@@ -1,0 +1,29 @@
+# 最小化Dockerfile - 仅安装运行时依赖
+FROM python:3.10.8-slim
+
+# 设置工作目录
+WORKDIR /app
+
+# 设置环境变量
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+
+# 升级pip
+RUN pip install --upgrade pip
+
+# 创建一个精简的requirements.txt，只包含运行时必需的包
+COPY requirements.minimal.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制项目文件
+COPY . .
+
+# 创建数据目录
+RUN mkdir -p /app/data/simulated
+
+# 暴露端口
+EXPOSE 8001
+
+# 启动命令（不使用健康检查来减少依赖）
+CMD ["python", "run_server.py"]

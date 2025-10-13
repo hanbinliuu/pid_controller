@@ -1,0 +1,482 @@
+#!/usr/bin/env python3
+"""
+实际时序数据库客户端
+用于连接真实的时序数据库服务，执行HTTP查询
+"""
+
+import os
+import requests
+import json
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+from dataclasses import dataclass
+import logging
+
+from .mock_tsdb_api import TSDBDataSource, DataPoint
+
+# 设置日志
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TSDBConfig:
+    """时序数据库配置"""
+    base_url: str
+    timeout: int = 30
+    max_retries: int = 3
+    auth_token: Optional[str] = None
+    headers: Optional[Dict[str, str]] = None
+
+
+class RealTSDBDataSource(TSDBDataSource):
+    """实际时序数据库数据源（通过HTTP API查询）"""
+    
+    def __init__(self, config: Optional[TSDBConfig] = None):
+        """
+        初始化实际时序数据库客户端
+        
+        Args:
+            config: 时序数据库配置，如果为None则从环境变量或默认配置读取
+        """
+        if config is None:
+            config = self._load_config_from_env()
+        
+        self.config = config
+        self.session = requests.Session()
+        
+        # 设置默认请求头
+        default_headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': 'PID-Agent-TSDB-Client/1.0'
+        }
+        
+        if config.headers:
+            default_headers.update(config.headers)
+            
+        if config.auth_token:
+            default_headers['Authorization'] = f'Bearer {config.auth_token}'
+            
+        self.session.headers.update(default_headers)
+        
+        # 设置超时（注意：requests.Session 没有 timeout 属性，需要在请求时传递）
+        self.default_timeout = config.timeout
+        
+        logger.info(f"初始化实际TSDB客户端，连接到: {config.base_url}")
+    
+    def _load_config_from_env(self) -> TSDBConfig:
+        """从环境变量加载配置"""
+        # 优先从环境变量读取
+        base_url = os.getenv('TSDB_BASE_URL')
+        
+        # 如果环境变量没有设置，使用默认配置
+        if not base_url:
+            # 使用代码中的默认URL
+            base_url = 'http://tsdb-select-infra-system.sit-cloud.ieccloud.hollicube.com'
+            logger.warning(f"未找到TSDB_BASE_URL环境变量，使用默认URL: {base_url}")
+        
+        return TSDBConfig(
+            base_url=base_url,
+            timeout=int(os.getenv('TSDB_TIMEOUT', '30')),
+            max_retries=int(os.getenv('TSDB_MAX_RETRIES', '3')),
+            auth_token=os.getenv('TSDB_AUTH_TOKEN')
+        )
+    
+    def query_raw_data(
+        self,
+        db: Optional[str] = None,
+        table: Optional[str] = None, 
+        fields: Optional[List[str]] = None,
+        tags: Optional[Dict[str, str]] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 1500,
+        continuation_point: Optional[str] = None
+    ) -> DataPoint:
+        """
+        查询实际时序数据库的原始数据
+        
+        Args:
+            db: 数据库名称
+            table: 表名
+            fields: 字段列表
+            tags: 标签过滤
+            start_time: 开始时间（毫秒时间戳）
+            end_time: 结束时间（毫秒时间戳）
+            limit: 数据条数限制
+            continuation_point: 续传点
+            
+        Returns:
+            DataPoint: 查询到的数据点
+        """
+        # 检查必需参数
+        if not table:
+            return DataPoint(columns=[], values=[])
+        
+        try:
+            # 构造查询请求
+            request_payload = {
+                "tables": [
+                    {
+                        "table": table,
+                        "fields": fields,
+                        "tags": tags,
+                        "continuationPoint": continuation_point
+                    }
+                ],
+                "detail": {
+                    "startTime": start_time,
+                    "endTime": end_time,
+                    "limit": limit,
+                    "returnBounds": False
+                }
+            }
+            
+            # 发送HTTP请求
+            url = f"{self.config.base_url}/tsdb/v4/read_raw"
+            if db:
+                url += f"?db={db}"
+            logger.info(f"发送TSDB查询请求到: {url}")
+            logger.info(f"请求参数: {json.dumps(request_payload, indent=2)}")
+            
+            response = self._make_request_with_retry('POST', url, json=request_payload)
+            
+            if response.status_code == 200:
+                result = response.json()
+                return self._parse_response(result, table)
+            else:
+                logger.error(f"TSDB查询失败，状态码: {response.status_code}, 响应: {response.text}")
+                return DataPoint(columns=[], values=[])
+                
+        except Exception as e:
+            logger.error(f"查询TSDB数据时发生异常: {str(e)}")
+            return DataPoint(columns=[], values=[])
+    
+    def _parse_response(self, response_data: Dict, table: str) -> DataPoint:
+        """
+        解析TSDB响应数据
+        
+        Args:
+            response_data: TSDB响应数据
+            table: 查询的表名
+            
+        Returns:
+            DataPoint: 解析后的数据点
+        """
+        try:
+            if response_data.get('code') != 0:
+                logger.error(f"TSDB返回错误: {response_data.get('message', '未知错误')}")
+                return DataPoint(columns=[], values=[])
+            
+            results = response_data.get('results', [])
+            if not results:
+                logger.warning(f"未找到表 {table} 的数据")
+                return DataPoint(columns=[], values=[])
+            
+            # 查找对应表的结果
+            table_result = None
+            for result in results:
+                if result.get('table') == table:
+                    table_result = result
+                    break
+            
+            if not table_result:
+                logger.warning(f"未找到表 {table} 的查询结果")
+                return DataPoint(columns=[], values=[])
+            
+            # 解析数据
+            data_list = table_result.get('data', [])
+            if not data_list:
+                return DataPoint(columns=[], values=[])
+            
+            # 获取第一个数据块（通常只有一个）
+            data_point = data_list[0]
+            
+            return DataPoint(
+                tags=data_point.get('tags'),
+                columns=data_point.get('columns', []),
+                values=data_point.get('values', [])
+            )
+            
+        except Exception as e:
+            logger.error(f"解析TSDB响应时发生异常: {str(e)}")
+            return DataPoint(columns=[], values=[])
+    
+    def _make_request_with_retry(self, method: str, url: str, **kwargs) -> requests.Response:
+        """
+        带重试机制的HTTP请求
+        
+        Args:
+            method: HTTP方法
+            url: 请求URL
+            **kwargs: 其他请求参数
+            
+        Returns:
+            requests.Response: HTTP响应
+        """
+        last_exception = None
+        
+        for attempt in range(self.config.max_retries):
+            try:
+                response = self.session.request(method, url, timeout=self.default_timeout, **kwargs)
+                
+                # 如果是成功响应或客户端错误（不需要重试），直接返回
+                if response.status_code < 500:
+                    return response
+                    
+                logger.warning(f"TSDB请求失败 (尝试 {attempt + 1}/{self.config.max_retries}): "
+                             f"状态码 {response.status_code}")
+                
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                logger.warning(f"TSDB请求异常 (尝试 {attempt + 1}/{self.config.max_retries}): {str(e)}")
+                
+                # 如果不是最后一次尝试，等待一下再重试
+                if attempt < self.config.max_retries - 1:
+                    import time
+                    time.sleep(1)
+        
+        # 所有重试都失败了
+        if last_exception:
+            raise last_exception
+        else:
+            raise requests.exceptions.RequestException(f"TSDB请求失败，已重试 {self.config.max_retries} 次")
+    
+
+    # todo 连接测试
+    def test_connection(self) -> bool:
+        """
+        测试与TSDB服务的连接
+        
+        Returns:
+            bool: 连接是否成功
+        """
+        try:
+            # 尝试访问健康检查接口
+            health_endpoints = [
+                f"{self.config.base_url}/health",
+            ]
+            
+            for endpoint in health_endpoints:
+                try:
+                    response = self.session.get(endpoint, timeout=5)
+                    if response.status_code == 200:
+                        logger.info(f"TSDB连接测试成功: {endpoint}")
+                        return True
+                except requests.exceptions.RequestException:
+                    continue
+            
+            return False
+        except Exception as e:
+            logger.error(f"TSDB连接测试异常: {str(e)}")
+            return False
+    
+    def get_db_data_size(self, database: Optional[str] = None) -> str:
+        """
+        获取数据库表列表
+        
+        Args:
+            database: 数据库名称
+            
+        Returns:
+            List[str]: 表名列表
+        """
+        try:
+            url = f"{self.config.base_url}/get/disk/used"
+            if database:
+                url += f"?db={database}"
+            
+            response = self._make_request_with_retry('GET', url)
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                if result.get('code') == 0:
+                    data = result.get('results', {})
+                    return data
+                else:
+                    logger.error(f"获取表列表失败: {result.get('message', '未知错误')}")
+            else:
+                logger.error(f"获取表列表失败，状态码: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"获取表列表时发生异常: {str(e)}")
+        
+        return ""
+
+
+class TSDBClientFactory:
+    """时序数据库客户端工厂"""
+    
+    @staticmethod
+    def create_client(use_real_tsdb: Optional[bool] = None, config: Optional[TSDBConfig] = None) -> TSDBDataSource:
+        """
+        创建时序数据库客户端
+        
+        Args:
+            use_real_tsdb: 是否使用真实TSDB，如果为None则从环境变量读取
+            config: TSDB配置
+            
+        Returns:
+            TSDBDataSource: 数据源实例
+        """
+        # 如果没有指定，从环境变量读取
+        if use_real_tsdb is None:
+            use_real_tsdb = os.getenv('USE_REAL_TSDB', 'false').lower() in ['true', '1', 'yes', 'on']
+        
+        if use_real_tsdb:
+            logger.info("创建实际TSDB客户端")
+            return RealTSDBDataSource(config)
+        else:
+            logger.info("创建模拟TSDB客户端")
+            from .mock_tsdb_api import MockTSDBDataSource
+            return MockTSDBDataSource()
+    
+    @staticmethod
+    def create_real_client(
+        base_url: Optional[str] = None,
+        timeout: int = 30,
+        auth_token: Optional[str] = None
+    ) -> RealTSDBDataSource:
+        """
+        创建实际TSDB客户端的便捷方法
+        
+        Args:
+            base_url: TSDB服务地址
+            timeout: 超时时间
+            auth_token: 认证令牌
+            
+        Returns:
+            RealTSDBDataSource: 实际TSDB数据源
+        """
+        if base_url is None:
+            base_url = os.getenv('TSDB_BASE_URL', 
+                               'http://tsdb-select-infra-system.sit-cloud.ieccloud.hollicube.com')
+        
+        config = TSDBConfig(
+            base_url=base_url,
+            timeout=timeout,
+            auth_token=auth_token
+        )
+        
+        return RealTSDBDataSource(config)
+
+
+# 全局客户端实例缓存
+_global_tsdb_client = None
+
+
+def get_configured_tsdb_client() -> TSDBDataSource:
+    """
+    获取配置的TSDB客户端实例（单例模式）
+    
+    Returns:
+        TSDBDataSource: 配置的TSDB客户端
+    """
+    global _global_tsdb_client
+    if _global_tsdb_client is None:
+        _global_tsdb_client = TSDBClientFactory.create_client()
+    
+    return _global_tsdb_client
+
+
+# 便捷函数
+def query_tsdb_data(
+    db:str,
+    table: str,
+    fields: Optional[List[str]] = None,
+    tags: Optional[Dict[str, str]] = None,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    limit: int = 1500,
+    use_real_tsdb: Optional[bool] = None
+) -> DataPoint:
+    """
+    查询TSDB数据的便捷函数
+    
+    Args:
+        db: 命名空间
+        table: 表名
+        fields: 字段列表
+        tags: 标签过滤
+        start_time: 开始时间（毫秒时间戳）
+        end_time: 结束时间（毫秒时间戳）
+        limit: 数据条数限制
+        use_real_tsdb: 是否使用真实TSDB
+        
+    Returns:
+        DataPoint: 查询结果
+    """
+    client = TSDBClientFactory.create_client(use_real_tsdb)
+    return client.query_raw_data(
+        db=db,
+        table=table,
+        fields=fields,
+        tags=tags,
+        start_time=start_time,
+        end_time=end_time,
+        limit=limit
+    )
+
+
+if __name__ == "__main__":
+    # 测试代码
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    print("🔧 TSDB客户端测试")
+    print("=" * 50)
+    
+    # 测试配置加载
+    print("\n1. 测试配置加载...")
+    client = TSDBClientFactory.create_real_client()
+    print(f"   TSDB地址: {client.config.base_url}")
+    print(f"   超时时间: {client.config.timeout}秒")
+    
+    # 测试连接
+    print("\n2. 测试连接...")
+    if 1==1:
+    # if client.test_connection():
+        print("   ✅ 连接成功")
+        db_name='platform'
+        # 测试获取表列表
+        print("\n3. 测试获取数据库资源信息...")
+        db_info = client.get_db_data_size(db_name)
+        if db_info:
+            print(f" {db_name} 表： {db_info}")
+        else:
+            print("获取数据库资源信息失败")
+        
+        # 测试查询数据
+        print("\n4. 测试查询数据...")
+        try:
+            from datetime import datetime, timedelta
+            
+            # 查询最近1小时的数据
+            # end_time = int(datetime.now().timestamp() * 1000)
+            # start_time = end_time - 3600000  # 1小时前
+            start_time="2025-09-30 13:03:37"
+            end_time="2025-09-30 14:03:37"
+            result = client.query_raw_data(
+                db=db_name,
+                table="PID_FEP_Gateway_Device_001default",  # 使用常见的表名
+                fields=["ns=100;s=FI15001.In_Channel0"],
+                start_time=start_time,
+                end_time=end_time,
+                limit=100
+            )
+            
+            if result.values:
+                print(f"   📊 查询成功，获得 {len(result.values)} 条记录")
+                print(f"   📋 字段: {result.columns}")
+                if result.values:
+                    print(f"   📄 首条数据: {result.values[0]}")
+            else:
+                print("   ⚠️  未查询到数据")
+                
+        except Exception as e:
+            print(f"   ❌ 查询失败: {str(e)}")
+    else:
+        print("   ❌ 连接失败")
+    
+    print("\n🎉 测试完成!")
