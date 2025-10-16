@@ -31,6 +31,29 @@
 ---
 
 ## 工具类详解
+### TemperatureAnalysisTool 分析指标
+- `current_temp`: 当前温度
+- `target_temp`: 目标温度
+- `max_temp`: 最高温度
+- `min_temp`: 最低温度
+- `avg_temp`: 平均温度
+- `temp_std`: 温度标准差(波动程度)
+- `steady_state`: 稳态温度
+- `steady_error`: 稳态误差
+- `overshoot`: 超调量(%)
+- `rise_time`: 上升时间
+
+### PIDOptimizationTool 分析结果
+- `current_params`: 当前PID参数
+- `performance`: 性能指标
+  - `steady_error`: 稳态误差
+  - `stability`: 稳定性
+  - `data_points`: 数据点数
+- `status`: 系统状态评估
+  - `response_speed`: 响应速度
+  - `stability`: 稳定性
+  - `accuracy`: 精度
+- `tuning_suggestions`: 调参建议
 
 ### 1. TemperatureAnalysisTool
 

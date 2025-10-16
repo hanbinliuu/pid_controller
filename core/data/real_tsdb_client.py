@@ -12,7 +12,7 @@ from datetime import datetime
 from dataclasses import dataclass
 import logging
 
-from .mock_tsdb_api import TSDBDataSource, DataPoint
+from mock_tsdb_api import TSDBDataSource, DataPoint
 
 # 设置日志
 logger = logging.getLogger(__name__)

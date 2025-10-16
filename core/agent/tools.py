@@ -12,6 +12,17 @@ class TemperatureAnalysisTool():
     分析温度曲线特性的工具。
     分析指标包括：上升时间、超调量、稳态误差、温度波动等。
     输入参数: :param history_data: 必要参数, List[Dict]类型, get_pid_history_data返回的历史数据列表
+    输出参数：
+            - `current_temp`: 当前温度
+            - `target_temp`: 目标温度
+            - `max_temp`: 最高温度
+            - `min_temp`: 最低温度
+            - `avg_temp`: 平均温度
+            - `temp_std`: 温度标准差(波动程度)
+            - `steady_state`: 稳态温度
+            - `steady_error`: 稳态误差
+            - `overshoot`: 超调量(%)
+            - `rise_time`: 上升时间
     """
     
     def __init__(self, **kwargs):
@@ -115,6 +126,17 @@ class PIDOptimizationTool():
     优化PID参数的工具。基于温度曲线分析结果，给出具体的PID参数调整建议。
     输入参数:
         :param history_data: 必要参数, List[Dict]类型, get_pid_history_data返回的历史数据列表
+    输出参数：
+        - `current_params`: 当前PID参数
+        - `performance`: 性能指标
+          - `steady_error`: 稳态误差
+          - `stability`: 稳定性
+          - `data_points`: 数据点数
+        - `status`: 系统状态评估
+          - `response_speed`: 响应速度(fast/slow)
+          - `stability`: 稳定性(unstable/stable)
+          - `accuracy`: 精度 (good/poor)
+        - `tuning_suggestions` ：建议参数值
     """
     
     def __init__(self, **kwargs):
@@ -168,7 +190,7 @@ class PIDOptimizationTool():
             temp_data = [float(record.get('temperature', 25.0)) for record in data_list]
             
             # 计算性能指标
-            temp_std = self._calculate_std(temp_data)
+            temp_std = self._calculate_std(temp_data) #标准差
             steady_state_temp = sum(temp_data[-5:]) / min(5, len(temp_data))
             steady_error = float(current_params["target_temp"] - steady_state_temp)
             
@@ -186,17 +208,17 @@ class PIDOptimizationTool():
             analysis_result = {
                 "current_params": current_params,
                 "performance": {
-                    "steady_error": steady_error,
-                    "stability": temp_std,
-                    "steady_state_temp": steady_state_temp,
-                    "data_points": len(temp_data)
+                    "steady_error": steady_error, #稳态误差
+                    "stability": temp_std, #稳定性
+                    "steady_state_temp": steady_state_temp, #稳态温度
+                    "data_points": len(temp_data) #测点数量
                 },
                 "status": {
-                    "response_speed": response_speed,
-                    "stability": stability,
-                    "accuracy": accuracy
+                    "response_speed": response_speed, #响应速度
+                    "stability": stability,#稳定性
+                    "accuracy": accuracy #准确度
                 },
-                "tuning_suggestions": tuning_suggestions
+                "tuning_suggestions": tuning_suggestions #调参建议
             }
             
             print(f"优化分析结果: {json.dumps(analysis_result, indent=2)}")
@@ -237,17 +259,17 @@ class PIDOptimizationTool():
         # 建议的参数调整值
         suggested_params = current_params.copy()
         
-        if abs(steady_error) > 1.0:
-            if steady_error > 0:
-                suggested_params["kp"] = min(current_params["kp"] * 1.1, 10.0)
-                suggested_params["ki"] = min(current_params["ki"] * 1.05, 1.0)
-            else:
-                suggested_params["kp"] = max(current_params["kp"] * 0.9, 0.1)
-                suggested_params["ki"] = max(current_params["ki"] * 0.95, 0.01)
-        
-        if stability == "unstable":
-            suggested_params["kp"] = max(suggested_params["kp"] * 0.8, 0.1)
-            suggested_params["kd"] = min(suggested_params["kd"] * 1.2, 1.0)
+        # if abs(steady_error) > 1.0:
+        #     if steady_error > 0:
+        #         suggested_params["kp"] = min(current_params["kp"] * 1.1, 10.0)
+        #         suggested_params["ki"] = min(current_params["ki"] * 1.05, 1.0)
+        #     else:
+        #         suggested_params["kp"] = max(current_params["kp"] * 0.9, 0.1)
+        #         suggested_params["ki"] = max(current_params["ki"] * 0.95, 0.01)
+        #
+        # if stability == "unstable":
+        #     suggested_params["kp"] = max(suggested_params["kp"] * 0.8, 0.1)
+        #     suggested_params["kd"] = min(suggested_params["kd"] * 1.2, 1.0)
         
         return {
             "recommendations": suggestions,
