@@ -1,3 +1,5 @@
+from dataclasses import asdict
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, validator
 from typing import Dict, List, Optional, Union
@@ -146,7 +148,79 @@ async def get_history_data(
             detail=f"获取历史数据失败: {str(e)}"
         )
 
+@router.get("/point_history_data",
+            summary="原始测点仿真数据查询",
+            description="查询指定设备在指定时间范围内的原始仿真数据，支持多种时间格式")
+async def get_point_history_data(
+    table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
+    field:  str =Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
+    start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
+                                       examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00", "2022-01-01"]),
+    end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
+                                     examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00", "2022-01-02"]),
+    limit: int = Query(..., description="数据条数",
+                                     examples= "1500")
+):
+    try:
+        # 参数验证
+        if not table or not table.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="表名参数不能为空"
+            )
 
+        # 时间格式转换和验证
+        try:
+            start_time_ms = parse_time_to_milliseconds(start_time)
+            end_time_ms = parse_time_to_milliseconds(end_time)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"时间格式错误: {str(e)}"
+            )
+
+        # 验证时间范围
+        if start_time_ms >= end_time_ms:
+            raise HTTPException(
+                status_code=400,
+                detail="开始时间必须小于结束时间"
+            )
+
+        # 使用环境变量中的数据库名
+        db = get_default_database()
+
+        # 使用新的查询方法
+        result = query_tsdb_data(
+            db=db,
+            table=table,
+            fields=["time",field],
+            start_time=start_time_ms,
+            end_time=end_time_ms,
+            limit=limit,
+            use_real_tsdb= True
+        )
+        # history_data = json.dumps(result, ensure_ascii=False, indent=2)
+
+        # 格式化响应数据
+        response_data = {
+            "status": "success",
+            "table": table,
+            "start_time": start_time,
+            "end_time": end_time,
+            "totalRecords": len(result.values),
+            "data": {
+                "columns":result.columns,
+                "values":result.values,
+            }
+        }
+
+        return response_data
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取历史数据失败: {str(e)}"
+        )
 @router.get("/history-data_mock",
             summary="历史数据查询（模拟）",
             description="查询指定设备在指定时间范围内的历史数据（使用模拟数据源）")

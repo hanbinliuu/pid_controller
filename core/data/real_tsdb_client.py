@@ -12,7 +12,7 @@ from datetime import datetime
 from dataclasses import dataclass
 import logging
 
-from mock_tsdb_api import TSDBDataSource, DataPoint
+from .mock_tsdb_api import TSDBDataSource, DataPoint
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -143,6 +143,7 @@ class RealTSDBDataSource(TSDBDataSource):
             
             if response.status_code == 200:
                 result = response.json()
+                # logger.info(f"发送TSDB查询请求到: {result}")
                 return self._parse_response(result, table)
             else:
                 logger.error(f"TSDB查询失败，状态码: {response.status_code}, 响应: {response.text}")
