@@ -200,9 +200,9 @@ class PIDOptimizationTool():
             accuracy = "good" if abs(steady_error) < 0.5 else "poor"
             
             # 生成PID调优建议
-            tuning_suggestions = self._generate_tuning_suggestions(
-                current_params, steady_error, temp_std, response_speed, stability, accuracy
-            )
+            # tuning_suggestions = self._generate_tuning_suggestions(
+            #     current_params, steady_error, temp_std, response_speed, stability, accuracy
+            # )
             
             # 生成分析结果
             analysis_result = {
@@ -217,8 +217,8 @@ class PIDOptimizationTool():
                     "response_speed": response_speed, #响应速度
                     "stability": stability,#稳定性
                     "accuracy": accuracy #准确度
-                },
-                "tuning_suggestions": tuning_suggestions #调参建议
+                }
+                # ,"tuning_suggestions": tuning_suggestions #调参建议
             }
             
             print(f"优化分析结果: {json.dumps(analysis_result, indent=2)}")
