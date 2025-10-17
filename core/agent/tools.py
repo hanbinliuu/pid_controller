@@ -259,22 +259,22 @@ class PIDOptimizationTool():
         # 建议的参数调整值
         suggested_params = current_params.copy()
         
-        # if abs(steady_error) > 1.0:
-        #     if steady_error > 0:
-        #         suggested_params["kp"] = min(current_params["kp"] * 1.1, 10.0)
-        #         suggested_params["ki"] = min(current_params["ki"] * 1.05, 1.0)
-        #     else:
-        #         suggested_params["kp"] = max(current_params["kp"] * 0.9, 0.1)
-        #         suggested_params["ki"] = max(current_params["ki"] * 0.95, 0.01)
-        #
-        # if stability == "unstable":
-        #     suggested_params["kp"] = max(suggested_params["kp"] * 0.8, 0.1)
-        #     suggested_params["kd"] = min(suggested_params["kd"] * 1.2, 1.0)
+        if abs(steady_error) > 1.0:
+            if steady_error > 0:
+                suggested_params["kp"] = min(current_params["kp"] * 1.1, 10.0)
+                suggested_params["ki"] = min(current_params["ki"] * 1.05, 1.0)
+            else:
+                suggested_params["kp"] = max(current_params["kp"] * 0.9, 0.1)
+                suggested_params["ki"] = max(current_params["ki"] * 0.95, 0.01)
+
+        if stability == "unstable":
+            suggested_params["kp"] = max(suggested_params["kp"] * 0.8, 0.1)
+            suggested_params["kd"] = min(suggested_params["kd"] * 1.2, 1.0)
         
         return {
-            "recommendations": suggestions,
-            "suggested_params": suggested_params,
-            "priority": "high" if (abs(steady_error) > 2.0 or stability == "unstable") else "medium"
+            "recommendations": suggestions, #调参建议
+            "suggested_params": suggested_params, #建议值
+            "priority": "high" if (abs(steady_error) > 2.0 or stability == "unstable") else "medium" #优先级
         }
 
 def get_tools() -> List:
