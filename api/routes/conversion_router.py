@@ -61,6 +61,7 @@ class ValidationResponse(BaseModel):
 
 @router.post("/pid-to-classical", 
              response_model=ConversionResponse,
+             operation_id="PID标准参数转换为经典控制参数",
              summary="PID标准参数转换为经典控制参数",
              description="将PID控制器的标准参数(Kp, Ki, Kd)转换为经典控制理论中的参数形式(比例带PB%, 积分时间Ti, 微分时间Td)")
 async def convert_pid_to_classical(params: PIDParameters):
@@ -111,6 +112,7 @@ async def convert_pid_to_classical(params: PIDParameters):
 
 @router.post("/classical-to-pid", 
              response_model=ConversionResponse,
+             operation_id="经典控制参数转换为PID标准参数",
              summary="经典控制参数转换为PID标准参数",
              description="将传统工业控制中的经典参数(比例带PB%, 积分时间Ti, 微分时间Td)转换为现代PID控制器的标准参数格式")
 async def convert_classical_to_pid(params: ClassicalParameters):
@@ -168,6 +170,8 @@ async def convert_classical_to_pid(params: ClassicalParameters):
 @router.post("/format-parameters", 
              response_model=ConversionResponse,
              summary="PID参数格式化与双重表示",
+             operation_id="PID参数格式化与双重表示",
+
              description="将PID参数进行格式化处理，同时提供标准形式和经典控制形式的双重表示，便于不同应用场景使用")
 async def format_pid_parameters(params: PIDParameters):
     """
@@ -214,6 +218,8 @@ async def format_pid_parameters(params: PIDParameters):
 @router.post("/validate-parameters", 
              response_model=ValidationResponse,
              summary="PID参数有效性验证",
+             operation_id="PID参数有效性验证",
+
              description="对PID控制器参数进行全面的有效性检查，包括数值范围、稳定性分析等，确保参数的可用性和安全性")
 async def validate_pid_parameters(params: PIDParameters):
     """
@@ -272,7 +278,8 @@ async def validate_pid_parameters(params: PIDParameters):
 
 
 @router.get("/conversion-formulas",
-            summary="获取PID参数转换公式", 
+            summary="获取PID参数转换公式",
+            operation_id="获取PID参数转换公式",
             description="获取PID标准参数与经典控制参数之间转换的数学公式和详细说明，包含理论基础和注意事项")
 async def get_conversion_formulas():
     """
@@ -332,6 +339,8 @@ async def get_conversion_formulas():
 
 @router.get("/examples",
             summary="获取PID参数转换示例",
+            operation_id="获取PID参数转换示例",
+
             description="获取典型PID控制场景的参数转换示例，包含常见控制器配置和应用说明，便于理解和参考")
 async def get_conversion_examples():
     """

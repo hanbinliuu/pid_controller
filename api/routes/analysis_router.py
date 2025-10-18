@@ -49,6 +49,7 @@ def get_default_database() -> str:
 """
 @router.get("/history-data",
             summary="历史数据查询",
+            operation_id="历史数据+PID数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data(
     table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
@@ -149,7 +150,8 @@ async def get_history_data(
         )
 
 @router.get("/point_history_data",
-            summary="原始测点仿真数据查询",
+            summary="原始测点仿真系统数据查询",
+            operation_id="原始测点仿真系统数据查询",
             description="查询指定设备在指定时间范围内的原始仿真数据，支持多种时间格式")
 async def get_point_history_data(
     table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
@@ -298,6 +300,7 @@ async def get_history_data_mock(
 
 @router.get("/temperature-analysis",
             summary="温度曲线分析",
+            operation_id="温度曲线分析",
             description="分析温度曲线的控制性能，包括上升时间、超调量、稳态误差等指标")
 async def analyze_temperature(
     table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
@@ -408,6 +411,7 @@ async def analyze_temperature(
 
 @router.get("/pid-optimization",
             summary="PID参数优化建议",
+            operation_id="PID参数优化建议",
             description="基于历史数据分析结果，提供PID参数调整建议")
 async def optimize_pid(
     table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
@@ -443,24 +447,7 @@ async def optimize_pid(
     - 响应速度与稳定性平衡
     - 控制精度与能耗优化
     - 鲁棒性与性能综合考量
-    
-    **优化输出：**
-    - 具体的Kp, Ki, Kd调整建议
-    - 参数调整的原理和依据
-    - 预期性能改善效果评估
-    - 逐步调试的指导步骤
-    
-    **适用场景：**
-    - 新系统的初始参数设置
-    - 现有系统的性能优化
-    - 生产环境变化后的参数重新调整
-    - 自动化系统的智能化升级
-    
-    **价值体现：**
-    - 显著减少调试时间和成本
-    - 提高控制精度和系统稳定性
-    - 降低能耗和设备损耗
-    - 提升生产效率和产品质量
+
     """
     # 时间格式转换和验证
     try:
@@ -534,7 +521,7 @@ async def health_check():
         "timestamp": datetime.now().isoformat()
     }
 
-#
+
 # class HistoryDataRequest(BaseModel):
 #     """历史数据工具请求 - 精简版"""
 #     table: str = Field(..., description="设备名（表名）", example="ns-01f-001")

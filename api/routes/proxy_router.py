@@ -35,6 +35,7 @@ class ProxyConfig:
     HEALTH_CHECK_TIMEOUT = int(os.getenv("HEALTH_CHECK_TIMEOUT", "10"))  # 健康检查超时10秒
 
 @router.post("/workflow/run",
+            operation_id="pid-agent工作流执行",
             summary="执行工作流",
             description="调用外部工作流API执行PID控制相关任务")
 async def run_workflow(
@@ -152,6 +153,7 @@ async def run_workflow(
 
 @router.get("/workflow/config",
            summary="获取工作流配置",
+           operation_id="获取PID-AGENT工作流配置",
            description="获取当前工作流代理的配置信息")
 async def get_workflow_config():
     """
@@ -185,7 +187,8 @@ async def get_workflow_config():
 
 @router.get("/health",
            summary="代理服务健康检查",
-           description="检查代理服务和外部工作流服务的连接状态")
+            operation_id="代理服务健康检查",
+            description="检查代理服务和外部工作流服务的连接状态")
 async def proxy_health_check():
     """
     **代理服务健康检查**

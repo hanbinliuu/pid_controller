@@ -32,6 +32,7 @@ class PIDParametersRequest(BaseModel):
     sample_interval: float = 5.0  # 采样间隔（秒）
 
 @router.post("/generate-simulation-data",
+             operation_id="基于时间范围的PID模拟数据生成",
              summary="基于时间范围的PID模拟数据生成",
              description="根据指定的开始和结束时间，生成高质量的PID控制系统模拟数据，支持CSV和JSON格式输出")
 async def generate_simulation_data(request: SimulationRequest):
@@ -165,6 +166,8 @@ async def generate_simulation_data(request: SimulationRequest):
 
 @router.post("/generate-custom-simulation",
              summary="自定义参数的PID模拟数据生成",
+             operation_id="自定义参数的PID模拟数据生成",
+
              description="支持自定义模拟时长、采样间隔和场景类型，生成特定条件下的PID控制系统模拟数据")
 async def generate_custom_simulation(request: CustomSimulationRequest):
     """
