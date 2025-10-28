@@ -8,8 +8,10 @@ import json
 import re
 import os
 from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool
-from core.data.mock_tsdb_api import query_raw_data
-from core.data.real_tsdb_client import query_tsdb_data
+from core.data.mock_tsdb_client import query_raw_data
+from core.data.real_tsdb_client import query_read_interpolated
+from api.routes.util import  parse_time_to_milliseconds
+from core.utils import pid_converter
 
 router = APIRouter()
 
@@ -21,6 +23,7 @@ def get_default_database() -> str:
         str: 数据库名称
     """
     return os.getenv('DEFAULT_TSDB_DATABASE', 'platform')
+
 
 """
 **获取设备历史数据 - HistoryDataTool**
@@ -47,23 +50,156 @@ def get_default_database() -> str:
 - control_period: 控制周期
 - max_duty: 最大占空比
 """
+
+
 @router.get("/history-data",
             summary="历史数据查询",
             operation_id="历史数据+PID数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data(
-    table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-    field:  str =Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
-    start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式", 
-                                       examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00", "2022-01-01"]),
-    end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式", 
-                                     examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00", "2022-01-02"]),
-    kp: float = Query(..., description="比例系数", example=1.5, gt=0),
-    ki: float = Query(..., description="积分系数", example=0.05, ge=0),
-    kd: float = Query(..., description="微分系数", example=0.08, ge=0),
-    target_temp: float = Query(..., description="目标温度", example=30)
+        table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
+        field: str = Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
+        start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
+                                            examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
+                                                      "2022-01-01"]),
+        end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
+                                          examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
+                                                    "2022-01-02"]),
+        kp: float = Query(..., description="比例系数", example=1.5, gt=0),
+        ki: float = Query(..., description="积分系数", example=0.05, ge=0),
+        kd: float = Query(..., description="微分系数", example=0.08, ge=0),
+        target_temp: float = Query(..., description="目标温度", example=30)
 ):
+    try:
+        # 参数验证
+        if not table or not table.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="表名参数不能为空"
+            )
 
+        # 时间格式转换和验证
+        try:
+            start_time_ms = parse_time_to_milliseconds(start_time)
+            end_time_ms = parse_time_to_milliseconds(end_time)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"时间格式错误: {str(e)}"
+            )
+
+        # 验证时间范围
+        if start_time_ms >= end_time_ms:
+            raise HTTPException(
+                status_code=400,
+                detail="开始时间必须小于结束时间"
+            )
+
+        # 验证PID参数
+        if kp <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="比例系数kp必须大于0"
+            )
+
+        if ki < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="积分系数ki不能为负数"
+            )
+
+        if kd < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="微分系数kd不能为负数"
+            )
+
+        # 定义需要查询的字段
+        # required_fields = [
+        #     "temperature",
+        #     "control_period",
+        #     "max_duty"
+        # ]
+
+        # 使用环境变量中的数据库名
+        db = get_default_database()
+
+        # 使用新的查询方法
+        history_data = _query_tsdb_data(
+            db=db,
+            table_name=table,
+            required_fields=[field],
+            start_time=start_time_ms,
+            end_time=end_time_ms,
+            kp=kp,
+            ki=ki,
+            kd=kd,
+            target_temp=target_temp
+        )
+
+        # 格式化响应数据
+        response_data = {
+            "status": "success",
+            "table": table,
+            "start_time": start_time,
+            "end_time": end_time,
+            "totalRecords": len(history_data),
+            "data": history_data
+        }
+
+        return response_data
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取历史数据失败: {str(e)}"
+        )
+
+
+"""
+**获取设备历史数据 - HistoryDataTool**
+
+从时序数据库(TSDB)中获取指定设备在特定时间范围内的历史数据。
+
+**时间格式支持：**
+- 毫秒时间戳: 1640995200000
+- 秒时间戳: 1640995200
+- 标准格式: '2022-01-01 12:00:00'
+- ISO 8601格式: '2022-01-01T12:00:00'
+- 日期格式: '2022-01-01'
+
+**参数验证：**
+- kp > 0 (比例系数必须为正数)
+- ki >= 0 (积分系数不能为负数)
+- kd >= 0 (微分系数不能为负数)
+
+**返回数据：**
+- timestamp: 时间戳（毫秒）
+- temperature: 实际温度值
+- target_temp: 目标温度设定值
+- kp, ki, kd: PID控制参数
+- control_period: 控制周期
+- max_duty: 最大占空比
+"""
+@router.get("/history-data-zhongkong",
+            summary="历史数据查询",
+            operation_id="历史数据_PID数据查询",
+            description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
+async def get_history_data_zhongkong(
+    start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式", 
+                                       examples=[1761357384979, "2025-01-01 12:00:00", "2025-01-01T12:00:00", "2025-01-01"]),
+    end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式", 
+                                     examples=[1761457384979, "2025-01-02 12:00:00", "2025-01-02T12:00:00", "2025-01-02"]),
+):
+    table="PID_FEP_Gateway_Device_001default"
+    required_fields = [
+        "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
+        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值
+        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值
+        "ns=100;s=FIC101A_PB.In_Channel0",
+        "ns=100;s=FIC101A_TI.In_Channel0",
+        "ns=100;s=FIC101A_TD.In_Channel0"
+    ]
     try:
         # 参数验证
         if not table or not table.strip():
@@ -90,23 +226,23 @@ async def get_history_data(
             )
         
         # 验证PID参数
-        if kp <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="比例系数kp必须大于0"
-            )
-        
-        if ki < 0:
-            raise HTTPException(
-                status_code=400,
-                detail="积分系数ki不能为负数"
-            )
-        
-        if kd < 0:
-            raise HTTPException(
-                status_code=400,
-                detail="微分系数kd不能为负数"
-            )
+        # if kp <= 0:
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail="比例系数kp必须大于0"
+        #     )
+        #
+        # if ki < 0:
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail="积分系数ki不能为负数"
+        #     )
+        #
+        # if kd < 0:
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail="微分系数kd不能为负数"
+        #     )
         
         # 定义需要查询的字段
         # required_fields = [
@@ -114,21 +250,18 @@ async def get_history_data(
         #     "control_period",
         #     "max_duty"
         # ]
+
         
         # 使用环境变量中的数据库名
         db = get_default_database()
         
         # 使用新的查询方法
-        history_data = _query_tsdb_data(
+        history_data = _query_tsdb_data_zhongkong(
             db=db, 
             table_name=table, 
-            required_fields=[field],
+            required_fields=required_fields,
             start_time=start_time_ms, 
-            end_time=end_time_ms, 
-            kp=kp, 
-            ki=ki, 
-            kd=kd, 
-            target_temp=target_temp
+            end_time=end_time_ms
         )
         
         # 格式化响应数据
@@ -155,7 +288,7 @@ async def get_history_data(
             description="查询指定设备在指定时间范围内的原始仿真数据，支持多种时间格式")
 async def get_point_history_data(
     table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-    field:  str =Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
+    fields:  Optional[List[str]] =Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
     start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
                                        examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00", "2022-01-01"]),
     end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
@@ -164,12 +297,12 @@ async def get_point_history_data(
                                      examples= "1500")
 ):
     try:
-        # 参数验证
-        if not table or not table.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="表名参数不能为空"
-            )
+        # # 参数验证
+        # if not table or not table.strip():
+        #     raise HTTPException(
+        #         status_code=400,
+        #         detail="表名参数不能为空"
+        #     )
 
         # 时间格式转换和验证
         try:
@@ -192,10 +325,10 @@ async def get_point_history_data(
         db = get_default_database()
 
         # 使用新的查询方法
-        result = query_tsdb_data(
+        result = query_raw_data(
             db=db,
             table=table,
-            fields=["time",field],
+            fields=["time",fields],
             start_time=start_time_ms,
             end_time=end_time_ms,
             limit=limit,
@@ -225,6 +358,7 @@ async def get_point_history_data(
         )
 @router.get("/history-data_mock",
             summary="历史数据查询（模拟）",
+            operation_id="历史数据查询_模拟",
             description="查询指定设备在指定时间范围内的历史数据（使用模拟数据源）")
 async def get_history_data_mock(
         db: str = Query(..., description="数据库名（库名）", example="platform"),
@@ -303,16 +437,12 @@ async def get_history_data_mock(
             operation_id="温度曲线分析",
             description="分析温度曲线的控制性能，包括上升时间、超调量、稳态误差等指标")
 async def analyze_temperature(
-    table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-    field:  str =Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
+    # table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
+    # field:  str =Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
     start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
                                        examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00", "2022-01-01"]),
     end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
-                                     examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00", "2022-01-02"]),
-    kp: float = Query(..., description="比例系数", example=1.5, gt=0),
-    ki: float = Query(..., description="积分系数", example=0.05, ge=0),
-    kd: float = Query(..., description="微分系数", example=0.08, ge=0),
-    target_temp: float = Query(..., description="目标温度", example=30)
+                                     examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00", "2022-01-02"])
 ):
     """
     **温度曲线智能分析 - TemperatureAnalysisTool**
@@ -347,6 +477,15 @@ async def analyze_temperature(
     - 生产过程优化和效率提升
     - 设备维护和故障预测
     """
+    table="PID_FEP_Gateway_Device_001default"
+    required_fields = [
+        "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
+        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值
+        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值
+        "ns=100;s=FIC101A_PB.In_Channel0",
+        "ns=100;s=FIC101A_TI.In_Channel0",
+        "ns=100;s=FIC101A_TD.In_Channel0"
+    ]
     try:
         start_time_ms = parse_time_to_milliseconds(start_time)
         end_time_ms = parse_time_to_milliseconds(end_time)
@@ -361,16 +500,12 @@ async def analyze_temperature(
         db = get_default_database()
 
         # 使用新的查询方法
-        history_data = _query_tsdb_data(
+        history_data = _query_tsdb_data_zhongkong(
             db=db,
             table_name=table,
-            required_fields=[field],
+            required_fields=required_fields,
             start_time=start_time_ms,
-            end_time=end_time_ms,
-            kp=kp,
-            ki=ki,
-            kd=kd,
-            target_temp=target_temp
+            end_time=end_time_ms
         )
         if not history_data:
             return {
@@ -414,16 +549,17 @@ async def analyze_temperature(
             operation_id="PID参数优化建议",
             description="基于历史数据分析结果，提供PID参数调整建议")
 async def optimize_pid(
-    table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-    field:  str =Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
+    # table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
+    # field:  str =Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
     start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
                                        examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00", "2022-01-01"]),
     end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
-                                     examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00", "2022-01-02"]),
-    kp: float = Query(..., description="比例系数", example=1.5, gt=0),
-    ki: float = Query(..., description="积分系数", example=0.05, ge=0),
-    kd: float = Query(..., description="微分系数", example=0.08, ge=0),
-    target_temp: float = Query(..., description="目标温度", example=30)
+                                     examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00", "2022-01-02"])
+    #     ,
+    # kp: float = Query(..., description="比例系数", example=1.5, gt=0),
+    # ki: float = Query(..., description="积分系数", example=0.05, ge=0),
+    # kd: float = Query(..., description="微分系数", example=0.08, ge=0),
+    # target_temp: float = Query(..., description="目标温度", example=30)
 ):
     """
     **PID参数智能优化 - PIDOptimizationTool**
@@ -449,7 +585,15 @@ async def optimize_pid(
     - 鲁棒性与性能综合考量
 
     """
-    # 时间格式转换和验证
+    table = "PID_FEP_Gateway_Device_001default"
+    required_fields = [
+        "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
+        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值
+        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值
+        "ns=100;s=FIC101A_PB.In_Channel0",
+        "ns=100;s=FIC101A_TI.In_Channel0",
+        "ns=100;s=FIC101A_TD.In_Channel0"
+    ]
     try:
         start_time_ms = parse_time_to_milliseconds(start_time)
         end_time_ms = parse_time_to_milliseconds(end_time)
@@ -464,16 +608,12 @@ async def optimize_pid(
         db = get_default_database()
 
         # 使用新的查询方法
-        history_data = _query_tsdb_data(
+        history_data = _query_tsdb_data_zhongkong(
             db=db,
             table_name=table,
-            required_fields=[field],
+            required_fields=required_fields,
             start_time=start_time_ms,
-            end_time=end_time_ms,
-            kp=kp,
-            ki=ki,
-            kd=kd,
-            target_temp=target_temp
+            end_time=end_time_ms
         )
         if not history_data:
             return {
@@ -626,7 +766,95 @@ def _query_tsdb_data_mock(db: str, table_name: str, start_time: int, end_time: i
 
     return history_data
 
+#查询时序数据-中控仿真测点
+def _query_tsdb_data_zhongkong(db: str,
+                     table_name: str,
+                     required_fields: List[str],
+                     start_time: int,
+                     end_time: int,
+                     tags: Optional[Dict[str, str]] = None) -> List[Dict]:
+    """查询时序数据，但使用传入的PID参数覆盖查询结果"""
+    # 定义仅查询必要的字段（不包括PID参数）
+    query_fields = [field for field in required_fields if field not in [
+                    "ns=100;s=FIC101A_MV.In_Channel0", # 控制输出值
+                    "ns=100;s=FIC101A_PV.In_Channel0", # 实时值  temperature
+                    "ns=100;s=FIC101A_SV.In_Channel0", # 设定值  target_temp
+                    "ns=100;s=FIC101A_PB.In_Channel0", # 比例带  pb
+                    "ns=100;s=FIC101A_TI.In_Channel0", # 积分参数 ti
+                    "ns=100;s=FIC101A_TD.In_Channel0"  # 微分参数 td
+                ]]
 
+    # 构造查询请求
+    query_request = {
+        "tables": [
+            {
+                "db": db,
+                "table": table_name,
+                "fields": query_fields,
+                "tags": tags,
+                "continuationPoint": None
+            }
+        ],
+        "detail": {
+            "startTime": start_time,
+            "endTime": end_time,
+            "limit": 3000,
+            "returnBounds": False
+        }
+    }
+
+    # 调用时序数据查询接口
+    response = query_read_interpolated(db=db, table=table_name, fields=required_fields, start_time=start_time, end_time=end_time,
+                               tags=tags)
+
+    # 解析查询结果
+    history_data = []
+
+    # 如果查询有结果，处理数据
+    if hasattr(response, 'values') and response.values:
+        columns = response.columns or []
+        values = response.values
+
+        # 将数据转换为字典格式
+        for value_row in values:
+            #测点值转换
+            record = {}
+            for i, column in enumerate(columns):
+                if i < len(value_row):
+                    if column == "time":
+                        record["timestamp"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_PV.In_Channel0":
+                        record["pv"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_SV.In_Channel0":
+                        record["sv"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_MV.In_Channel0":
+                        record["mv"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_PB.In_Channel0":
+                        record["pb"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_TI.In_Channel0":
+                        record["ti"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_TD.In_Channel0":
+                        record["td"] = value_row[i]
+                    else:
+                        record[column] = value_row[i]
+
+            reslut=  pid_converter.convert_pb_to_pid(record["pb"], record["ti"],record["td"])
+            # 确保包含查询字段的默认值
+            for field in query_fields:
+                # record["temperature"] = record["ns=100;s=FIC101A_PV.In_Channel0"]
+                if field not in record:
+                    record[field] = None
+
+            # todo 比例带值转pid
+            record["kp"] = reslut["kp"]
+            record["ki"] = reslut["ki"]
+            record["kd"] = reslut["kd"]
+
+            history_data.append(record)
+
+    return history_data
+
+#固定 pid值与目标温度，实时数据查询方法
 def _query_tsdb_data(db: str,
                      table_name: str,
                      required_fields: List[str],
@@ -661,7 +889,7 @@ def _query_tsdb_data(db: str,
     }
 
     # 调用时序数据查询接口
-    response = query_tsdb_data(db=db, table=table_name, fields=query_fields, start_time=start_time, end_time=end_time,
+    response = query_read_interpolated(db=db, table=table_name, fields=query_fields, start_time=start_time, end_time=end_time,
                                tags=tags, use_real_tsdb=True)
 
     # 解析查询结果
@@ -685,8 +913,8 @@ def _query_tsdb_data(db: str,
             # 确保包含查询字段的默认值
             for field in query_fields:
                 record["temperature"] = record[field]
-                # if field not in record:
-                #     record[field] = None
+                if field not in record:
+                    record[field] = None
 
                     # 使用传入的PID参数覆盖任何查询结果
             record["kp"] = kp
@@ -699,75 +927,4 @@ def _query_tsdb_data(db: str,
     return history_data
 
 
-def parse_time_to_milliseconds(time_input: Union[int, str]) -> int:
-    """
-    将时间参数转换为毫秒时间戳
 
-    支持格式：
-    - 毫秒时间戳 (int): 1640995200000
-    - 秒时间戳 (int): 1640995200 (自动检测并转换)
-    - ISO格式字符串: "2022-01-01T12:00:00"
-    - 标准格式字符串: "2022-01-01 12:00:00"
-    - 日期格式字符串: "2022-01-01"
-
-    Args:
-        time_input: 时间输入，支持int或str格式
-
-    Returns:
-        int: 毫秒时间戳
-
-    Raises:
-        ValueError: 时间格式不支持或解析失败
-    """
-    if isinstance(time_input, int):
-        # 如果是整数，检查是秒还是毫秒
-        if time_input < 10000000000:  # 小于10位数，认为是秒时间戳
-            return time_input * 1000
-        else:  # 大于等于10位数，认为是毫秒时间戳
-            return time_input
-
-    elif isinstance(time_input, str):
-        # 字符串格式的时间解析
-        time_patterns = [
-            # ISO 8601格式
-            (r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$', '%Y-%m-%dT%H:%M:%S'),
-            # 标准格式
-            (r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$', '%Y-%m-%d %H:%M:%S'),
-            # 日期格式（默认00:00:00）
-            (r'^\d{4}-\d{2}-\d{2}$', '%Y-%m-%d'),
-            # 带毫秒的格式
-            (r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+$', '%Y-%m-%d %H:%M:%S.%f'),
-        ]
-
-        for pattern, fmt in time_patterns:
-            if re.match(pattern, time_input.strip()):
-                try:
-                    # 处理ISO格式中的时区信息
-                    clean_time = time_input.strip()
-                    if 'T' in clean_time and (
-                            clean_time.endswith('Z') or '+' in clean_time[-6:] or clean_time[-6:].count('-') == 1):
-                        # 移除时区信息进行简单解析
-                        if clean_time.endswith('Z'):
-                            clean_time = clean_time[:-1]
-                        elif '+' in clean_time[-6:]:
-                            clean_time = clean_time.split('+')[0]
-                        elif clean_time[-6:].count('-') == 1:
-                            clean_time = clean_time.rsplit('-', 1)[0]
-
-                    dt = datetime.strptime(clean_time, fmt)
-                    return int(dt.timestamp() * 1000)
-                except ValueError:
-                    continue
-
-        # 如果所有格式都不匹配，尝试解析为时间戳字符串
-        try:
-            timestamp = int(time_input)
-            return parse_time_to_milliseconds(timestamp)
-        except ValueError:
-            pass
-
-        raise ValueError(
-            f"不支持的时间格式: {time_input}. 支持的格式包括: 毫秒时间戳、'YYYY-MM-DD'、'YYYY-MM-DD HH:MM:SS'、'YYYY-MM-DDTHH:MM:SS'")
-
-    else:
-        raise ValueError(f"时间参数类型错误: {type(time_input)}. 期望 int 或 str 类型")

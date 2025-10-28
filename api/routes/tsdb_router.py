@@ -17,7 +17,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 try:
-    from core.data.mock_tsdb_api import query_raw_data
+    from core.data.mock_tsdb_client import query_raw_data
 except ImportError:
     # 如果导入失败，提供一个简单的模拟实现
     def query_raw_data(request_data: Dict) -> Dict:

@@ -11,7 +11,7 @@ import json
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from core.data.mock_tsdb_api import MockTSDBDataSource, query_raw_data
+from core.data.mock_tsdb_client import MockTSDBDataSource, query_raw_data
 
 def test_csv_reading():
     """测试CSV文件读取功能"""

@@ -13,13 +13,13 @@ class TemperatureAnalysisTool():
     分析指标包括：上升时间、超调量、稳态误差、温度波动等。
     输入参数: :param history_data: 必要参数, List[Dict]类型, get_pid_history_data返回的历史数据列表
     输出参数：
-            - `current_temp`: 当前温度
-            - `target_temp`: 目标温度
-            - `max_temp`: 最高温度
-            - `min_temp`: 最低温度
-            - `avg_temp`: 平均温度
-            - `temp_std`: 温度标准差(波动程度)
-            - `steady_state`: 稳态温度
+            - `current_value`: 当前值
+            - `target_value`: 目标值
+            - `max_value`: 最高值
+            - `min_value`: 最低值
+            - `avg_value`: 平均温度
+            - `temp_std`: 标准差(波动程度)
+            - `steady_state`: 稳态值
             - `steady_error`: 稳态误差
             - `overshoot`: 超调量(%)
             - `rise_time`: 上升时间
@@ -57,7 +57,7 @@ class TemperatureAnalysisTool():
                 return json.dumps({"error": "无历史数据可分析"})
             
             # 检查数据格式，确保包含必要字段
-            required_fields = ['temperature', 'target_temp']
+            required_fields = ['pv', 'sv']
             first_record = data_list[0]
             #todo 过滤掉异常数据
             missing_fields = [field for field in required_fields if field not in first_record]
@@ -65,36 +65,36 @@ class TemperatureAnalysisTool():
                 return json.dumps({"error": f"数据缺少必要字段: {missing_fields}"})
                 
             # 提取温度数据和目标温度
-            temp_data = [float(record.get('temperature', 25.0)) for record in data_list]
-            target_temp = float(data_list[-1].get('target_temp', 25.0))
+            temp_data = [float(record.get('pv', 0)) for record in data_list]
+            target_value = float(data_list[-1].get('sv', 0))
             
-            print(f"温度数据点数: {len(temp_data)}")
-            print(f"温度数据范围: {min(temp_data):.2f} - {max(temp_data):.2f}")
-            print(f"目标温度: {target_temp}")
+            print(f"数据点数: {len(temp_data)}")
+            print(f"数据范围: {min(temp_data):.2f} - {max(temp_data):.2f}")
+            print(f"目标值: {target_value}")
             
             # 计算基本统计指标
             metrics = {
-                "current_temp": float(temp_data[-1]),
-                "target_temp": float(target_temp),
-                "max_temp": float(max(temp_data)),
-                "min_temp": float(min(temp_data)),
-                "avg_temp": float(sum(temp_data) / len(temp_data)),
+                "current_value": float(temp_data[-1]),
+                "target_value": float(target_value),
+                "max_value": float(max(temp_data)),
+                "min_value": float(min(temp_data)),
+                "avg_value": float(sum(temp_data) / len(temp_data)),
                 "temp_std": self._calculate_std(temp_data),
                 "steady_state": float(sum(temp_data[-5:]) / min(5, len(temp_data))),
                 "data_points": int(len(temp_data))
             }
             
             # 计算性能指标
-            metrics["steady_error"] = float(metrics["target_temp"] - metrics["steady_state"])
-            if metrics["target_temp"] != 0:
-                metrics["overshoot"] = float(((metrics["max_temp"] - metrics["target_temp"]) / metrics["target_temp"]) * 100)
+            metrics["steady_error"] = float(metrics["target_value"] - metrics["steady_state"])
+            if metrics["target_value"] != 0:
+                metrics["overshoot"] = float(((metrics["max_value"] - metrics["target_value"]) / metrics["target_value"]) * 100)
             else:
                 metrics["overshoot"] = 0.0
             
             # 计算上升时间
-            temp_range = metrics["max_temp"] - metrics["min_temp"]
+            temp_range = metrics["max_value"] - metrics["min_value"]
             if temp_range > 0:
-                t_90 = metrics["min_temp"] + 0.9 * temp_range
+                t_90 = metrics["min_value"] + 0.9 * temp_range
                 rise_time = None
                 for i, temp in enumerate(temp_data):
                     if temp >= t_90:
@@ -171,7 +171,7 @@ class PIDOptimizationTool():
                 return json.dumps({"error": "无历史数据可分析"})
             
             # 检查数据格式，确保包含PID相关字段
-            required_fields = ['temperature', 'target_temp', 'kp', 'ki', 'kd']
+            required_fields = ['pv', 'sv', 'kp', 'ki', 'kd']
             first_record = data_list[0]
             missing_fields = [field for field in required_fields if field not in first_record]
             if missing_fields:
@@ -183,20 +183,23 @@ class PIDOptimizationTool():
                 "kp": float(last_record.get('kp', 1.0)),
                 "ki": float(last_record.get('ki', 0.1)),
                 "kd": float(last_record.get('kd', 0.05)),
-                "target_temp": float(last_record.get('target_temp', 25.0))
+                "sv": float(last_record.get('sv', 25.0))
             }
             
             # 提取温度数据进行性能分析
-            temp_data = [float(record.get('temperature', 25.0)) for record in data_list]
+            temp_data = [float(record.get('pv', 25.0)) for record in data_list]
             
             # 计算性能指标
             temp_std = self._calculate_std(temp_data) #标准差
-            steady_state_temp = sum(temp_data[-5:]) / min(5, len(temp_data))
-            steady_error = float(current_params["target_temp"] - steady_state_temp)
+            steady_state_value = sum(temp_data[-5:]) / min(5, len(temp_data))
+            steady_error = float(current_params["sv"] - steady_state_value)
             
             # 评估系统性能
-            response_speed = "fast" if len(temp_data) > 0 and temp_data[-1] >= current_params["target_temp"] * 0.9 else "slow"
+            #响应速度
+            response_speed = "fast" if len(temp_data) > 0 and temp_data[-1] >= current_params["sv"] * 0.9 else "slow"
+            #稳定性
             stability = "stable" if temp_std < 0.5 else "unstable"
+            #精度
             accuracy = "good" if abs(steady_error) < 0.5 else "poor"
             
             # 生成PID调优建议
@@ -210,13 +213,13 @@ class PIDOptimizationTool():
                 "performance": {
                     "steady_error": steady_error, #稳态误差
                     "stability": temp_std, #稳定性
-                    "steady_state_temp": steady_state_temp, #稳态温度
+                    "steady_state_value": steady_state_value, #稳态温度
                     "data_points": len(temp_data) #测点数量
                 },
                 "status": {
                     "response_speed": response_speed, #响应速度
                     "stability": stability,#稳定性
-                    "accuracy": accuracy #准确度
+                    "accuracy": accuracy #精度
                 }
                 # ,"tuning_suggestions": tuning_suggestions #调参建议
             }

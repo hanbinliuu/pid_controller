@@ -115,7 +115,7 @@ client = TSDBClientFactory.create_real_client(
 ### 3. 与现有API集成
 
 ```python
-from core.data.mock_tsdb_api import get_query_engine, query_raw_data
+from core.data.mock_tsdb_client import get_query_engine, query_raw_data
 
 # 获取查询引擎（自动选择数据源）
 engine = get_query_engine()
@@ -259,7 +259,7 @@ export USE_REAL_TSDB=false
 ### 在代码中动态切换
 
 ```python
-from core.data.mock_tsdb_api import get_query_engine
+from core.data.mock_tsdb_client import get_query_engine
 
 # 在开发环境使用模拟数据
 dev_engine = get_query_engine(use_real_tsdb=False)

@@ -12,10 +12,9 @@ import random
 import math
 from pathlib import Path
 
-
+"""PID控制数据模拟器"""
 class PIDDataSimulator:
-    """PID控制数据模拟器"""
-    
+
     def __init__(self):
         """初始化模拟器参数"""
         self.current_temp = 25.0      # 当前温度
@@ -234,7 +233,7 @@ class PIDDataSimulator:
                 progress = (i / total_steps) * 100
                 print(f"生成进度: {progress:.1f}% ({i}/{total_steps})")
         
-        print(f"✅ 固定PID参数数据生成完成! 共 {len(data_points)} 条记录")
+        print(f"   固定PID参数数据生成完成! 共 {len(data_points)} 条记录")
         print(f"   PID参数保持不变: Kp={original_kp}, Ki={original_ki}, Kd={original_kd}")
         return data_points
     
@@ -381,12 +380,12 @@ class PIDDataSimulator:
                 writer.writerows(data)
             
             file_size = file_path.stat().st_size / 1024
-            print(f"📊 CSV文件已保存: {file_path}")
-            print(f"📈 文件大小: {file_size:.1f} KB, 记录数: {len(data)}")
+            print(f" CSV文件已保存: {file_path}")
+            print(f" 文件大小: {file_size:.1f} KB, 记录数: {len(data)}")
             return str(file_path)
             
         except Exception as e:
-            print(f"❌ 保存CSV文件失败: {str(e)}")
+            print(f" 保存CSV文件失败: {str(e)}")
             raise
     
     def save_as_tsdb_format(
@@ -454,9 +453,9 @@ class PIDDataSimulator:
                 json.dump(tsdb_response, f, indent=2, ensure_ascii=False)
             
             file_size = file_path.stat().st_size / 1024
-            print(f"🗄️  TSDB格式文件已保存: {file_path}")
-            print(f"📋 表名: {table_name}, 记录数: {len(values)}")
-            print(f"💾 文件大小: {file_size:.1f} KB")
+            print(f"  TSDB格式文件已保存: {file_path}")
+            print(f" 表名: {table_name}, 记录数: {len(values)}")
+            print(f" 文件大小: {file_size:.1f} KB")
             return str(file_path)
             
         except Exception as e:
@@ -465,7 +464,7 @@ class PIDDataSimulator:
     
     def create_sample_datasets(self) -> Dict[str, List[str]]:
         """创建多个示例数据集"""
-        print("🚀 开始创建PID模拟数据集...")
+        print(" 开始创建PID模拟数据集...")
         saved_files = {"json": [], "csv": [], "tsdb": []}
         
         scenarios = [
@@ -476,7 +475,7 @@ class PIDDataSimulator:
         ]
         
         for scenario, hours, interval, description in scenarios:
-            print(f"\n📊 生成{description} ({scenario})...")
+            print(f"\n 生成{description} ({scenario})...")
             
             # 重置状态
             self.reset_state()
@@ -646,7 +645,7 @@ def quick_generate_data(
 
 
 if __name__ == "__main__":
-    print("🎮 PID数据模拟器")
+    print("PID数据模拟器")
     print("=" * 50)
     
     # 创建模拟器实例
@@ -680,12 +679,12 @@ if __name__ == "__main__":
             quick_generate_data(hours, interval, scenario, ["json", "csv", "tsdb"])
             
         except ValueError:
-            print("❌ 输入格式错误，使用默认参数")
+            print("输入格式错误，使用默认参数")
             quick_generate_data()
     
     elif choice == "4":
         try:
-            print("\n🔧 输入固定PID参数:")
+            print("\n 输入固定PID参数:")
             kp = float(input("请输入Kp参数 [1.5]: ") or "1.5")
             ki = float(input("请输入Ki参数 [0.1]: ") or "0.1")
             kd = float(input("请输入Kd参数 [0.05]: ") or "0.05")
@@ -701,14 +700,14 @@ if __name__ == "__main__":
             )
             
         except ValueError:
-            print("❌ 输入格式错误，使用默认参数")
+            print(" 输入格式错误，使用默认参数")
             generate_data_with_fixed_pid(1.5, 0.1, 0.05, 30.0, 12, 5.0, ["json", "csv", "tsdb"])
     
     elif choice == "5":
-        print("👋 再见!")
+        print(" 再见!")
     
     else:
-        print("❌ 无效选择，使用默认操作")
+        print(" 无效选择，使用默认操作")
         quick_generate_data()
     
-    print("\n🎉 程序执行完成!")
+    print("\n 程序执行完成!")

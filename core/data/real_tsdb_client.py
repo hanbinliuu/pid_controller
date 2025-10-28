@@ -12,7 +12,7 @@ from datetime import datetime
 from dataclasses import dataclass
 import logging
 
-from .mock_tsdb_api import TSDBDataSource, DataPoint
+from core.data.mock_tsdb_client import TSDBDataSource, DataPoint,MockTSDBDataSource
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -88,8 +88,8 @@ class RealTSDBDataSource(TSDBDataSource):
         table: Optional[str] = None, 
         fields: Optional[List[str]] = None,
         tags: Optional[Dict[str, str]] = None,
-        start_time: Optional[int] = None,
-        end_time: Optional[int] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
         limit: int = 1500,
         continuation_point: Optional[str] = None
     ) -> DataPoint:
@@ -152,6 +152,80 @@ class RealTSDBDataSource(TSDBDataSource):
         except Exception as e:
             logger.error(f"查询TSDB数据时发生异常: {str(e)}")
             return DataPoint(columns=[], values=[])
+    #时序差值数据查询
+    def query_read_interpolated(
+        self,
+        db: Optional[str] = None,
+        table: Optional[str] = None,
+        fields: Optional[List[str]] = None,
+        tags: Optional[Dict[str, str]] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 1500,
+        window: int= 1,
+        continuation_point: Optional[str] = None
+    ) -> DataPoint:
+        """
+               查询实际时序数据库的插值数据
+
+               Args:
+                   db: 数据库名称
+                   table: 表名
+                   fields: 字段列表
+                   tags: 标签过滤
+                   start_time: 开始时间（毫秒时间戳）
+                   end_time: 结束时间（毫秒时间戳）
+                   limit: 数据条数限制
+                   window: 插值间隔（s）
+                   continuation_point: 续传点
+
+               Returns:
+                   DataPoint: 查询到的数据点
+               """
+        # 检查必需参数
+        if not table:
+            return DataPoint(columns=[], values=[])
+
+        try:
+            # 构造查询请求
+            request_payload = {
+                "tables": [
+                    {
+                        "table": table,
+                        "fields": fields,
+                        "tags": tags,
+                        "continuationPoint": continuation_point
+                    }
+                ],
+                "detail": {
+                    "startTime": start_time,
+                    "endTime": end_time,
+                    "limit": limit,
+                    "window": window
+                }
+            }
+
+            # 发送HTTP请求
+            url = f"{self.config.base_url}/tsdb/v4/read_interpolated"
+            if db:
+                url += f"?db={db}"
+            logger.info(f"发送TSDB查询请求到: {url}")
+            logger.info(f"请求参数: {json.dumps(request_payload, indent=2)}")
+
+            response = self._make_request_with_retry('POST', url, json=request_payload)
+
+            if response.status_code == 200:
+                result = response.json()
+                # logger.info(f"发送TSDB查询请求到: {result}")
+                return self._parse_response(result, table)
+            else:
+                logger.error(f"TSDB查询失败，状态码: {response.status_code}, 响应: {response.text}")
+                return DataPoint(columns=[], values=[])
+
+        except Exception as e:
+            logger.error(f"查询TSDB数据时发生异常: {str(e)}")
+            return DataPoint(columns=[], values=[])
+
     
     def _parse_response(self, response_data: Dict, table: str) -> DataPoint:
         """
@@ -330,7 +404,6 @@ class TSDBClientFactory:
             return RealTSDBDataSource(config)
         else:
             logger.info("创建模拟TSDB客户端")
-            from .mock_tsdb_api import MockTSDBDataSource
             return MockTSDBDataSource()
     
     @staticmethod
@@ -381,16 +454,15 @@ def get_configured_tsdb_client() -> TSDBDataSource:
     return _global_tsdb_client
 
 
-# 便捷函数
-def query_tsdb_data(
+# 单点位
+def query_raw_data(
     db:str,
     table: str,
     fields: Optional[List[str]] = None,
     tags: Optional[Dict[str, str]] = None,
     start_time: Optional[int] = None,
     end_time: Optional[int] = None,
-    limit: int = 1500,
-    use_real_tsdb: Optional[bool] = None
+    limit: int = 1500
 ) -> DataPoint:
     """
     查询TSDB数据的便捷函数
@@ -408,7 +480,7 @@ def query_tsdb_data(
     Returns:
         DataPoint: 查询结果
     """
-    client = TSDBClientFactory.create_client(use_real_tsdb)
+    client = TSDBClientFactory.create_client(True)
     return client.query_raw_data(
         db=db,
         table=table,
@@ -419,6 +491,45 @@ def query_tsdb_data(
         limit=limit
     )
 
+
+# 间隔值
+def query_read_interpolated(
+        db: str,
+        table: str,
+        fields: Optional[List[str]] = None,
+        tags: Optional[Dict[str, str]] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 1500,
+        window: int = 1
+) -> DataPoint:
+    """
+    查询TSDB数据的便捷函数
+
+    Args:
+        db: 命名空间
+        table: 表名
+        fields: 字段列表
+        tags: 标签过滤
+        start_time: 开始时间（毫秒时间戳）
+        end_time: 结束时间（毫秒时间戳）
+        limit: 数据条数限制
+        use_real_tsdb: 是否使用真实TSDB
+
+    Returns:
+        DataPoint: 查询结果
+    """
+    client = TSDBClientFactory.create_client(True)
+    return client.query_read_interpolated(
+        db=db,
+        table=table,
+        fields=fields,
+        tags=tags,
+        start_time=start_time,
+        end_time=end_time,
+        limit=limit,
+        window=window
+    )
 
 if __name__ == "__main__":
     # 测试代码
@@ -456,28 +567,36 @@ if __name__ == "__main__":
             # 查询最近1小时的数据
             # end_time = int(datetime.now().timestamp() * 1000)
             # start_time = end_time - 3600000  # 1小时前
-            start_time="2025-09-30 13:03:37"
-            end_time="2025-09-30 14:03:37"
-            result = client.query_raw_data(
+            start_time="2025-10-24 13:03:37"
+            end_time="2025-10-24 14:03:37"
+            result = client.query_read_interpolated(
                 db=db_name,
                 table="PID_FEP_Gateway_Device_001default",  # 使用常见的表名
-                fields=["ns=100;s=FI15001.In_Channel0"],
+                fields=[
+                    "ns=100;s=FIC101A_MV.In_Channel0", # 控制输出值
+                    "ns=100;s=FIC101A_PV.In_Channel0", # 实时值
+                    "ns=100;s=FIC101A_SV.In_Channel0", # 设定值
+                    "ns=100;s=FIC101A_PB.In_Channel0",
+                    "ns=100;s=FIC101A_TI.In_Channel0",
+                    "ns=100;s=FIC101A_TD.In_Channel0"
+                ],
                 start_time=start_time,
                 end_time=end_time,
+                window = 1,
                 limit=100
             )
             
             if result.values:
-                print(f"   📊 查询成功，获得 {len(result.values)} 条记录")
-                print(f"   📋 字段: {result.columns}")
+                print(f"    查询成功，获得 {len(result.values)} 条记录")
+                print(f"    字段: {result.columns}")
                 if result.values:
                     print(f"   📄 首条数据: {result.values[0]}")
             else:
-                print("   ⚠️  未查询到数据")
+                print("     未查询到数据")
                 
         except Exception as e:
-            print(f"   ❌ 查询失败: {str(e)}")
+            print(f"    查询失败: {str(e)}")
     else:
-        print("   ❌ 连接失败")
+        print("   连接失败")
     
-    print("\n🎉 测试完成!")
+    print("\n 测试完成!")
