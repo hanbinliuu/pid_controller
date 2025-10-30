@@ -8,7 +8,6 @@ import os
 import requests
 import json
 from typing import Dict, List, Optional, Any
-from datetime import datetime
 from dataclasses import dataclass
 import logging
 
@@ -166,61 +165,116 @@ class RealTSDBDataSource(TSDBDataSource):
         continuation_point: Optional[str] = None
     ) -> DataPoint:
         """
-               查询实际时序数据库的插值数据
+               查询实际时序数据库的插值数据（支持分页查询）
 
                Args:
                    db: 数据库名称
                    table: 表名
                    fields: 字段列表
                    tags: 标签过滤
-                   start_time: 开始时间（毫秒时间戳）
-                   end_time: 结束时间（毫秒时间戳）
+                   start_time: 开始时间（毫秒时间戳），未传则默认为最近1小时前
+                   end_time: 结束时间（毫秒时间戳），未传则默认为当前时间
                    limit: 数据条数限制
                    window: 插值间隔（s）
                    continuation_point: 续传点
 
                Returns:
-                   DataPoint: 查询到的数据点
+                   DataPoint: 查询到的数据点（包含所有分页数据）
                """
+        begin_time = datetime.now().timestamp()
+
         # 检查必需参数
         if not table:
             return DataPoint(columns=[], values=[])
+        
+        # 如果未传时间区间，使用默认值（最近1小时）
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
+        
+        if start_time is None:
+            start_time = end_time - 3600000  # 1小时前（3600秒 * 1000毫秒）
 
         try:
-            # 构造查询请求
-            request_payload = {
-                "tables": [
-                    {
-                        "table": table,
-                        "fields": fields,
-                        "tags": tags,
-                        "continuationPoint": continuation_point
+            all_values = []  # 存储所有分页的数据
+            all_columns = None  # 存储列信息
+            all_tags = None  # 存储标签信息
+            current_continuation_point = continuation_point
+            page_count = 0
+            max_pages = 50  # 最大分页数
+            
+            logger.info(f"开始循环分页查询TSDB数据，表: {table}, 时间范围: {start_time} - {end_time}")
+
+            while page_count < max_pages:
+                page_count += 1
+                # logger.info(f"========== 第{page_count}页查询开始 ==========" )
+                # logger.info(f"当前continuation_point: {current_continuation_point}")
+                
+                # 构造查询请求
+                request_payload = {
+                    "tables": [
+                        {
+                            "table": table,
+                            "fields": fields,
+                            "tags": tags,
+                            "continuationPoint": current_continuation_point
+                        }
+                    ],
+                    "detail": {
+                        "startTime": start_time,
+                        "endTime": end_time,
+                        "limit": limit,
+                        "window": window
                     }
-                ],
-                "detail": {
-                    "startTime": start_time,
-                    "endTime": end_time,
-                    "limit": limit,
-                    "window": window
                 }
-            }
 
-            # 发送HTTP请求
-            url = f"{self.config.base_url}/tsdb/v4/read_interpolated"
-            if db:
-                url += f"?db={db}"
-            logger.info(f"发送TSDB查询请求到: {url}")
-            logger.info(f"请求参数: {json.dumps(request_payload, indent=2)}")
+                # 发送HTTP请求
+                url = f"{self.config.base_url}/tsdb/v4/read_interpolated"
+                if db:
+                    url += f"?db={db}"
+                # logger.info(f"发送TSDB查询请求到: {url}")
+                response = self._make_request_with_retry('POST', url, json=request_payload)
+                if response.status_code == 200:
+                    result = response.json()
+                    # 解析当前页数据
+                    page_data = self._parse_response(result, table)
+                    # 如果当前页无数据，退出循环
+                    if not page_data.values:
+                        logger.warning(f"第{page_count}页无数据返回，查询结束")
+                        break
 
-            response = self._make_request_with_retry('POST', url, json=request_payload)
+                    # 保存列信息和标签信息（第一页）
+                    if all_columns is None:
+                        all_columns = page_data.columns
+                        all_tags = page_data.tags
 
-            if response.status_code == 200:
-                result = response.json()
-                # logger.info(f"发送TSDB查询请求到: {result}")
-                return self._parse_response(result, table)
-            else:
-                logger.error(f"TSDB查询失败，状态码: {response.status_code}, 响应: {response.text}")
-                return DataPoint(columns=[], values=[])
+
+                    # 合并当前页数据
+                    all_values.extend(page_data.values)
+                    
+                    if page_data.continuation_point:
+                        current_continuation_point = page_data.continuation_point
+                    else:
+                        break
+                else:
+                    logger.error(f"TSDB查询失败，状态码: {response.status_code}, 响应: {response.text}")
+                    break
+            
+            if page_count >= max_pages:
+                logger.warning(f"达到最大分页数限制({max_pages})，停止查询")
+            
+            logger.info(f"========== 循环查询完成 ==========" )
+            logger.info(f"总查询页数: {page_count}")
+            logger.info(f"总数据条数: {len(all_values)}")
+            over_time = datetime.now().timestamp()
+            logger.info(f"时序查询总耗时: {(over_time)-(begin_time)}")
+
+            # 返回合并后的所有数据
+            return DataPoint(
+                tags=all_tags,
+                columns=all_columns,
+                values=all_values,
+                continuation_point=None  # 已获取全部数据，不再有续传点
+            )
 
         except Exception as e:
             logger.error(f"查询TSDB数据时发生异常: {str(e)}")
@@ -267,10 +321,14 @@ class RealTSDBDataSource(TSDBDataSource):
             # 获取第一个数据块（通常只有一个）
             data_point = data_list[0]
             
+            # 提取续传点（如果存在）
+            continuation_point = table_result.get('continuationPoint')
+
             return DataPoint(
                 tags=data_point.get('tags'),
                 columns=data_point.get('columns', []),
-                values=data_point.get('values', [])
+                values=data_point.get('values', []),
+                continuation_point=continuation_point
             )
             
         except Exception as e:
@@ -501,23 +559,25 @@ def query_read_interpolated(
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
         limit: int = 1500,
-        window: int = 1
+        window: int = 1,
+        continuation_point: Optional[str] = None
 ) -> DataPoint:
     """
-    查询TSDB数据的便捷函数
+    查询TSDB插值数据的便捷函数
 
     Args:
         db: 命名空间
         table: 表名
         fields: 字段列表
         tags: 标签过滤
-        start_time: 开始时间（毫秒时间戳）
-        end_time: 结束时间（毫秒时间戳）
+        start_time: 开始时间（毫秒时间戳），未传则默认为最近1小时前
+        end_time: 结束时间（毫秒时间戳），未传则默认为当前时间
         limit: 数据条数限制
-        use_real_tsdb: 是否使用真实TSDB
+        window: 插值间隔（s）
+        continuation_point: 续传点，用于分页查询
 
     Returns:
-        DataPoint: 查询结果
+        DataPoint: 查询结果（如未传时间参数，默认查询最近1小时数据）
     """
     client = TSDBClientFactory.create_client(True)
     return client.query_read_interpolated(
@@ -528,7 +588,8 @@ def query_read_interpolated(
         start_time=start_time,
         end_time=end_time,
         limit=limit,
-        window=window
+        window=window,
+        continuation_point=continuation_point
     )
 
 if __name__ == "__main__":

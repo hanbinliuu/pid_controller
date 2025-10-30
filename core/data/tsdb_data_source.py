@@ -52,6 +52,7 @@ class DataPoint:
     tags: Optional[Dict[str, str]] = None
     columns: Optional[List[str]] = None
     values: Optional[List[List[Any]]] = None
+    continuation_point: Optional[str] = None  # 续传点
 
 
 @dataclass
@@ -129,6 +130,7 @@ class TSDBDataSource(ABC):
             start_time: Optional[int] = None,
             end_time: Optional[int] = None,
             limit: int = 1500,
+            window: int = 1,
             continuation_point: Optional[str] = None
     ) -> DataPoint:
         """ todo 查询历史插值数据"""

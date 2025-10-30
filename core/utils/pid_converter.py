@@ -13,9 +13,10 @@ PID参数与比例带转换工具类
 - 微分时间 Td = Kd / Kp
 - Kd = Td * Kp
 """
-
+import logging
 from typing import Dict, Optional, Union
 import math
+
 
 
 class PIDConverter:
@@ -269,6 +270,59 @@ def convert_pb_to_pid(proportional_band: float,
     """便捷函数：比例带形式转换为PID参数"""
     return PIDConverter.classical_to_pid(proportional_band, integral_time, derivative_time)
 
+# 截取最新的一组pid数据
+def process_lists_optimized(*lists):
+    """
+    优化版本，减少循环次数
+    """
+    if not lists:
+        return tuple()
+
+    first_len = len(lists[0])
+    for lst in lists:
+        if len(lst) != first_len:
+            raise ValueError("所有列表长度必须一致")
+
+    if first_len == 0:
+        return tuple([] for _ in lists)
+
+    # 直接计算最小连续长度，避免存储所有counts
+    min_count = first_len  # 初始化为最大可能值
+
+    for lst in lists:
+        if not lst:
+            min_count = 0
+            break
+
+        last_element = lst[-1]
+        latest_pb = last_element[3]
+        latest_ti = last_element[2]
+        latest_td = last_element[5]
+        latest_sv = last_element[1]
+
+        count = 1
+
+        for i in range(len(lst) - 2, -1, -1):
+            record=lst[i]
+            if (record[3] == latest_pb and
+                    record[2] == latest_ti and
+                    record[5] == latest_td and
+                    record[1] == latest_sv):
+                count += 1
+            # if lst[i] == last_element:
+            #     count += 1
+            else:
+                break
+
+        if count < min_count:
+            min_count = count
+
+    # 截取列表
+    if min_count == 0:
+        return list(tuple([] for _ in lists))
+    else:
+        logging.info(f"截取数据：{min_count} 条")
+        return tuple(lst[-min_count:] for lst in lists)
 
 if __name__ == "__main__":
     # 示例用法
