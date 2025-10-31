@@ -8,4 +8,4 @@ python-multipart==0.0.20
 numpy==1.26.4
 scikit-learn==1.7.2
 scipy==1.15.3
-tourch
+torch==2.2.2
