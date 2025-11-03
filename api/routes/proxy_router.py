@@ -5,7 +5,7 @@
 
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import httpx
 import logging
 import os
@@ -33,6 +33,12 @@ class ProxyConfig:
     WORKFLOW_CONNECT_TIMEOUT = int(os.getenv("WORKFLOW_CONNECT_TIMEOUT", "30"))  # 连接超时30秒
     WORKFLOW_READ_TIMEOUT = int(os.getenv("WORKFLOW_READ_TIMEOUT", "300"))  # 读取超时300秒
     HEALTH_CHECK_TIMEOUT = int(os.getenv("HEALTH_CHECK_TIMEOUT", "10"))  # 健康检查超时10秒
+    
+    # IOTDA设备指令批量下发基础URL
+    IOTDA_BASE_URL = os.getenv(
+        "IOTDA_BASE_URL",
+        "http://iotda-infra-system.sit-cloud.ieccloud.hollicube.com"
+    )
 
 @router.post("/workflow/run",
             operation_id="pid_agent工作流执行",
@@ -220,3 +226,85 @@ async def proxy_health_check():
         "service": "proxy-api",
         "health": health_info
     }
+
+class DeviceCommand(BaseModel):
+    """IOTDA设备指令数据模型"""
+    timeout: int = Field(..., description="单条指令超时时间（秒）", example=20)
+    object_device_id: str = Field(..., description="设备ID", example="PID_FEP_Gateway_Device_001")
+    service_id: str = Field(..., description="服务ID", example="default")
+    command_name: str = Field(..., description="命令名称", example="set_property")
+    paras: Dict[str, Any] = Field(..., description="命令参数字典", example={"ns=100;s=FIC101A_TD.In_Channel0": 10})
+
+@router.post(
+    "/iotda/command/batch",
+    operation_id="iotda设备指令批量下发",
+    summary="批量下发设备指令（代理透传）",
+    description="透传调用 IOTDA 设备指令批量下发接口: POST /iotda-data-engine/device/command/batch"
+)
+async def send_device_command_batch(
+    commands: List[DeviceCommand],
+    retryNum: int = 0,
+    timeout: int = 20000,
+    authorization: Optional[str] = Header(None, description="IOTDA鉴权令牌（可选）")
+):
+    """
+    代理下发设备指令到 IOTDA 系统（批量）。
+    
+    Query参数：
+    - retryNum: 重试次数（默认0）
+    - timeout: 请求整体超时（毫秒，默认20000）
+    
+    请求体：设备指令数组
+    """
+    try:
+        url = f"{ProxyConfig.IOTDA_BASE_URL}/iotda-data-engine/device/command/batch"
+
+        headers = {"Content-Type": "application/json"}
+        if authorization:
+            headers["Authorization"] = authorization
+
+        # 序列化请求体
+        payload = [cmd.model_dump() for cmd in commands]
+
+        logger.info(f"调用IOTDA设备指令批量接口: {url} params={{'retryNum': {retryNum}, 'timeout': {timeout}}}")
+        logger.debug(f"请求体: {payload}")
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                params={"retryNum": retryNum, "timeout": timeout},
+                json=payload,
+                headers=headers,
+                timeout=httpx.Timeout(
+                    connect=ProxyConfig.WORKFLOW_CONNECT_TIMEOUT,
+                    read=ProxyConfig.WORKFLOW_READ_TIMEOUT,
+                    write=ProxyConfig.WORKFLOW_CONNECT_TIMEOUT,
+                    pool=ProxyConfig.WORKFLOW_CONNECT_TIMEOUT
+                )
+            )
+
+        logger.info(f"IOTDA接口响应状态: {response.status_code}")
+
+        if response.status_code == 200:
+            result = response.json()
+            return {
+                "status": "success",
+                "message": "指令批量下发成功",
+                "data": result
+            }
+        else:
+            logger.error(f"IOTDA接口调用失败: {response.status_code} - {response.text}")
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"IOTDA调用失败: {response.text}"
+            )
+
+    except httpx.TimeoutException:
+        logger.error("IOTDA接口调用超时")
+        raise HTTPException(status_code=408, detail="IOTDA接口调用超时")
+    except httpx.ConnectError:
+        logger.error("无法连接到IOTDA接口")
+        raise HTTPException(status_code=503, detail="无法连接到IOTDA服务")
+    except Exception as e:
+        logger.error(f"设备指令代理错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"代理服务内部错误: {str(e)}")

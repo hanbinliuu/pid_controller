@@ -1,18 +1,15 @@
 from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, validator
 from typing import Dict, List, Optional, Union
 from datetime import datetime, timedelta
 import json
-import re
 import os
 import logging
 
-from torch.optim.optimizer import required
 
 from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool
-from core.data.mock_tsdb_client import query_raw_data
+from core.data.real_tsdb_client import query_raw_data
 from core.data.real_tsdb_client import query_read_interpolated
 from api.routes.util import parse_time_to_milliseconds
 from core.utils import pid_converter
@@ -65,17 +62,20 @@ def get_default_database() -> str:
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data(
         table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-        field: str = Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
+        fields: Optional[List[str]] = Query(..., description="测点名", example=[
+            "ns=100;s=FIC101A_MV.In_Channel0",
+            "ns=100;s=FIC101A_PV.In_Channel0",
+            "ns=100;s=FIC101A_SV.In_Channel0",
+            "ns=100;s=FIC101A_PB.In_Channel0",
+            "ns=100;s=FIC101A_TI.In_Channel0",
+            "ns=100;s=FIC101A_TD.In_Channel0"
+    ]),
         start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
         end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
-                                                    "2022-01-02"]),
-        kp: float = Query(..., description="比例系数", example=1.5, gt=0),
-        ki: float = Query(..., description="积分系数", example=0.05, ge=0),
-        kd: float = Query(..., description="微分系数", example=0.08, ge=0),
-        target_temp: float = Query(..., description="目标温度", example=30)
+                                                    "2022-01-02"])
 ):
     try:
         # 参数验证
@@ -84,7 +84,11 @@ async def get_history_data(
                 status_code=400,
                 detail="表名参数不能为空"
             )
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
 
+        if start_time is None:
+            start_time = end_time - 30000  # 1小时前（30秒 * 1000毫秒）
         # 时间格式转换和验证
         try:
             start_time_ms = parse_time_to_milliseconds(start_time)
@@ -102,46 +106,16 @@ async def get_history_data(
                 detail="开始时间必须小于结束时间"
             )
 
-        # 验证PID参数
-        if kp <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="比例系数kp必须大于0"
-            )
-
-        if ki < 0:
-            raise HTTPException(
-                status_code=400,
-                detail="积分系数ki不能为负数"
-            )
-
-        if kd < 0:
-            raise HTTPException(
-                status_code=400,
-                detail="微分系数kd不能为负数"
-            )
-
-        # 定义需要查询的字段
-        # required_fields = [
-        #     "temperature",
-        #     "control_period",
-        #     "max_duty"
-        # ]
-
         # 使用环境变量中的数据库名
         db = get_default_database()
-
+        fields.append("time")
         # 使用新的查询方法
         history_data = _query_tsdb_data(
             db=db,
             table_name=table,
-            required_fields=[field],
+            required_fields=fields,
             start_time=start_time_ms,
             end_time=end_time_ms,
-            kp=kp,
-            ki=ki,
-            kd=kd,
-            target_temp=target_temp
         )
 
         # 格式化响应数据
@@ -190,18 +164,104 @@ async def get_history_data(
 """
 
 
-@router.get("/history-data-zhongkong",
+@router.get("/history-data-zhongkong-raw-data",
             summary="历史数据查询_中控",
             operation_id="历史数据_PID数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data_zhongkong(
-        start_time: Union[int, str] = Query(...,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
+        start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1761357384979, "2025-01-01 12:00:00", "2025-01-01T12:00:00",
                                                       "2025-01-01"]),
-        end_time: Union[int, str] = Query(...,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
+        end_time: Union[int, str] = Query(None,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
+                                          examples=[1761457384979, "2025-01-02 12:00:00", "2025-01-02T12:00:00",
+                                                    "2025-01-02"])
+):
+    table = "PID_FEP_Gateway_Device_001default"
+    required_fields = [
+        "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
+        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值
+        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值
+        "ns=100;s=FIC101A_PB.In_Channel0",
+        "ns=100;s=FIC101A_TI.In_Channel0",
+        "ns=100;s=FIC101A_TD.In_Channel0"
+    ]
+    try:
+        # 参数验证
+        if not table or not table.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="表名参数不能为空"
+            )
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
+
+        if start_time is None:
+            start_time = end_time - 30000  # 1小时前（30秒 * 1000毫秒）
+        # 时间格式转换和验证
+        try:
+            start_time_ms = parse_time_to_milliseconds(start_time)
+            end_time_ms = parse_time_to_milliseconds(end_time)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"时间格式错误: {str(e)}"
+            )
+
+        # 验证时间范围
+        if start_time_ms >= end_time_ms:
+            raise HTTPException(
+                status_code=400,
+                detail="开始时间必须小于结束时间"
+            )
+        # 使用环境变量中的数据库名
+        db = get_default_database()
+        required_fields.append("time")
+        # 使用新的查询方法
+        history_data = _query_tsdb_data(
+            db=db,
+            table_name=table,
+            required_fields=required_fields,
+            start_time=start_time_ms,
+            end_time=end_time_ms
+        )
+        print(history_data)
+        # 格式化响应数据
+        response_data = {
+            "status": "success",
+            "table": table,
+            "start_time": start_time,
+            "end_time": end_time,
+            "totalRecords": len(history_data),
+            "data": history_data
+        }
+
+        return response_data
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取历史数据失败: {str(e)}"
+        )
+
+@router.get("/history-data-zhongkong",
+            summary="历史插值数据查询_中控",
+            operation_id="历史插值数据查询_中控",
+            description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
+async def get_history_zhongkong_interpolated(
+        start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
+                                            examples=[1761357384979, "2025-01-01 12:00:00", "2025-01-01T12:00:00",
+                                                      "2025-01-01"]),
+        end_time: Union[int, str] = Query(None,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1761457384979, "2025-01-02 12:00:00", "2025-01-02T12:00:00",
                                                     "2025-01-02"]),
+        is_filter: bool = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式",
+                                          examples=True),
 ):
+    if end_time is None:
+        end_time = int(datetime.now().timestamp() * 1000)
+
+    if start_time is None:
+        start_time = end_time - 30000  # 1小时前（30秒 * 1000毫秒）
     table = "PID_FEP_Gateway_Device_001default"
     required_fields = [
         "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
@@ -244,9 +304,10 @@ async def get_history_data_zhongkong(
             table_name=table,
             required_fields=required_fields,
             start_time=start_time_ms,
-            end_time=end_time_ms
+            end_time=end_time_ms,
+            is_filter=is_filter
         )
-
+        print(history_data)
         # 格式化响应数据
         response_data = {
             "status": "success",
@@ -264,15 +325,20 @@ async def get_history_data_zhongkong(
             status_code=500,
             detail=f"获取历史数据失败: {str(e)}"
         )
-
-
 @router.get("/point_history_data",
             summary="原始测点仿真系统数据查询",
             operation_id="原始测点仿真系统数据查询",
             description="查询指定设备在指定时间范围内的原始仿真数据，支持多种时间格式")
 async def get_point_history_data(
         table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-        fields: Optional[List[str]] = Query(...,required=False, description="测点名", example="ns=100;s=FI15001.In_Channel0"),
+        fields: Optional[List[str]] = Query(..., description="测点名", example=[
+            "ns=100;s=FIC101A_MV.In_Channel0",
+            "ns=100;s=FIC101A_PV.In_Channel0",
+            "ns=100;s=FIC101A_SV.In_Channel0",
+            "ns=100;s=FIC101A_PB.In_Channel0",
+            "ns=100;s=FIC101A_TI.In_Channel0",
+            "ns=100;s=FIC101A_TD.In_Channel0"
+        ]),
         start_time: Union[int, str] = Query(...,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
@@ -289,7 +355,11 @@ async def get_point_history_data(
         #         status_code=400,
         #         detail="表名参数不能为空"
         #     )
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
 
+        if start_time is None:
+            start_time = end_time - 30000  # 1小时前（30秒 * 1000毫秒）
         # 时间格式转换和验证
         try:
             start_time_ms = parse_time_to_milliseconds(start_time)
@@ -317,8 +387,7 @@ async def get_point_history_data(
             fields=["time", fields],
             start_time=start_time_ms,
             end_time=end_time_ms,
-            limit=limit,
-            use_real_tsdb=True
+            limit=limit
         )
         # history_data = json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -333,82 +402,6 @@ async def get_point_history_data(
                 "columns": result.columns,
                 "values": result.values,
             }
-        }
-
-        return response_data
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"获取历史数据失败: {str(e)}"
-        )
-
-
-@router.get("/history-data_mock",
-            summary="历史数据查询（模拟）",
-            operation_id="历史数据查询_模拟",
-            description="查询指定设备在指定时间范围内的历史数据（使用模拟数据源）")
-async def get_history_data_mock(
-        db: str = Query(..., description="数据库名（库名）", example="platform"),
-        table: str = Query(..., description="设备名（表名）", example="ns-01f-001"),
-        start_time: Union[int, str] = Query(...,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
-                                            examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
-                                                      "2022-01-01"]),
-        end_time: Union[int, str] = Query(...,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
-                                          examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
-                                                    "2022-01-02"])
-):
-    """
-    **获取设备历史数据 - HistoryDataTool**
-
-    从时序数据库(TSDB)中获取指定设备在特定时间范围内的历史数据。
-
-    **功能说明：**
-    - 基于设备名和时间范围的精确查询
-    - 自动获取PID控制所需的所有关键字段
-    - 智能缺失值填充，确保数据完整性
-    - 高效的数据格式处理和结构化输出
-
-    **数据字段：**
-    - timestamp: 时间戳（毫秒）
-    - temperature: 实际温度值
-    - target_temp: 目标温度设定值
-    - kp, ki, kd: PID控制参数
-    - control_period: 控制周期
-    - max_duty: 最大占空比
-
-    **返回格式：**
-    - status: 查询结果状态
-    - totalRecords: 数据记录总数
-    - data: 完整的历史数据数组
-
-    **应用场景：**
-    - PID控制系统分析前的数据准备
-    - 历史趋势分析和性能评估
-    - 控制算法优化的数据基础
-    - 故障诊断和系统调试
-    """
-    # 时间格式转换和验证
-    try:
-        start_time_ms = parse_time_to_milliseconds(start_time)
-        end_time_ms = parse_time_to_milliseconds(end_time)
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"时间格式错误: {str(e)}"
-        )
-    try:
-        # 使用新的查询方法
-        history_data = _query_tsdb_data_mock(db=db, table_name=table, start_time=start_time_ms, end_time=end_time_ms)
-
-        # 格式化响应数据
-        response_data = {
-            "status": "success",
-            "table": table,
-            "start_time": start_time,
-            "end_time": end_time,
-            "totalRecords": len(history_data),
-            "data": history_data
         }
 
         return response_data
@@ -725,7 +718,9 @@ def _query_tsdb_data_mock(db: str, table_name: str, start_time: int, end_time: i
     }
 
     # 调用时序数据查询接口
-    response = query_raw_data(query_request)
+    response =  query_raw_data(db=db, table=table_name, fields=required_fields, start_time=start_time,
+                                       end_time=end_time,
+                                       tags=tags)
 
     # 检查响应状态
     if response.get("code") != 0:
@@ -768,7 +763,9 @@ def _query_tsdb_data_zhongkong(db: str,
                                required_fields: List[str],
                                start_time: int,
                                end_time: int,
-                               tags: Optional[Dict[str, str]] = None) -> List[Dict]:
+                               tags: Optional[Dict[str, str]] = None,
+                               is_filter:Optional[bool]=True
+                               ) -> List[Dict]:
     first_time = datetime.now().timestamp()
 
     """
@@ -794,7 +791,7 @@ def _query_tsdb_data_zhongkong(db: str,
         tags=tags,
         continuation_point=None
     )
-
+    # print(response)
     columns = response.columns or []
     values = response.values
     latest_value = values[-1]
@@ -802,7 +799,11 @@ def _query_tsdb_data_zhongkong(db: str,
     latest_ti = latest_value[2]
     latest_td = latest_value[5]
     latest_sv = latest_value[1]
-    filter_values=process_lists_optimized(values)[0]
+
+    if  (is_filter is None) or is_filter:
+        filter_values=process_lists_optimized(values)[0]
+    else:
+        filter_values=values
 
     # 解析当前页数据并添加到all_records
     for value_row in filter_values:
@@ -828,13 +829,13 @@ def _query_tsdb_data_zhongkong(db: str,
         all_records.append(record)
     #     # 数据判断，是否为最新数据
     #     # 过滤数据：只保留参数与最新数据相同的记录
-    #     if (record.get("pb") == latest_pb and
-    #             record.get("ti") == latest_ti and
-    #             record.get("td") == latest_td and
-    #             record.get("sv") == latest_sv):
-    #         all_records.append(record)
-    #     else:
-    #         break
+        if (record.get("pb") == latest_pb and
+                record.get("ti") == latest_ti and
+                record.get("td") == latest_td and
+                record.get("sv") == latest_sv):
+            all_records.append(record)
+        else:
+            break
 
     # 解析查询结果
     history_data = []
@@ -870,14 +871,17 @@ def _query_tsdb_data(db: str,
                      required_fields: List[str],
                      start_time: int,
                      end_time: int,
-                     kp: float,
-                     ki: float,
-                     kd: float,
-                     target_temp: float,
                      tags: Optional[Dict[str, str]] = None) -> List[Dict]:
     """查询时序数据，但使用传入的PID参数覆盖查询结果"""
     # 定义仅查询必要的字段（不包括PID参数）
-    query_fields = [field for field in required_fields if field not in ["kp", "ki", "kd", "target_temp"]]
+    query_fields = [field for field in required_fields if field not in [
+        "ns=100;s=FIC101A_MV.In_Channel0",  # mv
+        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值  pv
+        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值  sv
+        "ns=100;s=FIC101A_PB.In_Channel0",  # 比例带  pb
+        "ns=100;s=FIC101A_TI.In_Channel0",  # 积分参数 ti
+        "ns=100;s=FIC101A_TD.In_Channel0"  # 微分参数 td
+    ]]
     begin_time = datetime.now().timestamp()
 
     # 构造查询请求
@@ -900,7 +904,7 @@ def _query_tsdb_data(db: str,
     }
 
     # 调用时序数据查询接口
-    response = query_read_interpolated(db=db, table=table_name, fields=query_fields, start_time=start_time,
+    response = query_raw_data(db=db, table=table_name, fields=required_fields, start_time=start_time,
                                        end_time=end_time,
                                        tags=tags)
 
@@ -919,20 +923,26 @@ def _query_tsdb_data(db: str,
                 if i < len(value_row):
                     if column == "time":
                         record["timestamp"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_MV.In_Channel0":
+                        record["mv"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_PV.In_Channel0":
+                        record["pv"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_SV.In_Channel0":
+                        record["sv"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_PB.In_Channel0":
+                        record["pb"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_TI.In_Channel0":
+                        record["ti"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_TD.In_Channel0":
+                        record["td"] = value_row[i]
                     else:
                         record[column] = value_row[i]
 
             # 确保包含查询字段的默认值
             for field in query_fields:
-                record["temperature"] = record[field]
+                # record["temperature"] = record[field]
                 if field not in record:
                     record[field] = None
-
-                    # 使用传入的PID参数覆盖任何查询结果
-            record["kp"] = kp
-            record["ki"] = ki
-            record["kd"] = kd
-            record["target_temp"] = target_temp
 
             history_data.append(record)
     over_time = datetime.now().timestamp()

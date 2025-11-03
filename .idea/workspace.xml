@@ -4,12 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d2303dfa-d636-4d53-9755-c089cae1a793" name="更改" comment="接口支持中控仿真系统">
+    <list default="true" id="d2303dfa-d636-4d53-9755-c089cae1a793" name="更改" comment="依赖支持">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/api/routes/analysis_router.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes/analysis_router.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api/routes/proxy_router.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes/proxy_router.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/core/data/real_tsdb_client.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/data/real_tsdb_client.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/core/data/tsdb_data_source.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/data/tsdb_data_source.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/core/utils/pid_converter.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/utils/pid_converter.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -39,38 +38,38 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "Python 测试.example_tool_usage.test_pid_optimization_tool 的 Python 测试.executor": "Run",
-    "Python 测试.test_analysis_apis.test_history_data_api 的 Python 测试.executor": "Run",
-    "Python 测试.test_continuation.test_auto_continuation 的 Python 测试.executor": "Run",
-    "Python 测试.test_real_tsdb_client.test_integration_with_existing_api 的 Python 测试.executor": "Run",
-    "Python 测试.test_real_tsdb_client.test_real_tsdb_client 的 Python 测试.executor": "Run",
-    "Python 测试.test_simulator_integration.test_simulator_with_analysis_tools 的 Python 测试.executor": "Debug",
-    "Python 测试.test_time_param.test_field_filtering 的 Python 测试.executor": "Run",
-    "Python.analysis_router.executor": "Run",
-    "Python.main.executor": "Run",
-    "Python.pid_converter.executor": "Run",
-    "Python.pid_data_simulator.executor": "Run",
-    "Python.real_tsdb_client.executor": "Run",
-    "Python.run_server.executor": "Debug",
-    "Python.tsdb_api.executor": "Run",
-    "Python.tsdb_router.executor": "Debug",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "Shell Script.build.sh.executor": "Run",
-    "git-widget-placeholder": "develop",
-    "last_opened_file_path": "/Users/dingzhenying/project/pythonProject/pid-agent-mvp",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "run.code.analysis.last.selected.profile": "pProject Default",
-    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Python 测试.example_tool_usage.test_pid_optimization_tool 的 Python 测试.executor&quot;: &quot;Run&quot;,
+    &quot;Python 测试.test_analysis_apis.test_history_data_api 的 Python 测试.executor&quot;: &quot;Run&quot;,
+    &quot;Python 测试.test_continuation.test_auto_continuation 的 Python 测试.executor&quot;: &quot;Run&quot;,
+    &quot;Python 测试.test_real_tsdb_client.test_integration_with_existing_api 的 Python 测试.executor&quot;: &quot;Run&quot;,
+    &quot;Python 测试.test_real_tsdb_client.test_real_tsdb_client 的 Python 测试.executor&quot;: &quot;Run&quot;,
+    &quot;Python 测试.test_simulator_integration.test_simulator_with_analysis_tools 的 Python 测试.executor&quot;: &quot;Debug&quot;,
+    &quot;Python 测试.test_time_param.test_field_filtering 的 Python 测试.executor&quot;: &quot;Run&quot;,
+    &quot;Python.analysis_router.executor&quot;: &quot;Run&quot;,
+    &quot;Python.main.executor&quot;: &quot;Run&quot;,
+    &quot;Python.pid_converter.executor&quot;: &quot;Run&quot;,
+    &quot;Python.pid_data_simulator.executor&quot;: &quot;Run&quot;,
+    &quot;Python.real_tsdb_client.executor&quot;: &quot;Run&quot;,
+    &quot;Python.run_server.executor&quot;: &quot;Debug&quot;,
+    &quot;Python.tsdb_api.executor&quot;: &quot;Run&quot;,
+    &quot;Python.tsdb_router.executor&quot;: &quot;Debug&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;Shell Script.build.sh.executor&quot;: &quot;Run&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;develop&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/dingzhenying/project/pythonProject/pid-agent-mvp&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;run.code.analysis.last.selected.profile&quot;: &quot;pProject Default&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/static/swagger" />
@@ -232,6 +231,10 @@
       <workItem from="1760669798239" duration="29146000" />
       <workItem from="1761372109799" duration="34922000" />
       <workItem from="1761660069434" duration="41402000" />
+      <workItem from="1761882513033" duration="395000" />
+      <workItem from="1761883283754" duration="4372000" />
+      <workItem from="1761961641401" duration="3277000" />
+      <workItem from="1762135330362" duration="15579000" />
     </task>
     <task id="LOCAL-00001" summary="描述文档提交">
       <option name="closed" value="true" />
@@ -289,7 +292,15 @@
       <option name="project" value="LOCAL" />
       <updated>1761635892637</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="依赖支持">
+      <option name="closed" value="true" />
+      <created>1761890128290</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1761890128290</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -313,45 +324,91 @@
     <MESSAGE value="屏蔽pid参数调优建议" />
     <MESSAGE value="接口添加operation_id描述" />
     <MESSAGE value="接口支持中控仿真系统" />
-    <option name="LAST_COMMIT_MESSAGE" value="接口支持中控仿真系统" />
+    <MESSAGE value="依赖支持" />
+    <option name="LAST_COMMIT_MESSAGE" value="依赖支持" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/core/data/real_tsdb_client.py</url>
-          <line>516</line>
+          <line>506</line>
           <option name="timeStamp" value="1" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>800</line>
-          <option name="timeStamp" value="11" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>910</line>
+          <line>914</line>
           <option name="timeStamp" value="13" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>839</line>
+          <line>840</line>
           <option name="timeStamp" value="20" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>250</line>
-          <option name="timeStamp" value="23" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>862</line>
+          <line>863</line>
           <option name="timeStamp" value="25" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>807</line>
-          <option name="timeStamp" value="26" />
+          <line>802</line>
+          <option name="timeStamp" value="27" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
+          <line>383</line>
+          <option name="timeStamp" value="28" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/data/real_tsdb_client.py</url>
+          <line>531</line>
+          <option name="timeStamp" value="30" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/data/real_tsdb_client.py</url>
+          <line>117</line>
+          <option name="timeStamp" value="32" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
+          <line>906</line>
+          <option name="timeStamp" value="33" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
+          <line>946</line>
+          <option name="timeStamp" value="34" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
+          <line>884</line>
+          <option name="timeStamp" value="35" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
+          <line>219</line>
+          <option name="timeStamp" value="36" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
+          <line>273</line>
+          <option name="timeStamp" value="37" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
+          <line>787</line>
+          <option name="timeStamp" value="39" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
+          <line>264</line>
+          <option name="timeStamp" value="40" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
+          <line>775</line>
+          <option name="timeStamp" value="41" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
@@ -359,7 +416,7 @@
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/pid_agent_mvp$main.coverage" NAME="main 覆盖结果" MODIFIED="1759150392104" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/api" />
     <SUITE FILE_PATH="coverage/pid_agent_mvp$pid_converter.coverage" NAME="pid_converter 覆盖结果" MODIFIED="1759971377233" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/utils" />
-    <SUITE FILE_PATH="coverage/pid_agent_mvp$run_server.coverage" NAME="run_server 覆盖结果" MODIFIED="1761809636628" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$run_server.coverage" NAME="run_server 覆盖结果" MODIFIED="1762156485557" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/pid_agent_mvp$analysis_router.coverage" NAME="analysis_router 覆盖结果" MODIFIED="1761802552623" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/api/routes" />
     <SUITE FILE_PATH="coverage/pid_agent_mvp$.coverage" NAME=" 覆盖结果" MODIFIED="1761721208228" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/test" />
     <SUITE FILE_PATH="coverage/pid_agent_mvp$pid_data_simulator.coverage" NAME="pid_data_simulator 覆盖结果" MODIFIED="1759152461922" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/data" />

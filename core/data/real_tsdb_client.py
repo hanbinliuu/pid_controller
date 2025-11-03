@@ -137,7 +137,7 @@ class RealTSDBDataSource(TSDBDataSource):
             if db:
                 url += f"?db={db}"
             logger.info(f"发送TSDB查询请求到: {url}")
-            logger.info(f"请求参数: {json.dumps(request_payload, indent=2)}")
+            # logger.info(f"请求参数: {json.dumps(request_payload, indent=2)}")
             
             response = self._make_request_with_retry('POST', url, json=request_payload)
             
@@ -187,13 +187,6 @@ class RealTSDBDataSource(TSDBDataSource):
         # 检查必需参数
         if not table:
             return DataPoint(columns=[], values=[])
-        
-        # 如果未传时间区间，使用默认值（最近1小时）
-        if end_time is None:
-            end_time = int(datetime.now().timestamp() * 1000)
-        
-        if start_time is None:
-            start_time = end_time - 3600000  # 1小时前（3600秒 * 1000毫秒）
 
         try:
             all_values = []  # 存储所有分页的数据
@@ -242,16 +235,12 @@ class RealTSDBDataSource(TSDBDataSource):
                     if not page_data.values:
                         logger.warning(f"第{page_count}页无数据返回，查询结束")
                         break
-
                     # 保存列信息和标签信息（第一页）
                     if all_columns is None:
                         all_columns = page_data.columns
                         all_tags = page_data.tags
-
-
                     # 合并当前页数据
                     all_values.extend(page_data.values)
-                    
                     if page_data.continuation_point:
                         current_continuation_point = page_data.continuation_point
                     else:
@@ -264,6 +253,7 @@ class RealTSDBDataSource(TSDBDataSource):
                 logger.warning(f"达到最大分页数限制({max_pages})，停止查询")
             
             logger.info(f"========== 循环查询完成 ==========" )
+            logger.info(f"数据: {all_values}")
             logger.info(f"总查询页数: {page_count}")
             logger.info(f"总数据条数: {len(all_values)}")
             over_time = datetime.now().timestamp()
