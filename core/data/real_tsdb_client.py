@@ -253,7 +253,7 @@ class RealTSDBDataSource(TSDBDataSource):
                 logger.warning(f"达到最大分页数限制({max_pages})，停止查询")
             
             logger.info(f"========== 循环查询完成 ==========" )
-            logger.info(f"数据: {all_values}")
+            # logger.info(f"数据: {all_values}")
             logger.info(f"总查询页数: {page_count}")
             logger.info(f"总数据条数: {len(all_values)}")
             over_time = datetime.now().timestamp()
