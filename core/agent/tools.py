@@ -3,6 +3,11 @@ import json  # 移到全局导入
 import traceback  # 添加traceback导入
 import sys
 import os
+
+import numpy as np
+
+from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
@@ -142,7 +147,7 @@ class PIDOptimizationTool():
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
     
-    def _run(self, history_data: str) -> str:
+    def _run(self, history_data: str,is_lambda: bool) -> str:
         try:
             # 解析输入的历史数据
             if isinstance(history_data, str):
@@ -191,8 +196,8 @@ class PIDOptimizationTool():
             
             # 计算性能指标
             temp_std = self._calculate_std(temp_data) #标准差
-            steady_state_value = sum(temp_data[-5:]) / min(5, len(temp_data))
-            steady_error = float(current_params["sv"] - steady_state_value)
+            steady_state_value = sum(temp_data[-5:]) / min(5, len(temp_data)) #稳态值
+            steady_error = float(current_params["sv"] - steady_state_value) #稳态误差
             
             # 评估系统性能
             #响应速度
@@ -203,10 +208,18 @@ class PIDOptimizationTool():
             accuracy = "good" if abs(steady_error) < 0.5 else "poor"
             
             # 生成PID调优建议
-            # tuning_suggestions = self._generate_tuning_suggestions(
-            #     current_params, steady_error, temp_std, response_speed, stability, accuracy
-            # )
-            
+            tuning_suggestions = self._generate_tuning_suggestions(
+                current_params, steady_error, temp_std, response_speed, stability, accuracy
+            )
+            if is_lambda:
+                # 基于Lambda方法的整定建议（支持 mv 与 timestamp）
+                try:
+                    lambda_suggestions = self._compute_lambda_suggestions(data_list)
+                    if lambda_suggestions is not None:
+                        tuning_suggestions["lambda_suggested_params"] = lambda_suggestions
+                except Exception as e:
+                    print(f"优化分析失败，错误: {str(e)}")
+                    print(f"错误堆栈: {traceback.format_exc()}")
             # 生成分析结果
             analysis_result = {
                 "current_params": current_params,
@@ -221,10 +234,10 @@ class PIDOptimizationTool():
                     "stability": stability,#稳定性
                     "accuracy": accuracy #精度
                 }
-                # ,"tuning_suggestions": tuning_suggestions #调参建议
+                ,"tuning_suggestions": tuning_suggestions #调参建议
             }
             
-            print(f"优化分析结果: {json.dumps(analysis_result, indent=2)}")
+            print(f"优化分析结果: {json.dumps(analysis_result, indent=2,ensure_ascii=False)}")
             return json.dumps(analysis_result)
             
         except Exception as e:
@@ -246,10 +259,10 @@ class PIDOptimizationTool():
         
         # 基于稳态误差的建议
         if abs(steady_error) > 1.0:
-            if steady_error > 0:  # 温度低于目标
-                suggestions.append("增加Kp参数或Ki参数以提高温度")
+            if steady_error > 0:  # 当前值低于目标
+                suggestions.append("增加Kp参数或Ki参数以提高当前值")
             else:  # 温度高于目标
-                suggestions.append("减小Kp参数或Ki参数以降低温度")
+                suggestions.append("减小Kp参数或Ki参数以降低当前值")
         
         # 基于稳定性的建议
         if stability == "unstable":
@@ -260,25 +273,75 @@ class PIDOptimizationTool():
             suggestions.append("响应过慢，建议适度增加Kp参数")
         
         # 建议的参数调整值
-        suggested_params = current_params.copy()
+        # suggested_params = current_params.copy()
         
-        if abs(steady_error) > 1.0:
-            if steady_error > 0:
-                suggested_params["kp"] = min(current_params["kp"] * 1.1, 10.0)
-                suggested_params["ki"] = min(current_params["ki"] * 1.05, 1.0)
-            else:
-                suggested_params["kp"] = max(current_params["kp"] * 0.9, 0.1)
-                suggested_params["ki"] = max(current_params["ki"] * 0.95, 0.01)
+        # if abs(steady_error) > 1.0:#稳态误差>1
+        #     if steady_error > 0:
+        #         suggested_params["kp"] = min(current_params["kp"] * 1.1, 10.0)
+        #         suggested_params["ki"] = min(current_params["ki"] * 1.05, 1.0)
+        #     else:
+        #         suggested_params["kp"] = max(current_params["kp"] * 0.9, 0.1)
+        #         suggested_params["ki"] = max(current_params["ki"] * 0.95, 0.01)
+        #
+        # if stability == "unstable": #不稳定
+        #     suggested_params["kp"] = max(suggested_params["kp"] * 0.8, 0.1)
+        #     suggested_params["kd"] = min(suggested_params["kd"] * 1.2, 1.0)
 
-        if stability == "unstable":
-            suggested_params["kp"] = max(suggested_params["kp"] * 0.8, 0.1)
-            suggested_params["kd"] = min(suggested_params["kd"] * 1.2, 1.0)
-        
         return {
             "recommendations": suggestions, #调参建议
-            "suggested_params": suggested_params, #建议值
+            # "suggested_params": suggested_params, #建议值
             "priority": "high" if (abs(steady_error) > 2.0 or stability == "unstable") else "medium" #优先级
         }
+
+    # lambda整定建议 by liu hanbin
+    def _compute_lambda_suggestions(self, data_list: List[Dict]) -> Optional[Dict]:
+        """从数据中提取t(秒)、y(pv)、u(mv)，进行FOPDT辨识并返回Lambda整定建议"""
+        try:
+            n = len(data_list)
+            # if n < 20:
+            #     print(f"数据量少于20组{len(data_list)},无法进行整定分析")
+            #     return None
+
+            # 时间轴: 使用timestamp毫秒，转为相对秒
+            if 'timestamp' in data_list[0]:
+                ts0 = float(data_list[0]['timestamp'])
+                t = np.array([(float(r['timestamp']) - ts0) / 1000.0 for r in data_list], dtype=float)
+            else:
+                t = np.arange(n, dtype=float)
+
+            # 输出y: 使用pv为过程变量
+            y = np.array([float(r.get('pv', r.get('temperature', 0.0))) for r in data_list], dtype=float)
+
+            # 输入u: 优先使用mv(操纵量/阀门开度)
+            u = None
+            if 'mv' in data_list[0]:
+                u = np.array([float(r.get('mv', 0.0)) for r in data_list], dtype=float)
+
+            if u is None or np.max(np.abs(u)) < 1e-6:
+                return None
+
+            # KTLBatchProcessor.plot_comparison(t=t, y=y, u=u,methods=None)
+            #todo 基于历史值推断系统模型类型
+
+            #FOPDT参数辨识与Lambda整定
+            K, T= SystemIdentifier.identify_first_order(t,y,u)
+            lambda_val = max(T * 0.4, 0.1)
+            Kp, Ti, Td = SystemIdentifier.lambda_tuning_for_flow(K, T,0,lambda_val, mode="flow_control")
+
+            # K, T= FlowValveLambdaTuner.identify_first_order(t, y, u)
+            # lambda_val = T * 0.3 #
+            # Kp, Ti, Td = FlowValveLambdaTuner.lambda_tuning(K, T, mode="standard")
+            # Pb=1/Kp
+            return {
+                "params": {"Kp": float(Kp), "ki": float(Kp / Ti) if Ti > 1e-6 else 0.0, "kd": float(Kp * Td),"Pb": float(1/Kp* 100),"Ti": float(Ti),"Td": float(Td)},
+                "pid_form": "Kp-Ti-Td",
+                "model": {"K": float(K), "T": float(T), "L": float(0)},
+                "lambda": float(lambda_val),
+                "note": "基于一阶相应模型辨识与Lambda方法的推荐值"
+            }
+        except Exception as e:
+            print(f"Lambda整定计算失败: {e}")
+            return None
 
 def get_tools() -> List:
     """创建工具实例
