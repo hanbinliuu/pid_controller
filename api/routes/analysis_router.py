@@ -1413,7 +1413,6 @@ def _query_tsdb_data_zhongkong(db: str,
             record["kd"] = result["kd"]
 
             history_data.append(record)
-        over_time = datetime.now().timestamp()
     over_time = datetime.now().timestamp()
     logger.info(f"查询耗时：{over_time-first_time}")
     return history_data

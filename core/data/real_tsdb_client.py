@@ -152,6 +152,7 @@ class RealTSDBDataSource(TSDBDataSource):
         except Exception as e:
             logger.error(f"查询TSDB数据时发生异常: {str(e)}")
             return DataPoint(columns=[], values=[])
+
     #时序差值数据查询
     def query_read_interpolated(
         self,

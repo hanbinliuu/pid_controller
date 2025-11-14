@@ -9,7 +9,6 @@ import numpy as np
 import matplotlib
 
 from core.algorithm.detector import StabilityDetector
-from core.algorithm.single_json_test import load_json
 
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
@@ -933,6 +932,50 @@ def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_t
         'disturbance_starts': starts_with_timestamp,  # (start_idx, start_timestamp, setpoint)
         'disturbance_ends': disturbance_ends  # (end_idx, end_timestamp, setpoint)
     }
+
+
+def load_json(data_list: List[Dict]):
+    """
+    从JSON文件加载数据
+
+    Returns:
+        t: 相对时间数组（秒）
+        t_original: 原始时间戳数组（毫秒或秒）
+        pv: 过程值数组
+        mv: 控制输出数组
+        sv: 设定值数组
+    """
+
+    # 提取数据
+    timestamps, pv_list, mv_list, sv_list = [], [], [], []
+    for item in data_list:
+        if 'timestamp' in item:
+            timestamps.append(item['timestamp'])
+        if 'pv' in item:
+            pv_list.append(item['pv'])
+        if 'mv' in item:
+            mv_list.append(item['mv'])
+        if 'sv' in item:
+            sv_list.append(item['sv'])
+
+    # 确保数据长度一致
+    min_len = min(len(timestamps), len(pv_list))
+    t_original = np.array(timestamps[:min_len])  # 原始时间戳
+    pv = np.array(pv_list[:min_len])
+    mv = np.array(mv_list[:min_len]) if mv_list else None
+    sv = np.array(sv_list[:min_len]) if sv_list else None
+
+    # 转换时间戳为相对时间（秒）
+    t = t_original.copy()
+    if t[0] > 1e10:  # 毫秒时间戳
+        t = t / 1000.0
+    t = t - t[0]  # 相对时间
+
+    # 如果没有SV，使用PV的平均值
+    if sv is None:
+        sv = np.full_like(pv, np.mean(pv))
+
+    return t, t_original, pv, mv, sv
 
 def get_tools() -> List:
     """创建工具实例
