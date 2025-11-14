@@ -115,14 +115,14 @@ class FlowValveLambdaTuner:
             if result.success:
                 K, T = result.x
                 cost = result.cost
-                print(f"✅ 优化成功! 残差平方和: {cost:.6f}")
-                print(f"✅ 辨识参数: K={K:.4f}, T={T:.2f}s")
+                print(f"优化成功! 残差平方和: {cost:.6f}")
+                print(f"辨识参数: K={K:.4f}, T={T:.2f}s")
             else:
-                print(f"⚠️ 优化未完全收敛: {result.message}")
+                print(f"优化未完全收敛: {result.message}")
                 K, T = result.x
 
         except Exception as e:
-            print(f"❌ 参数辨识失败：{e}")
+            print(f"c参数辨识失败：{e}")
             print(f"使用初始猜测值: K={initial_guess[0]:.3f}, T={initial_guess[1]:.1f}s")
             K, T = initial_guess
 
@@ -173,7 +173,7 @@ class FlowValveLambdaTuner:
             T = min(T, 250.0)
 
         for warning in warnings:
-            print(f"⚠️ {warning}")
+            print(f"{warning}")
 
         return K, T
 
@@ -194,7 +194,7 @@ class FlowValveLambdaTuner:
         print(f"Lambda整定: K={K:.3f}, T={T:.1f}s, λ={lambda_val:.1f}")
 
         if abs(K * lambda_val) < 1e-6:
-            print("⚠️ 计算异常，使用安全参数")
+            print("计算异常，使用安全参数")
             return 1.0, T, 0.0
 
         # 基于内部模型控制的整定公式

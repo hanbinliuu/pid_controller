@@ -5,14 +5,14 @@
 """
 
 import os
+from datetime import datetime
+
 import requests
-import json
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import logging
-from datetime import datetime, timedelta
 
-from core.data.mock_tsdb_client import TSDBDataSource, DataPoint,MockTSDBDataSource
+from core.data.tsdb_data_source import DataPoint, TSDBDataSource
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -433,27 +433,17 @@ class TSDBClientFactory:
     """时序数据库客户端工厂"""
     
     @staticmethod
-    def create_client(use_real_tsdb: Optional[bool] = None, config: Optional[TSDBConfig] = None) -> TSDBDataSource:
+    def create_client( config: Optional[TSDBConfig] = None) -> TSDBDataSource:
         """
         创建时序数据库客户端
         
         Args:
-            use_real_tsdb: 是否使用真实TSDB，如果为None则从环境变量读取
             config: TSDB配置
-            
         Returns:
             TSDBDataSource: 数据源实例
         """
         # 如果没有指定，从环境变量读取
-        if use_real_tsdb is None:
-            use_real_tsdb = os.getenv('USE_REAL_TSDB', 'false').lower() in ['true', '1', 'yes', 'on']
-        
-        if use_real_tsdb:
-            logger.info("创建实际TSDB客户端")
-            return RealTSDBDataSource(config)
-        else:
-            logger.info("创建模拟TSDB客户端")
-            return MockTSDBDataSource()
+        return RealTSDBDataSource(config)
     
     @staticmethod
     def create_real_client(
@@ -529,7 +519,7 @@ def query_raw_data(
     Returns:
         DataPoint: 查询结果
     """
-    client = TSDBClientFactory.create_client(True)
+    client = TSDBClientFactory.create_client()
     return client.query_raw_data(
         db=db,
         table=table,
@@ -570,7 +560,7 @@ def query_read_interpolated(
     Returns:
         DataPoint: 查询结果（如未传时间参数，默认查询最近1小时数据）
     """
-    client = TSDBClientFactory.create_client(True)
+    client = TSDBClientFactory.create_client()
     return client.query_read_interpolated(
         db=db,
         table=table,
@@ -582,73 +572,3 @@ def query_read_interpolated(
         window=window,
         continuation_point=continuation_point
     )
-
-if __name__ == "__main__":
-    # 测试代码
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    
-    print("🔧 TSDB客户端测试")
-    print("=" * 50)
-    
-    # 测试配置加载
-    print("\n1. 测试配置加载...")
-    client = TSDBClientFactory.create_real_client()
-    print(f"   TSDB地址: {client.config.base_url}")
-    print(f"   超时时间: {client.config.timeout}秒")
-    
-    # 测试连接
-    print("\n2. 测试连接...")
-    if 1==1:
-    # if client.test_connection():
-        print("   ✅ 连接成功")
-        db_name='platform'
-        # 测试获取表列表
-        print("\n3. 测试获取数据库资源信息...")
-        db_info = client.get_db_data_size(db_name)
-        if db_info:
-            print(f" {db_name} 表： {db_info}")
-        else:
-            print("获取数据库资源信息失败")
-        
-        # 测试查询数据
-        print("\n4. 测试查询数据...")
-        try:
-            from datetime import datetime, timedelta
-            
-            # 查询最近1小时的数据
-            # end_time = int(datetime.now().timestamp() * 1000)
-            # start_time = end_time - 3600000  # 1小时前
-            start_time="2025-10-24 13:03:37"
-            end_time="2025-10-24 14:03:37"
-            result = client.query_read_interpolated(
-                db=db_name,
-                table="PID_FEP_Gateway_Device_001default",  # 使用常见的表名
-                fields=[
-                    "ns=100;s=FIC101A_MV.In_Channel0", # 控制输出值
-                    "ns=100;s=FIC101A_PV.In_Channel0", # 实时值
-                    "ns=100;s=FIC101A_SV.In_Channel0", # 设定值
-                    "ns=100;s=FIC101A_PB.In_Channel0",
-                    "ns=100;s=FIC101A_TI.In_Channel0",
-                    "ns=100;s=FIC101A_TD.In_Channel0"
-                ],
-                start_time=start_time,
-                end_time=end_time,
-                window = 1,
-                limit=100
-            )
-            
-            if result.values:
-                print(f"    查询成功，获得 {len(result.values)} 条记录")
-                print(f"    字段: {result.columns}")
-                if result.values:
-                    print(f"   📄 首条数据: {result.values[0]}")
-            else:
-                print("     未查询到数据")
-                
-        except Exception as e:
-            print(f"    查询失败: {str(e)}")
-    else:
-        print("   连接失败")
-    
-    print("\n 测试完成!")

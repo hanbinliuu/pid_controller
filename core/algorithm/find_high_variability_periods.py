@@ -41,14 +41,17 @@ def find_high_variability_periods(data, window_size=3600, step_size=600,
         # 计算窗口内的方差（排除NaN值）
         if len(window_data.dropna()) > window_size * 0.8:  # 至少80%有效数据
             clean_vals = window_data.dropna().to_numpy(dtype=float)
+            # 方差
             window_var = float(np.var(clean_vals))
+            # 窗口标准差
             window_std = float(np.std(clean_vals))
-            # diffs = np.diff(clean_vals) if len(clean_vals) > 1 else np.array([], dtype=float)
-            # step_deg = float(np.std(diffs)) if len(diffs) > 1 else 0.0
+            # 插值、标准差
+            diffs = np.diff(clean_vals) if len(clean_vals) > 1 else np.array([], dtype=float)
+            step_deg = float(np.std(diffs)) if len(diffs) > 1 else 0.0
             
             variances.append(window_var)
             window_starts.append(data_resampled.index[start])
-            window_stats.append((window_std))
+            window_stats.append(window_std)
 
     if not variances:
         return []
@@ -66,9 +69,9 @@ def find_high_variability_periods(data, window_size=3600, step_size=600,
             high_var_windows.append({
                 "start_time": start_time,
                 "end_time": end_time,
-                "variance": float(var),
-                "std": float(std_val),
-                # "step_degree": float(step_deg)
+                "variance": float(var), #方差
+                "std": float(std_val), #标准差
+                "step_degree": float(step_deg) #步长
             })
 
     return high_var_windows

@@ -137,8 +137,8 @@ def test_tsdb_factory():
         
         # 测试显式参数
         print("\n2. 🎯 测试显式参数...")
-        explicit_mock = TSDBClientFactory.create_client(use_real_tsdb=False)
-        explicit_real = TSDBClientFactory.create_client(use_real_tsdb=True)
+        explicit_mock = TSDBClientFactory.create_client()
+        explicit_real = TSDBClientFactory.create_client()
         
         print(f"   明确指定false: {type(explicit_mock).__name__}")
         print(f"   明确指定true: {type(explicit_real).__name__}")

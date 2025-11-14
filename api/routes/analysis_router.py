@@ -5,8 +5,8 @@ import json
 import os
 import logging
 
-from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool
-from core.algorithm.non_steady_state_detector import NonSteadyStateDetector
+from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool, detect_and_visualize
+from core.algorithm.ls_pid_autotune_v5 import ModelType
 from core.data.real_tsdb_client import query_raw_data
 from core.data.real_tsdb_client import query_read_interpolated
 from api.routes.util import parse_time_to_milliseconds
@@ -16,6 +16,7 @@ from core.utils.pid_converter import process_lists_optimized
 import pandas as pd
 from core.algorithm.find_high_variability_periods import find_high_variability_periods
 from core.algorithm.ktl_simulator import KTLSimulator
+import numpy as np
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -60,14 +61,14 @@ def get_default_database() -> str:
 
 @router.get("/history-data",
             summary="历史数据查询",
-            operation_id="历史数据+PID数据查询",
+            operation_id="IOTDA历史数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data(
         table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
         fields: Optional[List[str]] = Query(..., description="测点名", example=[
-            "ns=100;s=FIC101A_MV.In_Channel0",
-            "ns=100;s=FIC101A_PV.In_Channel0",
-            "ns=100;s=FIC101A_SV.In_Channel0",
+            "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
+            "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值
+            "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值
             "ns=100;s=FIC101A_PB.In_Channel0",
             "ns=100;s=FIC101A_TI.In_Channel0",
             "ns=100;s=FIC101A_TD.In_Channel0"
@@ -310,7 +311,7 @@ async def get_history_zhongkong_interpolated(
             end_time=end_time_ms,
             is_filter=is_filter
         )
-        print(history_data)
+        # print(history_data)
         # 格式化响应数据
         response_data = {
             "status": "success",
@@ -329,9 +330,9 @@ async def get_history_zhongkong_interpolated(
             detail=f"获取历史数据失败: {str(e)}"
         )
 @router.get("/point_history_data",
-            summary="原始测点仿真系统数据查询",
-            operation_id="原始测点仿真系统数据查询",
-            description="查询指定设备在指定时间范围内的原始仿真数据，支持多种时间格式")
+            summary="仿真系统原始点位数据查询",
+            operation_id="仿真系统原始点位数据查询",
+            description="查询指定设备在指定时间范围内的仿真系统原始数据，支持多种时间格式")
 async def get_point_history_data(
         table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
         fields: Optional[List[str]] = Query(..., description="测点名", example=[
@@ -421,8 +422,6 @@ async def get_point_history_data(
             operation_id="温度曲线分析",
             description="分析温度曲线的控制性能，包括上升时间、超调量、稳态误差等指标")
 async def analyze_temperature(
-        # table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-        # field:  str =Query(..., description="测点名", example="ns=100;s=FI15001.In_Channel0"),
         start_time: Union[int, str] = Query(...,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
@@ -545,7 +544,9 @@ async def optimize_pid(
         is_filter: bool = Query(True, description="是否过滤数据",
                                 examples=[True]),
         is_lambda: bool = Query(False, description="是否增加lambda整定建议",
-                                      examples=[False])
+                                      examples=[False]),
+        model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
+                                      examples=["FOPDT","FO","SOPDT","SO","FO_INTEGRATOR","SO_INTEGRATOR"])
 ):
     """
     **PID参数智能优化 - PIDOptimizationTool**
@@ -613,7 +614,7 @@ async def optimize_pid(
         optimization_tool = PIDOptimizationTool()
 
         # 执行优化分析（传入历史数据列表）
-        optimization_result = optimization_tool._run(json.dumps(history_data),is_lambda)
+        optimization_result = optimization_tool._run(json.dumps(history_data),is_lambda,model_type)
 
         # 解析优化结果
         try:
@@ -631,6 +632,7 @@ async def optimize_pid(
                 "status": "error",
                 "table": table,
                 "message": optimization_result
+
             }
 
     except Exception as e:
@@ -786,26 +788,48 @@ async def get_tuning_windows(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"时间区间筛选失败: {str(e)}")
-@router.get("/non_steady_data",
-            summary="非稳态识别",
-            operation_id="非稳态识别",
-            description="自动识别非稳态数据区间")
-async def get_non_steady_data(
+
+
+@router.get("/step-response-windows",
+            summary="阶跃响应时间窗口获取",
+            operation_id="获取含有阶跃响应的时间窗口",
+            description="基于阶跃响应检测自动识别并筛选高质量参数辨识窗口，专用于FOPDT模型参数辨识")
+async def get_step_response_windows(
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
         window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
-        step_size: int = Query(10, description="滑动步长（分钟）", examples=[30, 60]),
-        variability_threshold: float = Query(0.8, description="波动性阈值分位数(0-1)", examples=[0.8]),
-        analyst_column: Optional[str] = Query("pv", description="用于波动判断的列名", examples=["pv", "mv", "sv"]),
+        step_size: int = Query(10, description="滑动步长（分钟）", examples=[10, 30]),
+        step_threshold: float = Query(0.05, description="阶跃检测阈值（占输入范围的百分比）", ge=0.01, le=0.5),
+        min_response_ratio: float = Query(0.1, description="最小响应比例（响应幅值/输入变化）", ge=0.05, le=1.0),
+        confidence_min: float = Query(0.5, description="最小置信度要求（0-1）", ge=0, le=1),
+        analyst_column: Optional[str] = Query("pv", description="用于分析的列名", examples=["pv", "mv", "sv"]),
         window_sec: int = Query(60, description="插值采样间隔（分钟）", examples=[1, 60]),
-        is_filter: bool = Query(False, description="是否对历史数据进行优化过滤（按最新参数）", examples=[False])
+        is_filter: bool = Query(False, description="是否对历史数据进行优化过滤", examples=[False])
 ):
     """
-    根据历史数据自动筛选适合常规整定的分析时间区间：
-    - 计算温度(PV)在滑动窗口内的方差，识别高波动区间
-    - 每个窗口附带 group_key = "{pb}_{ti}_{td}_{sv}", 用于后续分组分析
+    基于阶跃响应检测的专用时间窗口获取接口
+    
+    **功能说明:**
+    - 在历史数据中识别含有明显阶跃响应的时间窗口
+    - 通过置信度过滤确保数据质量
+    - 返回的每个窗口都包含完整的阶跃响应特征信息
+    - 特别适用于FOPDT等模型的参数辨识
+    
+    **返回窗口信息:**
+    - start_time / end_time: 窗口时间范围（毫秒）
+    - step_detected: 是否检测到阶跃
+    - confidence: 置信度评分（0-1）
+    - response_magnitude: 响应幅值
+    - response_ratio: 响应比例
+    - rise_time: 上升时间（秒）
+    - settling_time: 稳定时间（秒）
+    - group_key: 参数分组键
+    - last_pid: 窗口内最后的PID参数
+    - recommendation: 推荐等级（优秀/良好/可接受/不推荐）
     """
     try:
+        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
+        
         # 时间默认值：最近一天
         if end_time is None:
             end_time = int(datetime.now().timestamp() * 1000)
@@ -818,7 +842,7 @@ async def get_non_steady_data(
         if start_time_ms >= end_time_ms:
             raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
 
-        # 固定设备与字段（与现有分析接口保持一致）
+        # 固定设备与字段
         table = "PID_FEP_Gateway_Device_001default"
         required_fields = [
             "ns=100;s=FIC101A_MV.In_Channel0",
@@ -829,7 +853,7 @@ async def get_non_steady_data(
             "ns=100;s=FIC101A_TD.In_Channel0"
         ]
 
-        # 查询历史插值数据（数据访问层负责分页与解析）
+        # 查询历史数据
         db = get_default_database()
         history_data = _query_tsdb_data_zhongkong(
             db=db,
@@ -838,38 +862,326 @@ async def get_non_steady_data(
             start_time=start_time_ms,
             end_time=end_time_ms,
             is_filter=is_filter,
-            window = window_sec
+            window=window_sec
         )
-        if not history_data:
-            return {
-                "status": "success",
-                "table": table,
-                "start_time": start_time,
-                "end_time": end_time,
-                "total_windows": 0,
-                "windows": []
-            }
+        if not history_data or len(history_data) < 20:
+            raise HTTPException(
+                status_code=404,
+                detail="数据不足，无法进行阶跃响应检测"
+            )
 
-        # 构建DataFrame用于窗口筛选与分组键计算
+        # 构建DataFrame
         df = pd.DataFrame(history_data)
         column = analyst_column or "pv"
         if "timestamp" not in df.columns or column not in df.columns:
             raise HTTPException(status_code=500, detail=f"历史数据缺少必要字段: timestamp 或 {column}")
 
-        # 构建分析序列（索引为datetime）
-        ts_index = pd.to_datetime(df["timestamp"], unit="ms")
-        series = pd.Series(df[column].values, index=ts_index)
+        if "mv" not in df.columns:
+            raise HTTPException(status_code=500, detail="历史数据缺少MV字段")
 
-        detector = NonSteadyStateDetector()
+        # 生成滑动窗口
+        timestamps = np.array(df["timestamp"].values, dtype=float)
+        t_sec = (timestamps - timestamps[0]) / 1000.0  # 转换为相对秒数
+        
+        window_size_sec = window_size * 60
+        step_size_sec = step_size * 60
+        dt = float(t_sec[1] - t_sec[0]) if len(t_sec) > 1 else 1.0
+        
+        window_size_points = int(window_size_sec / dt) if dt > 0 else 120
+        step_size_points = int(step_size_sec / dt) if dt > 0 else 10
+        
+        windows = []
+        for i in range(0, len(t_sec) - window_size_points, max(1, step_size_points)):
+            window_end_idx = min(i + window_size_points, len(t_sec) - 1)
+            if window_end_idx - i < 20:
+                continue
+            
+            windows.append({
+                'start_idx': i,
+                'end_idx': window_end_idx,
+                'start_time': int(timestamps[i]),
+                'end_time': int(timestamps[window_end_idx])
+            })
+        
+        # 对每个窗口进行阶跃检测
+        qualified_windows = []
+        for win in windows:
+            start_idx = win['start_idx']
+            end_idx = win['end_idx']
+            
+            t_win = t_sec[start_idx:end_idx+1]
+            y_win = np.array(df[column].values[start_idx:end_idx+1], dtype=float)
+            u_win = np.array(df["mv"].values[start_idx:end_idx+1], dtype=float)
+            
+            # 检测阶跃响应
+            step_result = SystemIdentifier.detect_step_response_in_window(
+                t_window=t_win,
+                y_window=y_win,
+                u_window=u_win,
+                step_threshold=step_threshold,
+                response_ratio=min_response_ratio
+            )
+            
+            if step_result['has_step'] and step_result['confidence'] >= confidence_min:
+                confidence = step_result['confidence']
+                if confidence >= 0.85:
+                    recommendation = "优秀"
+                elif confidence >= 0.70:
+                    recommendation = "良好"
+                elif confidence >= 0.50:
+                    recommendation = "可接受"
+                else:
+                    recommendation = "不推荐"
+                
+                # 获取窗口内的PID参数
+                win_df = df.iloc[start_idx:end_idx+1]
+                if len(win_df) > 0:
+                    last = win_df.iloc[-1]
+                    pb = last.get("pb")
+                    ti = last.get("ti")
+                    td = last.get("td")
+                    sv = last.get("sv")
+                    group_key = f"{pb}_{ti}_{td}_{sv}"
+                    kp = last.get("kp")
+                    ki = last.get("ki")
+                    kd = last.get("kd")
+                else:
+                    group_key = None
+                    kp = ki = kd = None
+                
+                qualified_window = {
+                    'start_time': win['start_time'],
+                    'end_time': win['end_time'],
+                    'step_detected': step_result['has_step'],
+                    'step_idx': int(step_result['step_idx']),
+                    'response_magnitude': float(step_result['response_magnitude']),
+                    'response_ratio': float(step_result['response_ratio']),
+                    'rise_time': float(step_result['rise_time']),
+                    'settling_time': float(step_result['settling_time']),
+                    'confidence': float(step_result['confidence']),
+                    'recommendation': recommendation,
+                    'group_key': group_key,
+                    'last_pid': {"kp": kp, "ki": ki, "kd": kd}
+                }
+                qualified_windows.append(qualified_window)
+        
+        # 选择最优窗口
+        optimal_window = None
+        if qualified_windows:
+            optimal_window = max(qualified_windows, key=lambda x: x['confidence'])
+        
+        return {
+            "status": "success",
+            "table": table,
+            "start_time": start_time,
+            "end_time": end_time,
+            "params": {
+                "window_size": window_size,
+                "step_size": step_size,
+                "step_threshold": step_threshold,
+                "min_response_ratio": min_response_ratio,
+                "confidence_min": confidence_min,
+                "analyst_column": analyst_column or "pv",
+                "window_sec": window_sec,
+                "is_filter": is_filter
+            },
+            "total_windows": len(windows),
+            "qualified_windows": qualified_windows,
+            "analysis_summary": {
+                "total_examined": len(windows),
+                "with_step_response": len(qualified_windows),
+                "optimal_window": optimal_window
+            }
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"阶跃响应窗口获取失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"阶跃响应窗口获取失败: {str(e)}")
 
-        # 获取非稳态段起点
-        starts = detector.get_non_steady_starts(history_data)
+
+@router.get("/auto-select-windows",
+            summary="自动筛选参数辨识时间区间",
+            operation_id="自动筛选时间窗口",
+            description="智能识别含有阶跃响应的高质量时间窗口，适用于FOPDT参数辨识")
+async def auto_select_time_windows(
+    start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
+    end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
+    window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
+    step_size: int = Query(10, description="滑动步长（分钟）", examples=[10, 30]),
+    min_confidence: float = Query(0.5, description="最小置信度要求（0-1）", ge=0, le=1),
+    step_threshold: float = Query(0.05, description="阶跃检测阈值（0-1）", ge=0, le=1),
+    min_response_ratio: float = Query(0.1, description="最小响应比例（0-1）", ge=0, le=1)
+):
+    """
+    自动筛选适合参数辨识的时间区间
+    
+    **功能说明:**
+    - 自动识别含有明显阶跃响应的时间窗口
+    - 综合评估输入信号、输出响应、响应特征
+    - 返回评分最高的最优窗口
+    
+    **返回窗口信息:**
+    - start_time / end_time: 窗口时间范围（毫秒）
+    - step_detected: 是否检测到阶跃
+    - confidence: 置信度评分（0-1）
+    - response_magnitude: 响应幅值
+    - response_ratio: 响应比例
+    - rise_time: 上升时间（秒）
+    - settling_time: 稳定时间（秒）
+    - recommendation: 推荐等级（优秀/良好/可接受/不推荐）
+    """
+    try:
+        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
+        
+        # 时间默认值：最近一天
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
+        if start_time is None:
+            start_time = end_time - 24 * 60 * 60 * 1000  # 1天
+
+        # 时间转换与校验
+        start_time_ms = parse_time_to_milliseconds(start_time)
+        end_time_ms = parse_time_to_milliseconds(end_time)
+        if start_time_ms >= end_time_ms:
+            raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
+
+        # 固定设备与字段
+        table = "PID_FEP_Gateway_Device_001default"
+        required_fields = [
+            "ns=100;s=FIC101A_MV.In_Channel0",
+            "ns=100;s=FIC101A_PV.In_Channel0",
+            "ns=100;s=FIC101A_SV.In_Channel0",
+            "ns=100;s=FIC101A_PB.In_Channel0",
+            "ns=100;s=FIC101A_TI.In_Channel0",
+            "ns=100;s=FIC101A_TD.In_Channel0"
+        ]
+
+        # 查询历史数据
+        db = get_default_database()
+        history_data = _query_tsdb_data_zhongkong(
+            db=db,
+            table_name=table,
+            required_fields=required_fields,
+            start_time=start_time_ms,
+            end_time=end_time_ms,
+            is_filter=False,
+            window=1
+        )
+        if not history_data or len(history_data) < 10:
+            raise HTTPException(
+                status_code=404,
+                detail="数据不足，无法进行时间窗口筛选"
+            )
+
+        # 调用自动筛选方法
+        result = SystemIdentifier.auto_select_time_windows(
+            history_data=history_data,
+            window_size=window_size,
+            step_size=step_size,
+            min_response_ratio=min_response_ratio,
+            step_threshold=step_threshold,
+            confidence_min=min_confidence
+        )
+        
+        # 提取筛选结果中的最优窗口
+        optimal_window = result.get("analysis_summary", {}).get("optimal_window") if result.get("status") == "success" else None
+        
+        if not optimal_window:
+            raise HTTPException(
+                status_code=404,
+                detail="未找到符条件的时间窗口。请检查时间范围、上基门槛或参数配置是否合理。"
+            )
+        
+        return {
+            "status": "success",
+            "start_time": start_time,
+            "end_time": end_time,
+            "params": {
+                "window_size": window_size,
+                "step_size": step_size,
+                "step_threshold": step_threshold,
+                "min_response_ratio": min_response_ratio,
+                "min_confidence": min_confidence
+            },
+            "total_windows": result.get("total_windows", 0),
+            "qualified_windows_count": len(result.get("qualified_windows", [])),
+            "optimal_window": optimal_window,
+            "analysis_summary": result.get("analysis_summary", {})
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"自动筛选时间窗口失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"自动筛选时间窗口失败: {str(e)}")
+
+
+@router.get("/detect_and_visualize",
+            summary="数据状态识别",
+            operation_id="数据状态识别",
+            description="智能识别时间区间数据状态（稳态、非稳态）")
+async def auto_detect_and_visualize(
+        start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
+        end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式")
+):
+    try:
+        # 时间默认值：最近一天
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
+        if start_time is None:
+            start_time = end_time - 24 * 60 * 60 * 1000  # 1天
+
+        # 时间转换与校验
+        start_time_ms = parse_time_to_milliseconds(start_time)
+        end_time_ms = parse_time_to_milliseconds(end_time)
+        if start_time_ms >= end_time_ms:
+            raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
+
+        # 固定设备与字段
+        table = "PID_FEP_Gateway_Device_001default"
+        required_fields = [
+            "ns=100;s=FIC101A_MV.In_Channel0",
+            "ns=100;s=FIC101A_PV.In_Channel0",
+            "ns=100;s=FIC101A_SV.In_Channel0",
+            "ns=100;s=FIC101A_PB.In_Channel0",
+            "ns=100;s=FIC101A_TI.In_Channel0",
+            "ns=100;s=FIC101A_TD.In_Channel0"
+        ]
+
+        # 查询历史数据
+        db = get_default_database()
+        history_data = _query_tsdb_data_zhongkong(
+            db=db,
+            table_name=table,
+            required_fields=required_fields,
+            start_time=start_time_ms,
+            end_time=end_time_ms,
+            is_filter=False,
+            window=1
+        )
+        if not history_data or len(history_data) < 10:
+            raise HTTPException(
+                status_code=404,
+                detail="数据不足，无法进行时间窗口筛选"
+            )
+
+        # 调用自动筛选方法
+        result = detect_and_visualize(history_data)
+
+        return {
+            "status": "success",
+            "start_time": start_time,
+            "end_time": end_time,
+            "result": result,
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"时间区间筛选失败: {str(e)}")
-
+        logger.error(f"识别失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"识别失败: {str(e)}")
 
 @router.get("/ktl-simulation",
             summary="基于KTL参数生成仿真模型曲线",
@@ -991,28 +1303,6 @@ async def health_check():
         "timestamp": datetime.now().isoformat()
     }
 
-
-# class HistoryDataRequest(BaseModel):
-#     """历史数据工具请求 - 精简版"""
-#     table: str = Field(..., description="设备名（表名）", example="ns-01f-001")
-#     start_time: int = Field(..., description="开始时间戳（毫秒）", example=1640995200000)
-#     end_time: int = Field(..., description="结束时间戳（毫秒）", example=1641081600000)
-#
-#
-# class TemperatureAnalysisRequest(BaseModel):
-#     """温度分析工具请求 - 精简版"""
-#     table: str = Field(..., description="设备名（表名）", example="ns-01f-001")
-#     start_time: int = Field(..., description="开始时间戳（毫秒）", example=1640995200000)
-#     end_time: int = Field(..., description="结束时间戳（毫秒）", example=1641081600000)
-#
-#
-# class PIDOptimizationRequest(BaseModel):
-#     """PID优化工具请求 - 精简版"""
-#     table: str = Field(..., description="设备名（表名）", example="ns-01f-001")
-#     start_time: int = Field(..., description="开始时间戳（毫秒）", example=1640995200000)
-#     end_time: int = Field(..., description="结束时间戳（毫秒）", example=1641081600000)
-
-
 def _get_default_value(field: str):
     """获取字段默认值"""
     defaults = {
@@ -1025,78 +1315,6 @@ def _get_default_value(field: str):
         "max_duty": 100
     }
     return defaults.get(field, 0)
-
-
-def _query_tsdb_data_mock(db: str, table_name: str, start_time: int, end_time: int,
-                          tags: Optional[Dict[str, str]] = None) -> List[Dict]:
-    """查询模拟数据的公用方法"""
-    # 定义需要查询的字段
-    required_fields = [
-        "temperature",
-        "kp",
-        "ki",
-        "kd",
-        "target_temp",
-        "control_period",
-        "max_duty"
-    ]
-
-    # 构造查询请求
-    query_request = {
-        "tables": [
-            {
-                "db": db,
-                "table": table_name,
-                "fields": required_fields,
-                "tags": tags,
-                "continuationPoint": None
-            }
-        ],
-        "detail": {
-            "startTime": start_time,
-            "endTime": end_time,
-            "limit": 1500,
-            "returnBounds": False
-        }
-    }
-
-    # 调用时序数据查询接口
-    response =  query_raw_data(db=db, table=table_name, fields=required_fields, start_time=start_time,
-                                       end_time=end_time,
-                                       tags=tags)
-
-    # 检查响应状态
-    if isinstance(response, dict) and response.get("code") != 0:
-        raise Exception(f"查询失败: {response.get('message', '未知错误')}")
-
-    # 解析查询结果
-    results = response.get("results", []) if isinstance(response, dict) else []
-    history_data = []
-
-    if results:
-        for table_result in results:
-            data_points = table_result.get("data", [])
-            for data_point in data_points:
-                columns = data_point.get("columns", [])
-                values = data_point.get("values", [])
-
-                # 将数据转换为字典格式
-                for value_row in values:
-                    record = {}
-                    for i, column in enumerate(columns):
-                        if i < len(value_row):
-                            if column == "time":
-                                record["timestamp"] = value_row[i]
-                            else:
-                                record[column] = value_row[i]
-                    # 确保包含所有必需字段
-                    for field in required_fields:
-                        if field not in record:
-                            record[field] = _get_default_value(field)
-
-                    history_data.append(record)
-
-    return history_data
 
 
 # 查询时序数据-中控仿真测点
@@ -1284,3 +1502,102 @@ def _query_tsdb_data(db: str,
     over_time = datetime.now().timestamp()
     logger.info(f"总耗时: {begin_time} - {over_time}")
     return history_data
+
+
+def _plot_history_data(history_data: List[Dict], table_name: str, 
+                       start_time: Union[int, str], end_time: Union[int, str]) -> Optional[str]:
+    """
+    绘制历史数据曲线并保存为图片
+    
+    Args:
+        history_data: 历史数据列表，包含timestamp, pv, mv, sv等字段
+        table_name: 设备表名
+        start_time: 开始时间
+        end_time: 结束时间
+        
+    Returns:
+        保存的图片路径，如果失败则返回None
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # 非交互式后端
+        import matplotlib.pyplot as plt
+        
+        # 配置中文字体
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
+        plt.rcParams['axes.unicode_minus'] = False
+        
+        # 提取数据
+        timestamps = []
+        pv_values = []
+        mv_values = []
+        sv_values = []
+        
+        for record in history_data:
+            if 'timestamp' in record:
+                # 将毫秒时间戳转换为相对秒数
+                timestamps.append(record['timestamp'])
+                pv_values.append(record.get('pv', 0.0))
+                mv_values.append(record.get('mv', 0.0))
+                sv_values.append(record.get('sv', 0.0))
+        
+        if len(timestamps) == 0:
+            print("无有效数据点，跳过绘图")
+            return None
+        
+        # 转换时间为相对秒数
+        t0 = timestamps[0]
+        t_relative = [(t - t0) / 1000.0 for t in timestamps]
+        
+        # 创建3个子图网格（垂直排列）
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+        
+        # 子图1: PV (过程变量)
+        ax1.plot(t_relative, pv_values, 'b-', linewidth=2, label='PV (实际值)', alpha=0.8)
+        ax1.set_ylabel('PV (过程变量)', fontsize=12, color='blue')
+        ax1.tick_params(axis='y', labelcolor='blue')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='upper right', fontsize=10)
+        ax1.set_title('过程变量 (PV)', fontsize=11, fontweight='bold')
+        
+        # 子图2: SV (设定值)
+        ax2.plot(t_relative, sv_values, 'g-', linewidth=2, label='SV (设定值)', alpha=0.8)
+        ax2.set_ylabel('SV (设定值)', fontsize=12, color='green')
+        ax2.tick_params(axis='y', labelcolor='green')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(loc='upper right', fontsize=10)
+        ax2.set_title('设定值 (SV)', fontsize=11, fontweight='bold')
+        
+        # 子图3: MV (操纵量)
+        ax3.plot(t_relative, mv_values, 'r-', linewidth=2, label='MV (阀门开度)', alpha=0.8)
+        ax3.set_xlabel('时间 (秒)', fontsize=12)
+        ax3.set_ylabel('MV (操纵量)', fontsize=12, color='red')
+        ax3.tick_params(axis='y', labelcolor='red')
+        ax3.grid(True, alpha=0.3)
+        ax3.legend(loc='upper right', fontsize=10)
+        ax3.set_title('操纵量 (MV)', fontsize=11, fontweight='bold')
+        
+        # 总标题
+        fig.suptitle(f'设备历史数据曲线\n设备: {table_name} | 时间: {start_time} ~ {end_time}', 
+                     fontsize=14, fontweight='bold', y=0.995)
+        
+        plt.tight_layout()
+        
+        # 保存图片
+        plot_dir = os.path.join(os.getcwd(), "data", "plots")
+        os.makedirs(plot_dir, exist_ok=True)
+        
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        plot_filename = f"history_data_{timestamp_str}.png"
+        plot_path = os.path.join(plot_dir, plot_filename)
+        
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        return plot_path
+        
+    except Exception as e:
+        print(f"❌ 绘图失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None

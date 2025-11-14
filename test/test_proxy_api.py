@@ -13,7 +13,7 @@ def test_workflow_proxy():
     # API基础URL
     base_url = "http://localhost:8001"
     
-    print("🔄 测试工作流代理接口")
+    print("测试工作流代理接口")
     print("=" * 60)
     
     # 测试数据
@@ -40,23 +40,23 @@ def test_workflow_proxy():
             timeout=150  # 增加到150秒，留给连接和读取的缓冲时间
         )
         
-        print(f"📡 响应状态码: {response.status_code}")
+        print(f"响应状态码: {response.status_code}")
         
         if response.status_code == 200:
             result = response.json()
-            print("✅ 工作流代理调用成功!")
-            print(f"📊 响应数据:")
+            print("工作流代理调用成功!")
+            print(f"响应数据:")
             print(json.dumps(result, indent=2, ensure_ascii=False))
         else:
-            print(f"❌ 请求失败: {response.status_code}")
+            print(f"请求失败: {response.status_code}")
             print(f"错误信息: {response.text}")
             
     except requests.exceptions.Timeout:
-        print("❌ 请求超时")
+        print("请求超时")
     except requests.exceptions.ConnectionError:
-        print("❌ 连接失败，请确保服务器正在运行")
+        print("连接失败，请确保服务器正在运行")
     except Exception as e:
-        print(f"❌ 异常: {str(e)}")
+        print(f"异常: {str(e)}")
 
 def test_workflow_config():
     """测试获取工作流配置"""
@@ -70,19 +70,19 @@ def test_workflow_config():
     try:
         response = requests.get(f"{base_url}/api/proxy/workflow/config", timeout=10)
         
-        print(f"📡 响应状态码: {response.status_code}")
+        print(f"响应状态码: {response.status_code}")
         
         if response.status_code == 200:
             result = response.json()
-            print("✅ 配置获取成功!")
-            print(f"📊 配置信息:")
+            print("配置获取成功!")
+            print(f"配置信息:")
             print(json.dumps(result, indent=2, ensure_ascii=False))
         else:
-            print(f"❌ 请求失败: {response.status_code}")
+            print(f"请求失败: {response.status_code}")
             print(f"错误信息: {response.text}")
             
     except Exception as e:
-        print(f"❌ 异常: {str(e)}")
+        print(f"异常: {str(e)}")
 
 def test_proxy_health():
     """测试代理服务健康检查"""
@@ -90,25 +90,25 @@ def test_proxy_health():
     base_url = "http://localhost:8001"
     
     print(f"\n{'='*60}")
-    print("🏥 测试代理服务健康检查")
+    print("测试代理服务健康检查")
     print("=" * 60)
     
     try:
         response = requests.get(f"{base_url}/api/proxy/health", timeout=10)
         
-        print(f"📡 响应状态码: {response.status_code}")
+        print(f"响应状态码: {response.status_code}")
         
         if response.status_code == 200:
             result = response.json()
-            print("✅ 健康检查成功!")
-            print(f"📊 健康状态:")
+            print("健康检查成功!")
+            print(f"健康状态:")
             print(json.dumps(result, indent=2, ensure_ascii=False))
         else:
-            print(f"❌ 请求失败: {response.status_code}")
+            print(f"请求失败: {response.status_code}")
             print(f"错误信息: {response.text}")
             
     except Exception as e:
-        print(f"❌ 异常: {str(e)}")
+        print(f"异常: {str(e)}")
 
 def test_with_custom_auth():
     """测试自定义授权令牌"""
@@ -116,7 +116,7 @@ def test_with_custom_auth():
     base_url = "http://localhost:8001"
     
     print(f"\n{'='*60}")
-    print("🔐 测试自定义授权令牌")
+    print("测试自定义授权令牌")
     print("=" * 60)
     
     test_data = {
@@ -142,18 +142,18 @@ def test_with_custom_auth():
             timeout=150  # 增加到150秒
         )
         
-        print(f"📡 响应状态码: {response.status_code}")
+        print(f"响应状态码: {response.status_code}")
         print(f"使用自定义令牌: custom-token-for-testing")
         
         if response.status_code == 200:
             result = response.json()
-            print("✅ 自定义授权测试成功!")
+            print("自定义授权测试成功!")
         else:
-            print(f"❌ 请求失败，这是预期的（外部服务可能拒绝测试令牌）")
+            print(f"请求失败，这是预期的（外部服务可能拒绝测试令牌）")
             print(f"错误信息: {response.text}")
             
     except Exception as e:
-        print(f"❌ 异常: {str(e)}")
+        print(f"异常: {str(e)}")
 
 if __name__ == "__main__":
     print("🔧 代理接口测试工具")
@@ -170,8 +170,8 @@ if __name__ == "__main__":
     print(f"\n{'='*60}")
     print("🎯 代理接口测试完成!")
     print("\n功能总结:")
-    print("✅ 工作流代理执行")
-    print("✅ 配置信息获取")
-    print("✅ 健康状态检查") 
-    print("✅ 自定义授权支持")
-    print("✅ 错误处理和日志记录")
+    print("工作流代理执行")
+    print("配置信息获取")
+    print("健康状态检查") 
+    print("自定义授权支持")
+    print("错误处理和日志记录")

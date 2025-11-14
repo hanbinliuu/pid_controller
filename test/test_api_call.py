@@ -52,7 +52,7 @@ def test_history_data_api():
                         print(f"   - 首条记录: {json.dumps(data[0], indent=4, ensure_ascii=False)}")
                         print(f"   - 末条记录: {json.dumps(data[-1], indent=4, ensure_ascii=False)}")
                 else:
-                    print("   ⚠️  未查询到数据，可能原因:")
+                    print("    未查询到数据，可能原因:")
                     print("      1. 时序数据库中无对应表数据")
                     print("      2. 时间范围无匹配记录")
                     print("      3. 数据源配置问题")

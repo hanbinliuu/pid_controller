@@ -38,7 +38,8 @@ class DetectionResult:
 class NonSteadyStateDetector:
     """
     PID非稳态段检测器
-    
+    #  by LiuHanBin
+
     用于检测PID控制数据中的非稳态段，能够区分初始过渡过程和真正的非稳态。
     """
     
@@ -436,7 +437,7 @@ class NonSteadyStateDetector:
         
         return "unknown"
     
-    def detect_from_json(self, json_data: Union[str, Dict]) -> DetectionResult:
+    def detect_from_json(self, data_list: Union[str, Dict]) -> DetectionResult:
         """
         从JSON数据中检测非稳态段
         
@@ -452,13 +453,13 @@ class NonSteadyStateDetector:
                 data = json.load(f)
         else:
             data = json_data
-        
+
         if data.get("status") != "success":
             raise ValueError(f"JSON数据状态不是success: {data.get('status')}")
-        
+
         if "data" not in data:
             raise ValueError("JSON数据缺少data字段")
-        
+
         data_list = data["data"]
         if not data_list:
             raise ValueError("JSON数据data字段为空")

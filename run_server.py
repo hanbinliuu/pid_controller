@@ -90,13 +90,6 @@ except Exception as e:
     logger.error(f"加载分析路由失败: {e}")
 
 try:
-    from api.routes.simulation_router import router as simulation_router
-    app.include_router(simulation_router, prefix='/api/simulation', tags=['数据模拟'])
-    logger.info("成功加载模拟数据路由")
-except Exception as e:
-    logger.error(f"加载模拟数据路由失败: {e}")
-
-try:
     from api.routes.conversion_router import router as conversion_router
     app.include_router(conversion_router, prefix='/api/conversion', tags=['PID参数转换'])
     logger.info("成功加载PID转换路由")

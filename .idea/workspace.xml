@@ -4,11 +4,79 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d2303dfa-d636-4d53-9755-c089cae1a793" name="更改" comment="依赖支持">
+    <list default="true" id="d2303dfa-d636-4d53-9755-c089cae1a793" name="更改" comment="非稳态判别">
+      <change afterPath="$PROJECT_DIR$/core/algorithm/detector.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/core/algorithm/ls_pid_autotune_v5_old.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/core/algorithm/single_json_test.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/FOPDT_model_comparison_20251111_083954.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/FOPDT_model_comparison_20251111_084132.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/FOPDT_model_comparison_20251111_084142.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/FOPDT_model_comparison_20251111_084211.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/ModelType.FOPDT_model_comparison_20251111_085818.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/ModelType.FOPDT_model_comparison_20251111_090059.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/ModelType.FOPDT_model_comparison_20251111_090121.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/ModelType.FOPDT_model_comparison_20251111_135106.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/ModelType.FOPDT_model_comparison_20251111_135126.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/ModelType.SECOND_ORDER_NO_DELAY_model_comparison_20251111_085744.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/ModelType.SECOND_ORDER_model_comparison_20251111_135642.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/SOPDT_model_comparison_20251110_223748.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/SOPDT_model_comparison_20251110_224607.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/SOPDT_model_comparison_20251110_225146.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/SOPDT_model_comparison_20251111_083918.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/SOPDT_model_comparison_20251111_084301.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/SO_model_comparison_20251110_223702.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/SO_model_comparison_20251110_224617.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/SO_model_comparison_20251111_083939.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/SO_model_comparison_20251111_084308.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/first_order_model_comparison_20251110_211650.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/first_order_model_comparison_20251110_212423.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_174732.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_175336.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_182402.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_182713.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_183320.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_183540.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_201403.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_201600.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_204326.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_210944.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_211134.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_212331.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_213953.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/fopdt_model_comparison_20251110_215107.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/history_data_20251111_090336.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/integrator_model_comparison_20251110_204952.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/integrator_model_comparison_20251110_205412.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/integrator_model_comparison_20251110_211926.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_integrator_model_comparison_20251110_214112.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_211750.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_212526.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_214643.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_215053.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_215117.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_215333.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_215848.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_220216.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_221205.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/data/plots-old/second_order_model_comparison_20251110_221454.png" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/main.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/api/routes/analysis_router.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes/analysis_router.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/api/routes/proxy_router.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes/proxy_router.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/api/routes/simulation_router.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/api/routes/tsdb_router.py" beforeDir="false" afterPath="$PROJECT_DIR$/api/routes/tsdb_router.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/core/agent/flow_valve_lambda_model.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/agent/flow_valve_lambda_model.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/core/agent/tools.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/agent/tools.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/core/algorithm/find_high_variability_periods.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/algorithm/find_high_variability_periods.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/core/algorithm/ls_pid_autotune_v5.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/algorithm/ls_pid_autotune_v5.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/core/algorithm/non_steady_state_detector.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/algorithm/non_steady_state_detector.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/core/data/mock_tsdb_client.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/core/data/real_tsdb_client.py" beforeDir="false" afterPath="$PROJECT_DIR$/core/data/real_tsdb_client.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_server.py" beforeDir="false" afterPath="$PROJECT_DIR$/run_server.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/test_api_call.py" beforeDir="false" afterPath="$PROJECT_DIR$/test/test_api_call.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/test_csv_mocktsdb.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/test_proxy_api.py" beforeDir="false" afterPath="$PROJECT_DIR$/test/test_proxy_api.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test/test_real_tsdb_client.py" beforeDir="false" afterPath="$PROJECT_DIR$/test/test_real_tsdb_client.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -25,11 +93,27 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$" value="main" />
+        <entry key="$PROJECT_DIR$" value="test" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitLabMergeRequestFiltersHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPENED",
+    "assignee": {
+      "type": "org.jetbrains.plugins.gitlab.mergerequest.ui.filters.GitLabMergeRequestsFiltersValue.MergeRequestsMemberFilterValue.MergeRequestsAssigneeFilterValue",
+      "username": "183421",
+      "fullname": "丁振莹"
+    }
+  }
+}]]></component>
+  <component name="GitLabMergeRequestsSettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "first": "http://gitlab.hollicube.com/group-analysis/pid-agent-mvp.git",
+    "second": "680c509b-72c1-4c6e-9235-4a7411f841f6"
+  }
+}]]></component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 6
 }</component>
@@ -38,97 +122,61 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;Python 测试.example_tool_usage.test_pid_optimization_tool 的 Python 测试.executor&quot;: &quot;Run&quot;,
-    &quot;Python 测试.test_analysis_apis.test_history_data_api 的 Python 测试.executor&quot;: &quot;Run&quot;,
-    &quot;Python 测试.test_continuation.test_auto_continuation 的 Python 测试.executor&quot;: &quot;Run&quot;,
-    &quot;Python 测试.test_real_tsdb_client.test_integration_with_existing_api 的 Python 测试.executor&quot;: &quot;Run&quot;,
-    &quot;Python 测试.test_real_tsdb_client.test_real_tsdb_client 的 Python 测试.executor&quot;: &quot;Run&quot;,
-    &quot;Python 测试.test_simulator_integration.test_simulator_with_analysis_tools 的 Python 测试.executor&quot;: &quot;Debug&quot;,
-    &quot;Python 测试.test_time_param.test_field_filtering 的 Python 测试.executor&quot;: &quot;Run&quot;,
-    &quot;Python.analysis_router.executor&quot;: &quot;Run&quot;,
-    &quot;Python.main.executor&quot;: &quot;Run&quot;,
-    &quot;Python.pid_converter.executor&quot;: &quot;Run&quot;,
-    &quot;Python.pid_data_simulator.executor&quot;: &quot;Run&quot;,
-    &quot;Python.real_tsdb_client.executor&quot;: &quot;Run&quot;,
-    &quot;Python.run_server.executor&quot;: &quot;Debug&quot;,
-    &quot;Python.tsdb_api.executor&quot;: &quot;Run&quot;,
-    &quot;Python.tsdb_router.executor&quot;: &quot;Debug&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;Shell Script.build.sh.executor&quot;: &quot;Run&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;develop&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/dingzhenying/project/pythonProject/pid-agent-mvp&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;run.code.analysis.last.selected.profile&quot;: &quot;pProject Default&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Python 测试.Python 测试 (test_single_json.py 内) (1).executor": "Debug",
+    "Python 测试.Python 测试 (test_single_json.py 内).executor": "Run",
+    "Python 测试.example_tool_usage.test_pid_optimization_tool 的 Python 测试.executor": "Run",
+    "Python 测试.test_analysis_apis.test_history_data_api 的 Python 测试.executor": "Run",
+    "Python 测试.test_continuation.test_auto_continuation 的 Python 测试.executor": "Run",
+    "Python 测试.test_real_tsdb_client.test_integration_with_existing_api 的 Python 测试.executor": "Run",
+    "Python 测试.test_real_tsdb_client.test_real_tsdb_client 的 Python 测试.executor": "Run",
+    "Python 测试.test_simulator_integration.test_simulator_with_analysis_tools 的 Python 测试.executor": "Debug",
+    "Python 测试.test_time_param.test_field_filtering 的 Python 测试.executor": "Run",
+    "Python.analysis_router.executor": "Run",
+    "Python.ls_pid_autotune_v5.executor": "Run",
+    "Python.ls_pid_autotune_v5_old.executor": "Run",
+    "Python.main.executor": "Run",
+    "Python.non_steady_state_detector.executor": "Run",
+    "Python.pid_converter.executor": "Run",
+    "Python.pid_data_simulator.executor": "Run",
+    "Python.real_tsdb_client.executor": "Run",
+    "Python.run_server.executor": "Debug",
+    "Python.single_json_test.executor": "Run",
+    "Python.tools.executor": "Run",
+    "Python.tsdb_api.executor": "Run",
+    "Python.tsdb_router.executor": "Debug",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "Shell Script.build.sh.executor": "Run",
+    "git-widget-placeholder": "develop",
+    "last_opened_file_path": "/Users/dingzhenying/project/pythonProject/pid-agent-mvp/core/algorithm",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "run.code.analysis.last.selected.profile": "pProject Default",
+    "settings.editor.selected.configurable": "database.data.views.appearance",
+    "vue.rearranger.settings.migration": "true"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/core/algorithm" />
+      <recent name="$PROJECT_DIR$/data" />
+      <recent name="$PROJECT_DIR$/core/agent" />
       <recent name="$PROJECT_DIR$/static/swagger" />
       <recent name="$PROJECT_DIR$/api/static" />
-      <recent name="$PROJECT_DIR$" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/test" />
+      <recent name="$PROJECT_DIR$/core/algorithm" />
       <recent name="$PROJECT_DIR$/api/static/swagger-ui" />
       <recent name="$PROJECT_DIR$/core/data" />
     </key>
   </component>
   <component name="RunManager" selected="Python.run_server">
-    <configuration name="analysis_router" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
-      <module name="pid-agent-mvp" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/api/routes" />
-      <option name="IS_MODULE_SDK" value="true" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/api/routes/analysis_router.py" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration name="real_tsdb_client" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
-      <module name="pid-agent-mvp" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/core/data" />
-      <option name="IS_MODULE_SDK" value="true" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/core/data/real_tsdb_client.py" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
     <configuration name="run_server" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="pid-agent-mvp" />
       <option name="ENV_FILES" value="" />
@@ -152,22 +200,53 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="build.sh" type="ShConfigurationType" temporary="true">
-      <option name="SCRIPT_TEXT" value="" />
-      <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
-      <option name="SCRIPT_PATH" value="$PROJECT_DIR$/build.sh" />
-      <option name="SCRIPT_OPTIONS" value="" />
-      <option name="INDEPENDENT_SCRIPT_WORKING_DIRECTORY" value="true" />
-      <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
-      <option name="INDEPENDENT_INTERPRETER_PATH" value="true" />
-      <option name="INTERPRETER_PATH" value="/bin/bash" />
+    <configuration name="single_json_test" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="pid-agent-mvp" />
+      <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="EXECUTE_IN_TERMINAL" value="true" />
-      <option name="EXECUTE_SCRIPT_FILE" value="true" />
-      <envs />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/core/algorithm" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/core/algorithm/single_json_test.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="test_continuation.test_auto_continuation 的 Python 测试" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
+    <configuration name="tools" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="pid-agent-mvp" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/core/agent" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/core/agent/tools.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="Python 测试 (/Users/dingzhenying/project/pythonProject/pid-agent-mvp/test/test_single_json.py 内)" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
       <module name="pid-agent-mvp" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -179,24 +258,40 @@
       <option name="ADD_SOURCE_ROOTS" value="true" />
       <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
       <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;test_continuation.test_auto_continuation&quot;" />
-      <option name="_new_targetType" value="&quot;PYTHON&quot;" />
+      <option name="_new_target" value="&quot;$PROJECT_DIR$/test/test_single_json.py&quot;" />
+      <option name="_new_targetType" value="&quot;PATH&quot;" />
+      <method v="2" />
+    </configuration>
+    <configuration name="Python 测试 (single_json_test.py 内)" type="tests" factoryName="Autodetect" temporary="true" nameIsGenerated="true">
+      <module name="pid-agent-mvp" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/core/algorithm" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="_new_additionalArguments" value="&quot;&quot;" />
+      <option name="_new_target" value="&quot;$PROJECT_DIR$/core/algorithm/single_json_test.py&quot;" />
+      <option name="_new_targetType" value="&quot;PATH&quot;" />
       <method v="2" />
     </configuration>
     <list>
-      <item itemvalue="Python.analysis_router" />
-      <item itemvalue="Python.real_tsdb_client" />
+      <item itemvalue="Python.single_json_test" />
+      <item itemvalue="Python.tools" />
       <item itemvalue="Python.run_server" />
-      <item itemvalue="Python 测试.test_continuation.test_auto_continuation 的 Python 测试" />
-      <item itemvalue="Shell Script.build.sh" />
+      <item itemvalue="Python 测试.Python 测试 (/Users/dingzhenying/project/pythonProject/pid-agent-mvp/test/test_single_json.py 内)" />
+      <item itemvalue="Python 测试.Python 测试 (single_json_test.py 内)" />
     </list>
     <recent_temporary>
       <list>
         <item itemvalue="Python.run_server" />
-        <item itemvalue="Python.analysis_router" />
-        <item itemvalue="Shell Script.build.sh" />
-        <item itemvalue="Python 测试.test_continuation.test_auto_continuation 的 Python 测试" />
-        <item itemvalue="Python.real_tsdb_client" />
+        <item itemvalue="Python.tools" />
+        <item itemvalue="Python.single_json_test" />
+        <item itemvalue="Python 测试.Python 测试 (single_json_test.py 内)" />
+        <item itemvalue="Python 测试.Python 测试 (/Users/dingzhenying/project/pythonProject/pid-agent-mvp/test/test_single_json.py 内)" />
       </list>
     </recent_temporary>
   </component>
@@ -234,7 +329,9 @@
       <workItem from="1761882513033" duration="395000" />
       <workItem from="1761883283754" duration="4372000" />
       <workItem from="1761961641401" duration="3277000" />
-      <workItem from="1762135330362" duration="15579000" />
+      <workItem from="1762135330362" duration="45809000" />
+      <workItem from="1762241646877" duration="90608000" />
+      <workItem from="1762737780885" duration="129501000" />
     </task>
     <task id="LOCAL-00001" summary="描述文档提交">
       <option name="closed" value="true" />
@@ -300,7 +397,47 @@
       <option name="project" value="LOCAL" />
       <updated>1761890128290</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="前后端联调问题修复">
+      <option name="closed" value="true" />
+      <created>1762157228986</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1762157228986</updated>
+    </task>
+    <task id="LOCAL-00010" summary="整定算法目录">
+      <option name="closed" value="true" />
+      <created>1762480540441</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1762480540441</updated>
+    </task>
+    <task id="LOCAL-00011" summary="时序查询接口修改">
+      <option name="closed" value="true" />
+      <created>1762481085026</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1762481085026</updated>
+    </task>
+    <task id="LOCAL-00012" summary="自筛选时间过滤">
+      <option name="closed" value="true" />
+      <created>1762497148607</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1762497148608</updated>
+    </task>
+    <task id="LOCAL-00013" summary="非稳态判别">
+      <option name="closed" value="true" />
+      <created>1762497287591</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1762497287591</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -325,44 +462,25 @@
     <MESSAGE value="接口添加operation_id描述" />
     <MESSAGE value="接口支持中控仿真系统" />
     <MESSAGE value="依赖支持" />
-    <option name="LAST_COMMIT_MESSAGE" value="依赖支持" />
+    <MESSAGE value="前后端联调问题修复" />
+    <MESSAGE value="整定算法目录" />
+    <MESSAGE value="lambda整定算法集成+自筛选时间开发" />
+    <MESSAGE value="时序查询接口修改" />
+    <MESSAGE value="自筛选时间过滤" />
+    <MESSAGE value="非稳态判别" />
+    <option name="LAST_COMMIT_MESSAGE" value="非稳态判别" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/core/data/real_tsdb_client.py</url>
-          <line>506</line>
+          <line>496</line>
           <option name="timeStamp" value="1" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>914</line>
-          <option name="timeStamp" value="13" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>840</line>
-          <option name="timeStamp" value="20" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>863</line>
-          <option name="timeStamp" value="25" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>802</line>
-          <option name="timeStamp" value="27" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>383</line>
-          <option name="timeStamp" value="28" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/core/data/real_tsdb_client.py</url>
-          <line>531</line>
+          <line>521</line>
           <option name="timeStamp" value="30" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
@@ -371,44 +489,104 @@
           <option name="timeStamp" value="32" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>906</line>
-          <option name="timeStamp" value="33" />
+          <url>file://$PROJECT_DIR$/core/algorithm/non_steady_state_detector.py</url>
+          <line>467</line>
+          <option name="timeStamp" value="73" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/non_steady_state_detector.py</url>
+          <line>512</line>
+          <option name="timeStamp" value="74" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/non_steady_state_detector.py</url>
+          <line>536</line>
+          <option name="timeStamp" value="77" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/non_steady_state_detector.py</url>
+          <line>496</line>
+          <option name="timeStamp" value="78" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/ls_pid_autotune_v5.py</url>
+          <line>3058</line>
+          <option name="timeStamp" value="90" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/ls_pid_autotune_v5.py</url>
+          <line>1914</line>
+          <option name="timeStamp" value="102" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/ls_pid_autotune_v5.py</url>
+          <line>1007</line>
+          <option name="timeStamp" value="105" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/ls_pid_autotune_v5.py</url>
+          <line>1004</line>
+          <option name="timeStamp" value="106" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/ls_pid_autotune_v5.py</url>
+          <line>1283</line>
+          <option name="timeStamp" value="107" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/ls_pid_autotune_v5.py</url>
+          <line>988</line>
+          <option name="timeStamp" value="108" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/data/real_tsdb_client.py</url>
+          <line>143</line>
+          <option name="timeStamp" value="109" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>946</line>
-          <option name="timeStamp" value="34" />
+          <line>305</line>
+          <option name="timeStamp" value="110" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/single_json_test.py</url>
+          <line>241</line>
+          <option name="timeStamp" value="113" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>884</line>
-          <option name="timeStamp" value="35" />
+          <line>1153</line>
+          <option name="timeStamp" value="114" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>219</line>
-          <option name="timeStamp" value="36" />
+          <line>1329</line>
+          <option name="timeStamp" value="117" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>273</line>
-          <option name="timeStamp" value="37" />
+          <line>1356</line>
+          <option name="timeStamp" value="118" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>787</line>
-          <option name="timeStamp" value="39" />
+          <line>1418</line>
+          <option name="timeStamp" value="120" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>264</line>
-          <option name="timeStamp" value="40" />
+          <url>file://$PROJECT_DIR$/core/algorithm/single_json_test.py</url>
+          <line>26</line>
+          <option name="timeStamp" value="121" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/api/routes/analysis_router.py</url>
-          <line>775</line>
-          <option name="timeStamp" value="41" />
+          <url>file://$PROJECT_DIR$/core/agent/tools.py</url>
+          <line>781</line>
+          <option name="timeStamp" value="122" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/core/algorithm/single_json_test.py</url>
+          <line>38</line>
+          <option name="timeStamp" value="123" />
         </line-breakpoint>
       </breakpoints>
     </breakpoint-manager>
@@ -416,12 +594,17 @@
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/pid_agent_mvp$main.coverage" NAME="main 覆盖结果" MODIFIED="1759150392104" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/api" />
     <SUITE FILE_PATH="coverage/pid_agent_mvp$pid_converter.coverage" NAME="pid_converter 覆盖结果" MODIFIED="1759971377233" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/utils" />
-    <SUITE FILE_PATH="coverage/pid_agent_mvp$run_server.coverage" NAME="run_server 覆盖结果" MODIFIED="1762156485557" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/pid_agent_mvp$analysis_router.coverage" NAME="analysis_router 覆盖结果" MODIFIED="1761802552623" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/api/routes" />
-    <SUITE FILE_PATH="coverage/pid_agent_mvp$.coverage" NAME=" 覆盖结果" MODIFIED="1761721208228" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/test" />
-    <SUITE FILE_PATH="coverage/pid_agent_mvp$pid_data_simulator.coverage" NAME="pid_data_simulator 覆盖结果" MODIFIED="1759152461922" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/data" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$run_server.coverage" NAME="run_server 覆盖结果" MODIFIED="1763105301124" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$analysis_router.coverage" NAME="analysis_router 覆盖结果" MODIFIED="1762157855858" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/api/routes" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$non_steady_state_detector.coverage" NAME="non_steady_state_detector 覆盖结果" MODIFIED="1762497505822" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/algorithm" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$ls_pid_autotune_v5_old.coverage" NAME="ls_pid_autotune_v5_old 覆盖结果" MODIFIED="1762914897936" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/agent" />
     <SUITE FILE_PATH="coverage/pid_agent_mvp$tsdb_router.coverage" NAME="tsdb_router 覆盖结果" MODIFIED="1759142450244" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/api/routes" />
     <SUITE FILE_PATH="coverage/pid_agent_mvp$tsdb_api.coverage" NAME="tsdb_api 覆盖结果" MODIFIED="1759456228369" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/data" />
-    <SUITE FILE_PATH="coverage/pid_agent_mvp$real_tsdb_client.coverage" NAME="real_tsdb_client 覆盖结果" MODIFIED="1761714922507" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/data" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$.coverage" NAME=" 覆盖结果" MODIFIED="1763102467712" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/algorithm" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$tools.coverage" NAME="tools 覆盖结果" MODIFIED="1763104068774" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/agent" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$single_json_test.coverage" NAME="single_json_test 覆盖结果" MODIFIED="1763103888282" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/algorithm" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$pid_data_simulator.coverage" NAME="pid_data_simulator 覆盖结果" MODIFIED="1759152461922" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/data" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$real_tsdb_client.coverage" NAME="real_tsdb_client 覆盖结果" MODIFIED="1762252078928" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/data" />
+    <SUITE FILE_PATH="coverage/pid_agent_mvp$ls_pid_autotune_v5.coverage" NAME="ls_pid_autotune_v5 覆盖结果" MODIFIED="1763086321587" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/core/algorithm" />
   </component>
 </project>
