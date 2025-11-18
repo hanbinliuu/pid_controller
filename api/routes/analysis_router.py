@@ -5,14 +5,11 @@ import json
 import os
 import logging
 
-from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool, detect_and_visualize
+from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool, detect_and_visualize, \
+    _query_tsdb_data_zhongkong, _query_tsdb_data
 from core.algorithm.ls_pid_autotune_v5 import ModelType
 from core.data.real_tsdb_client import query_raw_data
-from core.data.real_tsdb_client import query_read_interpolated
-from api.routes.util import parse_time_to_milliseconds
-from core.utils import pid_converter
-from core.utils.pid_converter import process_lists_optimized
-
+from api.routes.time_util import parse_time_to_milliseconds, format_time_to_string
 import pandas as pd
 from core.algorithm.find_high_variability_periods import find_high_variability_periods
 from core.algorithm.ktl_simulator import KTLSimulator
@@ -228,7 +225,7 @@ async def get_history_data_zhongkong(
             start_time=start_time_ms,
             end_time=end_time_ms
         )
-        print(history_data)
+        logger.info(history_data)
         # 格式化响应数据
         response_data = {
             "status": "success",
@@ -311,7 +308,7 @@ async def get_history_zhongkong_interpolated(
             end_time=end_time_ms,
             is_filter=is_filter
         )
-        # print(history_data)
+        # logger.info(history_data)
         # 格式化响应数据
         response_data = {
             "status": "success",
@@ -595,7 +592,7 @@ async def optimize_pid(
         db = get_default_database()
 
         # 使用新的查询方法
-        history_data = _query_tsdb_data_zhongkong(
+        history_data: List[Dict] = _query_tsdb_data_zhongkong(
             db=db,
             table_name=table,
             required_fields=required_fields,
@@ -614,7 +611,7 @@ async def optimize_pid(
         optimization_tool = PIDOptimizationTool()
 
         # 执行优化分析（传入历史数据列表）
-        optimization_result = optimization_tool._run(json.dumps(history_data),is_lambda,model_type)
+        optimization_result = optimization_tool._run(history_data=history_data,is_lambda=is_lambda,model_type=model_type)
 
         # 解析优化结果
         try:
@@ -641,7 +638,304 @@ async def optimize_pid(
             detail=f"PID优化失败: {str(e)}"
         )
 
-@router.get("/tuning-windows",
+
+@router.get("/auto-select-windows",
+            summary="自动筛选参数辨识时间区间",
+            operation_id="自动筛选时间窗口",
+            description="智能识别含有阶跃响应的高质量时间窗口，适用于FOPDT参数辨识")
+async def auto_select_time_windows(
+        start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
+        end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
+        window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
+        step_size: int = Query(10, description="滑动步长（分钟）", examples=[10, 30]),
+        min_confidence: float = Query(0.5, description="最小置信度要求（0-1）", ge=0, le=1),
+        step_threshold: float = Query(0.05, description="阶跃检测阈值（0-1）", ge=0, le=1),
+        min_response_ratio: float = Query(0.1, description="最小响应比例（0-1）", ge=0, le=1)
+):
+    """
+    自动筛选适合参数辨识的时间区间
+
+    **功能说明:**
+    - 自动识别含有明显阶跃响应的时间窗口
+    - 综合评估输入信号、输出响应、响应特征
+    - 返回评分最高的最优窗口
+
+    **返回窗口信息:**
+    - start_time / end_time: 窗口时间范围（毫秒）
+    - step_detected: 是否检测到阶跃
+    - confidence: 置信度评分（0-1）
+    - response_magnitude: 响应幅值
+    - response_ratio: 响应比例
+    - rise_time: 上升时间（秒）
+    - settling_time: 稳定时间（秒）
+    - recommendation: 推荐等级（优秀/良好/可接受/不推荐）
+    """
+    try:
+        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
+
+        # 时间默认值：最近一天
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
+        if start_time is None:
+            start_time = end_time - 24 * 60 * 60 * 1000  # 1天
+
+        # 时间转换与校验
+        start_time_ms = parse_time_to_milliseconds(start_time)
+        end_time_ms = parse_time_to_milliseconds(end_time)
+        if start_time_ms >= end_time_ms:
+            raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
+
+        # 固定设备与字段
+        table = "PID_FEP_Gateway_Device_001default"
+        required_fields = [
+            "ns=100;s=FIC101A_MV.In_Channel0",
+            "ns=100;s=FIC101A_PV.In_Channel0",
+            "ns=100;s=FIC101A_SV.In_Channel0",
+            "ns=100;s=FIC101A_PB.In_Channel0",
+            "ns=100;s=FIC101A_TI.In_Channel0",
+            "ns=100;s=FIC101A_TD.In_Channel0"
+        ]
+
+        # 查询历史数据
+        db = get_default_database()
+        history_data = _query_tsdb_data_zhongkong(
+            db=db,
+            table_name=table,
+            required_fields=required_fields,
+            start_time=start_time_ms,
+            end_time=end_time_ms,
+            is_filter=False,
+            window=1
+        )
+        if not history_data or len(history_data) < 10:
+            raise HTTPException(
+                status_code=404,
+                detail="数据不足，无法进行时间窗口筛选"
+            )
+
+        # 调用自动筛选方法
+        result = SystemIdentifier.auto_select_time_windows(
+            history_data=history_data,
+            window_size=window_size,
+            step_size=step_size,
+            min_response_ratio=min_response_ratio,
+            step_threshold=step_threshold,
+            confidence_min=min_confidence
+        )
+
+        # 提取筛选结果中的最优窗口
+        optimal_window = result.get("analysis_summary", {}).get("optimal_window") if result.get(
+            "status") == "success" else None
+
+        if not optimal_window:
+            raise HTTPException(
+                status_code=404,
+                detail="未找到符条件的时间窗口。请检查时间范围、上基门槛或参数配置是否合理。"
+            )
+
+        return {
+            "status": "success",
+            "start_time": start_time,
+            "end_time": end_time,
+            "params": {
+                "window_size": window_size,
+                "step_size": step_size,
+                "step_threshold": step_threshold,
+                "min_response_ratio": min_response_ratio,
+                "min_confidence": min_confidence
+            },
+            "total_windows": result.get("total_windows", 0),
+            "qualified_windows_count": len(result.get("qualified_windows", [])),
+            "optimal_window": optimal_window,
+            "analysis_summary": result.get("analysis_summary", {})
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"自动筛选时间窗口失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"自动筛选时间窗口失败: {str(e)}")
+
+
+@router.post("/calculate-pid",
+            summary="直接计算PID参数",
+            operation_id="根据KTL和模型类型计算PID参数",
+            description="根据输入的模型参数(K、T、L)和模型类型，直接计算对应的PID参数")
+async def calculate_pid(
+        K: float = Query(..., description="增益系数 K", examples=[0.5, 1.0, 2.0]),
+        T1: float = Query(..., description="时间常数 T1 (秒)", examples=[10.0, 30.0, 50.0]),
+        T2: Optional[float] = Query(None, description="二阶时间常数 T2 (秒，仅二阶模型需要)", examples=[10.0, 20.0]),
+        L: Optional[float] = Query(0, description="滞后时间 L (秒)", examples=[0, 1.0, 5.0]),
+        lambda_val: Optional[float] = Query(None, description="Lambda值（期望闭环时间常数），不指定时自动计算", examples=[10.0, 30.0]),
+        model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
+                                      examples=["FOPDT", "FO", "SOPDT", "SO", "FO_INTEGRATOR", "SO_INTEGRATOR"])
+):
+    """
+    **直接PID参数计算接口**
+    
+    根据输入的系统模型参数(K、T、L等)和模型类型，使用Lambda方法直接计算PID参数。
+    
+    **参数说明：**
+    - K: 系统增益，值越大系统反应越灵敏
+    - T: 时间常数，决定系统响应速度
+    - T2: 仅用于二阶模型(SOPDT, SO, SO_INTEGRATOR)
+    - L: 滞后时间，仅用于带滞后的模型(FOPDT, SOPDT)
+    - lambda_val: Lambda值，越小响应越快但风险越大；越大响应越慢但更稳定
+    - model_type: 选择对应的模型类型
+    
+    **模型类型说明：**
+    - FOPDT: 一阶加纯滞后模型 G(s) = K/(Ts+1)*e^(-Ls) - 通用工业过程
+    - FO: 一阶模型 G(s) = K/(Ts+1) - 无滞后系统
+    - SOPDT: 二阶加纯滞后模型 G(s) = K/((T1s+1)(T2s+1))*e^(-Ls) - 温度、化学过程
+    - SO: 纯二阶模型 G(s) = K/((T1s+1)(T2s+1)) - 无滞后二阶系统
+    - FO_INTEGRATOR: 一阶积分模型 G(s) = K/(s(Ts+1)) - 流量累积、液位控制
+    - SO_INTEGRATOR: 二阶积分模型 G(s) = K/(s^2(T1s+1)(T2s+1)) - 双积分过程
+    
+    **返回值：**
+    - params: 计算的PID参数 (Kp, Ki, Kd)
+    - model_type: 使用的模型类型
+    - lambda: 实际使用的Lambda值
+    - recommendations: 针对选定模型类型的应用建议
+    """
+    try:
+        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, ModelType as ST_ModelType
+        
+        # 转换ModelType为字符串
+        mt_str = model_type.value if isinstance(model_type, ST_ModelType) else str(model_type)
+        
+        # 参数验证
+        if K <= 0:
+            raise HTTPException(status_code=400, detail="K值必须大于0")
+        if T1 <= 0:
+            raise HTTPException(status_code=400, detail="T值必须大于0")
+        if L is not None and L < 0:
+            raise HTTPException(status_code=400, detail="L值不能为负")
+        
+        # 确保L有默认值
+        if L is None:
+            L = 0.0
+        
+        # 根据模型类型验证参数
+        if mt_str in ['SOPDT', 'SO', 'SO_INTEGRATOR']:
+            if T2 is None or T2 <= 0:
+                raise HTTPException(status_code=400, detail=f"{mt_str}模型需要有效的T2参数（大于0）")
+        
+        # 调用Lambda整定
+        if mt_str in ['FOPDT', 'FO']:
+            # 一阶模型
+            Kp, Ti, Td = SystemIdentifier.lambda_tuning_for_flow(
+                K, T1, L if L else 0,
+                model_type=mt_str,
+                lambda_val=lambda_val,
+                mode="flow_control"
+            )
+        elif mt_str in ['SOPDT', 'SO']:
+            # 二阶模型
+            Kp, Ti, Td = SystemIdentifier.lambda_tuning_for_flow(
+                K, T1, T2, L if L else 0,
+                model_type=mt_str,
+                lambda_val=lambda_val,
+                mode="flow_control"
+            )
+        elif mt_str == 'FO_INTEGRATOR':
+            # 一阶积分模型
+            Kp, Ti, Td = SystemIdentifier.lambda_tuning_for_flow(
+                K, T1,
+                model_type=mt_str,
+                lambda_val=lambda_val,
+                mode="flow_control"
+            )
+        elif mt_str == 'SO_INTEGRATOR':
+            # 二阶积分模型
+            Kp, Ti, Td = SystemIdentifier.lambda_tuning_for_flow(
+                K, T1, T2,
+                model_type=mt_str,
+                lambda_val=lambda_val,
+                mode="flow_control"
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"不支持的模型类型: {mt_str}")
+        
+        # 计算Ki和Kd
+        Ki = Kp / Ti if Ti > 1e-6 else 0.0
+        Kd = Kp * Td
+        
+        # 实际使用的Lambda值
+        actual_lambda = lambda_val
+        if actual_lambda is None:
+            if mt_str == 'FO_INTEGRATOR':
+                actual_lambda = max(T1 * 1.0, 0.2)
+            elif mt_str == 'SO_INTEGRATOR':
+                T2_val = T2 if T2 is not None else T1
+                T_eq = T1 + T2_val
+                actual_lambda = max(T_eq * 1.0, 0.5)
+            elif mt_str in ['SOPDT', 'SO']:
+                T2_val = T2 if T2 is not None else T1
+                T_eq = T1 + T2_val
+                actual_lambda = T_eq * 1.0
+            else:  # FOPDT, FO
+                actual_lambda = T1 * 0.8
+        
+        # 获取模型配置信息
+        model_config = ST_ModelType(mt_str).name if hasattr(ST_ModelType, mt_str) else mt_str
+        
+        # 生成应用建议
+        recommendations = _get_model_recommendations(mt_str)
+        
+        response = {
+            "status": "success",
+            "model_type": mt_str,
+            "input_parameters": {
+                "K": float(K),
+                "T": float(T1),
+                "T2": float(T2) if T2 else None,
+                "L": float(L) if L else 0.0,
+                "lambda_input": float(lambda_val) if lambda_val else None
+            },
+            "params": {
+                "Kp": float(Kp),
+                "Ki": float(Ki),
+                "Kd": float(Kd),
+                "Ti": float(Ti),
+                "Td": float(Td),
+                "Pb": float(100 / Kp) if Kp > 1e-6 else None
+            },
+            "pid_form": "Kp-Ki-Kd",
+            "lambda": float(actual_lambda),
+            "recommendations": recommendations,
+            "note": f"基于{mt_str}模型使用Lambda方法({actual_lambda:.2f}s)的PID参数计算"
+        }
+        
+        return response
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"PID参数计算失败: {str(e)}"
+        )
+
+
+def _get_model_recommendations(model_type: str) -> Dict[str, str]:
+    """
+    获取不同模型类型的应用建议
+    """
+    recommendations = {
+        "FOPDT": "适用于大多数工业过程，具有一定滞后特性。建议用于温度、压力等缓变过程",
+        "FO": "适用于无明显滞后的一阶系统。响应较快，适合响应速度要求不高的场景",
+        "SOPDT": "适用于复杂工业过程（如温度、化学反应）。具有多惯性和滞后特性",
+        "SO": "适用于快速响应的二阶系统。无滞后，可能存在超调，需适当调节Lambda",
+        "FO_INTEGRATOR": "适用于流量控制、液位控制等积分特性系统。需要较强的反馈",
+        "SO_INTEGRATOR": "适用于复杂的双积分过程。需要更大的Lambda值以保证稳定性"
+    }
+    return {
+        "model_description": recommendations.get(model_type, "未知模型类型"),
+        "lambda_selection_tip": "可通过调整lambda_val参数：减小使响应快但波动增加，增大使响应慢但更稳定"
+    }
+
+
+@router.post("/tuning-windows",
             summary="常规整定自动筛选时间区间",
             operation_id="常规整定自动筛选时间区间",
             description="自动识别温度曲线中高波动时段，输出适合经典整定分析的时间窗口列表")
@@ -789,11 +1083,604 @@ async def get_tuning_windows(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"时间区间筛选失败: {str(e)}")
 
+@router.post("/auto-tuning",
+            summary="智能PID参数整定",
+            operation_id="自动筛选整定与手动时间范围整定",
+            description="支持两种模式：1) 自动筛选最佳时间窗口并整定 2) 手动指定时间范围整定")
+async def auto_tuning(
+        mode: str = Query("auto", description="整定模式：auto(自动筛选) 或 manual(手动指定时间范围)", examples=["auto", "manual"]),
+        start_time: Union[int, str] = Query(None, required=False, description="开始时间（manual模式必填），支持毫秒时间戳或字符串格式"),
+        end_time: Union[int, str] = Query(None, required=False, description="结束时间（manual模式必填），支持毫秒时间戳或字符串格式"),
+        model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
+                                      examples=["FOPDT","FO","SOPDT","SO","FO_INTEGRATOR","SO_INTEGRATOR"]),
+        lambda_val: Optional[float] = Query(None, description="Lambda参数值（可选），未指定时自动计算"),
+        window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
+        step_size: int = Query(10, description="滑动步长（分钟）", examples=[10, 30]),
+        confidence_threshold: float = Query(0.6, description="置信度阈值（仅auto模式有效，0-1）", examples=[0.6, 0.7]),
+        window_sec: int = Query(60, description="插值采样间隔（秒）", examples=[60, 120]),
+        is_filter: bool = Query(False, description="是否对历史数据进行优化过滤", examples=[False])
+):
+    """
+    **智能PID参数整定接口**
+    
+    支持两种整定模式：
+    
+    **1. 自动筛选模式 (mode="auto")：**
+    - 自动识别历史数据中的高质量时间窗口
+    - 基于阶跃响应检测选择最佳辨识区间
+    - 自动执行参数辨识与Lambda整定
+    - 返回推荐的PID参数及窗口信息
+    
+    **2. 手动指定模式 (mode="manual")：**
+    - 用户指定具体时间范围 (start_time, end_time)
+    - 直接对指定区间进行参数辨识
+    - 执行Lambda整定计算
+    - 返回PID参数建议
+    
+    **Lambda整定参数：**
+    - lambda_val: 期望闭环时间常数，影响响应速度与稳健性
+    - 未指定时自动根据模型类型计算最优值
+    """
+    try:
+        # 参数验证
+        if mode not in ["auto", "manual"]:
+            mode='auto'
+            # raise HTTPException(status_code=400, detail="mode参数必须为'auto'或'manual'")
+        
+        # 时间范围处理
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
+        if start_time is None:
+            start_time = end_time - 24 * 60 * 60 * 1000  # 默认1天
+        logger.info(f"将在时间范围 {start_time} - {end_time} 内筛选最佳整定区间")
+        
+        # 时间格式转换
+        start_time_ms = parse_time_to_milliseconds(start_time)
+        end_time_ms = parse_time_to_milliseconds(end_time)
+        
+        if start_time_ms >= end_time_ms:
+            raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
+        
+        # 固定设备与字段配置
+        table = "PID_FEP_Gateway_Device_001default"
+        required_fields = [
+            "ns=100;s=FIC101A_MV.In_Channel0",
+            "ns=100;s=FIC101A_PV.In_Channel0",
+            "ns=100;s=FIC101A_SV.In_Channel0",
+            "ns=100;s=FIC101A_PB.In_Channel0",
+            "ns=100;s=FIC101A_TI.In_Channel0",
+            "ns=100;s=FIC101A_TD.In_Channel0"
+        ]
+        
+        db = get_default_database()
+        
+        # 初始化变量
+        qualified_windows = []
+        best_window = None
+        window_data = []
+        
+        # 根据模式执行不同逻辑
+        if mode == "auto":
+            # 自动筛选模式
+            logger.info(f"执行自动整定，时间范围：{start_time} - {end_time}")
+            
+            # 获取历史数据
+            history_data = _query_tsdb_data_zhongkong(
+                db=db,
+                table_name=table,
+                required_fields=required_fields,
+                start_time=start_time_ms,
+                end_time=end_time_ms,
+                is_filter=is_filter,
+                window=window_sec
+            )
+            
+            if not history_data or len(history_data) == 0:
+                return {
+                    "status": "error",
+                    "mode": mode,
+                    "message": "指定时间范围内无数据"
+                }
+            
+            # 构建DataFrame用于窗口检测
+            df = pd.DataFrame(history_data)
+            if "timestamp" not in df.columns or "pv" not in df.columns or "mv" not in df.columns:
+                raise HTTPException(status_code=500, detail="历史数据缺少必要字段")
+            
+            # 使用阶跃响应检测筛选最佳窗口
+            from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
+            
+            # 滑动窗口检测阶跃响应
+            window_size_sec = window_size * 60
+            step_size_sec = step_size * 60
+
+            # 转换为numpy数组
+            t_array = (df["timestamp"].values - df["timestamp"].values[0]) / 1000  # 相对时间（秒）
+            pv_array = df["pv"].values
+            mv_array = df["mv"].values
+
+            # 使用采样间隔换算为“点数”窗口与步长
+            dt_seconds = float((df["timestamp"].values[1] - df["timestamp"].values[0]) / 1000) if len(
+                df["timestamp"].values) > 1 else 1.0
+            window_size_points = max(1, int(window_size_sec / dt_seconds))
+            step_size_points = max(1, int(step_size_sec / dt_seconds))
+
+            qualified_windows = []
+            total_windows_to_check = len(range(0, max(0, len(t_array) - window_size_points), step_size_points))
+            logger.info(f"开始扫描时间窗口，总共需检查 {total_windows_to_check} 个窗口")
+
+            for i in range(0, max(0, len(t_array) - window_size_points), step_size_points):
+                # 窗口范围（按点数）
+                window_start_idx = i
+                window_end_idx = min(i + window_size_points, len(t_array))
+
+                if window_end_idx - window_start_idx < 60:  # 至少60个点
+                    continue
+
+                t_window = np.array(t_array[window_start_idx:window_end_idx])
+                pv_window = np.array(pv_array[window_start_idx:window_end_idx])
+                mv_window = np.array(mv_array[window_start_idx:window_end_idx])
+                # 检测阶跃响应
+                step_info = SystemIdentifier.detect_step_response_in_window(
+                    t_window, pv_window, mv_window,
+                    step_threshold=0.05,
+                    response_ratio=0.1
+                )
+                
+                if step_info.get('has_step') and step_info.get('confidence', 0) >= confidence_threshold:
+                    # 记录窗口信息
+                    window_start_ms = int(df["timestamp"].values[window_start_idx])
+                    window_end_ms = int(df["timestamp"].values[window_end_idx - 1])
+                    
+                    qualified_windows.append({
+                        "start_timestamp": window_start_ms,
+                        "end_timestamp": window_end_ms,
+                        "confidence": step_info.get('confidence'),
+                        "step_size": step_info.get('step_size'),
+                        "response_magnitude": step_info.get('response_magnitude'),
+                        "data_indices": (window_start_idx, window_end_idx)
+                    })
+            
+            if not qualified_windows:
+                logger.warning(f"在 {total_windows_to_check} 个窗口中未找到符合条件的阶跃响应")
+                return {
+                    "status": "warning",
+                    "mode": mode,
+                    "message": f"未找到符合条件的阶跃响应窗口（已检查{total_windows_to_check}个窗口），建议：1)降低confidence_threshold（当前{confidence_threshold}）2)增加window_size 3)调整时间范围",
+                    "total_windows_checked": total_windows_to_check,
+                    "qualified_windows": 0,
+                    "suggestion": {
+                        "current_confidence_threshold": confidence_threshold,
+                        "suggested_confidence_threshold": max(0.3, confidence_threshold - 0.2),
+                        "current_window_size_minutes": window_size,
+                        "suggested_window_size_minutes": window_size + 60
+                    }
+                }
+            
+            # 选择置信度最高的窗口
+            best_window = max(qualified_windows, key=lambda x: x['confidence'])
+            logger.info(f"找到 {len(qualified_windows)} 个合格窗口，选择最佳窗口：置信度={best_window['confidence']:.3f}, 阶跃大小={best_window.get('step_size', 'N/A'):.2f}, 时间范围: {format_time_to_string(best_window['start_timestamp'])} - {format_time_to_string(best_window['end_timestamp'])}")
+            # 提取最佳窗口数据用于整定
+            # start_idx, end_idx = best_window['data_indices']
+            window_data = _query_tsdb_data_zhongkong(
+                db=db,
+                table_name=table,
+                required_fields=required_fields,
+                start_time=best_window['start_timestamp'],
+                end_time=best_window['end_timestamp'],
+                is_filter=is_filter
+            )
+            
+        else:
+            # 手动指定模式
+            logger.info(f"执行手动整定，时间范围：{start_time} - {end_time}")
+            
+            # 直接查询指定时间范围的数据
+            window_data = _query_tsdb_data_zhongkong(
+                db=db,
+                table_name=table,
+                required_fields=required_fields,
+                start_time=start_time_ms,
+                end_time=end_time_ms,
+                is_filter=is_filter,
+                window=1
+            )
+            
+            if not window_data or len(window_data) == 0:
+                return {
+                    "status": "error",
+                    "mode": mode,
+                    "message": "指定时间范围内无数据"
+                }
+            
+            best_window = {
+                "start_timestamp": start_time_ms,
+                "end_timestamp": end_time_ms,
+                "confidence": None,
+                "step_size": None,
+                "response_magnitude": None
+            }
+        
+        # 执行PID参数整定
+        optimization_tool = PIDOptimizationTool()
+        
+        # 如果指定了lambda_val，需要传递给整定工具
+        # 这里通过修改工具调用方式实现
+        optimization_result = optimization_tool._run(
+            history_data=window_data,
+            is_lambda=True,
+            model_type=model_type
+        )
+        
+        # 解析结果
+        try:
+            result_data = json.loads(optimization_result)
+            
+            # 构建返回数据
+            response = {
+                "status": "success",
+                "mode": mode,
+                "table": table,
+                "time_range": {
+                    "start_time": format_time_to_string(best_window["start_timestamp"]),
+                    "end_time": format_time_to_string(best_window["end_timestamp"]),
+                    "duration_seconds": (best_window["end_timestamp"] - best_window["start_timestamp"]) / 1000
+                },
+                "model_type": model_type.value,
+                "lambda_tuning_enabled": True,
+                "optimization_result": result_data
+            }
+            
+            return response
+            
+        except json.JSONDecodeError:
+            return {
+                "status": "error",
+                "mode": mode,
+                "message": f"参数整定失败: {optimization_result}"
+            }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"自动整定失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"参数整定失败: {str(e)}")
+
+
+@router.post("/generate-all-curves",
+             summary="生成三种仿真曲线",
+             operation_id="统一生成拟合、闭环、阶跃响应三种曲线",
+             description="根据模型参数和PID参数，一次性生成拟合曲线、闭环仿真曲线和阶跃响应曲线")
+async def generate_all_curves(
+        # 模型参数
+        K: float = Query(..., description="系统增益 K", examples=[0.5, 1.0, 2.0]),
+        T1: float = Query(..., description="时间常数 T (秒)", examples=[10.0, 30.0, 50.0]),
+        T2: Optional[float] = Query(None, description="二阶时间常数 T2 (秒)", examples=[10.0, 20.0]),
+        L: Optional[float] = Query(0, description="滞后时间 L (秒)", examples=[0, 1.0, 5.0]),
+        model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
+                                      examples=["FOPDT", "FO", "SOPDT", "SO"]),
+        # PID参数
+        Kp: Optional[float] = Query(..., description="PID比例系数", examples=[1.0]),
+        Ki: Optional[float] = Query(..., description="PID积分系数", examples=[0.1]),
+        Kd: Optional[float] = Query(..., description="PID微分系数", examples=[0]),
+        # 数据源参数 - 用于拟合和初始值
+        start_time: Union[int, str] = Query(..., required=False, description="开始时间"),
+        end_time: Union[int, str] = Query(..., required=False, description="结束时间"),
+        step_value: float = Query(1.0, description="阶跃输入幅值", examples=[1.0, 10.0]),
+        duration: float = Query(600.0, description="仿真时长(秒)", examples=[300.0, 600.0]),
+        dt: float = Query(1.0, description="采样时间间隔(秒)", examples=[0.1, 1.0]),
+        initial_output: float = Query(0.0, description="初始输出值", examples=[0.0]),
+        setpoint: Optional[float] = Query(None, description="PID设定值", examples=[100.0]),
+):
+    """
+    **三种仿真曲线统一生成接口**
+
+    一个统一接口，同时生成：
+    1. **拟合曲线**: 模型与实际数据的拟合效果
+    2. **闭环仿真曲线**: 使用PID参数的闭环控制响应
+    3. **阶跃响应曲线**: 系统的开环阶跃响应特性
+
+    **数据源模式:**
+    - 支持数据库查询模式(start_time, end_time)或直接数据模式(t_data, y_actual)
+    """
+    try:
+        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, PIDController
+
+        # 参数验证
+        if K <= 0 or T1 <= 0:
+            raise HTTPException(status_code=400, detail="K和T1必须大于0")
+        if (L and L < 0) or (Ki and Ki <= 0) or (Kd and Kd < 0):
+            raise HTTPException(status_code=400, detail="参数值无效")
+
+        mt_str = model_type.value if isinstance(model_type, ModelType) else str(model_type)
+
+        result = {
+            "status": "success",
+            "model_type": mt_str,
+            "model_parameters": {
+                "K": K,
+                "T1": T1,
+                "T2": float(T2) if T2 else 0.0,
+                "L": float(L) if L else 0.0
+            },
+            "pid_parameters": {
+                "Kp": float(Kp),
+                "Ki": float(Ki),
+                "Kd": float(Kd),
+            }
+        }
+        # 时间默认值：最近一天
+        # if end_time is None:
+        #     end_time = int(datetime.now().timestamp() * 1000)
+        # if start_time is None:
+        #     start_time = end_time - 24 * 60 * 60 * 1000  # 1天
+
+        # 时间转换与校验
+        start_time_ms = parse_time_to_milliseconds(start_time)
+        end_time_ms = parse_time_to_milliseconds(end_time)
+        if start_time_ms >= end_time_ms:
+            raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
+        # 从数据库查询
+        db = get_default_database()
+        table = "PID_FEP_Gateway_Device_001default"
+        required_fields = [
+            "ns=100;s=FIC101A_MV.In_Channel0",
+            "ns=100;s=FIC101A_PV.In_Channel0",
+            "ns=100;s=FIC101A_SV.In_Channel0",
+            "ns=100;s=FIC101A_PB.In_Channel0",
+            "ns=100;s=FIC101A_TI.In_Channel0",
+            "ns=100;s=FIC101A_TD.In_Channel0"
+        ]
+        data_list = _query_tsdb_data_zhongkong(
+            db=db,
+            table_name=table,
+            required_fields=required_fields,
+            start_time=start_time_ms,
+            end_time=end_time_ms,
+            window=1,
+            is_filter=False
+        )
+        # 获取实际数据
+
+        if data_list:
+            t_list, pv_list, mv_list = [], [], []
+            for item in data_list:
+                if 'timestamp' in item and 'pv' in item:
+                    t_list.append(item['timestamp'])
+                    pv_list.append(float(item.get('pv', 0.0)))
+
+            if t_list and len(t_list) > 0:
+                t_fit = np.array(t_list, dtype=float) / 1000.0
+                # 确保数组不为空再进行减法操作
+                if len(t_fit) > 0:
+                    t_fit = t_fit - t_fit[0]
+                y_fit = np.array(pv_list, dtype=float)
+            else:
+                raise ValueError("数据中缺少timestamp或pv字段")
+        else:
+            raise ValueError("查询数据为空")
+        # ==================== 1. 生成模拟拟合曲线 ====================
+        fitting_result = {}
+        try:
+            fitting_result=KTLSimulator.simulation_curve(
+                data_list=data_list,
+                model_params={'K': K, 'T1': T1, 'T2': T2, 'L': L},
+                model_type=ModelType.FOPDT.value
+            )
+        except Exception as e:
+            fitting_result = {"status": "error", "detail": f"拟合曲线生成失败: {str(e)}"}
+
+        # ==================== 2. 生成闭环仿真曲线 ====================
+        closed_loop_result = {}
+        try:
+            closed_loop_result = KTLSimulator.generate_closed_loop_response(
+                model_type=ModelType.FOPDT.value,
+                parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
+                Kp=Kp,
+                Ki=Ki,
+                Kd=Kd,
+                setpoint=setpoint,
+                duration=duration,
+                dt=dt
+            )
+        except Exception as e:
+            closed_loop_result = {"status": "error", "detail": f"闭环曲线生成失败: {str(e)}"}
+
+        # ==================== 3. 生成阶跃响应曲线 ====================
+        step_response_result = {}
+        try:
+            # 生成开环阶跃响应
+            step_response_result = KTLSimulator.generate_response(
+                model_type=ModelType.FOPDT.value,
+                parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
+                step_value=step_value,
+                duration=duration,
+                dt=dt,
+                initial_output=initial_output
+            )
+
+            # 计算性能指标
+            # generate_response_result = KTLSimulator.calculate_performance_metrics(
+            #     t=step_response_result["time"],
+            #     y=step_response_result["output"],
+            #     step_value=step_value,
+            #     K=K
+            # )
+        except Exception as e:
+            step_response_result = {"status": "error", "detail": f"阶跃响应曲线生成失败: {str(e)}"}
+
+        # 组合结果
+        result["fitting_curve"] = fitting_result
+        result["closed_loop_curve"] = closed_loop_result
+        result["step_response_curve"] = step_response_result
+        
+        # 生成三合一图片
+        plot_path = None
+        try:
+            import matplotlib.pyplot as plt
+            import os
+            from datetime import datetime
+            
+            # 配置中文字体
+            plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS']
+            plt.rcParams['axes.unicode_minus'] = False
+            
+            # 创建图片保存目录
+            output_dir = "data/plots"
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # 创建包含3个子图的figure，尺寸参考_plot_model_comparison
+            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 14))
+            
+            # ========== 子图1: 拟合曲线 ==========
+            if fitting_result.get("status") != "error":
+                # simulation_curve 返回：{timestamp, time, sv, pv, mv, pv_model, r_squared, rmse}
+                if "timestamp" in fitting_result and "pv" in fitting_result and "pv_model" in fitting_result:
+                    # 使用真实时间戳
+                    timestamps = fitting_result["timestamp"]
+                    # 将毫秒时间戳转为秒级相对时间用于绘图
+                    if len(timestamps) > 0:
+                        t0 = timestamps[0]
+                        time_for_plot = [(t - t0) / 1000.0 for t in timestamps]
+                    else:
+                        time_for_plot = timestamps
+                    
+                    # 绘制PV曲线，样式参考_plot_model_comparison
+                    ax1.plot(time_for_plot, fitting_result["pv"], 'b-', linewidth=2, label='PV (实际值)', alpha=0.8)
+                    ax1.plot(time_for_plot, fitting_result["pv_model"], 'r--', linewidth=2, label='PV (模型拟合)', alpha=0.8)
+                    
+                    # 如果有SV，绘制SV曲线
+                    if "sv" in fitting_result and len(fitting_result["sv"]) > 0:
+                        ax1.plot(time_for_plot, fitting_result["sv"], 'g--', linewidth=1.5, label='SV (目标值)', alpha=0.7)
+                    
+                    ax1.set_ylabel('PV / SV', fontsize=12)
+                    ax1.set_xlabel('时间 (秒)', fontsize=12)
+                    ax1.grid(True, alpha=0.3)
+                    r2 = fitting_result.get('r_squared', 0)
+                    rmse_val = fitting_result.get('rmse', 0)
+                    ax1.set_title(f'模式1: 拟合模式 - 实际数据 vs 模型预测 (R²={r2:.4f}, RMSE={rmse_val:.4f})',
+                                 fontsize=12, fontweight='bold')
+                    ax1.legend(loc='best', fontsize=10)
+                else:
+                    ax1.text(0.5, 0.5, '拟合曲线数据不完整', 
+                            ha='center', va='center', fontsize=14, transform=ax1.transAxes, color='gray')
+                    ax1.set_title('模式1: 拟合模式', fontsize=12, fontweight='bold')
+            else:
+                ax1.text(0.5, 0.5, f"拟合曲线生成失败\n{fitting_result.get('detail', '')}", 
+                        ha='center', va='center', fontsize=14, transform=ax1.transAxes, color='gray')
+                ax1.set_title('模式1: 拟合模式', fontsize=12, fontweight='bold')
+            ax1.grid(True, alpha=0.3)
+            
+            # ========== 子图2: 闭环仿真曲线 ==========
+            if closed_loop_result.get("status") != "error":
+                # generate_closed_loop_response 返回：{time, setpoint, process_value, control_output}
+                if "time" in closed_loop_result and "process_value" in closed_loop_result:
+                    ax2.plot(closed_loop_result["time"], closed_loop_result["process_value"], 
+                            'purple', linewidth=2, label='PV (闭环仿真)', alpha=0.8)
+                    
+                    if "control_output" in closed_loop_result:
+                        ax2.plot(closed_loop_result["time"], closed_loop_result["control_output"], 
+                                'orange', linewidth=1.5, label='MV (闭环控制)', alpha=0.7, linestyle='--')
+                    
+                    if "setpoint" in closed_loop_result:
+                        ax2.plot(closed_loop_result["time"], closed_loop_result["setpoint"], 
+                                'g--', linewidth=1.5, label='SV (目标值)', alpha=0.7)
+                    
+                    ax2.set_ylabel('PV / SV / MV', fontsize=12)
+                    ax2.set_xlabel('时间 (秒)', fontsize=12)
+                    ax2.set_title('模式2: 闭环仿真 - 使用推荐PID参数的控制效果',
+                                 fontsize=12, fontweight='bold')
+                    ax2.legend(loc='best', fontsize=10)
+                else:
+                    ax2.text(0.5, 0.5, '闭环仿真数据不完整', 
+                            ha='center', va='center', fontsize=14, transform=ax2.transAxes, color='gray')
+                    ax2.set_title('模式2: 闭环仿真', fontsize=12, fontweight='bold')
+            else:
+                ax2.text(0.5, 0.5, f"闭环曲线生成失败\n{closed_loop_result.get('detail', '')}", 
+                        ha='center', va='center', fontsize=14, transform=ax2.transAxes, color='gray')
+                ax2.set_title('模式2: 闭环仿真', fontsize=12, fontweight='bold')
+            ax2.grid(True, alpha=0.3)
+            
+            # ========== 子图3: 阶跃响应曲线 ==========
+            if step_response_result.get("status") != "error":
+                # generate_response 返回：{time, input, output}
+                if "time" in step_response_result and "output" in step_response_result:
+                    ax3.plot(step_response_result["time"], step_response_result["output"], 
+                            'teal', linewidth=2, label='PV (阶跃响应)', alpha=0.8)
+                    
+                    if "input" in step_response_result:
+                        ax3.plot(step_response_result["time"], step_response_result["input"], 
+                                'brown', linewidth=1.5, label='MV (阶跃输入)', alpha=0.7, linestyle='--')
+                    
+                    ax3.set_ylabel('PV / MV', fontsize=12)
+                    ax3.set_xlabel('时间 (秒)', fontsize=12)
+                    
+                    # 在标题中显示PID参数
+                    pid_info = ''
+                    if Kp is not None and Ki is not None and Kd is not None:
+                        pid_info = f' (PID: Kp={Kp:.3f}, Ki={Ki:.3f}, Kd={Kd:.3f})'
+                    
+                    ax3.set_title(f'模式3: 阶跃响应 - 系统开环阶跃响应特性{pid_info}',
+                                 fontsize=12, fontweight='bold')
+                    ax3.legend(loc='best', fontsize=10)
+                else:
+                    ax3.text(0.5, 0.5, '阶跃响应数据不完整', 
+                            ha='center', va='center', fontsize=14, transform=ax3.transAxes, color='gray')
+                    ax3.set_title('模式3: 阶跃响应', fontsize=12, fontweight='bold')
+            else:
+                ax3.text(0.5, 0.5, f"阶跃响应曲线生成失败\n{step_response_result.get('detail', '')}", 
+                        ha='center', va='center', fontsize=14, transform=ax3.transAxes, color='gray')
+                ax3.set_title('模式3: 阶跃响应', fontsize=12, fontweight='bold')
+            ax3.grid(True, alpha=0.3)
+            
+            # 总标题：包含模型参数和拟合指标
+            title = f'模型辨识结果 ({mt_str})\n'
+            title += f'K={K:.3f}, T1={T1:.2f}s'
+            if T2:
+                title += f', T2={T2:.2f}s'
+            if L:
+                title += f', L={L:.2f}s'
+            
+            # 添加拟合指标
+            if fitting_result.get("status") != "error" and "r_squared" in fitting_result:
+                r2 = fitting_result.get('r_squared', 0)
+                rmse_val = fitting_result.get('rmse', 0)
+                title += f' | R²={r2:.4f}, RMSE={rmse_val:.4f}'
+            
+            fig.suptitle(title, fontsize=14, fontweight='bold', y=0.995)
+            
+            # 调整子图间距
+            plt.tight_layout()
+            
+            # 保存图片
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            plot_filename = f"{mt_str}_three_curves_{timestamp}.png"
+            plot_path = os.path.join(output_dir, plot_filename)
+            plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            
+            logger.info(f"三合一曲线图已保存: {plot_path}")
+            
+        except Exception as e:
+            logger.error(f"生成三合一曲线图失败: {str(e)}")
+            plot_path = None
+        
+        # 添加图片路径到结果
+        result["plot_generated"] = plot_path is not None
+        result["plot_path"] = plot_path
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"曲线生成失败: {str(e)}")
+
 
 @router.get("/step-response-windows",
             summary="阶跃响应时间窗口获取",
             operation_id="获取含有阶跃响应的时间窗口",
-            description="基于阶跃响应检测自动识别并筛选高质量参数辨识窗口，专用于FOPDT模型参数辨识")
+            description="基于阶跃响应检测自动识别并筛选高质量参数辨识窗口")
 async def get_step_response_windows(
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
@@ -1001,121 +1888,6 @@ async def get_step_response_windows(
         raise HTTPException(status_code=500, detail=f"阶跃响应窗口获取失败: {str(e)}")
 
 
-@router.get("/auto-select-windows",
-            summary="自动筛选参数辨识时间区间",
-            operation_id="自动筛选时间窗口",
-            description="智能识别含有阶跃响应的高质量时间窗口，适用于FOPDT参数辨识")
-async def auto_select_time_windows(
-    start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
-    end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
-    window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
-    step_size: int = Query(10, description="滑动步长（分钟）", examples=[10, 30]),
-    min_confidence: float = Query(0.5, description="最小置信度要求（0-1）", ge=0, le=1),
-    step_threshold: float = Query(0.05, description="阶跃检测阈值（0-1）", ge=0, le=1),
-    min_response_ratio: float = Query(0.1, description="最小响应比例（0-1）", ge=0, le=1)
-):
-    """
-    自动筛选适合参数辨识的时间区间
-    
-    **功能说明:**
-    - 自动识别含有明显阶跃响应的时间窗口
-    - 综合评估输入信号、输出响应、响应特征
-    - 返回评分最高的最优窗口
-    
-    **返回窗口信息:**
-    - start_time / end_time: 窗口时间范围（毫秒）
-    - step_detected: 是否检测到阶跃
-    - confidence: 置信度评分（0-1）
-    - response_magnitude: 响应幅值
-    - response_ratio: 响应比例
-    - rise_time: 上升时间（秒）
-    - settling_time: 稳定时间（秒）
-    - recommendation: 推荐等级（优秀/良好/可接受/不推荐）
-    """
-    try:
-        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
-        
-        # 时间默认值：最近一天
-        if end_time is None:
-            end_time = int(datetime.now().timestamp() * 1000)
-        if start_time is None:
-            start_time = end_time - 24 * 60 * 60 * 1000  # 1天
-
-        # 时间转换与校验
-        start_time_ms = parse_time_to_milliseconds(start_time)
-        end_time_ms = parse_time_to_milliseconds(end_time)
-        if start_time_ms >= end_time_ms:
-            raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
-
-        # 固定设备与字段
-        table = "PID_FEP_Gateway_Device_001default"
-        required_fields = [
-            "ns=100;s=FIC101A_MV.In_Channel0",
-            "ns=100;s=FIC101A_PV.In_Channel0",
-            "ns=100;s=FIC101A_SV.In_Channel0",
-            "ns=100;s=FIC101A_PB.In_Channel0",
-            "ns=100;s=FIC101A_TI.In_Channel0",
-            "ns=100;s=FIC101A_TD.In_Channel0"
-        ]
-
-        # 查询历史数据
-        db = get_default_database()
-        history_data = _query_tsdb_data_zhongkong(
-            db=db,
-            table_name=table,
-            required_fields=required_fields,
-            start_time=start_time_ms,
-            end_time=end_time_ms,
-            is_filter=False,
-            window=1
-        )
-        if not history_data or len(history_data) < 10:
-            raise HTTPException(
-                status_code=404,
-                detail="数据不足，无法进行时间窗口筛选"
-            )
-
-        # 调用自动筛选方法
-        result = SystemIdentifier.auto_select_time_windows(
-            history_data=history_data,
-            window_size=window_size,
-            step_size=step_size,
-            min_response_ratio=min_response_ratio,
-            step_threshold=step_threshold,
-            confidence_min=min_confidence
-        )
-        
-        # 提取筛选结果中的最优窗口
-        optimal_window = result.get("analysis_summary", {}).get("optimal_window") if result.get("status") == "success" else None
-        
-        if not optimal_window:
-            raise HTTPException(
-                status_code=404,
-                detail="未找到符条件的时间窗口。请检查时间范围、上基门槛或参数配置是否合理。"
-            )
-        
-        return {
-            "status": "success",
-            "start_time": start_time,
-            "end_time": end_time,
-            "params": {
-                "window_size": window_size,
-                "step_size": step_size,
-                "step_threshold": step_threshold,
-                "min_response_ratio": min_response_ratio,
-                "min_confidence": min_confidence
-            },
-            "total_windows": result.get("total_windows", 0),
-            "qualified_windows_count": len(result.get("qualified_windows", [])),
-            "optimal_window": optimal_window,
-            "analysis_summary": result.get("analysis_summary", {})
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"自动筛选时间窗口失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"自动筛选时间窗口失败: {str(e)}")
 
 
 @router.get("/detect_and_visualize",
@@ -1186,24 +1958,27 @@ async def auto_detect_and_visualize(
 @router.get("/ktl-simulation",
             summary="基于KTL参数生成仿真模型曲线",
             operation_id="KTL仿真曲线生成",
-            description="根据K(增益)、T(时间常数)、L(纯滞后)参数生成一阶惯性加纯滞后(FOPDT)模型的阶跃响应曲线")
+            description="根据K(增益)、T(时间常数)、L(纯滞后)参数生成模型的阶跃响应曲线")
 async def generate_ktl_simulation(
-        K: float = Query(..., description="系统增益", examples=[1.0, 2.5]),
-        T: float = Query(..., description="时间常数(秒)", examples=[30.0, 60.0]),
-        L: float = Query(0.0, description="纯滞后时间(秒)", examples=[0.0, 5.0]),
+        model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
+                                      examples=["FOPDT", "FO", "SOPDT", "SO", "FO_INTEGRATOR", "SO_INTEGRATOR"]),
+        K: float = Query(..., description="增益系数 K", examples=[0.5, 1.0, 2.0]),
+        T1: float = Query(..., description="时间常数 T1 (秒)", examples=[10.0, 30.0, 50.0]),
+        T2: Optional[float] = Query(None, description="二阶时间常数 T2 (秒，仅二阶模型需要)", examples=[10.0, 20.0]),
+        L: Optional[float] = Query(0, description="滞后时间 L (秒)", examples=[0, 1.0, 5.0]),
+        Kp: Optional[float] = Query(None, description="PID比例系数", examples=[1.0]),
+        Ki: Optional[float] = Query(None, description="PID积分系数", examples=[0.1]),
+        Kd: Optional[float] = Query(None, description="PID微分系数", examples=[0.01]),
         step_value: float = Query(1.0, description="阶跃输入幅值", examples=[1.0, 10.0]),
         duration: float = Query(600.0, description="仿真时长(秒)", examples=[300.0, 600.0]),
         dt: float = Query(1.0, description="采样时间间隔(秒)", examples=[0.1, 1.0]),
         initial_output: float = Query(0.0, description="初始输出值", examples=[0.0]),
         with_pid: bool = Query(False, description="是否生成PID闭环响应", examples=[False]),
-        Kp: Optional[float] = Query(None, description="PID比例系数", examples=[1.0]),
-        Ki: Optional[float] = Query(None, description="PID积分系数", examples=[0.1]),
-        Kd: Optional[float] = Query(None, description="PID微分系数", examples=[0.01]),
         setpoint: Optional[float] = Query(None, description="PID设定值", examples=[100.0]),
         save_plot: bool = Query(True, description="是否保存图片", examples=[True])
 ):
     """
-    基于KTL参数生成FOPDT模型仿真曲线
+    基于KTL参数生成模型仿真曲线
     
     **功能说明:**
     - 生成一阶惯性加纯滞后(FOPDT)模型的阶跃响应曲线
@@ -1227,10 +2002,9 @@ async def generate_ktl_simulation(
                     detail="生成PID闭环响应时必须提供Kp, Ki, Kd和setpoint参数"
                 )
             
-            result = KTLSimulator.generate_pid_response(
-                K=K,
-                T=T,
-                L=L,
+            result = KTLSimulator.generate_closed_loop_response(
+                model_type=model_type.value,
+                parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
                 Kp=Kp,
                 Ki=Ki,
                 Kd=Kd,
@@ -1255,10 +2029,9 @@ async def generate_ktl_simulation(
             }
         else:
             # 生成开环阶跃响应
-            result = KTLSimulator.generate_fopdt_response(
-                K=K,
-                T=T,
-                L=L,
+            result = KTLSimulator.generate_response(
+                model_type=ModelType.FOPDT.value,
+                parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
                 step_value=step_value,
                 duration=duration,
                 dt=dt,
@@ -1294,6 +2067,9 @@ async def generate_ktl_simulation(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"KTL仿真生成失败: {str(e)}")
 
+
+
+
 @router.get("/health")
 async def health_check():
     """健康检查接口"""
@@ -1317,286 +2093,3 @@ def _get_default_value(field: str):
     return defaults.get(field, 0)
 
 
-# 查询时序数据-中控仿真测点
-def _query_tsdb_data_zhongkong(db: str,
-                               table_name: str,
-                               required_fields: List[str],
-                               start_time: int,
-                               end_time: int,
-                               tags: Optional[Dict[str, str]] = None,
-                               window: int = 1,
-                               is_filter:Optional[bool]=True
-                               ) -> List[Dict]:
-    first_time = datetime.now().timestamp()
-
-    """
-    查询时序数据，根据最新数据（最后一条）的pb、ti、td、sv进行过滤
-    只返回与最新参数值相同的历史数据，优化性能
-    """
-    # 定义仅查询必要的字段（不包括PID参数）
-    query_fields = [field for field in required_fields if field not in [
-        "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
-        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值  temperature
-        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值  target_temp
-        "ns=100;s=FIC101A_PB.In_Channel0",  # 比例带  pb
-        "ns=100;s=FIC101A_TI.In_Channel0",  # 积分参数 ti
-        "ns=100;s=FIC101A_TD.In_Channel0"  # 微分参数 td
-    ]]
-    all_records = []
-    response = query_read_interpolated(
-        db=db,
-        table=table_name,
-        fields=required_fields,
-        start_time=start_time,
-        end_time=end_time,
-        tags=tags,
-        window=window,
-        continuation_point=None
-    )
-    # print(response)
-    columns = response.columns or []
-    values = response.values
-    if not values:
-        return []
-    latest_value = values[-1]
-    latest_pb = latest_value[3]
-    latest_ti = latest_value[2]
-    latest_td = latest_value[5]
-    latest_sv = latest_value[1]
-
-    if  (is_filter is None) or is_filter:
-        filter_values=process_lists_optimized(values)[0]
-    else:
-        filter_values=values
-    # 解析当前页数据并添加到all_records
-    for value_row in filter_values:
-        record = {}
-        for i, column in enumerate(columns):
-            if i < len(value_row):
-                if column == "time":
-                    record["timestamp"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_PV.In_Channel0":
-                    record["pv"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_SV.In_Channel0":
-                    record["sv"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_MV.In_Channel0":
-                    record["mv"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_PB.In_Channel0":
-                    record["pb"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_TI.In_Channel0":
-                    record["ti"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_TD.In_Channel0":
-                    record["td"] = value_row[i]
-                else:
-                    record[column] = value_row[i]
-        all_records.append(record)
-    # 解析查询结果
-    history_data = []
-
-    # 参数转换
-    if all_records:
-        for record in all_records:
-            # 转换PID参数
-            result = pid_converter.convert_pb_to_pid(
-                record["pb"],
-                record["ti"],
-                record["td"]
-            )
-            # 确保包含查询字段的默认值
-            for field in query_fields:
-                if field not in record:
-                    record[field] = None
-
-            # 添加转换后的PID参数
-            record["kp"] = result["kp"]
-            record["ki"] = result["ki"]
-            record["kd"] = result["kd"]
-
-            history_data.append(record)
-    over_time = datetime.now().timestamp()
-    logger.info(f"查询耗时：{over_time-first_time}")
-    return history_data
-
-
-# 固定 pid值与目标温度，实时数据查询方法
-def _query_tsdb_data(db: str,
-                     table_name: str,
-                     required_fields: List[str],
-                     start_time: int,
-                     end_time: int,
-                     tags: Optional[Dict[str, str]] = None) -> List[Dict]:
-    """查询时序数据，但使用传入的PID参数覆盖查询结果"""
-    # 定义仅查询必要的字段（不包括PID参数）
-    query_fields = [field for field in required_fields if field not in [
-        "ns=100;s=FIC101A_MV.In_Channel0",  # mv
-        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值  pv
-        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值  sv
-        "ns=100;s=FIC101A_PB.In_Channel0",  # 比例带  pb
-        "ns=100;s=FIC101A_TI.In_Channel0",  # 积分参数 ti
-        "ns=100;s=FIC101A_TD.In_Channel0"  # 微分参数 td
-    ]]
-    begin_time = datetime.now().timestamp()
-
-    # 构造查询请求
-    query_request = {
-        "tables": [
-            {
-                "db": db,
-                "table": table_name,
-                "fields": query_fields,
-                "tags": tags,
-                "continuationPoint": None
-            }
-        ],
-        "detail": {
-            "startTime": start_time,
-            "endTime": end_time,
-            "limit": 1500,
-            "returnBounds": False
-        }
-    }
-
-    # 调用时序数据查询接口
-    response = query_raw_data(db=db, table=table_name, fields=required_fields, start_time=start_time,
-                                       end_time=end_time,
-                                       tags=tags)
-
-    # 解析查询结果
-    history_data = []
-
-    # 如果查询有结果，处理数据
-    if hasattr(response, 'values') and response.values:
-        columns = response.columns or []
-        values = response.values
-
-        # 将数据转换为字典格式
-        for value_row in values:
-            record = {}
-            for i, column in enumerate(columns):
-                if i < len(value_row):
-                    if column == "time":
-                        record["timestamp"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_MV.In_Channel0":
-                        record["mv"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_PV.In_Channel0":
-                        record["pv"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_SV.In_Channel0":
-                        record["sv"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_PB.In_Channel0":
-                        record["pb"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_TI.In_Channel0":
-                        record["ti"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_TD.In_Channel0":
-                        record["td"] = value_row[i]
-                    else:
-                        record[column] = value_row[i]
-
-            # 确保包含查询字段的默认值
-            for field in query_fields:
-                # record["temperature"] = record[field]
-                if field not in record:
-                    record[field] = None
-
-            history_data.append(record)
-    over_time = datetime.now().timestamp()
-    logger.info(f"总耗时: {begin_time} - {over_time}")
-    return history_data
-
-
-def _plot_history_data(history_data: List[Dict], table_name: str, 
-                       start_time: Union[int, str], end_time: Union[int, str]) -> Optional[str]:
-    """
-    绘制历史数据曲线并保存为图片
-    
-    Args:
-        history_data: 历史数据列表，包含timestamp, pv, mv, sv等字段
-        table_name: 设备表名
-        start_time: 开始时间
-        end_time: 结束时间
-        
-    Returns:
-        保存的图片路径，如果失败则返回None
-    """
-    try:
-        import matplotlib
-        matplotlib.use('Agg')  # 非交互式后端
-        import matplotlib.pyplot as plt
-        
-        # 配置中文字体
-        plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
-        plt.rcParams['axes.unicode_minus'] = False
-        
-        # 提取数据
-        timestamps = []
-        pv_values = []
-        mv_values = []
-        sv_values = []
-        
-        for record in history_data:
-            if 'timestamp' in record:
-                # 将毫秒时间戳转换为相对秒数
-                timestamps.append(record['timestamp'])
-                pv_values.append(record.get('pv', 0.0))
-                mv_values.append(record.get('mv', 0.0))
-                sv_values.append(record.get('sv', 0.0))
-        
-        if len(timestamps) == 0:
-            print("无有效数据点，跳过绘图")
-            return None
-        
-        # 转换时间为相对秒数
-        t0 = timestamps[0]
-        t_relative = [(t - t0) / 1000.0 for t in timestamps]
-        
-        # 创建3个子图网格（垂直排列）
-        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
-        
-        # 子图1: PV (过程变量)
-        ax1.plot(t_relative, pv_values, 'b-', linewidth=2, label='PV (实际值)', alpha=0.8)
-        ax1.set_ylabel('PV (过程变量)', fontsize=12, color='blue')
-        ax1.tick_params(axis='y', labelcolor='blue')
-        ax1.grid(True, alpha=0.3)
-        ax1.legend(loc='upper right', fontsize=10)
-        ax1.set_title('过程变量 (PV)', fontsize=11, fontweight='bold')
-        
-        # 子图2: SV (设定值)
-        ax2.plot(t_relative, sv_values, 'g-', linewidth=2, label='SV (设定值)', alpha=0.8)
-        ax2.set_ylabel('SV (设定值)', fontsize=12, color='green')
-        ax2.tick_params(axis='y', labelcolor='green')
-        ax2.grid(True, alpha=0.3)
-        ax2.legend(loc='upper right', fontsize=10)
-        ax2.set_title('设定值 (SV)', fontsize=11, fontweight='bold')
-        
-        # 子图3: MV (操纵量)
-        ax3.plot(t_relative, mv_values, 'r-', linewidth=2, label='MV (阀门开度)', alpha=0.8)
-        ax3.set_xlabel('时间 (秒)', fontsize=12)
-        ax3.set_ylabel('MV (操纵量)', fontsize=12, color='red')
-        ax3.tick_params(axis='y', labelcolor='red')
-        ax3.grid(True, alpha=0.3)
-        ax3.legend(loc='upper right', fontsize=10)
-        ax3.set_title('操纵量 (MV)', fontsize=11, fontweight='bold')
-        
-        # 总标题
-        fig.suptitle(f'设备历史数据曲线\n设备: {table_name} | 时间: {start_time} ~ {end_time}', 
-                     fontsize=14, fontweight='bold', y=0.995)
-        
-        plt.tight_layout()
-        
-        # 保存图片
-        plot_dir = os.path.join(os.getcwd(), "data", "plots")
-        os.makedirs(plot_dir, exist_ok=True)
-        
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plot_filename = f"history_data_{timestamp_str}.png"
-        plot_path = os.path.join(plot_dir, plot_filename)
-        
-        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-        plt.close()
-        
-        return plot_path
-        
-    except Exception as e:
-        print(f"❌ 绘图失败: {e}")
-        import traceback
-        traceback.print_exc()
-        return None

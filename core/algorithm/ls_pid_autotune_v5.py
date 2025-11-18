@@ -13,6 +13,7 @@ from logging.handlers import TimedRotatingFileHandler
 from enum import Enum
 from dataclasses import dataclass
 from typing import Tuple, List, Optional, Dict
+import random
 
 #  固定长度仿真+自识别扰动段
 #  by LiuHanBin
@@ -31,12 +32,13 @@ from typing import Tuple, List, Optional, Dict
 class ModelType(Enum):
     """模型类型枚举"""
     FOPDT = 'FOPDT'  # 一阶加纯滞后模型（First Order Plus Dead Time）
-    FIRST_ORDER = 'FO'  # 纯一阶模型
-    SECOND_ORDER = 'SOPDT'  # 二阶加纯滞后模型（向后兼容，带L参数）
-    SECOND_ORDER_NO_DELAY = 'SO'  # 纯二阶模型（无滞后）
-    INTEGRATOR = f'FO_INTEGRATOR'  # 一阶积分模型（First Order Plus Integrator）
-    SECOND_ORDER_INTEGRATOR = 'SO_INTEGRATOR'  # 二阶积分模型（Second Order Integrator）
-    
+    FO = 'FO'  # 纯一阶模型
+    SOPDT = 'SOPDT'  # 二阶加纯滞后模型（向后兼容，带L参数）
+    SO = 'SO'  # 纯二阶模型（无滞后）
+    FOPI = f'FO_INTEGRATOR'  # 一阶积分模型（First Order Plus Integrator）
+    SOPI = 'SO_INTEGRATOR'  # 二阶积分模型（Second Order Integrator）
+
+
     @classmethod
     def from_string(cls, value: str) -> 'ModelType':
         """从字符串创建枚举"""
@@ -44,22 +46,22 @@ class ModelType(Enum):
             return cls(value.lower())
         except ValueError:
             raise ValueError(f"不支持的模型类型: {value}，支持的类型: {[e.value for e in cls]}")
-    
+
     @property
     def display_name(self) -> str:
         """获取模型显示名称"""
         return MODEL_CONFIG[self].name
-    
+
     @property
     def description(self) -> str:
         """获取模型描述"""
         return MODEL_CONFIG[self].description
-    
+
     @property
     def param_count(self) -> int:
         """获取参数数量"""
         return MODEL_CONFIG[self].param_count
-    
+
     @property
     def param_names(self) -> List[str]:
         """获取参数名称列表"""
@@ -75,7 +77,7 @@ class ModelConfig:
     param_names: List[str]  # 参数名称列表
     transfer_function: str  # 传递函数表达式
     use_cases: List[str]  # 适用场景
-    
+
 
 # 模型配置映射
 MODEL_CONFIG = {
@@ -87,7 +89,7 @@ MODEL_CONFIG = {
         transfer_function="G(s) = K / (T*s + 1) * e^(-L*s)",
         use_cases=["通用工业过程", "温度控制", "压力控制", "流量控制"]
     ),
-    ModelType.FIRST_ORDER: ModelConfig(
+    ModelType.FO: ModelConfig(
         name="纯一阶模型",
         description="First Order (无滞后)",
         param_count=2,
@@ -95,7 +97,7 @@ MODEL_CONFIG = {
         transfer_function="G(s) = K / (T*s + 1)",
         use_cases=["无滞后系统", "快速响应过程"]
     ),
-    ModelType.SECOND_ORDER: ModelConfig(
+    ModelType.SOPDT: ModelConfig(
         name="二阶加纯滞后模型",
         description="SOPDT (Second Order Plus Dead Time)",
         param_count=4,
@@ -103,7 +105,7 @@ MODEL_CONFIG = {
         transfer_function="G(s) = K / ((T1*s + 1)(T2*s + 1)) * e^(-L*s)",
         use_cases=["温度过程", "化学反应", "复杂热力系统", "有超调特性的系统", "多惯性环节串联"]
     ),
-    ModelType.SECOND_ORDER_NO_DELAY: ModelConfig(
+    ModelType.SO: ModelConfig(
         name="纯二阶模型",
         description="SO (Second Order, 无滞后)",
         param_count=3,
@@ -111,7 +113,7 @@ MODEL_CONFIG = {
         transfer_function="G(s) = K / ((T1*s + 1)(T2*s + 1))",
         use_cases=["快速响应二阶系统", "无明显滞后的超调过程", "机械振动系统"]
     ),
-    ModelType.INTEGRATOR: ModelConfig(
+    ModelType.FOPI: ModelConfig(
         name="一阶积分模型",
         description="FOPI (First Order Plus Integrator)",
         param_count=2,
@@ -119,7 +121,7 @@ MODEL_CONFIG = {
         transfer_function="G(s) = K / (s(T*s + 1))",
         use_cases=["液位控制", "流量累积", "储罐系统", "积分特性过程"]
     ),
-    ModelType.SECOND_ORDER_INTEGRATOR: ModelConfig(
+    ModelType.SOPI: ModelConfig(
         name="二阶积分模型",
         description="SOPI (Second Order Integrator)",
         param_count=3,
@@ -713,7 +715,7 @@ class TemperatureSystem:
 class PIDController:
     """PID控制器：实现PID控制与参数平滑更新"""
 
-    def __init__(self, Kp=0.0, Ti=0.0, Td=0.0, dt=1, u_min=0, u_max=100, mode="standard", system_mode="standard"):
+    def __init__(self, Kp=0.0, Ti=0.0, Td=0.0, dt=1.0, u_min=0, u_max=100, mode="standard", system_mode="standard"):
         self.Kp = float(Kp)
         self.Ti = float(Ti)
         self.Td = float(Td)
@@ -875,14 +877,14 @@ class SystemIdentifier:
     @staticmethod
     def estimate_initial_guess(t, y, u, model_type='FOPDT', transient_mode=False):
         """统一的初始猜测值估算方法
-        
+
         Args:
             t: 时间序列
             y: 输出响应序列
             u: 输入信号序列
             model_type: 模型类型（'FOPDT', 'FO', 'SOPDT', 'SO', 'FO_INTEGRATOR', 'SO_INTEGRATOR'）
             transient_mode: 是否使用瞬态模式
-        
+
         Returns:
             tuple: (initial_guess, bounds) - 初始猜测和参数边界
         """
@@ -891,7 +893,7 @@ class SystemIdentifier:
         y_final = np.mean(y[-30:]) if len(y) > 30 else np.mean(y[-min(10, len(y)):])
         u_initial = np.mean(u[:30]) if len(u) > 30 else np.mean(u[:min(10, len(u))])
         u_final = np.mean(u[-30:]) if len(u) > 30 else np.mean(u[-min(10, len(u)):])
-        
+
         # 计算增益 K
         if transient_mode:
             u_range = np.ptp(u)
@@ -901,9 +903,9 @@ class SystemIdentifier:
             delta_u = abs(u_final - u_initial)
             delta_y = abs(y_final - y0)
             gain_guess = delta_y / delta_u if delta_u > 1e-6 else 0.5
-        
+
         gain_guess = max(gain_guess, 0.01)
-        
+
         # 计算滞后时间 L
         dy = np.abs(np.diff(y))
         L_guess = 0.01
@@ -913,7 +915,7 @@ class SystemIdentifier:
                 if dy[i] > response_threshold:
                     L_guess = max(t[i] - t[0], 0.01)
                     break
-        
+
         # 计算时间常数 T
         T_guess = 10.0
         if len(y) > 1 and len(t) > 1:
@@ -925,7 +927,7 @@ class SystemIdentifier:
                     rise_time = t[i] - t[response_start_idx] if response_start_idx < len(t) else 0
                     T_guess = max(rise_time, 1.0)
                     break
-        
+
         # 根据模型类型返回对应的初始猜测和边界
         if model_type == 'FOPDT':
             initial_guess = [gain_guess, T_guess, L_guess]
@@ -937,7 +939,7 @@ class SystemIdentifier:
             # 对于二阶模型，需要估算 T1 和 T2
             du = np.abs(np.diff(u))
             step_idx = np.argmax(du) if len(du) > 0 and np.max(du) > 0 else 0
-            
+
             T1_guess, T2_guess = 10.0, 5.0
             if step_idx < len(y) - 10:
                 peak_idx = np.argmax(y[step_idx:]) + step_idx
@@ -945,7 +947,7 @@ class SystemIdentifier:
                 T_eq_guess = max(t_peak * 0.6, 2.0)
                 T1_guess = T_eq_guess * 0.6
                 T2_guess = T_eq_guess * 0.4
-            
+
             if model_type == 'SOPDT':
                 initial_guess = [gain_guess, T1_guess, T2_guess, L_guess]
                 bounds = ([0.001, 0.1, 0.1, 0.01], [10.0, 500.0, 500.0, 100.0])
@@ -976,13 +978,13 @@ class SystemIdentifier:
             bounds = ([0.001, 0.1, 0.1], [10.0, 500.0, 500.0])
         else:
             raise ValueError(f"不支持的模型类型: {model_type}")
-        
+
         return initial_guess, bounds
 
     @staticmethod
     def fopdt_model(params, t, u, y0):
         """一阶加纯滞后（FOPDT）模型
-        
+
         微分方程: dy/dt = (y0 + K*u_delayed - y) / T
         离散化: y[i] = y[i-1] + (y0 + K*u_delayed - y[i-1]) / T * dt
         """
@@ -1010,7 +1012,7 @@ class SystemIdentifier:
     @staticmethod
     def first_order_model(params, t, u, y0):
         """一阶模型（无滞后）
-        
+
         微分方程: dy/dt = (y0 + K*u - y) / T
         离散化: y[i] = y[i-1] + (y0 + K*u[i] - y[i-1]) / T * dt
         """
@@ -1028,7 +1030,7 @@ class SystemIdentifier:
     @staticmethod
     def second_order_model(params, t, u, y0):
         """二阶模型（二阶加纯滞后 SOPDT）
-        
+
         传递函数: G(s) = K / ((T1*s + 1)(T2*s + 1)) * e^(-L*s)
         微分方程: T1*T2*d2y/dt2 + (T1+T2)*dy/dt + y = K*u_delayed + y0
         状态空间形式：
@@ -1046,7 +1048,7 @@ class SystemIdentifier:
 
             # 计算纯滞后对应的采样点数
             delay_steps = int(np.round(L / dt)) if dt > 0 else 0
-            
+
             # 考虑纯滞后
             if i > delay_steps:
                 u_delayed = u[i - delay_steps]
@@ -1058,7 +1060,7 @@ class SystemIdentifier:
             # x2' = (K*u_delayed + y0 - x1 - (T1+T2)*x2) / (T1*T2)
             dx1 = x2
             dx2 = (K * u_delayed + y0 - x1 - (T1 + T2) * x2) / (T1 * T2) if (T1 * T2) > 1e-6 else 0.0
-            
+
             x1 = x1 + dx1 * dt
             x2 = x2 + dx2 * dt
             y[i] = x1
@@ -1068,7 +1070,7 @@ class SystemIdentifier:
     @staticmethod
     def second_order_no_delay_model(params, t, u, y0):
         """纯二阶模型（Second Order, 无滞后）
-        
+
         传递函数: G(s) = K / ((T1*s + 1)(T2*s + 1))
         状态空间形式：
             x1' = x2
@@ -1082,11 +1084,11 @@ class SystemIdentifier:
 
         for i in range(len(t)):
             dt = t[i] - t[i - 1] if i > 0 else 1
-            
+
             # 二阶系统状态方程（无滞后）
             dx1 = x2
             dx2 = (K * u[i] + y0 - x1 - (T1 + T2) * x2) / (T1 * T2) if (T1 * T2) > 1e-6 else 0.0
-            
+
             x1 = x1 + dx1 * dt
             x2 = x2 + dx2 * dt
             y[i] = x1
@@ -1096,7 +1098,7 @@ class SystemIdentifier:
     @staticmethod
     def first_order_integrator_model(params, t, u, y0):
         """一阶积分模型（First Order Plus Integrator, FOPI）
-        
+
         传递函数: G(s) = K / (s(Ts + 1))
         微分方程: T*dy/dt + y = K*integral(u*dt) + y0
         状态空间形式：
@@ -1105,29 +1107,42 @@ class SystemIdentifier:
             y = x2 + y0
         """
         K, T = params
+        # 确保参数在安全范围内
+        K = np.clip(K, 0.001, 100.0)
+        T = np.clip(T, 0.1, 1000.0)
+
         y = np.ones_like(t) * y0
         x1 = 0.0  # 积分状态
         x2 = 0.0  # 一阶惯性状态
 
         for i in range(len(t)):
             dt = t[i] - t[i - 1] if i > 0 else 1
-            
+            dt = np.clip(dt, 0.01, 100.0)  # 限制时间步长
+
             # 积分项更新
             dx1 = K * u[i]
             x1 = x1 + dx1 * dt
-            
+
             # 一阶惯性更新
             dx2 = (x1 - x2) / T if T > 1e-6 else x1
             x2 = x2 + dx2 * dt
-            
+
+            # 防止数值溢出
+            x1 = np.clip(x1, -1e6, 1e6)
+            x2 = np.clip(x2, -1e6, 1e6)
+
             y[i] = x2 + y0
+
+            # 检查并修正无效值
+            if not np.isfinite(y[i]):
+                y[i] = y[i-1] if i > 0 else y0
 
         return y
 
     @staticmethod
     def second_order_integrator_model(params, t, u, y0):
         """二阶积分模型（Second Order Integrator, SOPI）
-        
+
         传递函数: G(s) = K / (s^2 * (T1*s + 1)(T2*s + 1))
         状态空间形式：
             x1' = K*u  (第一次积分)
@@ -1137,6 +1152,11 @@ class SystemIdentifier:
             y = x4 + y0
         """
         K, T1, T2 = params
+        # 确保参数在安全范围内
+        K = np.clip(K, 0.001, 100.0)
+        T1 = np.clip(T1, 0.1, 1000.0)
+        T2 = np.clip(T2, 0.1, 1000.0)
+
         y = np.ones_like(t) * y0
         x1 = 0.0  # 第一次积分状态
         x2 = 0.0  # 第二次积分状态
@@ -1145,24 +1165,35 @@ class SystemIdentifier:
 
         for i in range(len(t)):
             dt = t[i] - t[i - 1] if i > 0 else 1
-            
+            dt = np.clip(dt, 0.01, 100.0)  # 限制时间步长
+
             # 第一次积分更新
             dx1 = K * u[i]
             x1 = x1 + dx1 * dt
-            
+
             # 第二次积分更新
             dx2 = x1
             x2 = x2 + dx2 * dt
-            
+
             # 第一个一阶惯性更新
             dx3 = (x2 - x3) / T1 if T1 > 1e-6 else x2
             x3 = x3 + dx3 * dt
-            
+
             # 第二个一阶惯性更新
             dx4 = (x3 - x4) / T2 if T2 > 1e-6 else x3
             x4 = x4 + dx4 * dt
-            
+
+            # 防止数值溢出
+            x1 = np.clip(x1, -1e6, 1e6)
+            x2 = np.clip(x2, -1e6, 1e6)
+            x3 = np.clip(x3, -1e6, 1e6)
+            x4 = np.clip(x4, -1e6, 1e6)
+
             y[i] = x4 + y0
+
+            # 检查并修正无效值
+            if not np.isfinite(y[i]):
+                y[i] = y[i-1] if i > 0 else y0
 
         return y
 
@@ -1181,9 +1212,9 @@ class SystemIdentifier:
             y_predicted = SystemIdentifier.second_order_integrator_model(params, t, u, y0)
         else:  # FOPDT
             y_predicted = SystemIdentifier.fopdt_model(params, t, u, y0)
-        
+
         residual = y_predicted - y_measured
-        
+
         # 对于二阶模型，对峰值区域增加权重以改善峰值拟合
         if model_type in ['SOPDT', 'SO']:
             weights = np.ones_like(y_measured)
@@ -1198,13 +1229,13 @@ class SystemIdentifier:
             end_idx2 = min(len(y_measured), peak_idx + 5)
             weights[start_idx2:end_idx2] = 3.0
             residual = residual * weights
-        
+
         return residual
 
     @staticmethod
     def identify_fopdt(t, y, u, transient_mode=False):
         """用最小二乘法辨识FOPDT模型参数（K, T, L）
-        
+
         Args:
             t: 时间序列
             y: 输出响应序列
@@ -1216,7 +1247,7 @@ class SystemIdentifier:
         # y0：使用该段起始的均值（而非末尾），以便正确计算初值偏移
         y0 = np.mean(y[:30]) if len(y) > 30 else np.mean(y[:min(10, len(y))])
         y_final = np.mean(y[-30:]) if len(y) > 30 else np.mean(y[-min(10, len(y)):])
-        
+
         # 基于稳态变化量估算增益K
         u_initial = np.mean(u[:30]) if len(u) > 30 else np.mean(u[:min(10, len(u))])
         u_final = np.mean(u[-30:]) if len(u) > 30 else np.mean(u[-min(10, len(u)):])
@@ -1224,18 +1255,18 @@ class SystemIdentifier:
         delta_y = abs(y_final - y0)
         gain_guess = (delta_y / delta_u) if delta_u > 1e-6 else 0.5
         gain_guess = max(gain_guess, 0.01)
-        
+
         # 改进：基于阶跃点检测动态估算 T 和 L 的初值
         du = np.abs(np.diff(u))
         u_range = np.max(u) - np.min(u)
         step_threshold_abs = u_range * 0.05 if u_range > 1e-6 else 0.05
-        
+
         T_guess = 30.0  # 默认值
         L_guess = 5.0   # 默认值
-        
+
         if np.max(du) >= step_threshold_abs:
             step_idx = int(np.argmax(du))  # 找最大输入变化点
-            
+
             # 基于 20% 响应阈值估算 L（纯滞后时间）
             y_range_full = y_final - y0
             response_threshold = y0 + 0.2 * y_range_full if abs(y_range_full) > 1e-6 else y0 + 0.1
@@ -1244,7 +1275,7 @@ class SystemIdentifier:
                 L_guess = max(t[step_idx + response_indices[0]] - t[step_idx], 0.0)
             else:
                 L_guess = 0.0
-            
+
             # 基于 63.2% 响应阈值估算 T（时间常数）
             if abs(y_range_full) > 1e-6:
                 threshold_63 = y0 + 0.632 * y_range_full
@@ -1262,7 +1293,7 @@ class SystemIdentifier:
         # 初始猜测与参数边界
         initial_guess = [gain_guess, T_guess, L_guess]  # K, T, L
         bounds = ([0.001, 1.0, 0.0], [10.0, 500.0, 100.0])
-        
+
         try:
             result = least_squares(
                 SystemIdentifier.residuals,
@@ -1281,9 +1312,9 @@ class SystemIdentifier:
             K, T, L = initial_guess
 
         # 确保参数为正值
-        K = max(K, 0.001)
-        T = max(T, 0.1)
-        L = max(L, 0.0)
+        K = np.clip(K, 0.05, 1.5)
+        T = np.clip(T, 5.0, 150.0)
+        L = np.clip(L, 0.0, 20.0)
         return K, T, L
 
     @staticmethod
@@ -1331,11 +1362,11 @@ class SystemIdentifier:
         # dy_dt_mid = np.mean(dy_dt[mid_start:mid_end]) if len(dy_dt) > mid_end else 0.0
         # K_guess = abs(dy_dt_mid * 10.0 / u_mid) if abs(u_mid) > 1e-6 else 0.1
         # K_guess = max(K_guess, 0.01)
-        
+
         # 初始猜测与参数边界
         initial_guess = [gain_guess, 10.0]  # K, T
         bounds = ([0.001, 0.1], [10.0, 500.0])
-        
+
         try:
             result = least_squares(
                 SystemIdentifier.residuals,
@@ -1348,11 +1379,11 @@ class SystemIdentifier:
         except Exception as e:
             print(f"一阶积分模型参数辨识失败：{e}，使用初始猜测值")
             K, T = initial_guess
-        
+
         # 确保参数为正值
-        K = max(K, 0.001)
-        T = max(T, 0.1)
-        
+        K = np.clip(K, 0.05, 1.5)
+        T = np.clip(T, 5.0, 150.0)
+
         return K, T
 
     @staticmethod
@@ -1429,26 +1460,26 @@ class SystemIdentifier:
     @staticmethod
     def identify_second_order(t, y, u, transient_mode=False):
         """用最小二乘法辨识二阶模型参数（K, T1, T2, L）
-        
+
         Args:
             t: 时间序列
             y: 输出响应序列
             u: 输入信号序列
             transient_mode: 是否使用瞄态模式
-        
+
         Returns:
             tuple: (K, T1, T2, L) 四个参数
         """
         # y0：使用该段起始的均值
         y0 = np.mean(y[:30]) if len(y) > 30 else np.mean(y[:min(10, len(y))])
-        
+
         # 改进：针对有超调的系统，使用峰值估算增益
         y_final = np.mean(y[-30:]) if len(y) > 30 else np.mean(y[-min(10, len(y)):])
         y_max = np.max(y)
-        
+
         # 判断是否有超调（峰值明显高于稳态值）
         has_overshoot = (y_max - y0) > 1.2 * (y_final - y0) and (y_max - y_final) > 0.1 * (y_final - y0)
-        
+
         if has_overshoot:
             # 有超调：使用稳态值估算增益，而非峰值
             print(f"检测到超调：y_max={y_max:.2f}, y_final={y_final:.2f}, y0={y0:.2f}")
@@ -1466,13 +1497,13 @@ class SystemIdentifier:
             # 稳态模式：使用稳态变化量估算增益
             u_initial = np.mean(u[:30]) if len(u) > 30 else np.mean(u[:min(10, len(u))])
             u_final = np.mean(u[-30:]) if len(u) > 30 else np.mean(u[-min(10, len(u)):])
-            
+
             delta_u = abs(u_final - u_initial)
             delta_y = abs(y_final - y0)
             gain_guess = (delta_y / delta_u) if delta_u > 1e-6 else 0.5
-        
+
         gain_guess = max(gain_guess, 0.01)
-        
+
         # 改进：智能估算T1、T2和L
         # 找到输入阶跃的时刻
         du = np.abs(np.diff(u))
@@ -1480,13 +1511,13 @@ class SystemIdentifier:
             step_idx = np.argmax(du)
         else:
             step_idx = 0
-        
+
         # 估算上升时间和峰值时间
         if step_idx < len(y) - 10:
             # 找到峰值时刻
             peak_idx = np.argmax(y[step_idx:]) + step_idx
             t_peak = t[peak_idx] - t[step_idx]
-            
+
             # 找到响应开始的时刻（估算L）
             dy = np.abs(np.diff(y))
             response_start_idx = step_idx
@@ -1495,7 +1526,7 @@ class SystemIdentifier:
                     response_start_idx = i
                     break
             L_guess = max(t[response_start_idx] - t[step_idx], 0.0)
-            
+
             # 估算T1和T2（基于峰值时间）
             # 对于二阶欠阻尼系统，峰值时间约为 T_eq = T1 + T2
             T_eq_guess = max(t_peak * 0.6, 2.0)  # 经验公式
@@ -1505,13 +1536,13 @@ class SystemIdentifier:
             T1_guess = 20.0
             T2_guess = 10.0
             L_guess = 3.0
-        
+
         # 初始猜测与参数边界
         initial_guess = [gain_guess, T1_guess, T2_guess, L_guess]  # K, T1, T2, L
         bounds = ([0.001, 0.1, 0.1, 0.0], [10.0, 500.0, 500.0, 100.0])
-        
+
         print(f"二阶模型初始猜测: K={gain_guess:.3f}, T1={T1_guess:.2f}, T2={T2_guess:.2f}, L={L_guess:.2f}")
-        
+
         try:
             result = least_squares(
                 SystemIdentifier.residuals,
@@ -1530,25 +1561,28 @@ class SystemIdentifier:
         except Exception as e:
             print(f"二阶模型参数辨识失败：{e}，使用初始猜测值")
             K, T1, T2, L = initial_guess
-        
+
         # 确保参数为正值
-        K = max(K, 0.001)
-        T1 = max(T1, 0.1)
-        T2 = max(T2, 0.1)
-        L = max(L, 0.0)
-        
+        # K = max(K, 0.001)
+        # T1 = max(T1, 0.1)
+        # T2 = max(T2, 0.1)
+        # L = max(L, 0.0)
+        K = np.clip(K, 0.05, 1.5)
+        T1 = np.clip(T1, 5.0, 150.0)
+        T2 = np.clip(T2, 5.0, 150.0)
+        L = np.clip(L, 0.0, 20.0)
         return K, T1, T2, L
 
     @staticmethod
     def identify_second_order_no_delay(t, y, u, transient_mode=False):
         """用最小二乘法辨识纯二阶模型参数（K, T1, T2）（无滞后）
-        
+
         Args:
             t: 时间序列
             y: 输出响应序列
             u: 输入信号序列
             transient_mode: 是否使用瘴态模式
-        
+
         Returns:
             tuple: (K, T1, T2) 三个参数
         """
@@ -1556,9 +1590,9 @@ class SystemIdentifier:
         y0 = np.mean(y[:30]) if len(y) > 30 else np.mean(y[:min(10, len(y))])
         y_final = np.mean(y[-30:]) if len(y) > 30 else np.mean(y[-min(10, len(y)):])
         y_max = np.max(y)
-        
+
         has_overshoot = (y_max - y0) > 1.2 * (y_final - y0) and (y_max - y_final) > 0.1 * (y_final - y0)
-        
+
         if has_overshoot:
             print(f"检测到超调：y_max={y_max:.2f}, y_final={y_final:.2f}, y0={y0:.2f}")
             u_initial = np.mean(u[:30]) if len(u) > 30 else np.mean(u[:min(10, len(u))])
@@ -1576,15 +1610,15 @@ class SystemIdentifier:
             delta_u = abs(u_final - u_initial)
             delta_y = abs(y_final - y0)
             gain_guess = (delta_y / delta_u) if delta_u > 1e-6 else 0.5
-        
+
         gain_guess = max(gain_guess, 0.01)
-        
+
         du = np.abs(np.diff(u))
         if len(du) > 0 and np.max(du) > 0:
             step_idx = np.argmax(du)
         else:
             step_idx = 0
-        
+
         if step_idx < len(y) - 10:
             peak_idx = np.argmax(y[step_idx:]) + step_idx
             t_peak = t[peak_idx] - t[step_idx]
@@ -1594,12 +1628,12 @@ class SystemIdentifier:
         else:
             T1_guess = 20.0
             T2_guess = 10.0
-        
+
         initial_guess = [gain_guess, T1_guess, T2_guess]
         bounds = ([0.001, 0.1, 0.1], [10.0, 500.0, 500.0])
-        
+
         print(f"纯二阶模型初始猜测: K={gain_guess:.3f}, T1={T1_guess:.2f}, T2={T2_guess:.2f}")
-        
+
         try:
             result = least_squares(
                 SystemIdentifier.residuals,
@@ -1618,52 +1652,54 @@ class SystemIdentifier:
         except Exception as e:
             print(f"纯二阶模型参数辨识失败：{e}，使用初始猜测值")
             K, T1, T2 = initial_guess
-        
-        K = max(K, 0.001)
-        T1 = max(T1, 0.1)
-        T2 = max(T2, 0.1)
-        
+
+        # K = max(K, 0.001)
+        # T1 = max(T1, 0.1)
+        # T2 = max(T2, 0.1)
+        K = np.clip(K, 0.05, 1.5)
+        T1 = np.clip(T1, 5.0, 150.0)
+        T2 = np.clip(T2, 5.0, 150.0)
         return K, T1, T2
 
     @staticmethod
     def identify_second_order_integrator(t, y, u):
         """用最小二乘法辨识二阶积分模型参数（K, T1, T2）
-        
+
         Args:
             t: 时间序列
             y: 输出响应序列
             u: 输入信号序列
-        
+
         Returns:
             tuple: (K, T1, T2) 三个参数
         """
         # y0：使用该段起始的均值
         y0 = np.mean(y[:30]) if len(y) > 30 else np.mean(y[:min(10, len(y))])
-        
+
         # 二阶积分模型特征：输出随时间二次积分增长
         # 估算增益：基于输出的二阶导数
         dy = np.diff(y)
         dt_arr = np.diff(t)
         dy_dt = dy / dt_arr if len(dt_arr) > 0 else np.zeros_like(dy)
-        
+
         # 使用中间段数据估算参数
         mid_start = len(y) // 3
         mid_end = 2 * len(y) // 3
         u_mid = np.mean(u[mid_start:mid_end])
         dy_dt_mid = np.mean(dy_dt[mid_start:mid_end]) if len(dy_dt) > mid_end else 0.0
-        
+
         # K 估算：基于输出变化率
         if abs(u_mid) > 1e-6:
             K_guess = abs(dy_dt_mid * 20.0 / u_mid)  # 二阶积分需要更大的系数
         else:
             K_guess = 0.1
-        
+
         K_guess = max(K_guess, 0.01)
-        
+
         # 初始猜测与参数边界
         initial_guess = [K_guess, 15.0, 10.0]  # K, T1, T2
         bounds = ([0.001, 0.1, 0.1], [10.0, 500.0, 500.0])
-        
+
         try:
             result = least_squares(
                 SystemIdentifier.residuals,
@@ -1676,28 +1712,28 @@ class SystemIdentifier:
         except Exception as e:
             print(f"二阶积分模型参数辨识失败：{e}，使用初始猜测值")
             K, T1, T2 = initial_guess
-        
+
         # 确保参数为正值
-        K = max(K, 0.001)
-        T1 = max(T1, 0.1)
-        T2 = max(T2, 0.1)
-        
+        K = np.clip(K, 0.05, 1.5)
+        T1 = np.clip(T1, 5.0, 150.0)
+        T2 = np.clip(T2, 5.0, 150.0)
+
         return K, T1, T2
 
     @staticmethod
     def identify(t, y, u, model_type='FOPDT', transient_mode=False):
         """
         统一的系统辨识接口，根据模型类型自动调用相应的辨识方法
-        
+
         Args:
             t: 时间序列
-            y: 输出响应序列  
+            y: 输出响应序列
             u: 输入信号序列
             model_type: 模型类型，可以是ModelType枚举或字符串
             transient_mode: 是否使用瞬态模式（仅对FOPDT有效）
                           - False: 稳态模式，适合末段已稳定的数据
                           - True: 瞬态模式，适合MV有激励但未达稳态的异常段数据
-        
+
         Returns:
             tuple: 根据模型类型返回不同数量的参数
         """
@@ -1774,7 +1810,7 @@ class SystemIdentifier:
     def lambda_tuning_for_flow(*params, model_type='FOPDT', lambda_val=None, mode=None):
         """
         针对流量控制的 PID 整定，支持多种模型类型
-        
+
         Args:
             *params: 模型参数，根据model_type不同而不同
                 - FOPDT: K, T, L
@@ -1786,14 +1822,14 @@ class SystemIdentifier:
             model_type: 模型类型，可以是ModelType枚举或字符串
             lambda_val: Lambda参数，默认为 None 时自动计算
             mode: 控制模式，'flow_control' 为流量控制模式
-        
+
         Returns:
             tuple: (Kp, Ti, Td) PID参数
         """
         # 如果是枚举类型，转换为字符串值
         if isinstance(model_type, ModelType):
             model_type = model_type.value
-        
+
         # 根据模型类型解析参数
         if model_type == 'FOPDT' or model_type == 'FO':
             # FOPDT 或一阶模型: K, T, L
@@ -1804,24 +1840,24 @@ class SystemIdentifier:
                 L = 0.0
             else:
                 raise ValueError(f"{model_type}模型需要至少传入2个参数 (K, T)")
-            
+
             # 流量系统通常 L 很小，强制设为 0 避免过度保守
             # L = 0.0
-            
+
             if lambda_val is None:
                 # Lambda 选择：快响应，取较小值（如 T/3 ~ T/2）
                 lambda_val = max(T * 0.4, 0.1)
-            
+
             # 分母保护
             denominator = K * (lambda_val + L / 2)
             if denominator < 1e-6:
                 return 1.0, 20.0, 0.0
-            
+
             # 标准 Lambda 公式
             Kp = (T + L / 2) / denominator
             Ti = T + L / 2
             Td = (T * L) / (2 * T + L) if (2 * T + L) > 1e-6 else 0.0
-            
+
         elif model_type == 'SOPDT' or model_type == 'SO':
             # 二阶模型: SOPDT(K, T1, T2, L) 或 SO(K, T1, T2)
             if model_type == 'SOPDT':
@@ -1835,73 +1871,73 @@ class SystemIdentifier:
                     L = 0.0
                 else:
                     raise ValueError(f"SO模型需要传入3个参数 (K, T1, T2)")
-            
+
             # 流量系统强制设 L = 0
             L = 0.0
-            
+
             # 二阶系统的等效时间常数
             T_eq = T1 + T2
-            
+
             if lambda_val is None:
                 lambda_val = max(T_eq * 0.4, 0.1)
-            
+
             # 分母保护
             denominator = K * lambda_val
             if denominator < 1e-6:
                 return 1.0, 20.0, 0.0
-            
+
             # 二阶系统 Lambda 公式
             Kp = T_eq / denominator
             Ti = T_eq
             Td = (T1 * T2) / T_eq if T_eq > 1e-6 else 0.0
-            
+
         elif model_type == 'FO_INTEGRATOR':
             # 积分模型: K, T
             if len(params) >= 2:
                 K, T = params[0], params[1]
             else:
                 raise ValueError(f"FO_INTEGRATOR模型需要传入2个参数 (K, T)")
-            
+
             if lambda_val is None:
                 # 积分系统建议使用较大的 lambda
                 lambda_val = max(T * 0.8, 0.2)
-            
+
             # 分母保护
             if K < 1e-6:
                 return 1.0, 20.0, 0.0
-            
+
             # 积分系统的 Lambda 公式
             # 对于 G(s) = K/(s(Ts+1))，PI控制器
             Kp = T / (K * lambda_val)
             Ti = T
             Td = 0.0  # 积分系统不使用微分
-        
+
         elif model_type == 'SO_INTEGRATOR':
             # 二阶积分模型: K, T1, T2
             if len(params) >= 3:
                 K, T1, T2 = params[0], params[1], params[2]
             else:
                 raise ValueError(f"SO_INTEGRATOR模型需要传入3个参数 (K, T1, T2)")
-            
+
             if lambda_val is None:
                 # 二阶积分系统需要更大的 lambda
                 T_eq = T1 + T2
                 lambda_val = max(T_eq * 1.0, 0.5)
-            
+
             # 分母保护
             if K < 1e-6:
                 return 1.0, 20.0, 0.0
-            
+
             # 二阶积分系统的 Lambda 公式
             # 对于 G(s) = K/(s^2(T1*s+1)(T2*s+1))，PI控制器
             T_eq = T1 + T2
             Kp = T_eq / (K * lambda_val)
             Ti = T_eq
             Td = 0.0  # 积分系统不使用微分
-            
+
         else:
             raise ValueError(f"不支持的模型类型: {model_type}")
-        
+
         # 针对流量的特殊调整
         if mode == "flow_control":
             # 1. 降低 Kp 避免超调（流量易振荡）
@@ -1910,12 +1946,14 @@ class SystemIdentifier:
             Ti *= 1.5
             # 3. 微分通常关闭或极小（流量噪声大）
             Td = 0.0
-        
+
         # 确保参数为正值
-        Kp = max(Kp, 0.01)
-        Ti = max(Ti, 0.1)
-        Td = max(Td, 0.0)
-        
+        # Kp = max(Kp, 0.01)
+        # Ti = max(Ti, 0.1)
+        # Td = max(Td, 0.0)
+        Kp = np.clip(Kp, 0.5, 6.0)
+        Ti = np.clip(Ti, 8.0, 120.0)
+        Td = np.clip(Td, 0.0, 25.0)
         return Kp, Ti, Td
 
     @staticmethod
@@ -1926,14 +1964,14 @@ class SystemIdentifier:
                                       response_ratio: float = 0.1) -> Dict:
         """
         在时间窗口内检测阶跃响应
-        
+
         Args:
             t_window: 时间数组（秒）
             y_window: 输出响应数组
             u_window: 输入信号数组
             step_threshold: 阶跃检测阈值（占输入范围的百分比）
             response_ratio: 最小响应比例（响应幅值 / 输入变化）
-        
+
         Returns:
             {
                 'has_step': bool,              # 是否检测到阶跃
@@ -1956,57 +1994,57 @@ class SystemIdentifier:
             'settling_time': 0.0,
             'confidence': 0.0
         }
-        
+
         if len(t_window) < 10 or len(u_window) < 10 or len(y_window) < 10:
             return result
-        
+
         # 1. 检测输入阶跃点
         du = np.abs(np.diff(u_window))
         u_range = np.max(u_window) - np.min(u_window)
         step_threshold_abs = u_range * step_threshold if u_range > 1e-6 else 0.05
-        
+
         if np.max(du) < step_threshold_abs:
             return result  # 无明显阶跃
-        
+
         step_idx = int(np.argmax(du))
         step_size = du[step_idx]
         result['step_idx'] = step_idx
         result['step_size'] = float(step_size)
-        
+
         # 2. 计算响应幅值
         y_before = np.mean(y_window[:max(1, step_idx)])
         y_after = np.mean(y_window[step_idx:])
         response_magnitude = abs(y_after - y_before)
         result['response_magnitude'] = float(response_magnitude)
-        
+
         # 3. 计算响应比例
         if step_size > 1e-6:
             response_ratio_calc = response_magnitude / step_size
         else:
             response_ratio_calc = 0.0
         result['response_ratio'] = float(response_ratio_calc)
-        
+
         # 4. 判断响应幅值是否合理
         if response_magnitude < 1e-6 or response_ratio_calc < response_ratio:
             return result  # 响应不足
-        
+
         result['has_step'] = True
-        
+
         # 5. 计算上升时间（10% - 90%）
         response_start = y_before
         response_end = y_after
         response_range = response_end - response_start
-        
+
         # 避免0除错误
         if abs(response_range) < 1e-6:
             rise_time = 0.0
         else:
             threshold_10 = response_start + 0.1 * response_range
             threshold_90 = response_start + 0.9 * response_range
-            
+
             indices_10 = np.where(np.abs(y_window[step_idx:] - threshold_10) < abs(response_range) * 0.05)[0]
             indices_90 = np.where(np.abs(y_window[step_idx:] - threshold_90) < abs(response_range) * 0.05)[0]
-            
+
             if len(indices_10) > 0 and len(indices_90) > 0:
                 t_10_idx = step_idx + indices_10[0]
                 t_90_idx = step_idx + indices_90[-1]
@@ -2014,11 +2052,11 @@ class SystemIdentifier:
             else:
                 rise_time = float(t_window[-1] - t_window[step_idx])
         result['rise_time'] = rise_time
-        
+
         # 6. 计算稳定时间（进入并保持在稳态值±2%）
         steady_threshold = abs(response_range) * 0.02 if abs(response_range) > 1e-6 else 1e-6
         steady_region = np.where(np.abs(y_window[step_idx:] - response_end) < steady_threshold)[0]
-        
+
         if len(steady_region) > 0:
             # 找到第一个进入稳态的点
             settling_idx = step_idx + steady_region[0]
@@ -2026,10 +2064,10 @@ class SystemIdentifier:
         else:
             settling_time = float(t_window[-1] - t_window[step_idx])
         result['settling_time'] = settling_time
-        
+
         # 7. 计算置信度评分
         confidence = 0.5  # 基础分
-        
+
         # 响应充分性（最高+0.2）
         if response_ratio_calc >= response_ratio * 5:
             confidence += 0.2
@@ -2037,14 +2075,14 @@ class SystemIdentifier:
             confidence += 0.15
         elif response_ratio_calc >= response_ratio:
             confidence += 0.1
-        
+
         # 响应平滑性（最高+0.15）
         y_post_step = y_window[step_idx:]
         if len(y_post_step) > 2:
             d2y = np.diff(np.diff(y_post_step))
             smoothness = 1.0 / (1.0 + np.std(d2y) / (np.std(y_post_step) + 1e-6))
             confidence += min(0.15, smoothness * 0.15)
-        
+
         # 稳定速度（最高+0.15）
         if settling_time > 0:
             time_ratio = settling_time / (t_window[-1] - t_window[step_idx])
@@ -2054,9 +2092,9 @@ class SystemIdentifier:
                 confidence += 0.1
             elif time_ratio < 0.7:
                 confidence += 0.05
-        
+
         result['confidence'] = min(1.0, confidence)
-        
+
         return result
 
     @staticmethod
@@ -2068,13 +2106,13 @@ class SystemIdentifier:
                                 confidence_min: float = 0.5) -> Dict:
         """
         自动筛选适合参数辨识的时间区间
-        
+
         综合判断：
         1. 输入信号有明显变化（阶跃）
         2. 输出响应幅值合理
         3. 响应曲线特征完整（上升+稳定）
         4. 置信度达到要求
-        
+
         Args:
             history_data: 历史数据列表，每条记录包含 timestamp, pv, mv, sv
             window_size: 窗口大小（分钟）
@@ -2082,7 +2120,7 @@ class SystemIdentifier:
             min_response_ratio: 最小响应比例（响应幅值 / 输入变化）
             step_threshold: 阶跃检测阈值（占输入范围的百分比）
             confidence_min: 最小置信度要求
-        
+
         Returns:
             {
                 'status': 'success',
@@ -2109,7 +2147,7 @@ class SystemIdentifier:
                 }
             }
         """
-        
+
         if not history_data or len(history_data) < 10:
             return {
                 'status': 'error',
@@ -2117,17 +2155,17 @@ class SystemIdentifier:
                 'total_windows': 0,
                 'qualified_windows': []
             }
-        
+
         # 1. 数据预处理
         try:
             timestamps = np.array([r.get('timestamp', 0) for r in history_data])
             pv_data = np.array([r.get('pv', 0) for r in history_data])
             mv_data = np.array([r.get('mv', 0) for r in history_data])
             sv_data = np.array([r.get('sv', 0) for r in history_data])
-            
+
             # 转换时间为秒
             t_sec = (timestamps - timestamps[0]) / 1000.0
-            
+
         except Exception as e:
             return {
                 'status': 'error',
@@ -2135,45 +2173,45 @@ class SystemIdentifier:
                 'total_windows': 0,
                 'qualified_windows': []
             }
-        
+
         # 2. 生成窗口索引
         window_size_sec = window_size * 60
         step_size_sec = step_size * 60
-        
+
         # 计算采样间隔
         dt = 1.0
         if len(t_sec) > 1:
             dt = t_sec[1] - t_sec[0]
-        
+
         windows = []
         window_size_points = int(window_size_sec / dt) if dt > 0 else 120
         step_size_points = int(step_size_sec / dt) if dt > 0 else 10
-        
+
         for i in range(0, len(t_sec) - window_size_points, max(1, step_size_points)):
             window_end_idx = min(i + window_size_points, len(t_sec) - 1)
             if window_end_idx - i < 20:  # 窗口太小跳过
                 continue
-            
+
             windows.append({
                 'start_idx': i,
                 'end_idx': window_end_idx,
                 'start_time': int(timestamps[i]),
                 'end_time': int(timestamps[window_end_idx])
             })
-        
+
         # 3. 逐窗口分析
         qualified_windows = []
         step_response_count = 0
         high_conf_count = 0
-        
+
         for win in windows:
             start_idx = win['start_idx']
             end_idx = win['end_idx']
-            
+
             t_win = t_sec[start_idx:end_idx+1]
             y_win = pv_data[start_idx:end_idx+1]
             u_win = mv_data[start_idx:end_idx+1]
-            
+
             # 4. 检测阶跃响应
             step_result = SystemIdentifier.detect_step_response_in_window(
                 t_window=t_win,
@@ -2182,10 +2220,10 @@ class SystemIdentifier:
                 step_threshold=step_threshold,
                 response_ratio=min_response_ratio
             )
-            
+
             if step_result['has_step'] and step_result['confidence'] >= confidence_min:
                 step_response_count += 1
-                
+
                 # 5. 生成推荐等级
                 confidence = step_result['confidence']
                 if confidence >= 0.85:
@@ -2196,10 +2234,10 @@ class SystemIdentifier:
                     recommendation = "可接受"
                 else:
                     recommendation = "不推荐"
-                
+
                 if confidence >= 0.70:
                     high_conf_count += 1
-                
+
                 qualified_window = {
                     **win,
                     'step_detected': step_result['has_step'],
@@ -2211,14 +2249,14 @@ class SystemIdentifier:
                     'confidence': step_result['confidence'],
                     'recommendation': recommendation
                 }
-                
+
                 qualified_windows.append(qualified_window)
-        
+
         # 6. 选择最优窗口（置信度最高）
         optimal_window = None
         if qualified_windows:
             optimal_window = max(qualified_windows, key=lambda x: x['confidence'])
-        
+
         return {
             'status': 'success',
             'total_windows': len(windows),
@@ -2572,9 +2610,23 @@ class Visualizer:
     def update_plots(self, time_data, temp_data, true_temp_data, valve_data, error_data, kp_data, ti_data, td_data,
                      update_lines):
         """实时更新绘图数据"""
-        (true_temp_line, temp_line, valve_line, error_line, kp_line, ti_line, td_line) = self.plot_data['lines']
-        (ax2, _, _, _) = self.plot_data['axes']
-        _, _, update_marker = self.plot_data['markers']
+        # 类型安全检查：确保 plot_data 已初始化且包含必要的键
+        if not isinstance(self.plot_data, dict):
+            return
+
+        if 'lines' not in self.plot_data or 'axes' not in self.plot_data or 'markers' not in self.plot_data:
+            return
+
+        lines = self.plot_data.get('lines')
+        axes = self.plot_data.get('axes')
+        markers = self.plot_data.get('markers')
+
+        if lines is None or axes is None or markers is None:
+            return
+
+        (true_temp_line, temp_line, valve_line, error_line, kp_line, ti_line, td_line) = lines
+        (ax2, _, _, _) = axes
+        _, _, update_marker = markers
 
         # 更新曲线数据
         temp_line.set_data(time_data, temp_data)
@@ -2594,7 +2646,8 @@ class Visualizer:
         ax2.set_title(f'温度控制曲线（当前时间：{current_time:.0f}s）')
 
         # 刷新画布
-        self.fig.canvas.draw_idle()
+        if self.fig is not None and self.fig.canvas is not None:
+            self.fig.canvas.draw_idle()
         plt.pause(0.01)
 
 
@@ -2618,7 +2671,7 @@ class DisturbanceGenerator:
 
         # 从所有可用的扰动类型中选择num_disturbances种
         available_types = Config.DISTURBANCE_TYPES.copy()
-        selected_types = np.random.choice(available_types, size=num_disturbances, replace=False)
+        selected_types = random.sample(available_types, k=num_disturbances)
 
         for i in range(num_disturbances):
             disturbance_type = selected_types[i]
@@ -2997,10 +3050,13 @@ class ControlMonitor:
             print(f"初始温度：{Config.INIT_TEMPERATURE}℃ → 目标：{Config.TARGET_TEMPERATURE}℃")
             print(
                 f"最终实际响应温度：{current_temp:.1f}℃ | 最终真实仿真温度：{true_current_temp:.1f}℃ | 最终误差：{error:.2f}℃")
-            print(f"初始有效参数 → 最终参数：")
-            print(f"Kp: {initial_valid_params[0]:.2f} → {pid.Kp:.2f}")
-            print(f"Ti: {initial_valid_params[1]:.1f}s → {pid.Ti:.1f}s")
-            print(f"Td: {initial_valid_params[2]:.1f}s → {pid.Td:.1f}s")
+            if initial_valid_params is not None:
+                print(f"初始有效参数 → 最终参数：")
+                print(f"Kp: {initial_valid_params[0]:.2f} → {pid.Kp:.2f}")
+                print(f"Ti: {initial_valid_params[1]:.1f}s → {pid.Ti:.1f}s")
+                print(f"Td: {initial_valid_params[2]:.1f}s → {pid.Td:.1f}s")
+            else:
+                print(f"最终PID参数：Kp={pid.Kp:.2f}, Ti={pid.Ti:.1f}s, Td={pid.Td:.1f}s")
             print(f"总更新次数：{params_update_count}次")
             print(f"运行时间: {duration}")
             print("=" * 50)
@@ -3030,10 +3086,13 @@ class ControlMonitor:
             print("监控手动终止")
             print(
                 f"当前实际响应温度：{current_temp:.1f}℃ | 当前真实仿真温度：{true_current_temp:.1f}℃ | 误差：{error:.2f}℃")
-            print(f"初始有效参数 → 当前参数：")
-            print(f"Kp: {initial_valid_params[0]:.2f} → {pid.Kp:.2f}")
-            print(f"Ti: {initial_valid_params[1]:.1f}s → {pid.Ti:.1f}s")
-            print(f"Td: {initial_valid_params[2]:.1f}s → {pid.Td:.1f}s")
+            if initial_valid_params is not None:
+                print(f"初始有效参数 → 当前参数：")
+                print(f"Kp: {initial_valid_params[0]:.2f} → {pid.Kp:.2f}")
+                print(f"Ti: {initial_valid_params[1]:.1f}s → {pid.Ti:.1f}s")
+                print(f"Td: {initial_valid_params[2]:.1f}s → {pid.Td:.1f}s")
+            else:
+                print(f"当前PID参数：Kp={pid.Kp:.2f}, Ti={pid.Ti:.1f}s, Td={pid.Td:.1f}s")
             print(f"总更新次数：{params_update_count}次")
             print(f"运行时间: {duration}")
             print("=" * 50)

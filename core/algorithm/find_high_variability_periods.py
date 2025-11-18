@@ -75,3 +75,5 @@ def find_high_variability_periods(data, window_size=3600, step_size=600,
             })
 
     return high_var_windows
+
+

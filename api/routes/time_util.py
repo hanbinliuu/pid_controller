@@ -1,6 +1,6 @@
 from datetime import datetime
 import re
-from typing import Dict, List, Optional, Union
+from typing import Union
 
 def parse_time_to_milliseconds(time_input: Union[int, str]) -> int:
     """
@@ -74,3 +74,29 @@ def parse_time_to_milliseconds(time_input: Union[int, str]) -> int:
 
     else:
         raise ValueError(f"时间参数类型错误: {type(time_input)}. 期望 int 或 str 类型")
+
+
+def format_time_to_string(time_input: Union[int, str], fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """
+    将时间输入转换为指定格式的字符串（默认 'YYYY-MM-DD HH:MM:SS'）
+
+    支持输入：
+    - 毫秒/秒时间戳（int）
+    - 已支持的字符串时间格式（将先转为毫秒时间戳再格式化）
+    """
+    ms = parse_time_to_milliseconds(time_input)
+    dt = datetime.fromtimestamp(ms / 1000.0)
+    return dt.strftime(fmt)
+
+def format_time_to_iso(time_input: Union[int, str], with_ms: bool = False) -> str:
+    """
+    将时间输入转换为 ISO 格式字符串（默认无毫秒）
+    示例：'2025-01-01T12:00:00' 或 '2025-01-01T12:00:00.123'
+
+    参数：
+    - with_ms: 是否包含毫秒
+    """
+    ms = parse_time_to_milliseconds(time_input)
+    dt = datetime.fromtimestamp(ms / 1000.0)
+    return dt.isoformat(timespec='milliseconds' if with_ms else 'seconds')
+# ... existing code ...

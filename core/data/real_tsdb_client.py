@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import logging
 
+from api.routes.time_util import format_time_to_string
 from core.data.tsdb_data_source import DataPoint, TSDBDataSource
 
 # 设置日志
@@ -197,7 +198,7 @@ class RealTSDBDataSource(TSDBDataSource):
             page_count = 0
             max_pages = 50  # 最大分页数
             
-            logger.info(f"开始循环分页查询TSDB数据，表: {table}, 时间范围: {start_time} - {end_time}")
+            logger.info(f"开始循环分页查询TSDB数据，表: {table}, 时间范围: {format_time_to_string(start_time)} - {format_time_to_string(end_time)}")
 
             while page_count < max_pages:
                 page_count += 1

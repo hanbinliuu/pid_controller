@@ -1,4 +1,5 @@
-from typing import Optional, Dict, List, cast
+import logging
+from typing import Optional, Dict, List, cast, Union
 import json  # 移到全局导入
 import traceback  # 添加traceback导入
 import sys
@@ -8,15 +9,20 @@ from datetime import datetime
 import numpy as np
 import matplotlib
 
+from api.routes.tsdb_router import parse_time_to_milliseconds
 from core.algorithm.detector import StabilityDetector
+from core.data.real_tsdb_client import query_raw_data, query_read_interpolated
+from core.utils import pid_converter
+from core.utils.pid_converter import process_lists_optimized
 
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
 
-from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, ModelType, MODEL_CONFIG
+from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, ModelType
 from core.algorithm.ktl_simulator import KTLSimulator
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+logger = logging.getLogger(__name__)
 
 
 class TemperatureAnalysisTool():
@@ -37,10 +43,10 @@ class TemperatureAnalysisTool():
             - `overshoot`: 超调量(%)
             - `rise_time`: 上升时间
     """
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-    
+
     def _run(self, history_data: str) -> str:
         try:
             # 解析输入的历史数据
@@ -61,14 +67,14 @@ class TemperatureAnalysisTool():
                 data_list = history_data
             else:
                 return json.dumps({"error": "历史数据必须是JSON字符串或列表格式"})
-                
-            print(f"\nDebug - TemperatureAnalysisTool 分析历史数据:")
+
+            logging.info(f"\nDebug - TemperatureAnalysisTool 分析历史数据:")
             print(f"获取到的数据条数: {len(data_list)}")
-            
+
             if not data_list:
                 print("无历史数据")
                 return json.dumps({"error": "无历史数据可分析"})
-            
+
             # 检查数据格式，确保包含必要字段
             required_fields = ['pv', 'sv']
             first_record = data_list[0]
@@ -76,15 +82,15 @@ class TemperatureAnalysisTool():
             missing_fields = [field for field in required_fields if field not in first_record]
             if missing_fields:
                 return json.dumps({"error": f"数据缺少必要字段: {missing_fields}"})
-                
+
             # 提取温度数据和目标温度
             temp_data = [float(record.get('pv', 0)) for record in data_list]
             target_value = float(data_list[-1].get('sv', 0))
-            
+
             print(f"数据点数: {len(temp_data)}")
             print(f"数据范围: {min(temp_data):.2f} - {max(temp_data):.2f}")
             print(f"目标值: {target_value}")
-            
+
             # 计算基本统计指标
             metrics = {
                 "current_value": float(temp_data[-1]),
@@ -96,14 +102,14 @@ class TemperatureAnalysisTool():
                 "steady_state": float(sum(temp_data[-5:]) / min(5, len(temp_data))),
                 "data_points": int(len(temp_data))
             }
-            
+
             # 计算性能指标
             metrics["steady_error"] = float(metrics["target_value"] - metrics["steady_state"])
             if metrics["target_value"] != 0:
                 metrics["overshoot"] = float(((metrics["max_value"] - metrics["target_value"]) / metrics["target_value"]) * 100)
             else:
                 metrics["overshoot"] = 0.0
-            
+
             # 计算上升时间
             temp_range = metrics["max_value"] - metrics["min_value"]
             if temp_range > 0:
@@ -116,15 +122,15 @@ class TemperatureAnalysisTool():
                 metrics["rise_time"] = rise_time
             else:
                 metrics["rise_time"] = None
-            
+
             print(f"分析结果: {json.dumps(metrics, indent=2)}")
             return json.dumps(metrics)
-            
+
         except Exception as e:
             print(f"分析失败，错误: {str(e)}")
             print(f"错误堆栈: {traceback.format_exc()}")
             return json.dumps({"error": f"分析失败: {str(e)}"})
-    
+
     def _calculate_std(self, data_list):
         """计算标准差"""
         if len(data_list) <= 1:
@@ -151,11 +157,11 @@ class PIDOptimizationTool():
           - `accuracy`: 精度 (good/poor)
         - `tuning_suggestions` ：建议参数值
     """
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-    
-    def _run(self, history_data: str,is_lambda: bool, model_type: ModelType = ModelType.INTEGRATOR) -> str:
+
+    def _run(self, history_data, is_lambda: bool, model_type: ModelType = ModelType.FOPI) -> str:
         try:
             # 解析输入的历史数据
             if isinstance(history_data, str):
@@ -175,21 +181,21 @@ class PIDOptimizationTool():
                 data_list = history_data
             else:
                 return json.dumps({"error": "历史数据必须是JSON字符串或列表格式"})
-                
+
             print(f"\nDebug - PIDOptimizationTool 分析历史数据:")
             print(f"获取到的数据条数: {len(data_list)}")
-            
+
             if not data_list:
                 print("无历史数据")
                 return json.dumps({"error": "无历史数据可分析"})
-            
+
             # 检查数据格式，确保包含PID相关字段
             required_fields = ['pv', 'sv', 'kp', 'ki', 'kd']
             first_record = data_list[0]
             missing_fields = [field for field in required_fields if field not in first_record]
             if missing_fields:
                 return json.dumps({"error": f"数据缺少必要字段: {missing_fields}"})
-            
+
             # 提取当前PID参数（使用最后一条记录）
             last_record = data_list[-1]
             current_params = {
@@ -198,15 +204,15 @@ class PIDOptimizationTool():
                 "kd": float(last_record.get('kd', 0.05)),
                 "sv": float(last_record.get('sv', 25.0))
             }
-            
+
             # 提取温度数据进行性能分析
             temp_data = [float(record.get('pv', 25.0)) for record in data_list]
-            
+
             # 计算性能指标
             temp_std = self._calculate_std(temp_data) #标准差
             steady_state_value = sum(temp_data[-5:]) / min(5, len(temp_data)) #稳态值
             steady_error = float(current_params["sv"] - steady_state_value) #稳态误差
-            
+
             # 评估系统性能
             #响应速度
             response_speed = "fast" if len(temp_data) > 0 and temp_data[-1] >= current_params["sv"] * 0.9 else "slow"
@@ -214,8 +220,7 @@ class PIDOptimizationTool():
             stability = "stable" if temp_std < 0.5 else "unstable"
             #精度
             accuracy = "good" if abs(steady_error) < 0.5 else "poor"
-            
-            # 生成PID调优建议
+            # 生成调优建议
             tuning_suggestions = self._generate_tuning_suggestions(
                 current_params, steady_error, temp_std, response_speed, stability, accuracy
             )
@@ -262,15 +267,106 @@ class PIDOptimizationTool():
                 }
                 ,"tuning_suggestions": tuning_suggestions #调参建议
             }
-            
-            print(f"优化分析结果: {json.dumps(analysis_result, indent=2,ensure_ascii=False)}")
+
+            # print(f"优化分析结果: {json.dumps(analysis_result, indent=2,ensure_ascii=False)}")
             return json.dumps(analysis_result)
-            
+
         except Exception as e:
             print(f"优化分析失败，错误: {str(e)}")
             print(f"错误堆栈: {traceback.format_exc()}")
             return json.dumps({"error": f"优化分析失败: {str(e)}"})
-    
+
+    def pid_suggested(self, history_data: str, model_type: ModelType = ModelType.FOPI) -> str:
+        try:
+            # 解析输入的历史数据
+            if isinstance(history_data, str):
+                try:
+                    # 尝试解析JSON格式的历史数据
+                    parsed_data = json.loads(history_data)
+                    # 处理不同的数据格式
+                    if isinstance(parsed_data, list):
+                        data_list = parsed_data
+                    elif isinstance(parsed_data, dict) and 'data' in parsed_data:
+                        data_list = parsed_data['data']
+                    else:
+                        return json.dumps({"error": "无效的JSON数据格式"})
+                except json.JSONDecodeError:
+                    return json.dumps({"error": "无效的历史数据格式，请提供JSON格式的数据"})
+            elif isinstance(history_data, list):
+                data_list = history_data
+            else:
+                return json.dumps({"error": "历史数据必须是JSON字符串或列表格式"})
+
+            print(f"\nDebug - PIDOptimizationTool 分析历史数据:")
+            print(f"获取到的数据条数: {len(data_list)}")
+
+            if not data_list:
+                print("无历史数据")
+                return json.dumps({"error": "无历史数据可分析"})
+
+            # 检查数据格式，确保包含PID相关字段
+            required_fields = ['pv', 'sv', 'kp', 'ki', 'kd']
+            first_record = data_list[0]
+            missing_fields = [field for field in required_fields if field not in first_record]
+            if missing_fields:
+                return json.dumps({"error": f"数据缺少必要字段: {missing_fields}"})
+
+            # 提取当前PID参数（使用最后一条记录）
+            last_record = data_list[-1]
+            current_params = {
+                "kp": float(last_record.get('kp', 1.0)),
+                "ki": float(last_record.get('ki', 0.1)),
+                "kd": float(last_record.get('kd', 0.05)),
+                "sv": float(last_record.get('sv', 25.0))
+            }
+
+            # 提取温度数据进行性能分析
+            temp_data = [float(record.get('pv', 25.0)) for record in data_list]
+
+            # 计算性能指标
+            temp_std = self._calculate_std(temp_data)  # 标准差
+            steady_state_value = sum(temp_data[-5:]) / min(5, len(temp_data))  # 稳态值
+            steady_error = float(current_params["sv"] - steady_state_value)  # 稳态误差
+
+            # 评估系统性能
+            # 响应速度
+            response_speed = "fast" if len(temp_data) > 0 and temp_data[-1] >= current_params["sv"] * 0.9 else "slow"
+            # 稳定性
+            stability = "stable" if temp_std < 0.5 else "unstable"
+            # 精度
+            accuracy = "good" if abs(steady_error) < 0.5 else "poor"
+
+
+            # 基于Lambda方法的整定建议（支持 mv 与 timestamp）
+            # 传入model_type参数，默认为'integrator'（一阶积分模型）
+            # 可选：'integrator', 'fopdt', 'first_order', 'second_order'
+            lambda_suggestions = self._compute_lambda_suggestions(data_list, model_type=model_type)
+
+            # 生成分析结果
+            analysis_result = {
+                "current_params": current_params,
+                "performance": {
+                    "steady_error": steady_error,  # 稳态误差
+                    "stability": temp_std,  # 稳定性
+                    "steady_state_value": steady_state_value,  # 稳态温度
+                    "data_points": len(temp_data)  # 测点数量
+                },
+                "status": {
+                    "response_speed": response_speed,  # 响应速度
+                    "stability": stability,  # 稳定性
+                    "accuracy": accuracy  # 精度
+                }
+                , "lambda_suggestions": lambda_suggestions  # 调参建议
+            }
+
+            print(f"优化分析结果: {json.dumps(analysis_result, indent=2, ensure_ascii=False)}")
+            return json.dumps(analysis_result)
+        except Exception as e:
+            print(f"优化分析失败，错误: {str(e)}")
+            print(f"错误堆栈: {traceback.format_exc()}")
+            return json.dumps({"error": f"优化分析失败: {str(e)}"})
+
+
     def _calculate_std(self, data_list):
         """计算标准差"""
         if len(data_list) <= 1:
@@ -278,22 +374,22 @@ class PIDOptimizationTool():
         mean = sum(data_list) / len(data_list)
         variance = sum((x - mean) ** 2 for x in data_list) / len(data_list)
         return variance ** 0.5
-    
+
     def _generate_tuning_suggestions(self, current_params, steady_error, temp_std, response_speed, stability, accuracy):
         """生成PID调优建议"""
         suggestions = []
-        
+
         # 基于稳态误差的建议
         if abs(steady_error) > 1.0:
             if steady_error > 0:  # 当前值低于目标
                 suggestions.append("增加Kp参数或Ki参数以提高当前值")
             else:  # 温度高于目标
                 suggestions.append("减小Kp参数或Ki参数以降低当前值")
-        
+
         # 基于稳定性的建议
         if stability == "unstable":
             suggestions.append("系统振荡，建议减小Kp参数或增加Kd参数")
-        
+
         # 基于响应速度的建议
         if response_speed == "slow":
             suggestions.append("响应过慢，建议适度增加Kp参数")
@@ -307,7 +403,7 @@ class PIDOptimizationTool():
     # lambda整定建议 by liuhanbin
     def _compute_lambda_suggestions(self, data_list: List[Dict], model_type: ModelType = ModelType.FOPDT) -> Optional[Dict]:
         """从数据中提取t(秒)、y(pv)、u(mv)，进行模型辨识并返回Lambda整定建议及模型模拟曲线
-        
+
         Args:
             data_list: 历史数据列表
             model_type: 模型类型，可选值：
@@ -315,7 +411,7 @@ class PIDOptimizationTool():
                 - 'fopdt': 一阶加纯滞后模型（通用工业过程）
                 - 'first_order': 纯一阶模型（无滞后系统）
                 - 'second_order': 二阶模型（温度、化学过程）
-        
+
         Returns:
             包含PID参数、模型参数、拟合指标和图表路径的字典
         """
@@ -334,32 +430,32 @@ class PIDOptimizationTool():
                 t = np.arange(n, dtype=float)
 
             # 输出y: 使用pv为过程变量
-            y = np.array([float(r.get('pv', r.get('temperature', 0.0))) for r in data_list], dtype=float)
+            pv_list = np.array([float(r.get('pv', r.get('temperature', 0.0))) for r in data_list], dtype=float)
 
             # 输入u: 优先使用mv(操纵量/阀门开度)
-            u = None
+            mv_list = None
             if 'mv' in data_list[0]:
-                u = np.array([float(r.get('mv', 0.0)) for r in data_list], dtype=float)
+                mv_list = np.array([float(r.get('mv', 0.0)) for r in data_list], dtype=float)
 
-            if u is None or np.max(np.abs(u)) < 1e-6:
+            if mv_list is None or np.max(np.abs(mv_list)) < 1e-6:
                 return None
-            
+
             # 统一处理枚举或字符串类型
             mt_str = model_type.value if isinstance(model_type, ModelType) else str(model_type)
 
             # 判断是否使用瞬态模式：检查末段是否达到稳态
             # 如果末段MV或PV变化剧烈，使用瞬态模式
-            u_tail_std = np.std(u[-30:]) if len(u) > 30 else np.std(u)
-            y_tail_std = np.std(y[-30:]) if len(y) > 30 else np.std(y)
-            y_mean = np.mean(y)
+            u_tail_std = np.std(mv_list[-30:]) if len(mv_list) > 30 else np.std(mv_list)
+            y_tail_std = np.std(pv_list[-30:]) if len(pv_list) > 30 else np.std(pv_list)
+            y_mean = np.mean(pv_list)
             # 阈值：末段标准差 > 5% 均值时认为未稳定，使用瞬态模式
-            transient_mode = (y_tail_std > 0.05 * abs(y_mean)) or (u_tail_std > 0.05 * np.mean(u))
+            transient_mode = (y_tail_std > 0.05 * abs(y_mean)) or (u_tail_std > 0.05 * np.mean(mv_list))
 
             if transient_mode:
                 print("检测到瞬态数据，使用瞬态模式进行辨识")
 
             # 系统模型参数辨识（根据model_type返回不同数量的参数）
-            K, T1, T2, L = SystemIdentifier.identify(t, y, u, model_type=mt_str, transient_mode=bool(transient_mode))
+            K, T1, T2, L = SystemIdentifier.identify(t, pv_list, mv_list, model_type=mt_str, transient_mode=bool(transient_mode))
             model_params = {'K': K, 'T1': T1, 'T2': T2, 'L': L}
 
             # Lambda整定（根据模型类型调用）
@@ -404,10 +500,6 @@ class PIDOptimizationTool():
                 # 默认采用 λ=T_eq 的参数为主返回
                 Kp, Ti, Td = Kp1, Ti1, Td1
                 lambda_val = lambda_val_1
-                sopdt_params_options = [
-                    {"lambda": float(lambda_val_1), "Kp": float(Kp1), "Ti": float(Ti1), "Td": float(Td1)},
-                    {"lambda": float(lambda_val_2), "Kp": float(Kp2), "Ti": float(Ti2), "Td": float(Td2)}
-                ]
             elif mt_str == 'SO':
                 # 纯二阶模型（无滞后）：传入 K, T1, T2
                 T_eq = T1 + T2
@@ -430,33 +522,47 @@ class PIDOptimizationTool():
 
             #生成模型模拟曲线
             #todo 初始值取值
-            y0 = np.mean(y[:30]) if len(y) > 30 else np.mean(y[:min(10, len(y))])
+            y0 = np.mean(pv_list[:30]) if len(pv_list) > 30 else np.mean(pv_list[:min(10, len(pv_list))])
+            # 生成模型曲线
+            y_model, r_squared, rmse, y_model = self._simulation_curve(data_list,model_params,model_type=mt_str,y0=y0)
+            #
+            # # 生成闭环仿真曲线（使用推荐的PID参数）
+            # pv_closed_loop, mv_closed_loop = self._simulate_closed_loop(
+            #     t, data_list, model_params, mt_str, Kp, Ti, Td, y0
+            # )
+            #
+            # # 生成阶跃响应仿真曲线
+            # pv_step_response, mv_step_response, t_step = self._simulate_step_response(
+            #     model_params, mt_str, y0
+            # )
+            #
+            # # # 绘制对比图（传入三条仿真曲线和PID参数）
+            # plot_path = self._plot_model_comparison(
+            #     t, mv_list, pv_list, y_model,
+            #     model_params, model_type,
+            #     r_squared, rmse, data_list,
+            #     pv_closed_loop, mv_closed_loop,
+            #     pv_step_response, mv_step_response, t_step,
+            #     Kp, Ti, Td
+            # )
 
-            if mt_str == 'FO_INTEGRATOR':
-                y_model = SystemIdentifier.first_order_integrator_model([K, T1], t, u, y0)
-            elif mt_str == 'SO_INTEGRATOR':
-                y_model = SystemIdentifier.second_order_integrator_model([K, T1, T2], t, u, y0)
-            elif mt_str == 'SOPDT':
-                y_model = SystemIdentifier.second_order_model([K, T1, T2, L], t, u, y0)
-            elif mt_str == 'SO':
-                y_model = SystemIdentifier.second_order_no_delay_model([K, T1, T2], t, u, y0)
-            elif mt_str == 'FO':
-                y_model = SystemIdentifier.first_order_model([K, T1], t, u, y0)
-            else:  # FOPDT
-                y_model = SystemIdentifier.fopdt_model([K, T1, L], t, u, y0)
-
-            # 计算拟合指标
-            ss_res = np.sum((y - y_model) ** 2)
-            ss_tot = np.sum((y - np.mean(y)) ** 2)
-            r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-            rmse = np.sqrt(np.mean((y - y_model) ** 2)) #均方根误差
-
-            # 绘制对比图（传入原始数据列表以便在图中显示格式化时间）
-            plot_path = self._plot_model_comparison(
-                t, u, y, y_model,
-                model_params, model_type,
-                r_squared, rmse, data_list
-            )
+            # 清理和验证所有数值，确保JSON可序列化
+            def sanitize_value(val):
+                """清理单个数值，替换inf/nan为None或有限值"""
+                if isinstance(val, (int, float, np.number)):
+                    if not np.isfinite(val):
+                        return 0.0  # 将无效值替换为0
+                    return float(val)
+                return val
+            
+            def sanitize_array(arr):
+                """清理数组中的无效值"""
+                if arr is None:
+                    return []
+                arr = np.asarray(arr)
+                # 替换inf和nan为有限值
+                arr = np.where(np.isfinite(arr), arr, 0.0)
+                return arr.tolist()
 
             # 构建返回结果（根据model_type适配model字段）
             result = {
@@ -484,9 +590,9 @@ class PIDOptimizationTool():
                         "rmse": float(rmse)
                     }
                 },
-                "params_options": sopdt_params_options,
-                "plot_saved": plot_path is not None,
-                "plot_path": plot_path,
+                # "params_options": sopdt_params_options,
+                # "plot_saved": plot_path is not None,
+                # "plot_path": plot_path,
                 "note": f"基于{model_type}模型辨识与Lambda方法的推荐值"
             }
             return result
@@ -512,19 +618,214 @@ class PIDOptimizationTool():
                 "note": f"Lambda整定失败: {error_message}"
             }
 
-    def _plot_model_comparison(self, t, u, y_actual, y_predicted, model_params, model_type, r_squared, rmse, data_list):
-        """绘制模型对比图：实际值与预测值合并在一个网格，MV单独一个网格
+    def _simulation_curve(self, data_list, model_params, model_type, y0):
+        """
+               获取模拟曲线
+
+               Args:
+                   data_list: 设备数据
+                   model_params: 模型参数字典[K、T1、T2、L]
+                   model_type: 模型类型
+                   y0: 初始值
+               Returns:
+                   tuple: (y_model, r_squared, rmse) 模拟曲线和拟合指标
+        """
+        # 时间轴: 使用timestamp毫秒，转为相对秒
+        if 'timestamp' in data_list[0]:
+            ts0 = float(data_list[0]['timestamp'])
+            t = np.array([(float(r['timestamp']) - ts0) / 1000.0 for r in data_list], dtype=float)
+        else:
+            t = np.arange(len(data_list), dtype=float) #生成0-n的数组
+
+        # 输出y: 使用pv为过程变量
+        pv_list = np.array([float(r.get('pv', r.get('temperature', 0.0))) for r in data_list], dtype=float)
+
+        # 输入u: 优先使用mv(操纵量/阀门开度)
+        mv = None
+        if 'mv' in data_list[0]:
+            mv = np.array([float(r.get('mv', 0.0)) for r in data_list], dtype=float)
+
+        if mv is None or np.max(np.abs(mv)) < 1e-6:
+            return None
+
+        K = model_params.get('K', 0.5)
+        T1 = model_params.get('T1', 30.0)
+        T2 = model_params.get('T2', 0.0)
+        L = model_params.get('L', 0.0)
+
+        if model_type == 'FO_INTEGRATOR':
+            y_model = SystemIdentifier.first_order_integrator_model([K, T1], t, mv, y0)
+        elif model_type == 'SO_INTEGRATOR':
+            y_model = SystemIdentifier.second_order_integrator_model([K, T1, T2], t, mv, y0)
+        elif model_type == 'SOPDT':
+            y_model = SystemIdentifier.second_order_model([K, T1, T2, L], t, mv, y0)
+        elif model_type == 'SO':
+            y_model = SystemIdentifier.second_order_no_delay_model([K, T1, T2], t, mv, y0)
+        elif model_type == 'FO':
+            y_model = SystemIdentifier.first_order_model([K, T1], t, mv, y0)
+        else:  # FOPDT
+            y_model = SystemIdentifier.fopdt_model([K, T1, L], t, mv, y0)
+
+        # 计算拟合指标
+        ss_res = np.sum((pv_list - y_model) ** 2)
+        ss_tot = np.sum((pv_list - np.mean(pv_list)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        rmse = np.sqrt(np.mean((pv_list - y_model) ** 2))  # 均方根误差
+        return y_model, r_squared, rmse, y_model
+
+    def _simulate_closed_loop(self, t, data_list, model_params, model_type, Kp, Ti, Td, y0):
+        """
+        使用推荐的PID参数进行闭环控制仿真
+
+        Args:
+            t: 时间序列
+            data_list: 原始数据列表
+            model_params: 模型参数
+            model_type: 模型类型
+            Kp, Ti, Td: 推荐的PID参数
+            y0: 初始值
+
+        Returns:
+            pv_closed_loop: 闭环PV曲线
+            mv_closed_loop: 闭环MV曲线
+        """
+        try:
+            from core.algorithm.ls_pid_autotune_v5 import PIDController
+
+            # 时间轴: 使用timestamp毫秒，转为相对秒
+            # if 'timestamp' in data_list[0]:
+            #     ts0 = float(data_list[0]['timestamp'])
+            #     t = np.array([(float(r['timestamp']) - ts0) / 1000.0 for r in data_list], dtype=float)
+            # else:
+            #     t = np.arange(len(data_list), dtype=float)  # 生成0-n的数组
+            #
+            # # 输出y: 使用pv为过程变量
+            # pv_list = np.array([float(r.get('pv', r.get('temperature', 0.0))) for r in data_list], dtype=float)
+            #
+            # # 输入u: 优先使用mv(操纵量/阀门开度)
+            # mv = None
+            # if 'mv' in data_list[0]:
+            #     mv = np.array([float(r.get('mv', 0.0)) for r in data_list], dtype=float)
+            #
+            # if mv is None or np.max(np.abs(mv)) < 1e-6:
+            #     return None
+            # # 提取SV目标值
+            if data_list and 'sv' in data_list[0]:
+                sv_values = np.array([float(r.get('sv', y0)) for r in data_list], dtype=float)
+            else:
+                sv_values = []
+
+
+            # 闭环仿真
+            pv_closed = np.zeros_like(t)
+            mv_closed = np.zeros_like(t)
+            pv_closed[0] = y0
+            mv_closed[0] = 0.0
+
+            K = model_params.get('K', 0.5)
+            T1 = model_params.get('T1', 30.0)
+            T2 = model_params.get('T2', 0.0)
+            L = model_params.get('L', 0.0)
+
+            # 初始化PID控制器
+            dt = float(t[1] - t[0]) if len(t) > 1 else 1.0
+            pid = PIDController(Kp=Kp, Ti=Ti, Td=Td, dt=dt, u_min=0, u_max=100)
+            # 引入纯滞后步数
+            delay_steps = int(max(0, np.round(L / dt)))
+            # 模拟闭环控制过程
+            for i in range(1, len(t)):
+                # PID计算控制输出
+                mv_closed[i] = pid.compute(sv_values[i], pv_closed[i-1])
+
+                # 使用过程模型计算下一时刻的PV
+                # 简化为一阶惯性环节
+                if model_type == 'FO_INTEGRATOR' or model_type == 'SO_INTEGRATOR':
+                    # 积分模型：输出随时间积分
+                    delta_pv = K * mv_closed[i] * dt
+                    pv_closed[i] = pv_closed[i-1] + delta_pv / T1 if T1 > 0 else pv_closed[i-1]
+                else:
+                    # 一阶或二阶模型
+                    steady_state = y0 + K * mv_closed[i]
+                    tau = T1 if T1 > 0 else 1.0
+                    pv_closed[i] = pv_closed[i-1] + (steady_state - pv_closed[i-1]) * dt / tau
+
+            return pv_closed, mv_closed
+
+        except Exception as e:
+            print(f"闭环仿真失败: {str(e)}")
+            return None, None
+
+    def _simulate_step_response(self, model_params, model_type, y0):
+        """
+        生成系统阶跃响应曲线（开环）
+
+        Args:
+            model_params: 模型参数
+            model_type: 模型类型
+            y0: 初始值
+            data_list: 原始数据列表
+
+        Returns:
+            pv_step: 阶跃响应PV曲线
+            mv_step: 阶跃响应MV曲线
+            t_step: 阶跃响应时间序列
+        """
+        try:
+            # 生成阶跃响应时间序列（300秒，每秒1秒采样）
+            t_step = np.arange(0, 300, 1.0)
+            n = len(t_step)
+
+            # 阶跃输入：前50秒为0，后面为固定值
+            mv_step = np.zeros(n)
+            mv_step[50:] = 20.0  # 20%的阶跃
+
+            K = model_params.get('K', 0.5)
+            T1 = model_params.get('T1', 30.0)
+            T2 = model_params.get('T2', 0.0)
+            L = model_params.get('L', 0.0)
+
+            # 根据模型类型生成响应
+            if model_type == 'FO_INTEGRATOR':
+                pv_step = SystemIdentifier.first_order_integrator_model([K, T1], t_step, mv_step, y0)
+            elif model_type == 'SO_INTEGRATOR':
+                pv_step = SystemIdentifier.second_order_integrator_model([K, T1, T2], t_step, mv_step, y0)
+            elif model_type == 'SOPDT':
+                pv_step = SystemIdentifier.second_order_model([K, T1, T2, L], t_step, mv_step, y0)
+            elif model_type == 'SO':
+                pv_step = SystemIdentifier.second_order_no_delay_model([K, T1, T2], t_step, mv_step, y0)
+            elif model_type == 'FO':
+                pv_step = SystemIdentifier.first_order_model([K, T1], t_step, mv_step, y0)
+            else:  # FOPDT
+                pv_step = SystemIdentifier.fopdt_model([K, T1, L], t_step, mv_step, y0)
+
+            return pv_step, mv_step, t_step
+
+        except Exception as e:
+            print(f"阶跃响应仿真失败: {str(e)}")
+            return None, None, None
+
+    def _plot_model_comparison(self, t, u, y_actual, y_predicted, model_params, model_type, r_squared, rmse, data_list,
+                               pv_closed_loop=None, mv_closed_loop=None,
+                               pv_step_response=None, mv_step_response=None, t_step=None,
+                               Kp=None, Ti=None, Td=None):
+        """绘制模型对比图：三个独立网格分别显示三种仿真模式
 
         Args:
             t: 时间数组
             u: 输入信号（MV）
             y_actual: 实际输出（PV）
-            y_predicted: 模型预测输出
-            model_params: 模型参数字典 (e.g., {'K': 1.2, 'T': 30.0} for integrator)
-            model_type: 模型类型 ('fopdt', 'first_order', 'second_order', 'integrator')
+            y_predicted: 模型预测输出（拟合模式）
+            model_params: 模型参数字典
+            model_type: 模型类型
             r_squared: R²拟合指标
             rmse: RMSE拟合指标
             data_list: 原始数据列表
+            pv_closed_loop: 闭环PV曲线
+            mv_closed_loop: 闭环MV曲线
+            pv_step_response: 阶跃响应PV曲线
+            mv_step_response: 阶跃响应MV曲线
+            t_step: 阶跃响应时间序列
+            Kp, Ti, Td: 推荐的PID参数
         """
         try:
             # 配置中文字体
@@ -534,48 +835,81 @@ class PIDOptimizationTool():
             # 将时间转换为年月日时分秒格式（用于图表X轴显示）
             if data_list and 'timestamp' in data_list[0]:
                 ts0 = float(data_list[0]['timestamp'])
-                time_labels = [datetime.datetime.fromtimestamp(ts0 / 1000.0 + t_val).strftime('%Y-%m-%d %H:%M:%S')
+                time_labels = [datetime.fromtimestamp(ts0 / 1000.0 + t_val).strftime('%Y-%m-%d %H:%M:%S')
                               for t_val in t]
             else:
                 # 如果没有timestamp，使用相对秒数
                 time_labels = [f'{t_val:.1f}s' for t_val in t]
 
-            # 创建2个垂直排列的子图：PV对比 + MV
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+            # 创建3个垂直排列的子图：拟合模式 + 闭环仿真 + 阶跃响应
+            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 14))
 
-            # 子图1: PV 实际值、预测值、SV 目标值
-            ax1.plot(t, y_actual, 'b-', linewidth=2, label='PV (实际值)', alpha=0.8)
-            ax1.plot(t, y_predicted, 'r--', linewidth=2, label='PV (模型预测)', alpha=0.8)
-            
-            # 提取并绘制SV目标值曲线（移动到PV网格）
+            # 提取SV目标值曲线
+            sv_values = None
             if data_list and 'sv' in data_list[0]:
                 sv_values = np.array([float(r.get('sv', 0.0)) for r in data_list], dtype=float)
-                ax1.plot(t, sv_values, 'g--', linewidth=2, label='SV (目标值)', alpha=0.7)
-            
+
+            # ========== 子图1：拟合模式 ==========
+            ax1.plot(t, y_actual, 'b-', linewidth=2, label='PV (实际值)', alpha=0.8)
+            ax1.plot(t, y_predicted, 'r--', linewidth=2, label='PV (模型拟合)', alpha=0.8)
+
+            if sv_values is not None:
+                ax1.plot(t, sv_values, 'g--', linewidth=1.5, label='SV (目标值)', alpha=0.7)
+
             ax1.set_ylabel('PV / SV', fontsize=12)
+            ax1.set_xlabel('时间 (秒)', fontsize=12)
             ax1.grid(True, alpha=0.3)
-            ax1.set_title('PV 实际值、模型预测值 与 SV 目标值对比', fontsize=11, fontweight='bold')
+            ax1.set_title(f'模式1: 拟合模式 - 实际数据 vs 模型预测 (R²={r_squared:.4f}, RMSE={rmse:.4f})',
+                         fontsize=12, fontweight='bold')
             ax1.legend(loc='best', fontsize=10)
 
-            # 子图2: MV (操纵量)
-            ax2.plot(t, u, 'g-', linewidth=2, label='MV (操纵量)', alpha=0.8)
-            ax2.set_xlabel('时间', fontsize=12)
-            ax2.set_ylabel('MV', fontsize=12, color='green')
-            ax2.tick_params(axis='y', labelcolor='green')
-            ax2.grid(True, alpha=0.3)
-            ax2.set_title('MV 操纵量', fontsize=11, fontweight='bold')
-            ax2.legend(loc='best', fontsize=10)
+            # ========== 子图2：闭环仿真 ==========
+            if pv_closed_loop is not None and len(pv_closed_loop) > 0:
+                ax2.plot(t, pv_closed_loop, 'purple', linewidth=2, label='PV (闭环仿真)', alpha=0.8)
 
-            # 设置X轴刻度标签（显示格式化的时间）
-            n_points = len(t)
-            if n_points > 50:
-                step = n_points // 10  # 最多显示10个刻度
+                if mv_closed_loop is not None and len(mv_closed_loop) > 0:
+                    ax2.plot(t, mv_closed_loop, 'orange', linewidth=1.5,
+                            label='MV (闭环控制)', alpha=0.7, linestyle='--')
+
+                if data_list and sv_values is not None:
+                    ax2.plot(t, sv_values, 'g--', linewidth=1.5, label='SV (目标值)', alpha=0.7)
+
+                ax2.set_ylabel('PV / SV / MV', fontsize=12)
+                ax2.set_xlabel('时间 (秒)', fontsize=12)
+                ax2.set_title('模式2: 闭环仿真 - 使用推荐PID参数的控制效果',
+                             fontsize=12, fontweight='bold')
+                ax2.legend(loc='best', fontsize=10)
             else:
-                step = max(1, n_points // 5)
+                ax2.text(0.5, 0.5, '闭环仿真数据不可用',
+                        ha='center', va='center', fontsize=14, transform=ax2.transAxes, color='gray')
+                ax2.set_title('模式2: 闭环仿真', fontsize=12, fontweight='bold')
+            ax2.grid(True, alpha=0.3)
 
-            tick_indices = range(0, n_points, step)
-            ax2.set_xticks([t[i] for i in tick_indices])
-            ax2.set_xticklabels([time_labels[i] for i in tick_indices], rotation=45, ha='right', fontsize=9)
+            # ========== 子图3：阶跃响应 ==========
+            if pv_step_response is not None and t_step is not None and len(pv_step_response) > 0:
+                ax3.plot(t_step, pv_step_response, 'teal', linewidth=2,
+                        label='PV (阶跃响应)', alpha=0.8)
+
+                if mv_step_response is not None and len(mv_step_response) > 0:
+                    ax3.plot(t_step, mv_step_response, 'brown', linewidth=1.5,
+                            label='MV (阶跃输入)', alpha=0.7, linestyle='--')
+
+                ax3.set_ylabel('PV / MV', fontsize=12)
+                ax3.set_xlabel('时间 (秒)', fontsize=12)
+
+                # 在标题中显示PID参数
+                pid_info = ''
+                if Kp is not None and Ti is not None and Td is not None:
+                    pid_info = f' (PID: Kp={Kp:.3f}, Ti={Ti:.2f}, Td={Td:.2f})'
+
+                ax3.set_title(f'模式3: 阶跃响应 - 系统开环阶跃响应特性{pid_info}',
+                             fontsize=12, fontweight='bold')
+                ax3.legend(loc='best', fontsize=10)
+            else:
+                ax3.text(0.5, 0.5, '阶跃响应数据不可用',
+                        ha='center', va='center', fontsize=14, transform=ax3.transAxes, color='gray')
+                ax3.set_title('模式3: 阶跃响应', fontsize=12, fontweight='bold')
+            ax3.grid(True, alpha=0.3)
 
             # 总标题：包含模型参数和拟合指标
             title = f'模型辨识结果 ({model_type})\n'
@@ -608,7 +942,7 @@ class PIDOptimizationTool():
                 T = model_params.get('T1', 0)
                 L = model_params.get('L', 0)
                 title += f'K={K:.3f}, T={T:.2f}s, L={L:.2f}s | '
-            
+
             title += f'R^2={r_squared:.4f}, RMSE={rmse:.4f}'
             fig.suptitle(title, fontsize=14, fontweight='bold', y=0.995)
 
@@ -616,7 +950,7 @@ class PIDOptimizationTool():
 
             # 保存图片
             os.makedirs('data/plots', exist_ok=True)
-            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             plot_filename = f'{model_type}_model_comparison_{timestamp}.png'
             plot_path = os.path.join('data/plots', plot_filename)
             plt.savefig(plot_path, dpi=150, bbox_inches='tight')
@@ -631,17 +965,17 @@ class PIDOptimizationTool():
             traceback.print_exc()
             return None
 
-    def generate_valve_process_simulation(self, data_list: List[Dict], simulation_type: str = "open_loop", 
+    def generate_valve_process_simulation(self, data_list: List[Dict],model_type: ModelType = ModelType.FOPDT, simulation_type: str = "open_loop",
                                          duration: float = 600.0, dt: float = 1.0) -> Optional[Dict]:
         """
         启动阀门过程模型仿真，封装参数辨识、仿真、绘图流程
-        
+
         Args:
             data_list: 历史数据列表
             simulation_type: 仿真类型，"open_loop"（开环阶跃响应）或 "closed_loop"（PID闭环响应）
             duration: 仿真时长(秒)
             dt: 采样间隔(秒)
-            
+
         Returns:
             包含仿真数据、模型参数、PID参数、图片路径的字典
         """
@@ -651,45 +985,45 @@ class PIDOptimizationTool():
             if n < 20:
                 print("数据量不足，无法进行模型辨识")
                 return None
-            
+
             # 时间序列
             if 'timestamp' in data_list[0]:
                 ts0 = float(data_list[0]['timestamp'])
                 t_hist = np.array([(float(r['timestamp']) - ts0) / 1000.0 for r in data_list], dtype=float)
             else:
                 t_hist = np.arange(n, dtype=float)
-            
+
             # 输出 y (PV)
             y_hist = np.array([float(r.get('pv', r.get('temperature', 0.0))) for r in data_list], dtype=float)
-            
+
             # 输入 u (MV)
             if 'mv' not in data_list[0]:
                 print("数据缺少mv字段，无法进行仿真")
                 return None
             u_hist = np.array([float(r.get('mv', 0.0)) for r in data_list], dtype=float)
-            
+
             # 2. 参数辨识
             print(f"⚙️ 开始辨识过程模型参数...")
             # 使用统一的identify接口
             K, T1,T2, L = SystemIdentifier.identify(t_hist, y_hist, u_hist, model_type='fopdt', transient_mode=False)
             print(f"辨识结果: K={K:.3f}, T1={T1:.2f}s, T2={T2:.2f}s, L={L:.2f}s")
-            
+
             # 3. Lambda整定
             lambda_val = max(T1 * 0.4, 0.1)
             Kp, Ti, Td = SystemIdentifier.lambda_tuning_for_flow(K, T1, L, lambda_val, mode="flow_control")
             Ki = Kp / Ti if Ti > 1e-6 else 0.0
             Kd = Kp * Td
             print(f"Lambda整定: Kp={Kp:.3f}, Ki={Ki:.4f}, Kd={Kd:.4f}")
-            
+
             # 4. 生成仿真曲线
             y0 = np.mean(y_hist[:30]) if len(y_hist) > 30 else np.mean(y_hist[:min(10, len(y_hist))])
-            
+
             if simulation_type == "open_loop":
                 # 开环仿真：阶跃输入
                 print(f"生成开环阶跃响应...")
                 step_value = float(np.mean(u_hist[-30:])) if len(u_hist) > 30 else float(np.mean(u_hist))
                 sim_data = KTLSimulator.generate_fopdt_response(
-                    K=K, T=T1, L=L,
+                    K=K, T1=T1, L=L,
                     step_value=step_value,
                     duration=duration,
                     dt=dt,
@@ -701,7 +1035,7 @@ class PIDOptimizationTool():
                     simulation_type="open_loop",
                     output_dir="data/plots"
                 )
-                
+
             else:  # closed_loop
                 # 闭环PID仿真
                 print(f"生成PID闭环响应...")
@@ -712,10 +1046,13 @@ class PIDOptimizationTool():
                     setpoint = float(np.median([float(r.get('sp', 0.0)) for r in data_list]))
                 else:
                     setpoint = float(np.mean(y_hist[-30:]))  # 默认使用末尾均值
-                
-                sim_data = KTLSimulator.generate_pid_response(
-                    K=K, T=T1, L=L,
-                    Kp=Kp, Ki=Ki, Kd=Kd,
+
+                sim_data = KTLSimulator.generate_closed_loop_response(
+                    model_type=model_type.value,
+                    parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
+                    Kp=Kp,
+                    Ki=Ki,
+                    Kd=Kd,
                     setpoint=setpoint,
                     duration=duration,
                     dt=dt
@@ -726,9 +1063,9 @@ class PIDOptimizationTool():
                     simulation_type="closed_loop",
                     output_dir="data/plots"
                 )
-            
+
             print(f"仿真完成，图片已保存: {plot_path}")
-            
+
             # 5. 返回结果
             return {
                 "simulation_type": simulation_type,
@@ -750,7 +1087,7 @@ class PIDOptimizationTool():
                 "plot_path": plot_path,
                 "note": f"基于FOPDT模型的{simulation_type}仿真结果"
             }
-            
+
         except Exception as e:
             print(f"阀门过程模型仿真失败: {e}")
             import traceback
@@ -758,7 +1095,7 @@ class PIDOptimizationTool():
             return None
 
 
-def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_tol=0.2):
+def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_tol=0.2)-> Optional[Dict]:
     """
     检测非稳态段并可视化
 
@@ -917,7 +1254,7 @@ def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_t
     plt.tight_layout()
 
     if output_path is None:
-        base_name = datetime.now().time().strftime("%Y%m%d-%H%M%S")
+        base_name =datetime.now().strftime("%Y%m%d-%H%M%S")
         output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"stability_detection_{base_name}.png")
@@ -979,7 +1316,7 @@ def load_json(data_list: List[Dict]):
 
 def get_tools() -> List:
     """创建工具实例
-    
+
     Returns:
         工具列表
     """
@@ -987,3 +1324,354 @@ def get_tools() -> List:
         TemperatureAnalysisTool(),
         PIDOptimizationTool()
     ]
+
+
+# 查询时序数据-中控仿真测点
+def _query_tsdb_data_zhongkong(db: str,
+                               table_name: str,
+                               required_fields: List[str],
+                               start_time: int,
+                               end_time: int,
+                               tags: Optional[Dict[str, str]] = None,
+                               window: int = 1,
+                               is_filter: Optional[bool] = True
+                               ) -> List[Dict]:
+    first_time = datetime.now().timestamp()
+
+    """
+    查询时序数据，根据最新数据（最后一条）的pb、ti、td、sv进行过滤
+    只返回与最新参数值相同的历史数据，优化性能
+    """
+    # 定义仅查询必要的字段（不包括PID参数）
+    query_fields = [field for field in required_fields if field not in [
+        "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
+        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值  temperature
+        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值  target_temp
+        "ns=100;s=FIC101A_PB.In_Channel0",  # 比例带  pb
+        "ns=100;s=FIC101A_TI.In_Channel0",  # 积分参数 ti
+        "ns=100;s=FIC101A_TD.In_Channel0"  # 微分参数 td
+    ]]
+    all_records = []
+    response = query_read_interpolated(
+        db=db,
+        table=table_name,
+        fields=required_fields,
+        start_time=start_time,
+        end_time=end_time,
+        tags=tags,
+        window=window,
+        continuation_point=None
+    )
+    # print(response)
+    columns = response.columns or []
+    values = response.values
+    if not values:
+        return []
+    # latest_value = values[-1]
+    # latest_pb = latest_value[3]
+    # latest_ti = latest_value[2]
+    # latest_td = latest_value[5]
+    # latest_sv = latest_value[1]
+
+    if (is_filter is None) or is_filter:
+        filter_values = process_lists_optimized(values)[0]
+    else:
+        filter_values = values
+    # 解析当前页数据并添加到all_records
+    for value_row in filter_values:
+        record = {}
+        for i, column in enumerate(columns):
+            if i < len(value_row):
+                if column == "time":
+                    record["timestamp"] = value_row[i]
+                elif column == "ns=100;s=FIC101A_PV.In_Channel0":
+                    record["pv"] = value_row[i]
+                elif column == "ns=100;s=FIC101A_SV.In_Channel0":
+                    record["sv"] = value_row[i]
+                elif column == "ns=100;s=FIC101A_MV.In_Channel0":
+                    record["mv"] = value_row[i]
+                elif column == "ns=100;s=FIC101A_PB.In_Channel0":
+                    record["pb"] = value_row[i]
+                elif column == "ns=100;s=FIC101A_TI.In_Channel0":
+                    record["ti"] = value_row[i]
+                elif column == "ns=100;s=FIC101A_TD.In_Channel0":
+                    record["td"] = value_row[i]
+                else:
+                    record[column] = value_row[i]
+        all_records.append(record)
+    # 解析查询结果
+    history_data = []
+
+    # 参数转换
+    if all_records:
+        for record in all_records:
+            # 转换PID参数
+            result = pid_converter.convert_pb_to_pid(
+                record["pb"],
+                record["ti"],
+                record["td"]
+            )
+            # 确保包含查询字段的默认值
+            for field in query_fields:
+                if field not in record:
+                    record[field] = None
+
+            # 添加转换后的PID参数
+            record["kp"] = result["kp"]
+            record["ki"] = result["ki"]
+            record["kd"] = result["kd"]
+
+            history_data.append(record)
+    over_time = datetime.now().timestamp()
+    logger.info(f"查询耗时：{over_time - first_time}")
+    return history_data
+
+
+# 固定 pid值与目标温度，实时数据查询方法
+def _query_tsdb_data(db: str,
+                     table_name: str,
+                     required_fields: List[str],
+                     start_time: int,
+                     end_time: int,
+                     tags: Optional[Dict[str, str]] = None) -> List[Dict]:
+    """查询时序数据，但使用传入的PID参数覆盖查询结果"""
+    # 定义仅查询必要的字段（不包括PID参数）
+    query_fields = [field for field in required_fields if field not in [
+        "ns=100;s=FIC101A_MV.In_Channel0",  # mv
+        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值  pv
+        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值  sv
+        "ns=100;s=FIC101A_PB.In_Channel0",  # 比例带  pb
+        "ns=100;s=FIC101A_TI.In_Channel0",  # 积分参数 ti
+        "ns=100;s=FIC101A_TD.In_Channel0"  # 微分参数 td
+    ]]
+    begin_time =datetime.now().timestamp()
+
+    # 构造查询请求
+    query_request = {
+        "tables": [
+            {
+                "db": db,
+                "table": table_name,
+                "fields": query_fields,
+                "tags": tags,
+                "continuationPoint": None
+            }
+        ],
+        "detail": {
+            "startTime": start_time,
+            "endTime": end_time,
+            "limit": 1500,
+            "returnBounds": False
+        }
+    }
+
+    # 调用时序数据查询接口
+    response = query_raw_data(db=db, table=table_name, fields=required_fields, start_time=start_time,
+                              end_time=end_time,
+                              tags=tags)
+
+    # 解析查询结果
+    history_data = []
+
+    # 如果查询有结果，处理数据
+    if hasattr(response, 'values') and response.values:
+        columns = response.columns or []
+        values = response.values
+
+        # 将数据转换为字典格式
+        for value_row in values:
+            record = {}
+            for i, column in enumerate(columns):
+                if i < len(value_row):
+                    if column == "time":
+                        record["timestamp"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_MV.In_Channel0":
+                        record["mv"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_PV.In_Channel0":
+                        record["pv"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_SV.In_Channel0":
+                        record["sv"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_PB.In_Channel0":
+                        record["pb"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_TI.In_Channel0":
+                        record["ti"] = value_row[i]
+                    elif column == "ns=100;s=FIC101A_TD.In_Channel0":
+                        record["td"] = value_row[i]
+                    else:
+                        record[column] = value_row[i]
+
+            # 确保包含查询字段的默认值
+            for field in query_fields:
+                # record["temperature"] = record[field]
+                if field not in record:
+                    record[field] = None
+
+            history_data.append(record)
+    over_time = datetime.now().timestamp()
+    logger.info(f"总耗时: {begin_time} - {over_time}")
+    return history_data
+
+
+def _plot_history_data(history_data: List[Dict], table_name: str,
+                       start_time: Union[int, str], end_time: Union[int, str]) -> Optional[str]:
+    """
+    绘制历史数据曲线并保存为图片
+
+    Args:
+        history_data: 历史数据列表，包含timestamp, pv, mv, sv等字段
+        table_name: 设备表名
+        start_time: 开始时间
+        end_time: 结束时间
+
+    Returns:
+        保存的图片路径，如果失败则返回None
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # 非交互式后端
+        import matplotlib.pyplot as plt
+
+        # 配置中文字体
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
+        plt.rcParams['axes.unicode_minus'] = False
+
+        # 提取数据
+        timestamps = []
+        pv_values = []
+        mv_values = []
+        sv_values = []
+
+        for record in history_data:
+            if 'timestamp' in record:
+                # 将毫秒时间戳转换为相对秒数
+                timestamps.append(record['timestamp'])
+                pv_values.append(record.get('pv', 0.0))
+                mv_values.append(record.get('mv', 0.0))
+                sv_values.append(record.get('sv', 0.0))
+
+        if len(timestamps) == 0:
+            print("无有效数据点，跳过绘图")
+            return None
+
+        # 转换时间为相对秒数
+        t0 = timestamps[0]
+        t_relative = [(t - t0) / 1000.0 for t in timestamps]
+
+        # 创建3个子图网格（垂直排列）
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+
+        # 子图1: PV (过程变量)
+        ax1.plot(t_relative, pv_values, 'b-', linewidth=2, label='PV (实际值)', alpha=0.8)
+        ax1.set_ylabel('PV (过程变量)', fontsize=12, color='blue')
+        ax1.tick_params(axis='y', labelcolor='blue')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='upper right', fontsize=10)
+        ax1.set_title('过程变量 (PV)', fontsize=11, fontweight='bold')
+
+        # 子图2: SV (设定值)
+        ax2.plot(t_relative, sv_values, 'g-', linewidth=2, label='SV (设定值)', alpha=0.8)
+        ax2.set_ylabel('SV (设定值)', fontsize=12, color='green')
+        ax2.tick_params(axis='y', labelcolor='green')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(loc='upper right', fontsize=10)
+        ax2.set_title('设定值 (SV)', fontsize=11, fontweight='bold')
+
+        # 子图3: MV (操纵量)
+        ax3.plot(t_relative, mv_values, 'r-', linewidth=2, label='MV (阀门开度)', alpha=0.8)
+        ax3.set_xlabel('时间 (秒)', fontsize=12)
+        ax3.set_ylabel('MV (操纵量)', fontsize=12, color='red')
+        ax3.tick_params(axis='y', labelcolor='red')
+        ax3.grid(True, alpha=0.3)
+        ax3.legend(loc='upper right', fontsize=10)
+        ax3.set_title('操纵量 (MV)', fontsize=11, fontweight='bold')
+
+        # 总标题
+        fig.suptitle(f'设备历史数据曲线\n设备: {table_name} | 时间: {start_time} ~ {end_time}',
+                     fontsize=14, fontweight='bold', y=0.995)
+
+        plt.tight_layout()
+
+        # 保存图片
+        plot_dir = os.path.join(os.getcwd(), "data", "plots")
+        os.makedirs(plot_dir, exist_ok=True)
+
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        plot_filename = f"history_data_{timestamp_str}.png"
+        plot_path = os.path.join(plot_dir, plot_filename)
+
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+
+        return plot_path
+
+    except Exception as e:
+        print(f"❌ 绘图失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# 便捷函数，用于其他模块调用
+def query_historical_data(
+        table: str,
+        fields: Optional[List[str]] = None,
+        start_time: Optional[Union[int, str]] = None,
+        end_time: Optional[Union[int, str]] = None,
+        limit: int = 1500
+) -> Dict:
+    """
+    查询历史数据的便捷函数 - 支持多种时间格式
+
+    Args:
+        table: 表名
+        fields: 字段列表
+        start_time: 开始时间，支持毫秒时间戳或字符串格式
+        end_time: 结束时间，支持毫秒时间戳或字符串格式
+        limit: 限制条数
+
+    Returns:
+        Dict: 查询结果
+
+    Examples:
+        >>> # 使用毫秒时间戳
+        >>> query_historical_data("temperature", start_time=1640995200000, end_time=1641081600000)
+
+        >>> # 使用字符串格式
+        >>> query_historical_data("temperature", start_time="2022-01-01 12:00:00", end_time="2022-01-02 12:00:00")
+
+        >>> # 使用ISO格式
+        >>> query_historical_data("temperature", start_time="2022-01-01T12:00:00", end_time="2022-01-02T12:00:00")
+    """
+    # 转换时间格式
+    start_ms = None
+    end_ms = None
+
+    if start_time is not None:
+        try:
+            start_ms = parse_time_to_milliseconds(start_time)
+        except ValueError as e:
+            raise ValueError(f"开始时间格式错误: {str(e)}")
+
+    if end_time is not None:
+        try:
+            end_ms = parse_time_to_milliseconds(end_time)
+        except ValueError as e:
+            raise ValueError(f"结束时间格式错误: {str(e)}")
+
+    request_data = {
+        "tables": [
+            {
+                "table": table,
+                "fields": fields,
+                "continuationPoint": None
+            }
+        ],
+        "detail": {
+            "startTime": start_ms,
+            "endTime": end_ms or int(datetime.now().timestamp() * 1000),
+            "limit": limit,
+            "returnBounds": False
+        }
+    }
+
+    return query_raw_data(request_data)

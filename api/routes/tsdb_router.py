@@ -15,17 +15,7 @@ import os
 # 导入时序数据查询模块
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-try:
-    from core.data.real_tsdb_client import query_raw_data
-except ImportError:
-    # 如果导入失败，提供一个简单的模拟实现
-    def query_raw_data(request_data: Dict) -> Dict:
-        return {
-            "code": 0,
-            "message": "",
-            "results": []
-        }
+from core.data.real_tsdb_client import query_raw_data
 
 router = APIRouter()
 
@@ -423,67 +413,3 @@ async def health_check():
         }
     }
 
-# 便捷函数，用于其他模块调用
-def query_historical_data(
-    table: str,
-    fields: Optional[List[str]] = None,
-    start_time: Optional[Union[int, str]] = None,
-    end_time: Optional[Union[int, str]] = None,
-    limit: int = 1500
-) -> Dict:
-    """
-    查询历史数据的便捷函数 - 支持多种时间格式
-    
-    Args:
-        table: 表名
-        fields: 字段列表
-        start_time: 开始时间，支持毫秒时间戳或字符串格式
-        end_time: 结束时间，支持毫秒时间戳或字符串格式
-        limit: 限制条数
-        
-    Returns:
-        Dict: 查询结果
-        
-    Examples:
-        >>> # 使用毫秒时间戳
-        >>> query_historical_data("temperature", start_time=1640995200000, end_time=1641081600000)
-        
-        >>> # 使用字符串格式
-        >>> query_historical_data("temperature", start_time="2022-01-01 12:00:00", end_time="2022-01-02 12:00:00")
-        
-        >>> # 使用ISO格式
-        >>> query_historical_data("temperature", start_time="2022-01-01T12:00:00", end_time="2022-01-02T12:00:00")
-    """
-    # 转换时间格式
-    start_ms = None
-    end_ms = None
-    
-    if start_time is not None:
-        try:
-            start_ms = parse_time_to_milliseconds(start_time)
-        except ValueError as e:
-            raise ValueError(f"开始时间格式错误: {str(e)}")
-    
-    if end_time is not None:
-        try:
-            end_ms = parse_time_to_milliseconds(end_time)
-        except ValueError as e:
-            raise ValueError(f"结束时间格式错误: {str(e)}")
-    
-    request_data = {
-        "tables": [
-            {
-                "table": table,
-                "fields": fields,
-                "continuationPoint": None
-            }
-        ],
-        "detail": {
-            "startTime": start_ms,
-            "endTime": end_ms or int(datetime.now().timestamp() * 1000),
-            "limit": limit,
-            "returnBounds": False
-        }
-    }
-    
-    return query_raw_data(request_data)

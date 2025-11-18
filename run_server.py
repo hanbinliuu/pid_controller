@@ -7,6 +7,8 @@ import sys
 import os
 import logging
 
+from starlette.middleware.gzip import GZipMiddleware
+
 # 添加项目根目录到Python路径
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
@@ -68,6 +70,7 @@ app = FastAPI(
     docs_url=None,  # 禁用默认的docs路由
     redoc_url=None,  # 禁用默认的redoc路由
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # 只有大于1000字节的数据才会被压缩
 
 # 允许跨域
 app.add_middleware(
