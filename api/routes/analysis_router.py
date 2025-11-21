@@ -61,8 +61,8 @@ async def analyze_temperature(
         end_time: Union[int, str] = Query(...,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
                                                     "2022-01-02"]),
-        circuit_uri: str = Query(...,required=False,description="回路URI",
-                                          examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"] )
+        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+                                          examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"] ),
 ):
     """
     **温度曲线智能分析 - TemperatureAnalysisTool**
@@ -98,7 +98,7 @@ async def analyze_temperature(
     - 设备维护和故障预测
     """
     # 将map解析为一下关系
-
+    #todo 获取设备历史数据
 
     table = "PID_FEP_Gateway_Device_001default"
     required_fields = DEFAULT_FIELD_MAPPING
@@ -172,6 +172,8 @@ async def optimize_pid(
         end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
                                                     "2022-01-02"]),
+        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+                                          examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"] ),
         is_filter: bool = Query(True, description="是否过滤数据",
                                 examples=[True]),
         is_lambda: bool = Query(False, description="是否增加lambda整定建议",
@@ -297,15 +299,8 @@ async def optimize_pid(
 #             operation_id="IOTDA历史数据查询",
 #             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data(
-        table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-        fields: Optional[List[str]] = Query(..., description="测点名", example=[
-            "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
-            "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值
-            "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值
-            "ns=100;s=FIC101A_PB.In_Channel0",
-            "ns=100;s=FIC101A_TI.In_Channel0",
-            "ns=100;s=FIC101A_TD.In_Channel0"
-    ]),
+        circuit_uri: str = Query(..., required=False, description="回路URI",
+                                 examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"]),
         start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
@@ -314,6 +309,9 @@ async def get_history_data(
                                                     "2022-01-02"])
 ):
     try:
+        # 跟进回路信息查询表和字段信息
+        table = "PID_FEP_Gateway_Device_001default"
+        fields = DEFAULT_FIELD_MAPPING
         # 参数验证
         if not table or not table.strip():
             raise HTTPException(

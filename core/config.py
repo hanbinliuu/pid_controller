@@ -48,11 +48,11 @@ class Config:
     BFF_MODEL_TIMEOUT: int = int(os.getenv('BFF_MODEL_TIMEOUT', '30'))
     BFF_MODEL_PROJECT_PATH: str = os.getenv(
         'BFF_MODEL_PROJECT_PATH',
-        '/pid_zd/ce716ffbade5426e8faf18467d1d5a83'
+        '/pid_zd/0b521c82a96d4107a564e4c2678bdeca'
     )
     BFF_MODEL_POINT_PATH: str = os.getenv(
         'BFF_MODEL_POINT_PATH',
-        '/ZTCS'
+        '/loop_state_parameters'
     )
     
     @classmethod
@@ -66,8 +66,8 @@ class Config:
         return {
             'base_url': cls.BFF_MODEL_BASE_URL,
             'timeout': cls.BFF_MODEL_TIMEOUT,
-            'project_path': cls.BFF_MODEL_PROJECT_PATH
-            , 'point_path': cls.BFF_MODEL_POINT_PATH
+            'project_path': cls.BFF_MODEL_PROJECT_PATH,
+            'point_path': cls.BFF_MODEL_POINT_PATH
         }
     
     @classmethod

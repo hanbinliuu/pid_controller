@@ -25,7 +25,7 @@ async def get_point_paths(
     project_path: Optional[str] = Query(
         None,
         description="项目路径前缀，默认从环境变量BFF_MODEL_PROJECT_PATH读取",
-        example="/pid_zd/935cf045bd254867bdfeb113c31467da"
+        example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
     )
 ) -> Dict[str, Any]:
     """
@@ -54,29 +54,7 @@ async def get_point_paths(
             
             logger.info(f"BFF查询成功，项目路径: {client.project_path}")
             
-            # 提取原始响应和浏览路径
-            raw_response = query_result.get('raw_response', {})
-            browse_paths = query_result.get('browse_paths', [])
-            
-            logger.debug(f"BFF响应数据: {raw_response}")
-            logger.debug(f"浏览路径: {browse_paths}")
-            
-            # 提取result字段
-            result_paths = raw_response.get('result', [])
-            if not result_paths:
-                logger.warning("响应中未找到result字段")
-                return {
-                    "status": "warning",
-                    "project_path": client.project_path,
-                    "message": "查询成功但未解析到测点路径",
-                    "raw_response": raw_response
-                }
-            
-            # 按顺序映射浏览路径到测点路径
-            path_mapping = BFFModelClient.map_browse_paths_to_result(
-                browse_paths=browse_paths,
-                result_paths=result_paths
-            )
+
             
             # 生成字段映射（根据MV/PV/SV等标识）
             # field_mapping = BFFModelClient.parse_path_list_to_field_mapping(result_paths)
@@ -107,7 +85,7 @@ async def get_point_values(
     project_path: Optional[str] = Query(
         None,
         description="项目路径前缀，默认从环境变量BFF_MODEL_PROJECT_PATH读取",
-        example="/pid_zd/935cf045bd254867bdfeb113c31467da"
+        example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
     )
 ) -> Dict[str, Any]:
     """
@@ -175,12 +153,12 @@ async def get_table_and_points(
     project_path: Optional[str] = Query(
         None,
         description="项目路径前缀，默认从环境变量BFF_MODEL_PROJECT_PATH读取",
-        example="/pid_zd/ce716ffbade5426e8faf18467d1d5a83"
+        example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
     ),
     point_path: Optional[str] = Query(
-        None,
+        'loop_state_parameters',
         description="测点路径，默认从环境变量BFF_MODEL_POINT_PATH读取",
-        example="/ZTCS"
+        example="/loop_state_parameters"
     )
 ) -> Dict[str, Any]:
     """
@@ -213,41 +191,22 @@ async def get_table_and_points(
             # 查询常用字段
             query_result = client.query_common_fields()
             
-            logger.info(f"BFF查询成功，项目路径: {client.project_path}, 测点路径: {client.point_path}")
-            
-            # 提取原始响应
-            raw_response = query_result.get('raw_response', {})
-            
-            logger.debug(f"BFF响应数据: {raw_response}")
-            
-            # 提取result字段
-            result_paths = raw_response.get('result', [])
-            if not result_paths:
-                logger.warning("响应中未找到result字段")
-                return {
-                    "status": "warning",
-                    "project_path": client.project_path,
-                    "point_path": client.point_path,
-                    "message": "查询成功但未解析到测点路径",
-                    "raw_response": raw_response
-                }
-            
-            # 提取table名称和测点列表
-            table_and_points = BFFModelClient.extract_table_and_points_from_paths(result_paths)
+            # 提取table名称和测点列表，传入query_paths和result_paths
+            table_and_points = BFFModelClient.extract_table_and_points_from_paths(query_result)
             
             table_name = table_and_points.get('table_name')
             points = table_and_points.get('points', [])
             
-            # if not table_name:
-            #     logger.warning("未能从路径中解析出table名称")
-            #     return {
-            #         "status": "warning",
-            #         "project_path": client.project_path,
-            #         "point_path": client.point_path,
-            #         "message": "查询成功但未解析到table名称",
-            #         "points": points,
-            #         "total_points": len(points)
-            #     }
+            if not table_name:
+                logger.warning("未能从路径中解析出table名称")
+                return {
+                    "status": "warning",
+                    "project_path": client.project_path,
+                    "point_path": client.point_path,
+                    "message": "未解析到table名称",
+                    "points": points,
+                    "total_points": len(points)
+                }
             
             return {
                 "status": "success",

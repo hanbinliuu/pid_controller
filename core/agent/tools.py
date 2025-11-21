@@ -1716,6 +1716,8 @@ def query_table_and_points(
             
             # 提取原始响应
             raw_response = query_result.get('raw_response', {})
+            # 提取查询路径
+            browse_paths = query_result.get('browse_paths', [])
             
             # 处理raw_response为None的情况
             if raw_response is None:
@@ -1733,8 +1735,8 @@ def query_table_and_points(
                     "total_points": 0
                 }
             
-            # 提取table名称和测点列表
-            table_and_points = BFFModelClient.extract_table_and_points_from_paths(result_paths)
+            # 提取table名称和测点列表，传入query_paths和result_paths
+            table_and_points = BFFModelClient.extract_table_and_points_from_paths(browse_paths, result_paths)
             
             table_name = table_and_points.get('table_name')
             points = table_and_points.get('points', {})
