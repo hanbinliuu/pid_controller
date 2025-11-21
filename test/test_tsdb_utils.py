@@ -14,10 +14,10 @@ sys.path.insert(0, project_root)
 
 from core.utils.tsdb_utils import (
     get_pid_history_data,
-    get_temperature_history, 
+    get_temperature_history,
     get_recent_pid_data,
     format_pid_data_for_analysis,
-    _convert_to_timestamp
+    convert_to_timestamp
 )
 
 
@@ -27,22 +27,22 @@ def test_time_conversion():
     
     # 测试时间戳转换
     timestamp_ms = 1657258564523
-    result = _convert_to_timestamp(timestamp_ms)
+    result = convert_to_timestamp(timestamp_ms)
     print(f"毫秒时间戳 {timestamp_ms} -> {result}")
     
     # 测试秒级时间戳转换
     timestamp_s = 1657258564
-    result = _convert_to_timestamp(timestamp_s)
+    result = convert_to_timestamp(timestamp_s)
     print(f"秒级时间戳 {timestamp_s} -> {result}")
     
     # 测试字符串转换
     time_str = "2022-07-08 13:36:04"
-    result = _convert_to_timestamp(time_str)
+    result = convert_to_timestamp(time_str)
     print(f"时间字符串 '{time_str}' -> {result}")
     
     # 测试datetime对象转换
     dt = datetime.now()
-    result = _convert_to_timestamp(dt)
+    result = convert_to_timestamp(dt)
     print(f"datetime对象 {dt} -> {result}")
     print()
 
@@ -193,7 +193,7 @@ def test_error_handling():
     
     # 测试无效时间格式
     try:
-        result = _convert_to_timestamp("invalid_time_format")
+        result = convert_to_timestamp("invalid_time_format")
         print(f"无效时间格式处理结果: {result}")
     except ValueError as e:
         print(f"无效时间格式错误处理: {str(e)}")

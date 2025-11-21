@@ -6,6 +6,7 @@
 import sys
 import os
 import logging
+import uvicorn
 
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -64,8 +65,8 @@ from fastapi.openapi.docs import (
 
 # 创建FastAPI应用
 app = FastAPI(
-    title="PID Agent API",
-    description="PID控制系统代理API",
+    title="PID整定API",
+    description="PID整定系统API",
     version="1.0.0",
     docs_url=None,  # 禁用默认的docs路由
     redoc_url=None,  # 禁用默认的redoc路由
@@ -87,21 +88,43 @@ app.mount("/static", StaticFiles(directory="api/static"), name="static")
 # 导入路由
 try:
     from api.routes.analysis_router import router as analysis_router
-    app.include_router(analysis_router, prefix='/api/analysis', tags=['pid数据分析'])
-    logger.info("成功加载分析路由")
+    app.include_router(analysis_router, prefix='/api/analysis', tags=['pid整定-大模型整定'])
+    logger.info("成功加载大模型整定分析路由")
 except Exception as e:
-    logger.error(f"加载分析路由失败: {e}")
+    logger.error(f"加载大模型整定分析路由失败: {e}")
+
+# 导入路由
+try:
+    from api.routes.expert_tuning_route import router as normal_setting_route
+    app.include_router(normal_setting_route, prefix='/api/expert_tuning', tags=['pid整定-专家整定'])
+    logger.info("成功加载专家整定分析路由")
+except Exception as e:
+    logger.error(f"加载专家整定分析路由失败: {e}")
+
 
 try:
-    from api.routes.conversion_router import router as conversion_router
-    app.include_router(conversion_router, prefix='/api/conversion', tags=['PID参数转换'])
-    logger.info("成功加载PID转换路由")
+    from api.routes.iotda_route import router as iotda_route
+    app.include_router(iotda_route, prefix='/api/iotda', tags=['时序数据查询'])
+    logger.info("成功时序数据查询路由")
 except Exception as e:
-    logger.error(f"加载PID转换路由失败: {e}")
+    logger.error(f"加载时序数据查询路由失败: {e}")
+
+try:
+    from api.routes.bff_route import router as bff_route
+    app.include_router(bff_route, prefix='/api/bff', tags=['BFF模型查询'])
+    logger.info("成功加载BFF模型查询路由")
+except Exception as e:
+    logger.error(f"加载BFF模型查询路由失败: {e}")
+# try:
+#     from api.routes.conversion_router import router as conversion_router
+#     app.include_router(conversion_router, prefix='/api/conversion', tags=['PID参数转换'])
+#     logger.info("成功加载PID转换路由")
+# except Exception as e:
+#     logger.error(f"加载PID转换路由失败: {e}")
 
 try:
     from api.routes.proxy_router import router as proxy_router
-    app.include_router(proxy_router, prefix='/api/proxy', tags=['代理服务'])
+    app.include_router(proxy_router, prefix='/api/proxy', tags=['智能体工作流代理服务'])
     logger.info("成功加载代理路由")
 except Exception as e:
     logger.error(f"加载代理路由失败: {e}")
@@ -113,7 +136,7 @@ async def health_check():
 
 @app.get("/")
 async def root():
-    return {"message": "PID Agent API"}
+    return {"message": "PID整定 API"}
 
 # 自定义Swagger UI路由，使用本地静态资源
 @app.get("/docs", include_in_schema=False)
@@ -131,16 +154,15 @@ async def redoc_html():
     return get_redoc_html(
         openapi_url=app.openapi_url,
         title=app.title + " - ReDoc",
-        redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@latest/bundles/redoc.standalone.js",
+        # redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@latest/bundles/redoc.standalone.js",
+        redoc_js_url="/static/swagger-ui/swagger-ui.css"
     )
 
 if __name__ == "__main__":
-    import uvicorn
-    
     # 获取日志级别并转换为uvicorn格式
     log_level = os.getenv('LOG_LEVEL', 'INFO').lower()
     
-    logger.info("启动PID Agent API服务器...")
+    logger.info("启动PID整定软件 API服务器...")
     logger.info("API文档地址: http://localhost:8001/docs")
     logger.info(f"Uvicorn日志级别: {log_level}")
     

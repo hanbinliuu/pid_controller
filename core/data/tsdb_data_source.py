@@ -117,7 +117,6 @@ class TSDBDataSource(ABC):
             limit: int = 1500,
             continuation_point: Optional[str] = None
     ) -> DataPoint:
-        """ todo 查询原始数据"""
         pass
 
     @abstractmethod
@@ -133,5 +132,4 @@ class TSDBDataSource(ABC):
             window: int = 1,
             continuation_point: Optional[str] = None
     ) -> DataPoint:
-        """ todo 查询历史插值数据"""
         pass

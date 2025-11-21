@@ -494,6 +494,14 @@ def get_configured_tsdb_client() -> TSDBDataSource:
     
     return _global_tsdb_client
 
+def get_default_database() -> str:
+    """
+    获取默认数据库名称，优先从环境变量读取
+
+    Returns:
+        str: 数据库名称
+    """
+    return os.getenv('DEFAULT_TSDB_DATABASE', 'platform')
 
 # 单点位
 def query_raw_data(

@@ -99,4 +99,3 @@ def format_time_to_iso(time_input: Union[int, str], with_ms: bool = False) -> st
     ms = parse_time_to_milliseconds(time_input)
     dt = datetime.fromtimestamp(ms / 1000.0)
     return dt.isoformat(timespec='milliseconds' if with_ms else 'seconds')
-# ... existing code ...

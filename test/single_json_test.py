@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from fastapi import HTTPException
 
-from api.routes.analysis_router import _query_tsdb_data_zhongkong
+from api.routes.analysis_router import process_query_tsdb_data_interpolated
 from api.routes.time_util import parse_time_to_milliseconds
 from core.algorithm.detector import StabilityDetector
 
@@ -264,7 +264,7 @@ def run(
 
         # 查询历史数据
         db = 'platform'
-        history_data = _query_tsdb_data_zhongkong(
+        history_data = process_query_tsdb_data_interpolated(
             db=db,
             table_name=table,
             required_fields=required_fields,

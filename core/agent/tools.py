@@ -1120,12 +1120,12 @@ def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_t
     # 检测非稳态段
     print(f"\n🔍 检测非稳态段...")
     non_steady_segments = detector.detect_non_steady_segments(pv, sv, min_segment_len=20)
-    print(f"📊 检测到 {len(non_steady_segments)} 个非稳态段")
+    print(f" 检测到 {len(non_steady_segments)} 个非稳态段")
 
     # 检测扰动起始点
     print(f"\n🔍 检测扰动起始点...")
     disturbance_starts = detector.detect_all_disturbances(pv, sv, non_steady_segments=non_steady_segments)
-    print(f"📊 检测到 {len(disturbance_starts)} 个扰动起始点")
+    print(f" 检测到 {len(disturbance_starts)} 个扰动起始点")
 
     # 提取扰动结束点（从非稳态段中提取）
     disturbance_ends = []
@@ -1154,7 +1154,7 @@ def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_t
         segments_with_timestamp.append((start_idx, end_idx, start_timestamp, end_timestamp, setpoint))
 
     # 打印结果（使用原始时间戳）
-    print(f"\n📋 检测结果（原始时间戳）:")
+    print(f"\n 检测结果（原始时间戳）:")
     for idx, (start_idx, end_idx, start_ts, end_ts, setpoint) in enumerate(segments_with_timestamp, 1):
         print(f"   非稳态段 {idx}:")
         print(f"     索引: [{start_idx}, {end_idx}]")
@@ -1177,7 +1177,7 @@ def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_t
         print(f"     设定值: {setpoint:.2f}")
 
     # 可视化（使用相对时间）
-    print(f"\n🎨 生成可视化...")
+    print(f"\n 生成可视化...")
     plt.rcParams["font.family"] = ["Heiti TC"]
     plt.rcParams['font.sans-serif'] = ["Heiti TC", "Arial Unicode MS", "SimHei", "DejaVu Sans"]
     plt.rcParams['axes.unicode_minus'] = False
@@ -1261,7 +1261,7 @@ def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_t
 
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
-    print(f"✅ 图片已保存: {output_path}")
+    print(f" 图片已保存: {output_path}")
 
     return {
         'non_steady_segments': segments_with_timestamp,
@@ -1326,57 +1326,56 @@ def get_tools() -> List:
     ]
 
 
-# 查询时序数据-中控仿真测点
-def _query_tsdb_data_zhongkong(db: str,
-                               table_name: str,
-                               required_fields: List[str],
-                               start_time: int,
-                               end_time: int,
-                               tags: Optional[Dict[str, str]] = None,
-                               window: int = 1,
-                               is_filter: Optional[bool] = True
-                               ) -> List[Dict]:
+# 查询时序数据-插值查询
+def process_query_tsdb_data_interpolated(db: str,
+                                         table_name: str,
+                                         required_fields: Dict[str, str],
+                                         start_time: int,
+                                         end_time: int,
+                                         tags: Optional[Dict[str, str]] = None,
+                                         window: int = 1,
+                                         is_filter: Optional[bool] = True
+                                         ) -> List[Dict]:
     first_time = datetime.now().timestamp()
 
     """
     查询时序数据，根据最新数据（最后一条）的pb、ti、td、sv进行过滤
     只返回与最新参数值相同的历史数据，优化性能
+    
+    Args:
+        required_fields: 字段映射map，例如:
+            {"mv": "ns=100;s=FIC101A_MV.In_Channel0", "pv": "ns=100;s=FIC101A_PV.In_Channel0", ...}
     """
+    # 使用传入的字段映射
+    field_mapping = required_fields
+    query_field_list = list(field_mapping.values())
+    
     # 定义仅查询必要的字段（不包括PID参数）
-    query_fields = [field for field in required_fields if field not in [
-        "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
-        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值  temperature
-        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值  target_temp
-        "ns=100;s=FIC101A_PB.In_Channel0",  # 比例带  pb
-        "ns=100;s=FIC101A_TI.In_Channel0",  # 积分参数 ti
-        "ns=100;s=FIC101A_TD.In_Channel0"  # 微分参数 td
-    ]]
+    pid_fields = [field_mapping.get(key) for key in ['mv', 'pv', 'sv', 'pb', 'ti', 'td'] if field_mapping.get(key)]
+    query_fields = [field for field in query_field_list if field not in pid_fields]
+    
     all_records = []
     response = query_read_interpolated(
         db=db,
         table=table_name,
-        fields=required_fields,
+        fields=query_field_list,
         start_time=start_time,
         end_time=end_time,
         tags=tags,
         window=window,
         continuation_point=None
     )
-    # print(response)
+    
     columns = response.columns or []
     values = response.values
     if not values:
         return []
-    # latest_value = values[-1]
-    # latest_pb = latest_value[3]
-    # latest_ti = latest_value[2]
-    # latest_td = latest_value[5]
-    # latest_sv = latest_value[1]
 
     if (is_filter is None) or is_filter:
         filter_values = process_lists_optimized(values)[0]
     else:
         filter_values = values
+    
     # 解析当前页数据并添加到all_records
     for value_row in filter_values:
         record = {}
@@ -1384,17 +1383,18 @@ def _query_tsdb_data_zhongkong(db: str,
             if i < len(value_row):
                 if column == "time":
                     record["timestamp"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_PV.In_Channel0":
+                # 使用field_mapping进行动态匹配
+                elif column == field_mapping.get("pv"):
                     record["pv"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_SV.In_Channel0":
+                elif column == field_mapping.get("sv"):
                     record["sv"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_MV.In_Channel0":
+                elif column == field_mapping.get("mv"):
                     record["mv"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_PB.In_Channel0":
+                elif column == field_mapping.get("pb"):
                     record["pb"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_TI.In_Channel0":
+                elif column == field_mapping.get("ti"):
                     record["ti"] = value_row[i]
-                elif column == "ns=100;s=FIC101A_TD.In_Channel0":
+                elif column == field_mapping.get("td"):
                     record["td"] = value_row[i]
                 else:
                     record[column] = value_row[i]
@@ -1428,47 +1428,38 @@ def _query_tsdb_data_zhongkong(db: str,
 
 
 # 固定 pid值与目标温度，实时数据查询方法
-def _query_tsdb_data(db: str,
-                     table_name: str,
-                     required_fields: List[str],
-                     start_time: int,
-                     end_time: int,
-                     tags: Optional[Dict[str, str]] = None) -> List[Dict]:
-    """查询时序数据，但使用传入的PID参数覆盖查询结果"""
+def process_query_tsdb_data_raw(db: str,
+                                table_name: str,
+                                required_fields: Dict[str, str],
+                                start_time: int,
+                                end_time: int,
+                                tags: Optional[Dict[str, str]] = None) -> List[Dict]:
+    """
+    查询时序数据原始数据
+    
+    Args:
+        required_fields: 字段映射map，例如:
+            {"mv": "ns=100;s=FIC101A_MV.In_Channel0", "pv": "ns=100;s=FIC101A_PV.In_Channel0", ...}
+    """
+    # 使用传入的字段映射
+    field_mapping = required_fields
+    query_field_list = list(field_mapping.values())
+    
     # 定义仅查询必要的字段（不包括PID参数）
-    query_fields = [field for field in required_fields if field not in [
-        "ns=100;s=FIC101A_MV.In_Channel0",  # mv
-        "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值  pv
-        "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值  sv
-        "ns=100;s=FIC101A_PB.In_Channel0",  # 比例带  pb
-        "ns=100;s=FIC101A_TI.In_Channel0",  # 积分参数 ti
-        "ns=100;s=FIC101A_TD.In_Channel0"  # 微分参数 td
-    ]]
-    begin_time =datetime.now().timestamp()
-
-    # 构造查询请求
-    query_request = {
-        "tables": [
-            {
-                "db": db,
-                "table": table_name,
-                "fields": query_fields,
-                "tags": tags,
-                "continuationPoint": None
-            }
-        ],
-        "detail": {
-            "startTime": start_time,
-            "endTime": end_time,
-            "limit": 1500,
-            "returnBounds": False
-        }
-    }
+    pid_fields = [field_mapping.get(key) for key in ['mv', 'pv', 'sv', 'pb', 'ti', 'td'] if field_mapping.get(key)]
+    query_fields = [field for field in query_field_list if field not in pid_fields]
+    
+    begin_time = datetime.now().timestamp()
 
     # 调用时序数据查询接口
-    response = query_raw_data(db=db, table=table_name, fields=required_fields, start_time=start_time,
-                              end_time=end_time,
-                              tags=tags)
+    response = query_raw_data(
+        db=db,
+        table=table_name,
+        fields=query_field_list,
+        start_time=start_time,
+        end_time=end_time,
+        tags=tags
+    )
 
     # 解析查询结果
     history_data = []
@@ -1485,30 +1476,31 @@ def _query_tsdb_data(db: str,
                 if i < len(value_row):
                     if column == "time":
                         record["timestamp"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_MV.In_Channel0":
+                    # 使用field_mapping进行动态匹配
+                    elif column == field_mapping.get("mv"):
                         record["mv"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_PV.In_Channel0":
+                    elif column == field_mapping.get("pv"):
                         record["pv"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_SV.In_Channel0":
+                    elif column == field_mapping.get("sv"):
                         record["sv"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_PB.In_Channel0":
+                    elif column == field_mapping.get("pb"):
                         record["pb"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_TI.In_Channel0":
+                    elif column == field_mapping.get("ti"):
                         record["ti"] = value_row[i]
-                    elif column == "ns=100;s=FIC101A_TD.In_Channel0":
+                    elif column == field_mapping.get("td"):
                         record["td"] = value_row[i]
                     else:
                         record[column] = value_row[i]
 
             # 确保包含查询字段的默认值
             for field in query_fields:
-                # record["temperature"] = record[field]
                 if field not in record:
                     record[field] = None
 
             history_data.append(record)
+    
     over_time = datetime.now().timestamp()
-    logger.info(f"总耗时: {begin_time} - {over_time}")
+    logger.info(f"总耗时: {over_time - begin_time:.2f}秒")
     return history_data
 
 

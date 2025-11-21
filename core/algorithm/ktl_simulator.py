@@ -34,7 +34,78 @@ logger = logging.getLogger(__name__)
 
 class KTLSimulator:
     """KTL模型仿真器：支持多种模型类型的阶跃响应曲线生成"""
-    
+
+    @staticmethod
+    def simulation_curve(data_list: List[Dict], model_params: Dict[str, float], model_type: str):
+        """
+            获取模拟曲线
+            Args:
+                data_list: 设备数据
+                model_params: 模型参数字典[K、T1、T2、L]
+                model_type: 模型类型
+            Returns:
+                dict: 包含时间、实际值、模型值和拟合指标
+        """
+        # 时间轴: 使用timestamp毫秒，转为相对秒
+        if 'timestamp' in data_list[0]:
+            ts0 = float(data_list[0]['timestamp'])
+            t = np.array([(float(r['timestamp']) - ts0) / 1000.0 for r in data_list], dtype=float)
+            # 保存真实时间戳（毫秒）
+            timestamp_list = np.array([float(r['timestamp']) for r in data_list], dtype=float)
+        else:
+            t = np.arange(len(data_list), dtype=float)  # 生成相对秒
+            timestamp_list = t.copy()  # 如果没有timestamp，使用相对时间
+
+        # 输出y: 使用pv为过程变量
+        pv = np.array([float(r.get('pv')) for r in data_list], dtype=float)
+
+        # 初始值y0
+        y0 = pv[0]
+        # 输入u: 优先使用mv(操纵量/阀门开度)
+        mv = []
+        if 'mv' in data_list[0]:
+            mv = np.array([float(r.get('mv', 0.0)) for r in data_list], dtype=float)
+        sv = []
+        if 'sv' in data_list[0]:
+            sv = np.array([float(r.get('sv')) for r in data_list], dtype=float)
+
+        K = model_params.get('K', 0.5)
+        T1 = model_params.get('T1', 30.0)
+        T2 = model_params.get('T2', 0.0)
+        L = model_params.get('L', 0.0)
+
+        if model_type == 'FO_INTEGRATOR':
+            y_model = SystemIdentifier.first_order_integrator_model([K, T1], t, mv, y0)
+        elif model_type == 'SO_INTEGRATOR':
+            y_model = SystemIdentifier.second_order_integrator_model([K, T1, T2], t, mv, y0)
+        elif model_type == 'SOPDT':
+            y_model = SystemIdentifier.second_order_model([K, T1, T2, L], t, mv, y0)
+        elif model_type == 'SO':
+            y_model = SystemIdentifier.second_order_no_delay_model([K, T1, T2], t, mv, y0)
+        elif model_type == 'FO':
+            y_model = SystemIdentifier.first_order_model([K, T1], t, mv, y0)
+        else:  # FOPDT
+            y_model = SystemIdentifier.fopdt_model([K, T1, L], t, mv, y0)
+
+        # 计算拟合指标
+        ss_res = np.sum((pv - y_model) ** 2)
+        ss_tot = np.sum((pv - np.mean(pv)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        rmse = np.sqrt(np.mean((pv - y_model) ** 2))  # 均方根误差
+
+        return {
+            "timestamp": timestamp_list.tolist(),  # 真实时间戳（毫秒）
+            # "time": t.tolist(),  # 相对时间（秒），保留兼容性
+            "sv": sv.tolist() if len(sv) > 0 else [],
+            "pv": pv.tolist(),
+            "mv": mv.tolist() if len(mv) > 0 else [],
+            "pv_model": y_model.tolist(),
+            "r_squared": float(r_squared),
+            "rmse": float(rmse),
+            "model_name": model_type,
+            "parameters": model_params
+        }
+
     @staticmethod
     def generate_response(
         model_type: str,
@@ -499,79 +570,7 @@ class KTLSimulator:
             dt=dt,
             initial_output=initial_output
         )
-    @staticmethod
-    def simulation_curve(data_list: List[Dict], model_params: Dict[str, float], model_type: str) :
-        """
-               获取模拟曲线
 
-               Args:
-                   data_list: 设备数据
-                   model_params: 模型参数字典[K、T1、T2、L]
-                   model_type: 模型类型
-               Returns:
-                   dict: 包含时间、实际值、模型值和拟合指标
-        """
-        # 时间轴: 使用timestamp毫秒，转为相对秒
-        if 'timestamp' in data_list[0]:
-            ts0 = float(data_list[0]['timestamp'])
-            t = np.array([(float(r['timestamp']) - ts0) / 1000.0 for r in data_list], dtype=float)
-            # 保存真实时间戳（毫秒）
-            timestamp_list = np.array([float(r['timestamp']) for r in data_list], dtype=float)
-        else:
-            t = np.arange(len(data_list), dtype=float) #生成相对秒
-            timestamp_list = t.copy()  # 如果没有timestamp，使用相对时间
-
-        # 输出y: 使用pv为过程变量
-        pv = np.array([float(r.get('pv')) for r in data_list], dtype=float)
-
-        # 初始值y0
-        y0=pv[0]
-        # 输入u: 优先使用mv(操纵量/阀门开度)
-        mv = []
-        if 'mv' in data_list[0]:
-            mv = np.array([float(r.get('mv', 0.0)) for r in data_list], dtype=float)
-        sv = []
-        if 'sv' in data_list[0]:
-            sv = np.array([float(r.get('sv')) for r in data_list], dtype=float)
-
-
-
-        K = model_params.get('K', 0.5)
-        T1 = model_params.get('T1', 30.0)
-        T2 = model_params.get('T2', 0.0)
-        L = model_params.get('L', 0.0)
-
-        if model_type == 'FO_INTEGRATOR':
-            y_model = SystemIdentifier.first_order_integrator_model([K, T1], t, mv, y0)
-        elif model_type == 'SO_INTEGRATOR':
-            y_model = SystemIdentifier.second_order_integrator_model([K, T1, T2], t, mv, y0)
-        elif model_type == 'SOPDT':
-            y_model = SystemIdentifier.second_order_model([K, T1, T2, L], t, mv, y0)
-        elif model_type == 'SO':
-            y_model = SystemIdentifier.second_order_no_delay_model([K, T1, T2], t, mv, y0)
-        elif model_type == 'FO':
-            y_model = SystemIdentifier.first_order_model([K, T1], t, mv, y0)
-        else:  # FOPDT
-            y_model = SystemIdentifier.fopdt_model([K, T1, L], t, mv, y0)
-
-        # 计算拟合指标
-        ss_res = np.sum((pv - y_model) ** 2)
-        ss_tot = np.sum((pv - np.mean(pv)) ** 2)
-        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-        rmse = np.sqrt(np.mean((pv - y_model) ** 2))  # 均方根误差
-        
-        return {
-            "timestamp": timestamp_list.tolist(),  # 真实时间戳（毫秒）
-            "time": t.tolist(),  # 相对时间（秒），保留兼容性
-            "sv": sv.tolist() if len(sv) > 0 else [],
-            "pv": pv.tolist(),
-            "mv": mv.tolist() if len(mv) > 0 else [],
-            "pv_model": y_model.tolist(),
-            "r_squared": float(r_squared),
-            "rmse": float(rmse),
-            "model_name": model_type,
-            "parameters": model_params
-        }
     @staticmethod
     def save_plot(
         data: Dict[str, Any],
