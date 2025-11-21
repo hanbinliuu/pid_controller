@@ -10,3 +10,4 @@ scikit-learn==1.7.2
 scipy==1.15.3
 torch==2.2.2+cpu
 matplotlib==3.10.7
+zipp==3.23.0

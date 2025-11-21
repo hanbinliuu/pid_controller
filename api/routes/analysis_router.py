@@ -60,7 +60,9 @@ async def analyze_temperature(
                                                       "2022-01-01"]),
         end_time: Union[int, str] = Query(...,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
-                                                    "2022-01-02"])
+                                                    "2022-01-02"]),
+        circuit_uri: str = Query(...,required=False,description="回路URI",
+                                          examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"] )
 ):
     """
     **温度曲线智能分析 - TemperatureAnalysisTool**

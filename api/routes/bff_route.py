@@ -166,6 +166,107 @@ async def get_point_values(
 
 
 @router.get(
+    "/table-points",
+    summary="查询表名和测点列表",
+    operation_id="查询BFF表名和测点列表",
+    description="根据项目路径查询表名和测点名称列表"
+)
+async def get_table_and_points(
+    project_path: Optional[str] = Query(
+        None,
+        description="项目路径前缀，默认从环境变量BFF_MODEL_PROJECT_PATH读取",
+        example="/pid_zd/ce716ffbade5426e8faf18467d1d5a83"
+    ),
+    point_path: Optional[str] = Query(
+        None,
+        description="测点路径，默认从环境变量BFF_MODEL_POINT_PATH读取",
+        example="/ZTCS"
+    )
+) -> Dict[str, Any]:
+    """
+    根据项目路径查询表名和测点列表
+    
+    功能说明：
+    - 查询指定项目下的所有PID控制字段
+    - 返回table名称和测点名称映射
+    
+    返回格式：
+    {
+        "status": "success",
+        "project_path": "/pid_zd/xxx",
+        "point_path": "/ZTCS",
+        "table_name": "PID_FEP_Gateway_Device_001default",
+        "points": {
+            "mv": "ns=100;s=FIC101A_MV.In_Channel0",
+            "pv": "ns=100;s=FIC101A_PV.In_Channel0",
+            "sv": "ns=100;s=FIC101A_SV.In_Channel0",
+            "pb": "ns=100;s=FIC101A_PB.In_Channel0",
+            "ti": "ns=100;s=FIC101A_TI.In_Channel0",
+            "td": "ns=100;s=FIC101A_TD.In_Channel0"
+        },
+        "total_points": 6
+    }
+    """
+    try:
+        # 使用BFF客户端查询
+        with BFFModelClient(project_path=project_path, point_path=point_path) as client:
+            # 查询常用字段
+            query_result = client.query_common_fields()
+            
+            logger.info(f"BFF查询成功，项目路径: {client.project_path}, 测点路径: {client.point_path}")
+            
+            # 提取原始响应
+            raw_response = query_result.get('raw_response', {})
+            
+            logger.debug(f"BFF响应数据: {raw_response}")
+            
+            # 提取result字段
+            result_paths = raw_response.get('result', [])
+            if not result_paths:
+                logger.warning("响应中未找到result字段")
+                return {
+                    "status": "warning",
+                    "project_path": client.project_path,
+                    "point_path": client.point_path,
+                    "message": "查询成功但未解析到测点路径",
+                    "raw_response": raw_response
+                }
+            
+            # 提取table名称和测点列表
+            table_and_points = BFFModelClient.extract_table_and_points_from_paths(result_paths)
+            
+            table_name = table_and_points.get('table_name')
+            points = table_and_points.get('points', [])
+            
+            # if not table_name:
+            #     logger.warning("未能从路径中解析出table名称")
+            #     return {
+            #         "status": "warning",
+            #         "project_path": client.project_path,
+            #         "point_path": client.point_path,
+            #         "message": "查询成功但未解析到table名称",
+            #         "points": points,
+            #         "total_points": len(points)
+            #     }
+            
+            return {
+                "status": "success",
+                "project_path": client.project_path,
+                "point_path": client.point_path,
+                "table_name": table_name,
+                "points": points,
+                "total_points": len(points)
+            }
+    
+    except Exception as e:
+        logger.error(f"查询表名和测点列表失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询表名和测点列表失败: {str(e)}"
+        )
+
+
+@router.get(
     "/config",
     summary="获取BFF配置信息",
     operation_id="获取BFF配置",

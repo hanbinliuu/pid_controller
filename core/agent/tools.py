@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, Dict, List, cast, Union
+from typing import Optional, Dict, List, cast, Union, Any
 import json  # 移到全局导入
 import traceback  # 添加traceback导入
 import sys
@@ -11,6 +11,7 @@ import matplotlib
 
 from api.routes.tsdb_router import parse_time_to_milliseconds
 from core.algorithm.detector import StabilityDetector
+from core.data.bff_model_client import BFFModelClient
 from core.data.real_tsdb_client import query_raw_data, query_read_interpolated
 from core.utils import pid_converter
 from core.utils.pid_converter import process_lists_optimized
@@ -1597,7 +1598,7 @@ def _plot_history_data(history_data: List[Dict], table_name: str,
         return plot_path
 
     except Exception as e:
-        print(f"❌ 绘图失败: {e}")
+        print(f"绘图失败: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -1667,3 +1668,93 @@ def query_historical_data(
     }
 
     return query_raw_data(request_data)
+
+
+def query_table_and_points(
+    project_path: Optional[str] = None,
+    point_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    查询表名和测点映射的便捷函数
+    
+    Args:
+        project_path: 项目路径前缀，默认从环境变量读取
+        point_path: 测点路径，默认从环境变量读取
+        
+    Returns:
+        Dict: 包含table名称和测点映射的字典
+            {
+                "status": "success",
+                "table_name": "PID_FEP_Gateway_Device_001default",
+                "points": {
+                    "mv": "ns=100;s=FIC101A_MV.In_Channel0",
+                    "pv": "ns=100;s=FIC101A_PV.In_Channel0",
+                    "sv": "ns=100;s=FIC101A_SV.In_Channel0",
+                    "pb": "ns=100;s=FIC101A_PB.In_Channel0",
+                    "ti": "ns=100;s=FIC101A_TI.In_Channel0",
+                    "td": "ns=100;s=FIC101A_TD.In_Channel0"
+                },
+                "total_points": 6
+            }
+            
+    Examples:
+        >>> # 使用默认配置
+        >>> result = query_table_and_points()
+        >>> print(result['table_name'])
+        'PID_FEP_Gateway_Device_001default'
+        
+        >>> # 指定项目路径
+        >>> result = query_table_and_points(
+        ...     project_path="/pid_zd/custom_project_id",
+        ...     point_path="/ZTCS"
+        ... )
+    """
+    try:
+        with BFFModelClient(project_path=project_path, point_path=point_path) as client:
+            # 查询常用字段
+            query_result = client.query_common_fields()
+            
+            # 提取原始响应
+            raw_response = query_result.get('raw_response', {})
+            
+            # 处理raw_response为None的情况
+            if raw_response is None:
+                raw_response = {}
+            
+            # 提取result字段
+            result_paths = raw_response.get('result', []) if isinstance(raw_response, dict) else []
+            if result_paths is None or not result_paths:
+                logger.warning("响应中未找到result字段或为空")
+                return {
+                    "status": "warning",
+                    "message": "查询成功但未解析到测点路径",
+                    "table_name": None,
+                    "points": {},
+                    "total_points": 0
+                }
+            
+            # 提取table名称和测点列表
+            table_and_points = BFFModelClient.extract_table_and_points_from_paths(result_paths)
+            
+            table_name = table_and_points.get('table_name')
+            points = table_and_points.get('points', {})
+            
+            return {
+                "status": "success" if table_name else "warning",
+                "message": "查询成功" if table_name else "查询成功但未解析到table名称",
+                "project_path": client.project_path,
+                "point_path": client.point_path,
+                "table_name": table_name,
+                "points": points,
+                "total_points": len(points) if isinstance(points, dict) else 0
+            }
+    
+    except Exception as e:
+        logger.error(f"查询表名和测点列表失败: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"查询失败: {str(e)}",
+            "table_name": None,
+            "points": {},
+            "total_points": 0
+        }
