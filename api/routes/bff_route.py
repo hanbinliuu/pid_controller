@@ -48,23 +48,19 @@ async def get_point_paths(
     """
     try:
         # 使用BFF客户端查询
-        with BFFModelClient(project_path=project_path) as client:
+        with BFFModelClient(device_uri=project_path) as client:
             # 查询常用字段
-            query_result = client.query_common_fields()
+            common_field_map = client.query_common_fields()
             
-            logger.info(f"BFF查询成功，项目路径: {client.project_path}")
-            
+            logger.info(f"BFF查询成功，项目路径: {client.device_uri}")
 
-            
             # 生成字段映射（根据MV/PV/SV等标识）
             # field_mapping = BFFModelClient.parse_path_list_to_field_mapping(result_paths)
             
             return {
-                "status": "success",
-                "project_path": client.project_path,
-                "path_mapping": path_mapping,
-                # "field_mapping": field_mapping,
-                "total_fields": len(path_mapping)
+                "project_path": client.device_uri,
+                "point_path": client.point_path,
+                "model_point_map":common_field_map
             }
     
     except Exception as e:
@@ -109,28 +105,12 @@ async def get_point_values(
     """
     try:
         # 使用BFF客户端查询
-        with BFFModelClient(project_path=project_path) as client:
+        with BFFModelClient(device_uri=project_path) as client:
             # 查询常用字段
             query_result = client.query_common_fields()
-            raw_response = query_result.get('raw_response', {})
-            
-            logger.info(f"BFF查询成功，项目路径: {client.project_path}")
-            
-            # 解析测点uri
-            values = client.parse_response(raw_response)
-            
-            if not values:
-                logger.warning("未能解析出有效的测点值")
-                return {
-                    "status": "warning",
-                    "project_path": client.project_path,
-                    "message": "查询成功但未解析到测点值",
-                    "raw_response": raw_response
-                }
-            
+            values = list(query_result.values())
             return {
-                "status": "success",
-                "project_path": client.project_path,
+                "project_path": client.device_uri,
                 "values": values,
                 "total_points": len(values)
             }
@@ -187,7 +167,7 @@ async def get_table_and_points(
     """
     try:
         # 使用BFF客户端查询
-        with BFFModelClient(project_path=project_path, point_path=point_path) as client:
+        with BFFModelClient(device_uri=project_path, point_path=point_path) as client:
             # 查询常用字段
             query_result = client.query_common_fields()
             
@@ -200,8 +180,7 @@ async def get_table_and_points(
             if not table_name:
                 logger.warning("未能从路径中解析出table名称")
                 return {
-                    "status": "warning",
-                    "project_path": client.project_path,
+                    "project_path": client.device_uri,
                     "point_path": client.point_path,
                     "message": "未解析到table名称",
                     "points": points,
@@ -209,8 +188,7 @@ async def get_table_and_points(
                 }
             
             return {
-                "status": "success",
-                "project_path": client.project_path,
+                "project_path": client.device_uri,
                 "point_path": client.point_path,
                 "table_name": table_name,
                 "points": points,
@@ -244,7 +222,6 @@ async def get_bff_config() -> Dict[str, Any]:
         config = Config.get_bff_model_config()
         
         return {
-            "status": "success",
             "config": config
         }
     

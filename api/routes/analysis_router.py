@@ -55,10 +55,10 @@ DEFAULT_FIELD_MAPPING = {
             # operation_id="温度曲线分析",
             description="大模型整定-分析温度曲线的控制性能，包括上升时间、超调量、稳态误差等指标")
 async def analyze_temperature(
-        start_time: Union[int, str] = Query(...,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
+        start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
-        end_time: Union[int, str] = Query(...,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
+        end_time: Union[int, str] = Query(None,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
                                                     "2022-01-02"]),
         circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
@@ -98,7 +98,12 @@ async def analyze_temperature(
     - 设备维护和故障预测
     """
     # 将map解析为一下关系
-    #todo 获取设备历史数据
+    # 默认查询2小时
+    if end_time is None:
+        end_time = int(datetime.now().timestamp() * 1000)
+
+    if start_time is None:
+        start_time = end_time - 2 * 60 * 60 * 1000  # 默认2小时
 
     table = "PID_FEP_Gateway_Device_001default"
     required_fields = DEFAULT_FIELD_MAPPING
@@ -125,7 +130,6 @@ async def analyze_temperature(
         )
         if not history_data:
             return {
-                "status": "error",
                 "table": table,
                 "message": "指定时间范围内无数据"
             }
@@ -140,7 +144,6 @@ async def analyze_temperature(
         try:
             result_data = json.loads(analysis_result)
             return {
-                "status": "success",
                 "table": table,
                 "start_time": start_time,
                 "end_time": end_time,
@@ -149,7 +152,6 @@ async def analyze_temperature(
         except json.JSONDecodeError:
             # 如果返回的不是JSON格式（可能是错误信息）
             return {
-                "status": "error",
                 "table": table,
                 "message": analysis_result
             }
@@ -166,10 +168,10 @@ async def analyze_temperature(
             operation_id="大模型整定-PID参数优化建议",
             description="基于历史数据分析结果，提供PID参数调整建议")
 async def optimize_pid(
-        start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
+        start_time: Union[int, str] = Query(None, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
-        end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
+        end_time: Union[int, str] = Query(None, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
                                                     "2022-01-02"]),
         circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
@@ -205,8 +207,15 @@ async def optimize_pid(
     - 鲁棒性与性能综合考量
 
     """
+    # 默认查询2小时
+    if end_time is None:
+        end_time = int(datetime.now().timestamp() * 1000)
+
+    if start_time is None:
+        start_time = end_time - 2 * 60 * 60 * 1000  # 默认2小时
     table = "PID_FEP_Gateway_Device_001default"
     required_fields = DEFAULT_FIELD_MAPPING
+
     try:
         start_time_ms = parse_time_to_milliseconds(start_time)
         end_time_ms = parse_time_to_milliseconds(end_time)
@@ -231,7 +240,6 @@ async def optimize_pid(
         )
         if not history_data:
             return {
-                "status": "error",
                 "table": table,
                 "message": "指定时间范围内无数据"
             }
@@ -246,7 +254,6 @@ async def optimize_pid(
         try:
             result_data = json.loads(optimization_result)
             return {
-                "status": "success",
                 "table": table,
                 "start_time": start_time,
                 "end_time": end_time,
@@ -255,7 +262,6 @@ async def optimize_pid(
         except json.JSONDecodeError:
             # 如果返回的不是JSON格式（可能是错误信息）
             return {
-                "status": "error",
                 "table": table,
                 "message": optimization_result
 
@@ -357,7 +363,6 @@ async def get_history_data(
 
         # 格式化响应数据
         response_data = {
-            "status": "success",
             "table": table,
             "start_time": start_time,
             "end_time": end_time,

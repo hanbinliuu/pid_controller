@@ -48,95 +48,24 @@ def setup_logging():
         logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
     
     logger = logging.getLogger(__name__)
-    logger.info(f"日志级别设置为: {log_level}")
     return logger
 
 # 设置日志
 logger = setup_logging()
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+# 从api.main导入已配置好的app(包含全局中间件)
+from api.main import app
+
+# 添加GZip压缩中间件
+# app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 from fastapi.openapi.docs import (
     get_redoc_html,
     get_swagger_ui_html,
-    get_swagger_ui_oauth2_redirect_html,
 )
 
-# 创建FastAPI应用
-app = FastAPI(
-    title="PID整定API",
-    description="PID整定系统API",
-    version="1.0.0",
-    docs_url=None,  # 禁用默认的docs路由
-    redoc_url=None,  # 禁用默认的redoc路由
-)
-app.add_middleware(GZipMiddleware, minimum_size=1000)  # 只有大于1000字节的数据才会被压缩
-
-# 允许跨域
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=['*'],
-    allow_credentials=True,
-    allow_methods=['*'],
-    allow_headers=['*'],
-)
-
-# 挂载静态文件目录
-app.mount("/static", StaticFiles(directory="api/static"), name="static")
-
-# 导入路由
-try:
-    from api.routes.analysis_router import router as analysis_router
-    app.include_router(analysis_router, prefix='/api/analysis', tags=['pid整定-大模型整定'])
-    logger.info("成功加载大模型整定分析路由")
-except Exception as e:
-    logger.error(f"加载大模型整定分析路由失败: {e}")
-
-# 导入路由
-try:
-    from api.routes.expert_tuning_route import router as normal_setting_route
-    app.include_router(normal_setting_route, prefix='/api/expert_tuning', tags=['pid整定-专家整定'])
-    logger.info("成功加载专家整定分析路由")
-except Exception as e:
-    logger.error(f"加载专家整定分析路由失败: {e}")
-
-
-try:
-    from api.routes.iotda_route import router as iotda_route
-    app.include_router(iotda_route, prefix='/api/iotda', tags=['时序数据查询'])
-    logger.info("成功时序数据查询路由")
-except Exception as e:
-    logger.error(f"加载时序数据查询路由失败: {e}")
-
-try:
-    from api.routes.bff_route import router as bff_route
-    app.include_router(bff_route, prefix='/api/bff', tags=['BFF模型查询'])
-    logger.info("成功加载BFF模型查询路由")
-except Exception as e:
-    logger.error(f"加载BFF模型查询路由失败: {e}")
-# try:
-#     from api.routes.conversion_router import router as conversion_router
-#     app.include_router(conversion_router, prefix='/api/conversion', tags=['PID参数转换'])
-#     logger.info("成功加载PID转换路由")
-# except Exception as e:
-#     logger.error(f"加载PID转换路由失败: {e}")
-
-try:
-    from api.routes.proxy_router import router as proxy_router
-    app.include_router(proxy_router, prefix='/api/proxy', tags=['智能体工作流代理服务'])
-    logger.info("成功加载代理路由")
-except Exception as e:
-    logger.error(f"加载代理路由失败: {e}")
-
-
-@app.get('/health')
-async def health_check():
-    return {'status': 'ok'}
-
-@app.get("/")
-async def root():
-    return {"message": "PID整定 API"}
+# 注意: 路由已在api/main.py中注册,这里不需要重复注册
+# 以下注释掉的代码保留用于参考
 
 # 自定义Swagger UI路由，使用本地静态资源
 @app.get("/docs", include_in_schema=False)

@@ -9,7 +9,7 @@ from datetime import datetime
 import numpy as np
 import matplotlib
 
-from api.routes.tsdb_router import parse_time_to_milliseconds
+from api.routes.time_util import parse_time_to_milliseconds
 from core.algorithm.detector import StabilityDetector
 from core.data.bff_model_client import BFFModelClient
 from core.data.real_tsdb_client import query_raw_data, query_read_interpolated
@@ -1710,7 +1710,7 @@ def query_table_and_points(
         ... )
     """
     try:
-        with BFFModelClient(project_path=project_path, point_path=point_path) as client:
+        with BFFModelClient(device_uri=project_path, point_path=point_path) as client:
             # 查询常用字段
             query_result = client.query_common_fields()
             
@@ -1744,7 +1744,7 @@ def query_table_and_points(
             return {
                 "status": "success" if table_name else "warning",
                 "message": "查询成功" if table_name else "查询成功但未解析到table名称",
-                "project_path": client.project_path,
+                "project_path": client.device_uri,
                 "point_path": client.point_path,
                 "table_name": table_name,
                 "points": points,

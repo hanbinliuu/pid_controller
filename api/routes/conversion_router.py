@@ -158,7 +158,6 @@ async def convert_classical_to_pid(params: ClassicalParameters):
         }
         
         return ConversionResponse(
-            success=True,
             message="经典控制参数转换为PID参数成功",
             data=response_data
         )

@@ -7,7 +7,7 @@ import logging
 from core.agent.tools import  PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.algorithm.ls_pid_autotune_v5 import ModelType
-from core.data.real_tsdb_client import get_default_database
+from core.data.real_tsdb_client import get_default_database, query_raw_data
 from api.routes.time_util import parse_time_to_milliseconds, format_time_to_string
 import pandas as pd
 from core.algorithm.find_high_variability_periods import find_high_variability_periods
@@ -34,6 +34,8 @@ DEFAULT_FIELD_MAPPING = {
              operation_id="常规整定自动筛选时间区间",
              description="自动识别温度曲线中高波动时段，输出适合经典整定分析的时间窗口列表")
 async def get_tuning_windows(
+        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+                                          examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"] ),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
         window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
@@ -78,7 +80,6 @@ async def get_tuning_windows(
         )
         if not history_data:
             return {
-                "status": "success",
                 "table": table,
                 "start_time": start_time,
                 "end_time": end_time,
@@ -150,7 +151,6 @@ async def get_tuning_windows(
                 std_max_window = windows_out[0]
 
         return {
-            "status": "success",
             "table": table,
             "start_time": start_time,
             "end_time": end_time,
@@ -179,6 +179,8 @@ async def get_tuning_windows(
 async def auto_tuning(
         mode: str = Query("auto", description="整定模式：auto(自动筛选) 或 manual(手动指定时间范围)",
                           examples=["auto", "manual"]),
+        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+                                          examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"] ),
         start_time: Union[int, str] = Query(None, required=False,
                                             description="开始时间（manual模式必填），支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False,
@@ -262,7 +264,6 @@ async def auto_tuning(
 
             if not history_data or len(history_data) == 0:
                 return {
-                    "status": "error",
                     "mode": mode,
                     "message": "指定时间范围内无数据"
                 }
@@ -329,7 +330,6 @@ async def auto_tuning(
             if not qualified_windows:
                 logger.warning(f"在 {total_windows_to_check} 个窗口中未找到符合条件的阶跃响应")
                 return {
-                    "status": "warning",
                     "mode": mode,
                     "message": f"未找到符合条件的阶跃响应窗口（已检查{total_windows_to_check}个窗口），建议：1)降低confidence_threshold（当前{confidence_threshold}）2)增加window_size 3)调整时间范围",
                     "total_windows_checked": total_windows_to_check,
@@ -374,7 +374,6 @@ async def auto_tuning(
 
             if not window_data or len(window_data) == 0:
                 return {
-                    "status": "error",
                     "mode": mode,
                     "message": "指定时间范围内无数据"
                 }
@@ -404,7 +403,6 @@ async def auto_tuning(
 
             # 构建返回数据
             response = {
-                "status": "success",
                 "mode": mode,
                 "table": table,
                 "time_range": {
@@ -421,7 +419,6 @@ async def auto_tuning(
 
         except json.JSONDecodeError:
             return {
-                "status": "error",
                 "mode": mode,
                 "message": f"参数整定失败: {optimization_result}"
             }
@@ -438,6 +435,10 @@ async def auto_tuning(
              operation_id="统一生成拟合、闭环、阶跃响应三种曲线",
              description="根据模型参数和PID参数，一次性生成拟合曲线、闭环仿真曲线和阶跃响应曲线")
 async def generate_all_curves(
+        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+                                 examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
+        start_time: Union[int, str] = Query(None, required=False, description="开始时间"),
+        end_time: Union[int, str] = Query(None, required=False, description="结束时间"),
         # 模型参数
         K: float = Query(..., description="系统增益 K", examples=[0.5, 1.0, 2.0]),
         T1: float = Query(..., description="时间常数 T (秒)", examples=[10.0, 30.0, 50.0]),
@@ -450,8 +451,7 @@ async def generate_all_curves(
         Ki: Optional[float] = Query(..., description="PID积分系数", examples=[0.1]),
         Kd: Optional[float] = Query(..., description="PID微分系数", examples=[0]),
         # 数据源参数 - 用于拟合和初始值
-        start_time: Union[int, str] = Query(..., required=False, description="开始时间"),
-        end_time: Union[int, str] = Query(..., required=False, description="结束时间"),
+
         step_value: float = Query(1.0, description="阶跃输入幅值", examples=[1.0, 10.0]),
         duration: float = Query(600.0, description="仿真时长(秒)", examples=[300.0, 600.0]),
         dt: float = Query(1.0, description="采样时间间隔(秒)", examples=[0.1, 1.0]),
@@ -481,7 +481,6 @@ async def generate_all_curves(
         mt_str = model_type.value if isinstance(model_type, ModelType) else str(model_type)
 
         result = {
-            "status": "success",
             "model_type": mt_str,
             "model_parameters": {
                 "K": K,
@@ -495,11 +494,12 @@ async def generate_all_curves(
                 "Kd": float(Kd),
             }
         }
-        # 时间默认值：最近一天
-        # if end_time is None:
-        #     end_time = int(datetime.now().timestamp() * 1000)
-        # if start_time is None:
-        #     start_time = end_time - 24 * 60 * 60 * 1000  # 1天
+        # 时间默认值：最近2小时
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
+
+        if start_time is None:
+            start_time = end_time - 2 * 60 * 60 * 1000  # 默认2小时
 
         # 时间转换与校验
         start_time_ms = parse_time_to_milliseconds(start_time)
@@ -761,6 +761,8 @@ async def generate_all_curves(
             # operation_id="获取含有阶跃响应的时间窗口",
             description="常规整定-基于阶跃响应检测自动识别并筛选高质量参数辨识窗口")
 async def get_step_response_windows(
+        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+                                 examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
         window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
@@ -930,7 +932,6 @@ async def get_step_response_windows(
             optimal_window = max(qualified_windows, key=lambda x: x['confidence'])
 
         return {
-            "status": "success",
             "table": table,
             "start_time": start_time,
             "end_time": end_time,
@@ -965,6 +966,8 @@ async def get_step_response_windows(
             operation_id="设备状态识别",
             description="智能识别时间区间数据状态（稳态、非稳态）")
 async def auto_detect_and_visualize(
+        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+                                 examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式")
 ):
@@ -1006,7 +1009,6 @@ async def auto_detect_and_visualize(
         result = detect_and_visualize(history_data)
 
         return {
-            "status": "success",
             "start_time": start_time,
             "end_time": end_time,
             "result": result,
@@ -1143,7 +1145,6 @@ async def calculate_pid(
         recommendations = _get_model_recommendations(mt_str)
 
         response = {
-            "status": "success",
             "model_type": mt_str,
             "input_parameters": {
                 "K": float(K),
@@ -1181,6 +1182,8 @@ async def calculate_pid(
 #             operation_id="自动筛选时间窗口",
 #             description="智能识别含有阶跃响应的高质量时间窗口，适用于FOPDT参数辨识")
 async def auto_select_time_windows(
+        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+                                 examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
         window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
@@ -1264,7 +1267,6 @@ async def auto_select_time_windows(
             )
 
         return {
-            "status": "success",
             "start_time": start_time,
             "end_time": end_time,
             "params": {
@@ -1371,17 +1373,16 @@ async def get_history_data(
         # 使用字段名作为key，字段路径作为value
         required_fields = {f"field_{i}": field for i, field in enumerate(field_list)}
         # 使用新的查询方法
-        history_data = process_query_tsdb_data_raw(
+        history_data = query_raw_data(
             db=db,
-            table_name=table,
-            required_fields=required_fields,
+            table=table,
+            fields=required_fields,
             start_time=start_time_ms,
             end_time=end_time_ms,
         )
 
         # 格式化响应数据
         response_data = {
-            "status": "success",
             "table": table,
             "start_time": start_time,
             "end_time": end_time,
@@ -1464,7 +1465,6 @@ async def generate_ktl_simulation(
                 )
 
             return {
-                "status": "success",
                 "simulation_type": "pid_closed_loop",
                 "data": result,
                 "plot_saved": plot_path is not None,
@@ -1497,7 +1497,6 @@ async def generate_ktl_simulation(
                 )
 
             return {
-                "status": "success",
                 "simulation_type": "open_loop_step",
                 "data": result,
                 "performance_metrics": metrics,

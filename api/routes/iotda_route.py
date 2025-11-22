@@ -34,7 +34,7 @@ IOTDA_BASE_URL = os.getenv(
             operation_id="时序测点数据查询接口",
             description="查询指定设备在指定时间范围内的测点原始数据，支持多种时间格式")
 async def get_point_history_data_tsdb(
-        table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
+        table_name: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
         fields: Optional[List[str]] = Query(..., description="测点名", example=[
             "ns=100;s=FIC101A_MV.In_Channel0",
             "ns=100;s=FIC101A_PV.In_Channel0",
@@ -43,13 +43,13 @@ async def get_point_history_data_tsdb(
             "ns=100;s=FIC101A_TI.In_Channel0",
             "ns=100;s=FIC101A_TD.In_Channel0"
         ]),
-        start_time: Union[int, str] = Query(...,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
+        start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
-        end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
+        end_time: Union[int, str] = Query(None, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
                                                     "2022-01-02"]),
-        limit: int = Query(..., description="数据条数",
+        limit: int = Query(1500, description="数据条数",
                            examples=[1500])
 ):
     try:
@@ -87,7 +87,7 @@ async def get_point_history_data_tsdb(
         # 使用新的查询方法
         result = query_raw_data(
             db=db,
-            table=table,
+            table=table_name,
             fields=(["time"] + (fields or [])),
             start_time=start_time_ms,
             end_time=end_time_ms,
@@ -97,8 +97,7 @@ async def get_point_history_data_tsdb(
 
         # 格式化响应数据
         response_data = {
-            "status": "success",
-            "table": table,
+            "table": table_name,
             "start_time": start_time,
             "end_time": end_time,
             "totalRecords": len(result.values or []),
@@ -115,11 +114,20 @@ async def get_point_history_data_tsdb(
             status_code=500,
             detail=f"获取历史数据失败: {str(e)}"
         )
-@router.get("/history-data-raw",
+@router.post("/history-data-raw",
             summary="测点数据查询",
             # operation_id="测点数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data_raw(
+        table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
+        fields: Optional[List[str]] = Query(..., description="测点名", example=[
+            "ns=100;s=FIC101A_MV.In_Channel0",
+            "ns=100;s=FIC101A_PV.In_Channel0",
+            "ns=100;s=FIC101A_SV.In_Channel0",
+            "ns=100;s=FIC101A_PB.In_Channel0",
+            "ns=100;s=FIC101A_TI.In_Channel0",
+            "ns=100;s=FIC101A_TD.In_Channel0"
+        ]),
         start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1761357384979, "2025-01-01 12:00:00", "2025-01-01T12:00:00",
                                                       "2025-01-01"]),
@@ -127,7 +135,11 @@ async def get_history_data_raw(
                                           examples=[1761457384979, "2025-01-02 12:00:00", "2025-01-02T12:00:00",
                                                     "2025-01-02"])
 ):
-    table = "PID_FEP_Gateway_Device_001default"
+    # table = "PID_FEP_Gateway_Device_001default"
+    if not fields:
+        required_fields = DEFAULT_FIELD_MAPPING
+    else:
+        required_fields = fields
     required_fields = DEFAULT_FIELD_MAPPING
 
     try:
@@ -137,11 +149,12 @@ async def get_history_data_raw(
                 status_code=400,
                 detail="表名参数不能为空"
             )
+        # 时间默认值：最近2小时
         if end_time is None:
             end_time = int(datetime.now().timestamp() * 1000)
 
         if start_time is None:
-            start_time = end_time - 60 * 60 * 1000  # 默认1小时
+            start_time = end_time - 2 * 60 * 60 * 1000  # 默认2小时
         # 时间格式转换和验证
         try:
             start_time_ms = parse_time_to_milliseconds(start_time)
@@ -173,7 +186,6 @@ async def get_history_data_raw(
         logger.info(history_data)
         # 格式化响应数据
         response_data = {
-            "status": "success",
             "table": table,
             "start_time": start_time,
             "end_time": end_time,
@@ -194,6 +206,8 @@ async def get_history_data_raw(
             operation_id="历史插值数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_zhongkong_interpolated(
+        table: str = Query('PID_FEP_Gateway_Device_001default', description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
+
         start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1761357384979, "2025-01-01 12:00:00", "2025-01-01T12:00:00",
                                                       "2025-01-01"]),
@@ -208,7 +222,9 @@ async def get_history_zhongkong_interpolated(
 
     if start_time is None:
         start_time = end_time - 60 * 60 * 1000  # 默认1小时
-    table = "PID_FEP_Gateway_Device_001default"
+    table_name="PID_FEP_Gateway_Device_001default"
+    if table:
+        table_name = table
     required_fields = DEFAULT_FIELD_MAPPING
     try:
         # 参数验证
@@ -240,7 +256,7 @@ async def get_history_zhongkong_interpolated(
         # 使用新的查询方法
         history_data = process_query_tsdb_data_interpolated(
             db=db,
-            table_name=table,
+            table_name=table_name,
             required_fields=required_fields,
             start_time=start_time_ms,
             end_time=end_time_ms,
@@ -249,7 +265,6 @@ async def get_history_zhongkong_interpolated(
         # logger.info(history_data)
         # 格式化响应数据
         response_data = {
-            "status": "success",
             "table": table,
             "start_time": start_time,
             "end_time": end_time,
@@ -320,7 +335,6 @@ async def send_device_command_batch(
         if response.status_code == 200:
             result = response.json()
             return {
-                "status": "success",
                 "message": "指令批量下发成功",
                 "data": result
             }

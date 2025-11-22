@@ -124,7 +124,6 @@ async def run_workflow(
             result = response.json()
             logger.info("工作流执行成功")
             return {
-                "status": "success",
                 "message": "工作流执行成功",
                 "data": result,
                 "execution_time": datetime.now().isoformat()
@@ -166,7 +165,6 @@ async def get_workflow_config():
     返回当前工作流代理的配置参数，用于调试和监控。
     """
     return {
-        "status": "success",
         "config": {
             "base_url": ProxyConfig.WORKFLOW_BASE_URL,
             "timeout": ProxyConfig.WORKFLOW_TIMEOUT,
@@ -220,7 +218,6 @@ async def proxy_health_check():
         health_info["workflow_service"] = "unreachable"
     
     return {
-        "status": "ok",
         "service": "proxy-api",
         "health": health_info
     }
