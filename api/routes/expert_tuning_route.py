@@ -7,6 +7,7 @@ import logging
 from core.agent.tools import  PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.algorithm.ls_pid_autotune_v5 import ModelType
+from core.data.bff_model_client import BFFModelClient
 from core.data.real_tsdb_client import get_default_database, query_raw_data
 from api.routes.time_util import parse_time_to_milliseconds, format_time_to_string
 import pandas as pd
@@ -34,7 +35,7 @@ DEFAULT_FIELD_MAPPING = {
              operation_id="常规整定自动筛选时间区间",
              description="自动识别温度曲线中高波动时段，输出适合经典整定分析的时间窗口列表")
 async def get_tuning_windows(
-        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
                                           examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"] ),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
@@ -179,7 +180,7 @@ async def get_tuning_windows(
 async def auto_tuning(
         mode: str = Query("auto", description="整定模式：auto(自动筛选) 或 manual(手动指定时间范围)",
                           examples=["auto", "manual"]),
-        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
                                           examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"] ),
         start_time: Union[int, str] = Query(None, required=False,
                                             description="开始时间（manual模式必填），支持毫秒时间戳或字符串格式"),
@@ -435,7 +436,7 @@ async def auto_tuning(
              operation_id="统一生成拟合、闭环、阶跃响应三种曲线",
              description="根据模型参数和PID参数，一次性生成拟合曲线、闭环仿真曲线和阶跃响应曲线")
 async def generate_all_curves(
-        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
                                  examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间"),
@@ -508,8 +509,10 @@ async def generate_all_curves(
             raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
         # 从数据库查询
         db = get_default_database()
-        table = "PID_FEP_Gateway_Device_001default"
-        required_fields = DEFAULT_FIELD_MAPPING
+        # table = "PID_FEP_Gateway_Device_001default"
+        # required_fields = DEFAULT_FIELD_MAPPING
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
+
         data_list = process_query_tsdb_data_interpolated(
             db=db,
             table_name=table,
@@ -761,7 +764,7 @@ async def generate_all_curves(
             # operation_id="获取含有阶跃响应的时间窗口",
             description="常规整定-基于阶跃响应检测自动识别并筛选高质量参数辨识窗口")
 async def get_step_response_windows(
-        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
                                  examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
@@ -811,8 +814,9 @@ async def get_step_response_windows(
             raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
 
         # 固定设备与字段
-        table = "PID_FEP_Gateway_Device_001default"
-        required_fields = DEFAULT_FIELD_MAPPING
+        # table = "PID_FEP_Gateway_Device_001default"
+        # required_fields = DEFAULT_FIELD_MAPPING
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
 
         # 查询历史数据
         db = get_default_database()
@@ -966,7 +970,7 @@ async def get_step_response_windows(
             operation_id="设备状态识别",
             description="智能识别时间区间数据状态（稳态、非稳态）")
 async def auto_detect_and_visualize(
-        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
                                  examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式")
@@ -985,8 +989,9 @@ async def auto_detect_and_visualize(
             raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
 
         # 固定设备与字段
-        table = "PID_FEP_Gateway_Device_001default"
-        required_fields = DEFAULT_FIELD_MAPPING
+        # table = "PID_FEP_Gateway_Device_001default"
+        # required_fields = DEFAULT_FIELD_MAPPING
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
 
         # 查询历史数据
         db = get_default_database()
@@ -1182,7 +1187,7 @@ async def calculate_pid(
 #             operation_id="自动筛选时间窗口",
 #             description="智能识别含有阶跃响应的高质量时间窗口，适用于FOPDT参数辨识")
 async def auto_select_time_windows(
-        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
                                  examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
@@ -1226,8 +1231,9 @@ async def auto_select_time_windows(
             raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
 
         # 固定设备与字段
-        table = "PID_FEP_Gateway_Device_001default"
-        required_fields = DEFAULT_FIELD_MAPPING
+        # table = "PID_FEP_Gateway_Device_001default"
+        # required_fields = DEFAULT_FIELD_MAPPING
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
 
         # 查询历史数据
         db = get_default_database()
@@ -1296,15 +1302,8 @@ async def auto_select_time_windows(
 #             operation_id="IOTDA历史数据查询",
 #             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data(
-        table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-        fields: Optional[List[str]] = Query(..., description="测点名", example=[
-            "ns=100;s=FIC101A_MV.In_Channel0",  # 控制输出值
-            "ns=100;s=FIC101A_PV.In_Channel0",  # 实时值
-            "ns=100;s=FIC101A_SV.In_Channel0",  # 设定值
-            "ns=100;s=FIC101A_PB.In_Channel0",
-            "ns=100;s=FIC101A_TI.In_Channel0",
-            "ns=100;s=FIC101A_TD.In_Channel0"
-        ]),
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+                                          examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"] ),
         start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
@@ -1338,6 +1337,8 @@ async def get_history_data(
     - max_duty: 最大占空比
     """
     try:
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
+
         # 参数验证
         if not table or not table.strip():
             raise HTTPException(
@@ -1368,15 +1369,16 @@ async def get_history_data(
 
         # 使用环境变量中的数据库名
         db = get_default_database()
-        # 将字段列表转换为字段映射map
-        field_list = (list(fields) + ["time"]) if fields is not None else ["time"]
-        # 使用字段名作为key，字段路径作为value
-        required_fields = {f"field_{i}": field for i, field in enumerate(field_list)}
+        # # 将字段列表转换为字段映射map
+        # field_list = (list(fields) + ["time"]) if fields is not None else ["time"]
+        # # 使用字段名作为key，字段路径作为value
+        # required_fields = {f"field_{i}": field for i, field in enumerate(field_list)}
+
         # 使用新的查询方法
         history_data = query_raw_data(
             db=db,
             table=table,
-            fields=required_fields,
+            fields=list(required_fields.values()),
             start_time=start_time_ms,
             end_time=end_time_ms,
         )

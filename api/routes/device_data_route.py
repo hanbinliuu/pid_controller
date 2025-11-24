@@ -9,6 +9,7 @@ from pydantic import Field,BaseModel
 
 from api.routes.time_util import parse_time_to_milliseconds
 from core.agent.tools import process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
+from core.data.bff_model_client import BFFModelClient
 from core.data.real_tsdb_client import query_raw_data, get_default_database
 
 router = APIRouter()
@@ -115,40 +116,29 @@ async def get_point_history_data_tsdb(
             detail=f"获取历史数据失败: {str(e)}"
         )
 @router.post("/history-data-raw",
-            summary="测点数据查询",
+            summary="回路测点数据查询",
             # operation_id="测点数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data_raw(
-        table: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-        fields: Optional[List[str]] = Query(..., description="测点名", example=[
-            "ns=100;s=FIC101A_MV.In_Channel0",
-            "ns=100;s=FIC101A_PV.In_Channel0",
-            "ns=100;s=FIC101A_SV.In_Channel0",
-            "ns=100;s=FIC101A_PB.In_Channel0",
-            "ns=100;s=FIC101A_TI.In_Channel0",
-            "ns=100;s=FIC101A_TD.In_Channel0"
-        ]),
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+                              examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1761357384979, "2025-01-01 12:00:00", "2025-01-01T12:00:00",
                                                       "2025-01-01"]),
         end_time: Union[int, str] = Query(None,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1761457384979, "2025-01-02 12:00:00", "2025-01-02T12:00:00",
                                                     "2025-01-02"])
+
 ):
+
     # table = "PID_FEP_Gateway_Device_001default"
-    if not fields:
-        required_fields = DEFAULT_FIELD_MAPPING
-    else:
-        required_fields = fields
-    required_fields = DEFAULT_FIELD_MAPPING
+    # if not fields:
+    #     required_fields = DEFAULT_FIELD_MAPPING
+    # else:
+    #     required_fields = fields
+    # required_fields = DEFAULT_FIELD_MAPPING
 
     try:
-        # 参数验证
-        if not table or not table.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="表名参数不能为空"
-            )
         # 时间默认值：最近2小时
         if end_time is None:
             end_time = int(datetime.now().timestamp() * 1000)
@@ -174,6 +164,7 @@ async def get_history_data_raw(
         # 使用环境变量中的数据库名
         db = get_default_database()
         # 将字段列表转换为字段映射map
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
 
         # 使用新的查询方法
         history_data = process_query_tsdb_data_raw(

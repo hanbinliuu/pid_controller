@@ -19,7 +19,7 @@ from core.utils.pid_converter import process_lists_optimized
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
 
-from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, ModelType
+from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, ModelType, Config
 from core.algorithm.ktl_simulator import KTLSimulator
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -1256,7 +1256,7 @@ def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_t
 
     if output_path is None:
         base_name =datetime.now().strftime("%Y%m%d-%H%M%S")
-        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+        output_dir = os.path.join('data/plots')
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"stability_detection_{base_name}.png")
 
@@ -1264,11 +1264,38 @@ def detect_and_visualize(data_list: List[Dict], output_path=None, tol=0.5, std_t
     plt.close(fig)
     print(f" 图片已保存: {output_path}")
 
+    # 将所有numpy类型转换为Python原生类型以便JSON序列化
+    serializable_segments = []
+    for start_idx, end_idx, start_ts, end_ts, setpoint in segments_with_timestamp:
+        serializable_segments.append((
+            int(start_idx),
+            int(end_idx),
+            float(start_ts),
+            float(end_ts),
+            float(setpoint)
+        ))
+    
+    serializable_starts = []
+    for start_idx, start_ts, setpoint in starts_with_timestamp:
+        serializable_starts.append((
+            int(start_idx),
+            float(start_ts),
+            float(setpoint)
+        ))
+    
+    serializable_ends = []
+    for end_idx, end_ts, setpoint in disturbance_ends:
+        serializable_ends.append((
+            int(end_idx),
+            float(end_ts),
+            float(setpoint)
+        ))
+    
     return {
-        'non_steady_segments': segments_with_timestamp,
+        'non_steady_segments': serializable_segments,
         # (start_idx, end_idx, start_timestamp, end_timestamp, setpoint)
-        'disturbance_starts': starts_with_timestamp,  # (start_idx, start_timestamp, setpoint)
-        'disturbance_ends': disturbance_ends  # (end_idx, end_timestamp, setpoint)
+        'disturbance_starts': serializable_starts,  # (start_idx, start_timestamp, setpoint)
+        'disturbance_ends': serializable_ends  # (end_idx, end_timestamp, setpoint)
     }
 
 

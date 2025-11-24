@@ -173,7 +173,7 @@ class Config:
 
     # 仿真与存储参数
     SIMULATION_DURATION = 10000  # 仿真总时长(s)
-    DATA_SAVE_DIR = "../../data_simulation/data_generation"  # 数据保存目录
+    DATA_SAVE_DIR = "../../data/data_generation"  # 数据保存目录
     PLOT_REFRESH_INTERVAL = 20  # 绘图刷新间隔(步)
 
     # 模式配置

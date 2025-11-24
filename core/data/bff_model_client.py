@@ -9,6 +9,8 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 import logging
 
+from fastapi import HTTPException
+
 from core.config import Config
 
 logger = logging.getLogger(__name__)
@@ -508,7 +510,64 @@ class BFFModelClient:
             "points": {}
         }
 
-    def _extract_from_dict(self, path_dict: Dict[str, str]) -> Dict[str, Any]:
+    @staticmethod
+    def query_table_and_points_by_loop_uri(
+            loop_uri: str,
+    ) -> tuple[str, Dict[str, str]]:
+        """
+        根据loop_uri查询表名和测点列表
+
+        Args:
+            loop_uri: 回路URI，如 '/pid_zd/0b521c82a96d4107a564e4c2678bdeca'
+            point_path: 测点路径，默认为 'loop_state_parameters'
+
+        Returns:
+            tuple: (table_name, points_mapping)
+
+        Raises:
+            HTTPException: 查询失败时抛出异常
+        """
+        try:
+            logger.info(f"根据loop_uri查询测点: {loop_uri}")
+
+            with BFFModelClient(device_uri=loop_uri) as client:
+                # 查询常用字段
+                query_result = client.query_common_fields()
+
+                # 提取table名称和测点列表
+                table_and_points = BFFModelClient.extract_table_and_points_from_paths(query_result)
+
+                table_name = table_and_points.get('table_name')
+                points = table_and_points.get('points', {})
+
+                if not table_name:
+                    logger.warning(f"未能从回路URI解析出回路: {loop_uri}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"未能从回路URI解析出回路: {loop_uri}"
+                    )
+
+                if not points:
+                    logger.warning(f"未解析出测点列表: {loop_uri}")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"未能从回路URI解析出测点列表: {loop_uri}"
+                    )
+
+                logger.info(f"查询成功 - table: {table_name}, points: {len(points)}个")
+                return table_name, points
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"查询设备和测点列表失败: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"查询设备和测点列表失败: {str(e)}"
+            )
+
+    @staticmethod
+    def _extract_from_dict(path_dict: Dict[str, str]) -> Dict[str, Any]:
         """
         从字典格式的路径映射中提取table名称和测点
         
@@ -529,7 +588,7 @@ class BFFModelClient:
         points = {}
 
         # 字段名映射：大写到小写
-        field_mapping = self.DEFAULT_PID_POINT_MAP
+        field_mapping = BFFModelClient.DEFAULT_PID_POINT_MAP
 
         for field_upper, path in path_dict.items():
             if not path:
@@ -574,8 +633,8 @@ class BFFModelClient:
             "points": points
         }
 
+    @staticmethod
     def _extract_from_lists(
-            self,
             query_names: List[str],
             result_paths: List[str]
     ) -> Dict[str, Any]:
@@ -607,7 +666,7 @@ class BFFModelClient:
         points = {}
 
         # 字段名模式映射（用于从query_path中识别字段类型）
-        field_map = self.DEFAULT_PID_POINT_MAP
+        field_map = BFFModelClient.DEFAULT_PID_POINT_MAP
         field_patterns = list(field_map.values())
         field_keys = list(field_map.keys())
         # 根据索引位置匹配query_paths和result_paths

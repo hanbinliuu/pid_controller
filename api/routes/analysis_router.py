@@ -8,6 +8,7 @@ from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool, detec
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.algorithm.ls_pid_autotune_v5 import ModelType
 from core.data.real_tsdb_client import get_default_database
+from core.data.bff_model_client import BFFModelClient
 from api.routes.time_util import parse_time_to_milliseconds, format_time_to_string
 
 router = APIRouter()
@@ -22,6 +23,9 @@ DEFAULT_FIELD_MAPPING = {
     "ti": "ns=100;s=FIC101A_TI.In_Channel0",
     "td": "ns=100;s=FIC101A_TD.In_Channel0"
 }
+
+
+
 
 
 """
@@ -51,9 +55,9 @@ DEFAULT_FIELD_MAPPING = {
 """
 
 @router.get("/temperature-analysis",
-            summary="大模型整定-温度曲线分析",
+            summary="大模型整定-曲线分析",
             # operation_id="温度曲线分析",
-            description="大模型整定-分析温度曲线的控制性能，包括上升时间、超调量、稳态误差等指标")
+            description="大模型整定-分析曲线的控制性能，包括上升时间、超调量、稳态误差等指标")
 async def analyze_temperature(
         start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
@@ -61,36 +65,36 @@ async def analyze_temperature(
         end_time: Union[int, str] = Query(None,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
                                                     "2022-01-02"]),
-        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
                                           examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"] ),
 ):
     """
     **温度曲线智能分析 - TemperatureAnalysisTool**
-    
+
     使用先进的控制理论算法，对PID控制系统的温度响应特性进行全面、精确的定量分析。
-    
+
     **分析指标：**
-    
+
     **1. 动态响应特性：**
     - 上升时间(Rise Time): 达到90%目标值的时间
     - 调节时间(Settling Time): 稳定在误差带内的时间
     - 峰值时间(Peak Time): 首次达到最大值的时间
-    
+
     **2. 稳态性能评估：**
     - 超调量(Overshoot): 超出目标值的百分比
     - 稳态误差(Steady State Error): 最终稳态值与目标值的偏差
     - 温度波动: 稳态状态下的温度波动程度
-    
+
     **3. 控制质量评估：**
     - 控制精度: 长期稳定性和精度评估
     - 系统鲁棒性: 对干扰和参数变化的适应性
     - 能耗效率: 控制动作的经济性分析
-    
+
     **输出格式：**
     - 定量化的性能指标数值
     - 直观的性能评级和建议
     - 问题诊断和改进方向
-    
+
     **应用价值：**
     - PID参数优化的科学依据
     - 控制系统性能监控和评估
@@ -105,8 +109,6 @@ async def analyze_temperature(
     if start_time is None:
         start_time = end_time - 2 * 60 * 60 * 1000  # 默认2小时
 
-    table = "PID_FEP_Gateway_Device_001default"
-    required_fields = DEFAULT_FIELD_MAPPING
     try:
         start_time_ms = parse_time_to_milliseconds(start_time)
         end_time_ms = parse_time_to_milliseconds(end_time)
@@ -115,8 +117,11 @@ async def analyze_temperature(
             status_code=400,
             detail=f"时间格式错误: {str(e)}"
         )
+    
     try:
-        # 使用新的查询方法获取数据
+        # 根据loop_uri查询表名和测点列表
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
+        
         # 使用环境变量中的数据库名
         db = get_default_database()
 
@@ -129,10 +134,12 @@ async def analyze_temperature(
             end_time=end_time_ms
         )
         if not history_data:
-            return {
+            raise HTTPException(
+                status_code=500,
+                detail={
                 "table": table,
                 "message": "指定时间范围内无数据"
-            }
+            })
 
         # 创建温度分析工具实例
         analysis_tool = TemperatureAnalysisTool()
@@ -151,15 +158,14 @@ async def analyze_temperature(
             }
         except json.JSONDecodeError:
             # 如果返回的不是JSON格式（可能是错误信息）
-            return {
-                "table": table,
-                "message": analysis_result
-            }
+            raise HTTPException(
+                status_code=500,
+                detail= 'json解析异常')
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"温度分析失败: {str(e)}"
+            detail=f"曲线分析失败: {str(e)}"
         )
 
 
@@ -174,7 +180,7 @@ async def optimize_pid(
         end_time: Union[int, str] = Query(None, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
                                                     "2022-01-02"]),
-        circuit_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
                                           examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"] ),
         is_filter: bool = Query(True, description="是否过滤数据",
                                 examples=[True]),
@@ -185,22 +191,22 @@ async def optimize_pid(
 ):
     """
     **PID参数智能优化 - PIDOptimizationTool**
-    
+
     运用先进的控制理论和机器学习算法，对PID控制器参数进行智能化优化分析。
-    
+
     **优化策略：**
-    
+
     **1. 数据驱动分析：**
     - 基于历史数据的性能评估
     - 控制效果量化分析
     - 系统特性识别和建模
-    
+
     **2. 参数优化算法：**
     - Ziegler-Nichols经典调试法
     - Cohen-Coon改进算法
     - 现代启发式优化算法
     - 机器学习自适应优化
-    
+
     **3. 多目标优化：**
     - 响应速度与稳定性平衡
     - 控制精度与能耗优化
@@ -213,8 +219,6 @@ async def optimize_pid(
 
     if start_time is None:
         start_time = end_time - 2 * 60 * 60 * 1000  # 默认2小时
-    table = "PID_FEP_Gateway_Device_001default"
-    required_fields = DEFAULT_FIELD_MAPPING
 
     try:
         start_time_ms = parse_time_to_milliseconds(start_time)
@@ -224,8 +228,11 @@ async def optimize_pid(
             status_code=400,
             detail=f"时间格式错误: {str(e)}"
         )
+    
     try:
-        # 使用新的查询方法获取数据
+        # 根据loop_uri查询表名和测点列表
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
+        
         # 使用环境变量中的数据库名
         db = get_default_database()
 
@@ -305,7 +312,7 @@ async def optimize_pid(
 #             operation_id="IOTDA历史数据查询",
 #             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data(
-        circuit_uri: str = Query(..., required=False, description="回路URI",
+        loop_uri: str = Query(..., required=False, description="回路URI",
                                  examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"]),
         start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",

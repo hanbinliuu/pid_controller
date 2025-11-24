@@ -8,11 +8,11 @@ import os
 import logging
 import uvicorn
 
-from starlette.middleware.gzip import GZipMiddleware
-
 # 添加项目根目录到Python路径
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
+# 从api.main导入已配置好的app(包含全局中间件)
+from api.main import app
 
 # 配置日志
 def setup_logging():
@@ -53,39 +53,16 @@ def setup_logging():
 # 设置日志
 logger = setup_logging()
 
-# 从api.main导入已配置好的app(包含全局中间件)
-from api.main import app
+
 
 # 添加GZip压缩中间件
 # app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-from fastapi.openapi.docs import (
-    get_redoc_html,
-    get_swagger_ui_html,
-)
 
 # 注意: 路由已在api/main.py中注册,这里不需要重复注册
 # 以下注释掉的代码保留用于参考
 
-# 自定义Swagger UI路由，使用本地静态资源
-@app.get("/docs", include_in_schema=False)
-async def custom_swagger_ui_html():
-    return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
-        title=app.title + " - Swagger UI",
-        oauth2_redirect_url=app.swagger_ui_oauth2_redirect_url,
-        swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
-        swagger_css_url="/static/swagger-ui/swagger-ui.css"
-    )
 
-@app.get("/redoc", include_in_schema=False)
-async def redoc_html():
-    return get_redoc_html(
-        openapi_url=app.openapi_url,
-        title=app.title + " - ReDoc",
-        # redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@latest/bundles/redoc.standalone.js",
-        redoc_js_url="/static/swagger-ui/swagger-ui.css"
-    )
 
 if __name__ == "__main__":
     # 获取日志级别并转换为uvicorn格式
@@ -96,7 +73,7 @@ if __name__ == "__main__":
     logger.info(f"Uvicorn日志级别: {log_level}")
     
     uvicorn.run(
-        "run_server:app", 
+        "run_server:app",
         host="0.0.0.0", 
         port=8001, 
         reload=True,

@@ -163,7 +163,7 @@ class RealTSDBDataSource(TSDBDataSource):
         tags: Optional[Dict[str, str]] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
-        limit: int = 1500,
+        limit: int = 3000,
         window: int= 1,
         continuation_point: Optional[str] = None
     ) -> DataPoint:
@@ -196,7 +196,7 @@ class RealTSDBDataSource(TSDBDataSource):
             all_tags = None  # 存储标签信息
             current_continuation_point = continuation_point
             page_count = 0
-            max_pages = 50  # 最大分页数
+            max_pages = 100  # 最大分页数
             
             logger.info(f"开始循环分页查询TSDB数据，表: {table}, 时间范围: {format_time_to_string(start_time)} - {format_time_to_string(end_time)}")
 
@@ -549,7 +549,7 @@ def query_read_interpolated(
         tags: Optional[Dict[str, str]] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
-        limit: int = 1500,
+        limit: int = 3000,
         window: int = 1,
         continuation_point: Optional[str] = None
 ) -> DataPoint:
