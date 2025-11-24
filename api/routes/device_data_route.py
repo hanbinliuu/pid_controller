@@ -30,9 +30,9 @@ IOTDA_BASE_URL = os.getenv(
     "http://data-engine-iotda-infra-system.sit-cloud.ieccloud.hollicube.com"
 )
 
-@router.get("/point_history_data_tsdb",
-            summary="时序测点数据查询接口",
-            operation_id="时序测点数据查询接口",
+@router.get("/point_history_data_iotda",
+            summary="iotda-测点数据查询接口",
+            # operation_id="时序测点数据查询接口",
             description="查询指定设备在指定时间范围内的测点原始数据，支持多种时间格式")
 async def get_point_history_data_tsdb(
         table_name: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
@@ -115,7 +115,7 @@ async def get_point_history_data_tsdb(
             status_code=500,
             detail=f"获取历史数据失败: {str(e)}"
         )
-@router.post("/history-data-raw",
+@router.get("/history-data-raw",
             summary="回路测点数据查询",
             # operation_id="测点数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
@@ -194,11 +194,12 @@ async def get_history_data_raw(
 
 @router.get("/history-data-interpolated",
             summary="历史插值数据查询",
-            operation_id="历史插值数据查询",
+            # operation_id="历史插值数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_zhongkong_interpolated(
-        table: str = Query('PID_FEP_Gateway_Device_001default', description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-
+        # table: str = Query('PID_FEP_Gateway_Device_001default', description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+                              examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1761357384979, "2025-01-01 12:00:00", "2025-01-01T12:00:00",
                                                       "2025-01-01"]),
@@ -213,10 +214,11 @@ async def get_history_zhongkong_interpolated(
 
     if start_time is None:
         start_time = end_time - 60 * 60 * 1000  # 默认1小时
-    table_name="PID_FEP_Gateway_Device_001default"
-    if table:
-        table_name = table
-    required_fields = DEFAULT_FIELD_MAPPING
+    # table_name="PID_FEP_Gateway_Device_001default"
+    # if table:
+    #     table_name = table
+    # required_fields = DEFAULT_FIELD_MAPPING
+    table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
     try:
         # 参数验证
         if not table or not table.strip():
@@ -247,7 +249,7 @@ async def get_history_zhongkong_interpolated(
         # 使用新的查询方法
         history_data = process_query_tsdb_data_interpolated(
             db=db,
-            table_name=table_name,
+            table_name=table,
             required_fields=required_fields,
             start_time=start_time_ms,
             end_time=end_time_ms,
@@ -273,7 +275,7 @@ async def get_history_zhongkong_interpolated(
 
 class DeviceCommand(BaseModel):
     """IOTDA设备指令数据模型"""
-    timeout: int = Field(..., description="单条指令超时时间（秒）", example=20)
+    timeout: int = Field(..., description="单条指令超时时间（ms）", example=20000)
     object_device_id: str = Field(..., description="设备ID", example="PID_FEP_Gateway_Device_001")
     service_id: str = Field(..., description="服务ID", example="default")
     command_name: str = Field(..., description="命令名称", example="set_property")

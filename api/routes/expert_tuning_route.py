@@ -65,9 +65,9 @@ async def get_tuning_windows(
             raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
 
         # 固定设备与字段（与现有分析接口保持一致）
-        table = "PID_FEP_Gateway_Device_001default"
-        required_fields = DEFAULT_FIELD_MAPPING
-
+        # table = "PID_FEP_Gateway_Device_001default"
+        # required_fields = DEFAULT_FIELD_MAPPING
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
         # 查询历史插值数据（数据访问层负责分页与解析）
         db = get_default_database()
         history_data = process_query_tsdb_data_interpolated(
@@ -237,8 +237,9 @@ async def auto_tuning(
             raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
 
         # 固定设备与字段配置
-        table = "PID_FEP_Gateway_Device_001default"
-        required_fields = DEFAULT_FIELD_MAPPING
+        # table = "PID_FEP_Gateway_Device_001default"
+        # required_fields = DEFAULT_FIELD_MAPPING
+        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
 
         db = get_default_database()
 
