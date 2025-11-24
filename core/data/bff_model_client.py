@@ -153,7 +153,9 @@ class BFFModelClient:
     # 默认配置（从环境变量读取）
     DEFAULT_BASE_URL = Config.BFF_MODEL_BASE_URL
     DEFAULT_QUERY_PATH_VALUE_PATH = "/bff/aggquery/v2/model/queryValueByBrowsePath"
+    DEFAULT_QUERY_CURRENT_RAW_VALUE_PATH = "/bff/aggquery/v2/query/v2/queryCurrentRawValueByBrowsePath"
     DEFAULT_LIST_INSTANCE_PATH = "/bff/v2/instance/listInstanceUnderInstanceTree"
+    DEFAULT_GET_NEXT_LEVEL_SUBMODEL_PATH = "/bff/v2/model/getNextLevelSubModel"
     DEFAULT_TIMEOUT = Config.BFF_MODEL_TIMEOUT
     DEFAULT_DEVICE_URI = Config.BFF_MODEL_PROJECT_PATH
     DEFAULT_POINT_PATH = Config.BFF_MODEL_POINT_PATH
@@ -863,6 +865,229 @@ class BFFModelClient:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """上下文管理器出口"""
         self.close()
+
+    def get_next_level_submodel(
+            self,
+            identifier: str
+    ) -> Dict[str, Any]:
+        """
+        获取下一级子模型
+
+        Args:
+            identifier: 模型标识符，如 '/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243'
+
+        Returns:
+            简化后的子模型列表，包含uri, browseName, displayName, extendedAttr, parentUri
+
+        Example:
+            >>> client = BFFModelClient()
+            >>> result = client.get_next_level_submodel(
+            ...     identifier='/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243'
+            ... )
+            >>> print(result)
+            {
+                'submodels': [
+                    {
+                        'uri': '/pid_zd/49ccb5882d9b4c8d91885a55e4cbcda1',
+                        'browseName': 'flow_loop_model',
+                        'displayName': '流量单回路模型',
+                        'extendedAttr': {'loop_type': '流量'},
+                        'parentUri': '/pid_zd/d4d2d8c4906846818c91e4fe06a290a2'
+                    }
+                ],
+                'total': 1
+            }
+        """
+        url = f"{self.base_url}{self.DEFAULT_GET_NEXT_LEVEL_SUBMODEL_PATH}"
+
+        # 构建请求参数
+        params = {
+            'identifier': identifier
+        }
+
+        try:
+            logger.info(f"查询下一级子模型，标识符: {identifier}")
+            logger.debug(f"请求URL: {url}")
+            logger.debug(f"请求参数: {params}")
+
+            response = self.session.get(
+                url,
+                params=params,
+                timeout=self.timeout
+            )
+
+            response.raise_for_status()
+            result = response.json()
+
+            # 解析响应
+            if result.get('code') != 200:
+                logger.error(f"BFF返回错误: {result.get('message')}")
+                return {
+                    'submodels': [],
+                    'error': result.get('message'),
+                    'total': 0
+                }
+
+            # 提取结果数据
+            result_data = result.get('result', [])
+            
+            # 简化数据，只提取指定字段：uri、displayName、extendedAttr、browseName、parentUri
+            submodels = []
+            for item in result_data:
+                simplified_item = {
+                    'uri': item.get('uri'),
+                    'browseName': item.get('browseName'),
+                    'displayName': item.get('displayName'),
+                    'extendedAttr': item.get('extendedAttr', {}),
+                    'parentUri': item.get('parentUri')
+                }
+                submodels.append(simplified_item)
+
+            logger.info(f"成功查询到 {len(submodels)} 个子模型")
+
+            return {
+                'submodels': submodels,
+                'total': len(submodels)
+            }
+
+        except requests.exceptions.Timeout:
+            logger.error(f"请求超时（{self.timeout}秒）")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"BFF子模型查询失败: {str(e)}")
+            raise
+
+    def query_current_raw_values(
+            self,
+            point_names: List[str],
+            loop_uri: Optional[str] = None,
+            point_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        查询测点当前原始值（最新值）
+        """
+        loop_uri = loop_uri if loop_uri is not None else self.device_uri
+        point_path = point_path if point_path is not None else self.point_path
+        if point_path and not point_path.startswith('/'):
+            point_path = f"/{point_path}"
+        browse_paths = [
+            f"{loop_uri}{point_path}/{point_name}"
+            for point_name in point_names
+        ]
+        url = f"{self.base_url}{self.DEFAULT_QUERY_CURRENT_RAW_VALUE_PATH}"
+
+        try:
+            logger.info(f"查询测点当前原始值，路径数量: {len(browse_paths)}")
+            logger.debug(f"请求URL: {url}")
+            logger.debug(f"浏览路径: {browse_paths[:3]}..." if len(browse_paths) > 3 else f"浏览路径: {browse_paths}")
+
+            response = self.session.post(
+                url,
+                json=browse_paths,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # 兼容非字典响应或包含None的项
+            result_data: List[Any] = []
+            if isinstance(result, dict):
+                if result.get('code') != '0x00000000':
+                    logger.error(f"BFF返回错误: {result.get('msg')}")
+                    return {}
+                result_data = result.get('result', []) or []
+            elif isinstance(result, list):
+                result_data = result
+            else:
+                logger.warning(f"未知响应类型: {type(result)}")
+                result_data = []
+
+            values_map = {}
+            for i, point_name in enumerate(point_names):
+                item = result_data[i] if i < len(result_data) else None
+                value = item.get('v') if isinstance(item, dict) else None
+                if i >= len(result_data):
+                    logger.warning(f"测点索引 {i} 超出返回结果范围")
+                values_map[point_name] = value
+
+            logger.info(f"成功查询到 {len(values_map)} 个测点值")
+            return values_map
+
+        except requests.exceptions.Timeout:
+            logger.error(f"请求超时（{self.timeout}秒）")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"BFF测点值查询失败: {str(e)}")
+            raise
+
+    def query_multi_loop_current_values(
+            self,
+            loop_configs: List[Dict[str, Any]],
+            point_path: Optional[str] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        一次查询多个回路的测点实时值
+        """
+        point_path = point_path if point_path is not None else self.point_path
+        if point_path and not point_path.startswith('/'):
+            point_path = f"/{point_path}"
+        all_browse_paths = []
+        path_mapping = []
+        for config in loop_configs:
+            loop_uri = config.get('loop_uri')
+            point_names = config.get('point_names', [])
+            for point_name in point_names:
+                browse_path = f"{loop_uri}{point_path}/{point_name}"
+                all_browse_paths.append(browse_path)
+                path_mapping.append({'loop_uri': loop_uri, 'point_name': point_name})
+
+        url = f"{self.base_url}{self.DEFAULT_QUERY_CURRENT_RAW_VALUE_PATH}"
+
+        try:
+            logger.info(f"查询多回路测点当前值，回路数: {len(loop_configs)}, 总测点数: {len(all_browse_paths)}")
+            logger.debug(f"请求URL: {url}")
+
+            response = self.session.post(
+                url,
+                json=all_browse_paths,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            result_data: List[Any] = []
+            if isinstance(result, dict):
+                if result.get('code') != '0x00000000':
+                    logger.error(f"BFF返回错误: {result.get('msg')}")
+                    return {}
+                result_data = result.get('result', []) or []
+            elif isinstance(result, list):
+                result_data = result
+            else:
+                logger.warning(f"未知响应类型: {type(result)}")
+                result_data = []
+
+            loop_values: Dict[str, Dict[str, Any]] = {}
+            for i, mapping in enumerate(path_mapping):
+                loop_uri = mapping['loop_uri']
+                point_name = mapping['point_name']
+                if loop_uri not in loop_values:
+                    loop_values[loop_uri] = {}
+                item = result_data[i] if i < len(result_data) else None
+                value = item.get('v') if isinstance(item, dict) else None
+                if i >= len(result_data):
+                    logger.warning(f"测点索引 {i} 超出返回结果范围")
+                loop_values[loop_uri][point_name] = value
+
+            logger.info(f"成功查询到 {len(loop_values)} 个回路的测点值")
+            return loop_values
+
+        except requests.exceptions.Timeout:
+            logger.error(f"请求超时（{self.timeout}秒）")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"BFF多回路测点值查询失败: {str(e)}")
+            raise
 
     @staticmethod
     def convert_bff_path_to_iot_field(bff_path: str) -> str:
