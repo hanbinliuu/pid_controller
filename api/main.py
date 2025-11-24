@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from api.routes.loop_router import router as loop_router
 # 导入所有路由
 from api.routes.analysis_router import router as analysis_router
 from api.routes.conversion_router import router as conversion_router
@@ -51,6 +52,8 @@ app.include_router(expert_tuning_router, prefix='/api/expert', tags=['专家整�
 app.include_router(conversion_router, prefix='/api/conversion', tags=['参数转换'])
 app.include_router(iotda_router, prefix='/api/data_query', tags=['数据查询接口'])
 app.include_router(bff_router, prefix='/api/bff', tags=['BFF模型'])
+
+app.include_router(loop_router, prefix='/api/loop', tags=['回路管理'])
 
 
 
