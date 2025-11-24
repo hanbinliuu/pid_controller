@@ -1,8 +1,14 @@
-from fastapi import APIRouter, HTTPException, Query
-from typing import Dict, List, Optional, Union
+import os
+
+import httpx
+from fastapi import APIRouter, HTTPException, Query, Header
+from fastapi.responses import StreamingResponse
+from typing import Dict, List, Optional, Union, AsyncGenerator
 from datetime import datetime
 import json
 import logging
+
+from pydantic import Field, BaseModel
 
 from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
@@ -280,127 +286,227 @@ async def optimize_pid(
             detail=f"PID优化失败: {str(e)}"
         )
 
-"""
-**获取设备历史数据 - HistoryDataTool**
 
-从时序数据库(TSDB)中获取指定设备在特定时间范围内的历史数据。
-
-**时间格式支持：**
-- 毫秒时间戳: 1640995200000
-- 秒时间戳: 1640995200
-- 标准格式: '2022-01-01 12:00:00'
-- ISO 8601格式: '2022-01-01T12:00:00'
-- 日期格式: '2022-01-01'
-
-**参数验证：**
-- kp > 0 (比例系数必须为正数)
-- ki >= 0 (积分系数不能为负数)
-- kd >= 0 (微分系数不能为负数)
-
-**返回数据：**
-- timestamp: 时间戳（毫秒）
-- temperature: 实际温度值
-- target_temp: 目标温度设定值
-- kp, ki, kd: PID控制参数
-- control_period: 控制周期
-- max_duty: 最大占空比
-"""
+class WorkflowRequest(BaseModel):
+    """工作流请求模型"""
+    start_time: str = Field(..., description="开始时间", example="2025-10-08 17:30:37")
+    end_time: str = Field(..., description="结束时间", example="2025-10-08 18:00:37")
+    loop_type: str =Field(..., description="回路类型", example="")
+    response_mode: str = Field("blocking", description="响应模式（流式/直连）", example=["blocking","streaming"])
+    # user: str = Field("admin", description="用户名", example="admin")
 
 
-# @router.get("/history-data",
-#             summary="历史数据查询",
-#             operation_id="IOTDA历史数据查询",
-#             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
-async def get_history_data(
-        loop_uri: str = Query(..., required=False, description="回路URI",
-                                 examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"]),
-        start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
-                                            examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
-                                                      "2022-01-01"]),
-        end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
-                                          examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
-                                                    "2022-01-02"])
+class ProxyConfig:
+    """代理配置"""
+    WORKFLOW_BASE_URL = os.getenv("WORKFLOW_BASE_URL", "http://192.168.202.172")
+    WORKFLOW_TOKEN = os.getenv("WORKFLOW_TOKEN", "app-LLQlDBTuWW16F8FZTATS6aJ7")
+    WORKFLOW_TIMEOUT = int(os.getenv("WORKFLOW_TIMEOUT", "120"))  # 增加到120秒
+    WORKFLOW_CONNECT_TIMEOUT = int(os.getenv("WORKFLOW_CONNECT_TIMEOUT", "30"))  # 连接超时30秒
+    WORKFLOW_READ_TIMEOUT = int(os.getenv("WORKFLOW_READ_TIMEOUT", "300"))  # 读取超时300秒
+    HEALTH_CHECK_TIMEOUT = int(os.getenv("HEALTH_CHECK_TIMEOUT", "10"))  # 健康检查超时10秒
+
+
+@router.post("/workflow/run",
+             operation_id="pid_agent整定分析",
+             summary="执行大模型整定分析",
+             description="调用外部工作流API执行PID整定分析")
+async def run_workflow(
+        request: WorkflowRequest,
+        authorization: Optional[str] = Header(None, description="授权令牌")
 ):
+    """
+    **执行外部工作流 - Workflow Proxy**
+
+    通过代理方式调用外部工作流服务，支持PID控制参数的处理和分析。
+
+    **功能说明：**
+    - 转发请求到外部工作流API
+    - 自动处理授权认证
+    - 统一的错误处理和日志记录
+    - 支持超时控制和重试机制
+    - 支持流式(streaming)和阻塞(blocking)两种响应模式
+
+    **参数说明：**
+    - start_time: 开始时间（字符串格式）
+    - end_time: 结束时间（字符串格式）
+    - loop_type: 回路类型（字符串格式）
+    - response_mode: 响应模式（blocking/streaming）
+    - user: 执行用户
+
+    **返回格式：**
+    - blocking模式: 直接返回外部工作流的响应结果
+    - streaming模式: 返回SSE流式响应，实时推送工作流执行进度
+    """
     try:
-        # 跟进回路信息查询表和字段信息
-        table = "PID_FEP_Gateway_Device_001default"
-        fields = DEFAULT_FIELD_MAPPING
-        # 参数验证
-        if not table or not table.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="表名参数不能为空"
-            )
-        if end_time is None:
-            end_time = int(datetime.now().timestamp() * 1000)
+        # 构建请求URL
+        workflow_url = f"{ProxyConfig.WORKFLOW_BASE_URL}/v1/workflows/run"
 
-        if start_time is None:
-            start_time = end_time - 30000  # 1小时前（30秒 * 1000毫秒）
-        # 时间格式转换和验证
-        try:
-            start_time_ms = parse_time_to_milliseconds(start_time)
-            end_time_ms = parse_time_to_milliseconds(end_time)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"时间格式错误: {str(e)}"
-            )
-
-        # 验证时间范围
-        if start_time_ms >= end_time_ms:
-            raise HTTPException(
-                status_code=400,
-                detail="开始时间必须小于结束时间"
-            )
-
-        # 使用环境变量中的数据库名
-        db = get_default_database()
-        # 将字段列表转换为字段映射map
-        field_list = (list(fields) + ["time"]) if fields is not None else ["time"]
-        # 使用字段名作为key，字段路径作为value
-        required_fields = {f"field_{i}": field for i, field in enumerate(field_list)}
-        # 使用新的查询方法
-        history_data = process_query_tsdb_data_raw(
-            db=db,
-            table_name=table,
-            required_fields=required_fields,
-            start_time=start_time_ms,
-            end_time=end_time_ms,
-        )
-
-        # 格式化响应数据
-        response_data = {
-            "table": table,
-            "start_time": start_time,
-            "end_time": end_time,
-            "totalRecords": len(history_data),
-            "data": history_data
+        # 准备请求头
+        headers = {
+            "Content-Type": "application/json"
         }
 
-        return response_data
+        # 使用传入的授权令牌或默认令牌
+        if authorization:
+            headers["Authorization"] = authorization
+        else:
+            headers["Authorization"] = f"Bearer {ProxyConfig.WORKFLOW_TOKEN}"
 
+        # 准备请求数据
+        request_data = {
+            "inputs": {
+                "start_time": request.start_time,
+                "end_time": request.end_time,
+                "loop_type": request.loop_type
+            },
+            "response_mode": request.response_mode,
+            "user": "pid-agent-api"
+        }
+
+        logger.info(f"调用工作流API: {workflow_url}")
+        logger.debug(f"请求数据: {request_data}")
+
+        # 如果是流式模式，返回流式响应
+        if request.response_mode == "streaming":
+            async def stream_generator() -> AsyncGenerator[str, None]:
+                """流式响应生成器"""
+                try:
+                    async with httpx.AsyncClient() as client:
+                        async with client.stream(
+                            "POST",
+                            workflow_url,
+                            json=request_data,
+                            headers=headers,
+                            timeout=httpx.Timeout(
+                                connect=ProxyConfig.WORKFLOW_CONNECT_TIMEOUT,
+                                read=ProxyConfig.WORKFLOW_READ_TIMEOUT,
+                                write=ProxyConfig.WORKFLOW_CONNECT_TIMEOUT,
+                                pool=ProxyConfig.WORKFLOW_CONNECT_TIMEOUT
+                            )
+                        ) as response:
+                            logger.info(f"工作流API流式响应状态: {response.status_code}")
+                            
+                            if response.status_code != 200:
+                                error_text = await response.aread()
+                                logger.error(f"工作流API调用失败: {response.status_code} - {error_text.decode()}")
+                                yield f"data: {{\"error\": \"工作流执行失败: {error_text.decode()}\", \"status_code\": {response.status_code}}}\n\n"
+                                return
+                            
+                            # 逐行读取流式响应
+                            async for line in response.aiter_lines():
+                                if line:
+                                    # 转发SSE格式的数据
+                                    yield f"{line}\n"
+                                    logger.debug(f"流式数据: {line}")
+                            
+                            logger.info("工作流流式执行完成")
+                            
+                except httpx.TimeoutException:
+                    logger.error("工作流API调用超时")
+                    yield f"data: {{\"error\": \"工作流执行超时，请稍后重试\", \"status_code\": 408}}\n\n"
+                except httpx.ConnectError:
+                    logger.error("无法连接到工作流API")
+                    yield f"data: {{\"error\": \"无法连接到工作流服务，请检查网络连接\", \"status_code\": 503}}\n\n"
+                except Exception as e:
+                    logger.error(f"工作流代理错误: {str(e)}")
+                    yield f"data: {{\"error\": \"代理服务内部错误: {str(e)}\", \"status_code\": 500}}\n\n"
+            
+            return StreamingResponse(
+                stream_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"  # 禁用nginx缓冲
+                }
+            )
+        
+        # 阻塞模式：等待完整响应
+        else:
+            # 使用异步HTTP客户端发送请求
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    workflow_url,
+                    json=request_data,
+                    headers=headers,
+                    timeout=httpx.Timeout(
+                        connect=ProxyConfig.WORKFLOW_CONNECT_TIMEOUT,
+                        read=ProxyConfig.WORKFLOW_READ_TIMEOUT,
+                        write=ProxyConfig.WORKFLOW_CONNECT_TIMEOUT,
+                        pool=ProxyConfig.WORKFLOW_CONNECT_TIMEOUT
+                    )
+                )
+
+            # 记录响应状态
+            logger.info(f"工作流API响应状态: {response.status_code}")
+
+            if response.status_code == 200:
+                result = response.json()
+                logger.info("工作流执行成功")
+                return {
+                    "message": "工作流执行成功",
+                    "data": result,
+                    "execution_time": datetime.now().isoformat()
+                }
+            else:
+                logger.error(f"工作流API调用失败: {response.status_code} - {response.text}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"工作流执行失败: {response.text}"
+                )
+
+    except httpx.TimeoutException:
+        logger.error("工作流API调用超时")
+        raise HTTPException(
+            status_code=408,
+            detail="工作流执行超时，请稍后重试"
+        )
+    except httpx.ConnectError:
+        logger.error("无法连接到工作流API")
+        raise HTTPException(
+            status_code=503,
+            detail="无法连接到工作流服务，请检查网络连接"
+        )
     except Exception as e:
+        logger.error(f"工作流代理错误: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"获取历史数据失败: {str(e)}"
+            detail=f"代理服务内部错误: {str(e)}"
         )
 
 
+@router.get("/workflow/config",
+            summary="获取工作流配置",
+            operation_id="获取PID_AGENT工作流配置",
+            description="获取当前工作流代理的配置信息")
+async def get_workflow_config():
+    """
+    **获取工作流配置信息**
 
-def _get_default_value(field: str):
-    """获取PID字段默认值"""
-    defaults = {
-        "temperature": 25.0,
-        "kp": 1.0,
-        "ki": 0.1,
-        "kd": 0.05,
-        "target_temp": 25.0,
-        "control_period": 100,
-        "max_duty": 100
+    返回当前工作流代理的配置参数，用于调试和监控。
+    """
+    return {
+        "config": {
+            "base_url": ProxyConfig.WORKFLOW_BASE_URL,
+            "timeout": ProxyConfig.WORKFLOW_TIMEOUT,
+            "connect_timeout": ProxyConfig.WORKFLOW_CONNECT_TIMEOUT,
+            "read_timeout": ProxyConfig.WORKFLOW_READ_TIMEOUT,
+            "health_check_timeout": ProxyConfig.HEALTH_CHECK_TIMEOUT,
+            "token_configured": bool(ProxyConfig.WORKFLOW_TOKEN)
+        },
+        "endpoints": [
+            {
+                "path": "/api/proxy/workflow/run",
+                "method": "POST",
+                "description": "执行整定分析"
+            },
+            {
+                "path": "/api/proxy/workflow/config",
+                "method": "GET",
+                "description": "获取大模型整定配置"
+            }
+        ]
     }
-    return defaults.get(field, 0)
-
-
 
 
 def _get_model_recommendations(model_type: str) -> Dict[str, str]:

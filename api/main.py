@@ -8,7 +8,6 @@ from api.routes.conversion_router import router as conversion_router
 from api.routes.device_data_route import router as iotda_router
 from api.routes.bff_route import router as bff_router
 from api.routes.expert_tuning_route import router as expert_tuning_router
-from api.routes.proxy_router import router as proxy_router
 
 # 导入中间件
 from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware
@@ -47,12 +46,12 @@ app.add_middleware(
 )
 
 # 注册所有路由
-app.include_router(analysis_router, prefix='/api/analysis', tags=['分析接口'])
-# app.include_router(conversion_router, prefix='/api/conversion', tags=['参数转换'])
+app.include_router(analysis_router, prefix='/api/analysis', tags=['大模型整定'])
+app.include_router(expert_tuning_router, prefix='/api/expert', tags=['专家整定'])
+app.include_router(conversion_router, prefix='/api/conversion', tags=['参数转换'])
 app.include_router(iotda_router, prefix='/api/data_query', tags=['数据查询接口'])
 app.include_router(bff_router, prefix='/api/bff', tags=['BFF模型'])
-app.include_router(expert_tuning_router, prefix='/api/expert', tags=['专家整定'])
-app.include_router(proxy_router, prefix='/api/proxy', tags=['代理服务'])
+
 
 
 @app.get('/health')
