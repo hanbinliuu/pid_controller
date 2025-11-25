@@ -55,6 +55,28 @@ class Config:
         '/loop_state_parameters'
     )
     
+    # ==================== 数据库配置 ====================
+    # 数据库连接配置
+    DB_HOST: str = os.getenv('DB_HOST', '192.168.201.113')
+    DB_PORT: int = int(os.getenv('DB_PORT', '15432'))
+    DB_USER: str = os.getenv('DB_USER', 'postgres')
+    DB_PASSWORD: str = os.getenv('DB_PASSWORD', 'Postgres#7556')
+    DB_NAME: str = os.getenv('DB_NAME', 'pid_controller')
+    
+    # 数据库连接URL格式：
+    # PostgreSQL: postgresql://user:password@host:port/dbname
+    # SQLite: sqlite:///./database.db
+    DATABASE_URL: str = os.getenv(
+        'DATABASE_URL',
+        f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
+    )
+    # 是否打印SQL语句（调试用）
+    SQL_ECHO: bool = os.getenv('SQL_ECHO', 'False').lower() == 'true'
+    # 数据库连接池大小
+    DB_POOL_SIZE: int = int(os.getenv('DB_POOL_SIZE', '10'))
+    # 数据库连接池最大溢出连接数
+    DB_MAX_OVERFLOW: int = int(os.getenv('DB_MAX_OVERFLOW', '20'))
+    
     @classmethod
     def get_bff_model_config(cls) -> dict:
         """

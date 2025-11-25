@@ -156,6 +156,7 @@ class BFFModelClient:
     DEFAULT_QUERY_CURRENT_RAW_VALUE_PATH = "/bff/aggquery/v2/query/v2/queryCurrentRawValueByBrowsePath"
     DEFAULT_LIST_INSTANCE_PATH = "/bff/v2/instance/listInstanceUnderInstanceTree"
     DEFAULT_GET_NEXT_LEVEL_SUBMODEL_PATH = "/bff/v2/model/getNextLevelSubModel"
+    DEFAULT_QUERY_NODES_BY_URIS_PATH = "/bff/aggquery/v2/model/queryNodesByUris"
     DEFAULT_TIMEOUT = Config.BFF_MODEL_TIMEOUT
     DEFAULT_DEVICE_URI = Config.BFF_MODEL_PROJECT_PATH
     DEFAULT_POINT_PATH = Config.BFF_MODEL_POINT_PATH
@@ -955,6 +956,100 @@ class BFFModelClient:
             raise
         except requests.exceptions.RequestException as e:
             logger.error(f"BFF子模型查询失败: {str(e)}")
+            raise
+
+    def query_nodes_by_uris(
+            self,
+            uris: List[str]
+    ) -> Dict[str, Any]:
+        """
+        根据URI列表查询节点详细信息
+
+        Args:
+            uris: URI列表，如 ['/pid_zd/0b521c82a96d4107a564e4c2678bdeca']
+
+        Returns:
+            节点详细信息列表
+
+        Example:
+            >>> client = BFFModelClient()
+            >>> result = client.query_nodes_by_uris(
+            ...     uris=['/pid_zd/0b521c82a96d4107a564e4c2678bdeca']
+            ... )
+            >>> print(result)
+            {
+                'nodes': [
+                    {
+                        'uri': '/pid_zd/0b521c82a96d4107a564e4c2678bdeca',
+                        'browseName': 'flow_loop_model_1',
+                        'displayName': '流量单回路实例_1',
+                        'description': '催化车间-流量回路1',
+                        'extendedAttr': {'loop_type': '流量'},
+                        'parentUri': '/pid_zd/1f59615dc9d44b4388e29829f95a49c6',
+                        'typeUri': '/pid_zd/49ccb5882d9b4c8d91885a55e4cbcda1',
+                        'displayNamePath': 'root,PID参数整定_勿删,...',
+                        'browseNamePath': 'root,pid_zd,instance,...'
+                    }
+                ],
+                'total': 1
+            }
+        """
+        url = f"{self.base_url}{self.DEFAULT_QUERY_NODES_BY_URIS_PATH}"
+
+        try:
+            logger.info(f"根据URI查询节点详细信息，URI数量: {len(uris)}")
+            logger.debug(f"请求URL: {url}")
+            logger.debug(f"URI列表: {uris[:3]}..." if len(uris) > 3 else f"URI列表: {uris}")
+
+            response = self.session.post(
+                url,
+                json=uris,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # 检查响应状态
+            if result.get('code') != '0x00000000':
+                logger.error(f"BFF返回错误: {result.get('msg')}")
+                return {
+                    'nodes': [],
+                    'error': result.get('msg'),
+                    'total': 0
+                }
+
+            # 提取结果数据
+            result_data = result.get('result', [])
+            
+            # 简化数据，只提取关键字段
+            nodes = []
+            for item in result_data:
+                simplified_item = {
+                    'uri': item.get('uri'),
+                    'browseName': item.get('browseName'),
+                    'displayName': item.get('displayName'),
+                    'description': item.get('description'),
+                    'extendedAttr': item.get('extendedAttr', {}),
+                    'parentUri': item.get('parentUri'),
+                    'typeUri': item.get('typeUri'),
+                    'displayNamePath': item.get('displayNamePath'),
+                    'browseNamePath': item.get('browseNamePath')
+                }
+                nodes.append(simplified_item)
+
+            logger.info(f"成功查询到 {len(nodes)} 个节点")
+
+            return {
+                'nodes': nodes,
+                'error': None,
+                'total': len(nodes)
+            }
+
+        except requests.exceptions.Timeout:
+            logger.error(f"请求超时（{self.timeout}秒）")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"BFF节点查询失败: {str(e)}")
             raise
 
     def query_current_raw_values(

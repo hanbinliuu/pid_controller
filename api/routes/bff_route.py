@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-BFF模型查询路由
+BFF模型查询路由 - MVC架构的Controller层
+使用api.services封装业务逻辑
 提供BFF模型相关的API接口
 """
 
@@ -8,8 +9,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Query
 
-from core.data.bff_model_client import BFFModelClient
-from core.config import Config
+from api.services.bff_service import BFFService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -47,21 +47,10 @@ async def get_point_paths(
     }
     """
     try:
-        # 使用BFF客户端查询
-        with BFFModelClient(device_uri=project_path) as client:
-            # 查询常用字段
-            common_field_map = client.query_common_fields()
-            
-            logger.info(f"BFF查询成功，项目路径: {client.device_uri}")
-
-            # 生成字段映射（根据MV/PV/SV等标识）
-            # field_mapping = BFFModelClient.parse_path_list_to_field_mapping(result_paths)
-            
-            return {
-                "project_path": client.device_uri,
-                "point_path": client.point_path,
-                "model_point_map":common_field_map
-            }
+        # 使用BFF服务查询
+        result = BFFService.get_point_paths(project_path)
+        
+        return result
     
     except Exception as e:
         logger.error(f"查询BFF测点路径失败: {str(e)}")
@@ -120,14 +109,11 @@ async def query_current_raw_values(
     }
     """
     try:
-        # 使用BFF客户端查询
-        with BFFModelClient(device_uri=loop_uri, point_path=point_path) as client:
-            result = client.query_current_raw_values(point_names)
-
-            logger.info(f"BFF查询成功，测点数量: {len(result)}")
-
-            return result
-
+        # 使用BFF服务查询
+        result = BFFService.get_point_values(point_names, loop_uri, point_path)
+        
+        return result
+    
     except Exception as e:
         logger.error(f"查询测点当前值失败: {str(e)}")
         raise HTTPException(
@@ -179,34 +165,10 @@ async def get_table_and_points(
     }
     """
     try:
-        # 使用BFF客户端查询
-        with BFFModelClient(device_uri=project_path, point_path=point_path) as client:
-            # 查询常用字段
-            query_result = client.query_common_fields()
-            
-            # 提取table名称和测点列表，传入query_paths和result_paths
-            table_and_points = BFFModelClient.extract_table_and_points_from_paths(query_result)
-            
-            table_name = table_and_points.get('table_name')
-            points = table_and_points.get('points', [])
-            
-            if not table_name:
-                logger.warning("未能从路径中解析出table名称")
-                return {
-                    "project_path": client.device_uri,
-                    "point_path": client.point_path,
-                    "message": "未解析到table名称",
-                    "points": points,
-                    "total_points": len(points)
-                }
-            
-            return {
-                "project_path": client.device_uri,
-                "point_path": client.point_path,
-                "table_name": table_name,
-                "points": points,
-                "total_points": len(points)
-            }
+        # 使用BFF服务查询
+        result = BFFService.get_table_and_points(project_path, point_path)
+        
+        return result
     
     except Exception as e:
         logger.error(f"查询表名和测点列表失败: {str(e)}")
@@ -281,13 +243,12 @@ async def get_next_level_submodel(
     }
     """
     try:
-        # 使用BFF客户端查询
-        with BFFModelClient() as client:
-            result = client.get_next_level_submodel(identifier)
-            
-            logger.info(f"BFF查询成功，模型标识符: {identifier}, 子模型数量: {result.get('total', 0)}")
-            
-            return result
+        # 使用BFF服务查询
+        result = BFFService.get_next_level_submodel(identifier)
+        
+        logger.info(f"BFF查询成功，模型标识符: {identifier}, 子模型数量: {result.get('total', 0)}")
+        
+        return result
     
     except Exception as e:
         logger.error(f"查询下一级子模型失败: {str(e)}")
@@ -358,27 +319,80 @@ async def list_instances_under_tree(
     }
     """
     try:
-        # 使用BFF客户端查询
-        with BFFModelClient() as client:
-            result = client.list_instances_under_tree(
-                model_identifier_list=model_identifier_list,
-                start_identifier_list=start_identifier_list,
-                contain_sub_model=contain_sub_model,
-                page_no=page_no,
-                page_size=page_size
-            )
-
-            logger.info(
-                f"BFF查询成功，模型标识符: {model_identifier_list}, "
-                f"起始标识符: {start_identifier_list}, "
-                f"实例数量: {len(result.get('instances', []))}"
-            )
-
-            return result
-
+        # 使用BFF服务查询
+        result = BFFService.list_instances_under_tree(
+            model_identifier_list=model_identifier_list,
+            start_identifier_list=start_identifier_list,
+            contain_sub_model=contain_sub_model,
+            page_no=page_no,
+            page_size=page_size
+        )
+        
+        logger.info(
+            f"BFF查询成功，模型标识符: {model_identifier_list}, "
+            f"起始标识符: {start_identifier_list}, "
+            f"实例数量: {len(result.get('instances', []))}"
+        )
+        
+        return result
+    
     except Exception as e:
         logger.error(f"查询实例树失败: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"查询实例树失败: {str(e)}"
+        )
+
+
+@router.post(
+    "/nodes-detail",
+    summary="根据URI查询节点详细信息",
+    operation_id="根据URI查询节点详细信息",
+    description="根据URI列表查询节点的详细信息，包括名称、描述、父节点、类型、路径等"
+)
+async def query_nodes_detail(
+        uris: List[str] = Query(
+            ...,
+            description="节点URI列表",
+            example=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]
+        )
+) -> Dict[str, Any]:
+    """
+    根据URI列表查询节点详细信息
+    
+    功能说明：
+    - 支持批量查询多个节点的详细信息
+    - 返回节点的完整属性（名称、描述、父节点、类型、路径等）
+    
+    返回格式：
+    {
+        "nodes": [
+            {
+                "uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
+                "browseName": "flow_loop_model_1",
+                "displayName": "流量单回路实例_1",
+                "description": "催化车间-流量回路1",
+                "extendedAttr": {"loop_type": "流量"},
+                "parentUri": "/pid_zd/1f59615dc9d44b4388e29829f95a49c6",
+                "typeUri": "/pid_zd/49ccb5882d9b4c8d91885a55e4cbcda1",
+                "displayNamePath": "root,PID参数整定_勿删,...",
+                "browseNamePath": "root,pid_zd,instance,..."
+            }
+        ],
+        "total": 1
+    }
+    """
+    try:
+        # 使用BFF服务查询
+        result = BFFService.query_nodes_by_uris(uris)
+        
+        logger.info(f"BFF查询成功，节点详细信数量: {result.get('total', 0)}")
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"查询节点详细信息失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询节点详细信息失败: {str(e)}"
         )

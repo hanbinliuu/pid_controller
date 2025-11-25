@@ -13,6 +13,8 @@ project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 # 从api.main导入已配置好的app(包含全局中间件)
 from api.main import app
+# 导入数据库初始化函数
+from core.database.database import init_database
 
 # 配置日志
 def setup_logging():
@@ -52,6 +54,14 @@ def setup_logging():
 
 # 设置日志
 logger = setup_logging()
+
+# 初始化数据库
+try:
+    init_database()
+    logger.info("数据库初始化成功")
+except Exception as e:
+    logger.error(f"数据库初始化失败: {str(e)}")
+    logger.warning("服务将继续启动，但数据库功能可能不可用")
 
 
 

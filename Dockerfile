@@ -10,12 +10,13 @@ ENV PYTHONUNBUFFERED=1
 
 RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list
 
-# 安装系统依赖
+# 安装系统依赖（包括PostgreSQL客户端库）
 RUN apt-get update --fix-missing && \
     apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     curl \
+    libpq-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
