@@ -206,7 +206,7 @@ async def get_history_zhongkong_interpolated(
         end_time: Union[int, str] = Query(None,required=False, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=[1761457384979, "2025-01-02 12:00:00", "2025-01-02T12:00:00",
                                                     "2025-01-02"]),
-        is_filter: bool = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式",
+        is_filter: bool = Query(None, required=False, description="是否过滤，获取最新一组pid值数据",
                                           examples=[True]),
 ):
     if end_time is None:
