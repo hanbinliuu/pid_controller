@@ -102,6 +102,7 @@ class LoopService:
                             browseName=instance.get('browseName'),
                             displayName=instance.get('displayName'),
                             description=instance.get('description'),
+                            uriPath=instance.get('uriPath'),
                             extendedAttr=instance.get('extendedAttr', {}),
                             pid_params=PIDParams(
                                 PB=instance.get('pid_params', {}).get('PB'),
@@ -148,6 +149,7 @@ class LoopService:
                         browseName=None,
                         displayName=None,
                         description=None,
+                        uriPath=None,
                         extendedAttr=None,
                         auto_control_status=None,
                         action_type=None,
@@ -162,12 +164,12 @@ class LoopService:
                 # 定义需要查询的测点名称
                 # 根据图片显示的字段，查询相关测点
                 point_names = [
-                    'auto_control_status',  # 自控情况
+                    'AUTO',  # 自控情况
                     'action_type',          # 正反作用
-                    'sv_range_max',         # 目标值量程上限
-                    'sv_range_min',         # 目标值量程下限
-                    'mv_range_max',         # 阀位值量程上限
-                    'mv_range_min'          # 阀位值量程下限
+                    'SVH',         # 目标值量程上限
+                    'SVL',         # 目标值量程下限
+                    'MVH',         # 阀位值量程上限
+                    'MVL'          # 阀位值量程下限
                 ]
                 
                 # 查询测点当前值
@@ -179,13 +181,14 @@ class LoopService:
                     browseName=loop_info.get('browseName'),
                     displayName=loop_info.get('displayName'),
                     description=loop_info.get('description'),
+                    uriPath=loop_info.get('uriPath'),
                     extendedAttr=loop_info.get('extendedAttr', {}),
-                    auto_control_status=point_values.get('auto_control_status'),
+                    auto_control_status=point_values.get('AUTO'),
                     action_type=point_values.get('action_type'),
-                    sv_range_max=point_values.get('sv_range_max'),
-                    sv_range_min=point_values.get('sv_range_min'),
-                    mv_range_max=point_values.get('mv_range_max'),
-                    mv_range_min=point_values.get('mv_range_min')
+                    sv_range_max=point_values.get('SVH'),
+                    sv_range_min=point_values.get('SVL'),
+                    mv_range_max=point_values.get('MVH'),
+                    mv_range_min=point_values.get('MVL')
                 )
         
         except Exception as e:

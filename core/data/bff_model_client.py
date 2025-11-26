@@ -22,8 +22,10 @@ class InstanceInfo:
     uri: str
     browseName: str
     displayName: str
+    uriPath: str
     description: Optional[str] = None
     extendedAttr: Dict[str, Any] = field(default_factory=dict)
+
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'InstanceInfo':
@@ -32,6 +34,7 @@ class InstanceInfo:
             uri=data.get('uri', ''),
             browseName=data.get('browseName', ''),
             displayName=data.get('displayName', ''),
+            uriPath=data.get('uriPath', ''),
             description=data.get('description'),
             extendedAttr=data.get('extendedAttr', {})
         )
@@ -42,6 +45,7 @@ class InstanceInfo:
             'uri': self.uri,
             'browseName': self.browseName,
             'displayName': self.displayName,
+            'uriPath': self.uriPath,
             'description': self.description,
             'extendedAttr': self.extendedAttr
         }
@@ -836,7 +840,10 @@ class BFFModelClient:
                     'browseName': item.get('browseName'),
                     'displayName': item.get('displayName'),
                     'description': item.get('description'),
-                    'extendedAttr': item.get('extendedAttr', {})
+                    'extendedAttr': item.get('extendedAttr', {}),
+                    'uriPath': item.get('uriPath'),
+                    'browsePath': item.get('browsePath'),
+                    'displayNamePath': item.get('displayNamePath')
                 }
                 instances.append(simplified_item)
 
@@ -939,6 +946,8 @@ class BFFModelClient:
                     'uri': item.get('uri'),
                     'browseName': item.get('browseName'),
                     'displayName': item.get('displayName'),
+                    'description': item.get('description'),
+                    'uriPath': item.get('uriPath'),
                     'extendedAttr': item.get('extendedAttr', {}),
                     'parentUri': item.get('parentUri')
                 }
@@ -1033,7 +1042,9 @@ class BFFModelClient:
                     'parentUri': item.get('parentUri'),
                     'typeUri': item.get('typeUri'),
                     'displayNamePath': item.get('displayNamePath'),
-                    'browseNamePath': item.get('browseNamePath')
+                    'browseNamePath': item.get('browseNamePath'),
+                    'uriPath': item.get('uriPath')
+
                 }
                 nodes.append(simplified_item)
 

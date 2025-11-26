@@ -1,5 +1,4 @@
 import os
-
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Header
 from fastapi.responses import StreamingResponse
@@ -10,12 +9,9 @@ import logging
 
 from pydantic import Field, BaseModel
 
-from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool, detect_and_visualize, \
-    process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
+# 更新导入语句，移除直接的工具类导入，改为导入AnalysisService
+from api.services.analysis_service import AnalysisService
 from core.algorithm.ls_pid_autotune_v5 import ModelType
-from core.data.real_tsdb_client import get_default_database
-from core.data.bff_model_client import BFFModelClient
-from api.routes.time_util import parse_time_to_milliseconds, format_time_to_string
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -29,10 +25,6 @@ DEFAULT_FIELD_MAPPING = {
     "ti": "ns=100;s=FIC101A_TI.In_Channel0",
     "td": "ns=100;s=FIC101A_TD.In_Channel0"
 }
-
-
-
-
 
 """
 **获取设备历史数据 - HistoryDataTool**
@@ -107,73 +99,19 @@ async def analyze_temperature(
     - 生产过程优化和效率提升
     - 设备维护和故障预测
     """
-    # 将map解析为一下关系
-    # 默认查询2小时
-    if end_time is None:
-        end_time = int(datetime.now().timestamp() * 1000)
-
-    if start_time is None:
-        start_time = end_time - 2 * 60 * 60 * 1000  # 默认2小时
-
     try:
-        start_time_ms = parse_time_to_milliseconds(start_time)
-        end_time_ms = parse_time_to_milliseconds(end_time)
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"时间格式错误: {str(e)}"
+        # 调用Service层进行温度曲线分析
+        result = AnalysisService.analyze_temperature_curve(
+            start_time=start_time,
+            end_time=end_time,
+            loop_uri=loop_uri
         )
-    
-    try:
-        # 根据loop_uri查询表名和测点列表
-        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
-        
-        # 使用环境变量中的数据库名
-        db = get_default_database()
-
-        # 使用新的查询方法
-        history_data = process_query_tsdb_data_interpolated(
-            db=db,
-            table_name=table,
-            required_fields=required_fields,
-            start_time=start_time_ms,
-            end_time=end_time_ms
-        )
-        if not history_data:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                "table": table,
-                "message": "指定时间范围内无数据"
-            })
-
-        # 创建温度分析工具实例
-        analysis_tool = TemperatureAnalysisTool()
-
-        # 执行分析（传入历史数据列表）
-        analysis_result = analysis_tool._run(json.dumps(history_data))
-
-        # 解析分析结果
-        try:
-            result_data = json.loads(analysis_result)
-            return {
-                "table": table,
-                "start_time": start_time,
-                "end_time": end_time,
-                "analysis_result": result_data
-            }
-        except json.JSONDecodeError:
-            # 如果返回的不是JSON格式（可能是错误信息）
-            raise HTTPException(
-                status_code=500,
-                detail= 'json解析异常')
-
+        return result
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"曲线分析失败: {str(e)}"
         )
-
 
 @router.get("/pid-optimization",
             summary="大模型整定-PID参数优化建议",
@@ -219,73 +157,22 @@ async def optimize_pid(
     - 鲁棒性与性能综合考量
 
     """
-    # 默认查询2小时
-    if end_time is None:
-        end_time = int(datetime.now().timestamp() * 1000)
-
-    if start_time is None:
-        start_time = end_time - 2 * 60 * 60 * 1000  # 默认2小时
-
     try:
-        start_time_ms = parse_time_to_milliseconds(start_time)
-        end_time_ms = parse_time_to_milliseconds(end_time)
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"时间格式错误: {str(e)}"
+        # 调用Service层进行PID参数优化
+        result = AnalysisService.optimize_pid_parameters(
+            start_time=start_time,
+            end_time=end_time,
+            loop_uri=loop_uri,
+            is_filter=is_filter,
+            is_lambda=is_lambda,
+            model_type=model_type
         )
-    
-    try:
-        # 根据loop_uri查询表名和测点列表
-        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
-        
-        # 使用环境变量中的数据库名
-        db = get_default_database()
-
-        # 使用新的查询方法
-        history_data: List[Dict] = process_query_tsdb_data_interpolated(
-            db=db,
-            table_name=table,
-            required_fields=required_fields,
-            start_time=start_time_ms,
-            end_time=end_time_ms,
-            is_filter=is_filter
-        )
-        if not history_data:
-            return {
-                "table": table,
-                "message": "指定时间范围内无数据"
-            }
-
-        # 创建PID优化工具实例
-        optimization_tool = PIDOptimizationTool()
-
-        # 执行优化分析（传入历史数据列表）
-        optimization_result = optimization_tool._run(history_data=history_data,is_lambda=is_lambda,model_type=model_type)
-
-        # 解析优化结果
-        try:
-            result_data = json.loads(optimization_result)
-            return {
-                "table": table,
-                "start_time": start_time,
-                "end_time": end_time,
-                "optimization_result": result_data
-            }
-        except json.JSONDecodeError:
-            # 如果返回的不是JSON格式（可能是错误信息）
-            return {
-                "table": table,
-                "message": optimization_result
-
-            }
-
+        return result
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"PID优化失败: {str(e)}"
         )
-
 
 class WorkflowRequest(BaseModel):
     """工作流请求模型"""
@@ -295,7 +182,6 @@ class WorkflowRequest(BaseModel):
     response_mode: str = Field("blocking", description="响应模式（流式/直连）", example=["blocking","streaming"])
     # user: str = Field("admin", description="用户名", example="admin")
 
-
 class ProxyConfig:
     """代理配置"""
     WORKFLOW_BASE_URL = os.getenv("WORKFLOW_BASE_URL", "http://192.168.202.172")
@@ -304,7 +190,6 @@ class ProxyConfig:
     WORKFLOW_CONNECT_TIMEOUT = int(os.getenv("WORKFLOW_CONNECT_TIMEOUT", "30"))  # 连接超时30秒
     WORKFLOW_READ_TIMEOUT = int(os.getenv("WORKFLOW_READ_TIMEOUT", "300"))  # 读取超时300秒
     HEALTH_CHECK_TIMEOUT = int(os.getenv("HEALTH_CHECK_TIMEOUT", "10"))  # 健康检查超时10秒
-
 
 @router.post("/workflow/run",
              operation_id="pid_agent整定分析",
@@ -474,7 +359,6 @@ async def run_workflow(
             detail=f"代理服务内部错误: {str(e)}"
         )
 
-
 @router.get("/workflow/config",
             summary="获取工作流配置",
             operation_id="获取PID_AGENT工作流配置",
@@ -508,20 +392,25 @@ async def get_workflow_config():
         ]
     }
 
-
-def _get_model_recommendations(model_type: str) -> Dict[str, str]:
+@router.get("/model-recommendations/{model_type}",
+         summary="获取模型推荐信息",
+         operation_id="获取模型推荐信息",
+         description="根据模型类型获取应用建议和使用说明")
+async def get_model_recommendations(model_type: str):
     """
-    获取不同模型类型的应用建议
+    **获取模型推荐信息**
+    
+    根据模型类型获取应用建议和使用说明
     """
-    recommendations = {
-        "FOPDT": "适用于大多数工业过程，具有一定滞后特性。建议用于温度、压力等缓变过程",
-        "FO": "适用于无明显滞后的一阶系统。响应较快，适合响应速度要求不高的场景",
-        "SOPDT": "适用于复杂工业过程（如温度、化学反应）。具有多惯性和滞后特性",
-        "SO": "适用于快速响应的二阶系统。无滞后，可能存在超调，需适当调节Lambda",
-        "FO_INTEGRATOR": "适用于流量控制、液位控制等积分特性系统。需要较强的反馈",
-        "SO_INTEGRATOR": "适用于复杂的双积分过程。需要更大的Lambda值以保证稳定性"
-    }
-    return {
-        "model_description": recommendations.get(model_type, "未知模型类型"),
-        "lambda_selection_tip": "可通过调整lambda_val参数：减小使响应快但波动增加，增大使响应慢但更稳定"
-    }
+    try:
+        # 调用Service层获取模型推荐信息
+        recommendations = AnalysisService.get_model_recommendations(model_type)
+        return {
+            "model_type": model_type,
+            "recommendations": recommendations
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取模型推荐信息失败: {str(e)}"
+        )

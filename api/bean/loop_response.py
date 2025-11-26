@@ -20,6 +20,7 @@ class LoopInstance(BaseModel):
     browseName: str = Field(..., description="浏览名称")
     displayName: str = Field(..., description="显示名称")
     description: Optional[str] = Field(None, description="描述")
+    uriPath: str = Field(None, description="回路uriPath")
     extendedAttr: Dict[str, Any] = Field(default_factory=dict, description="扩展属性")
     pid_params: Optional[PIDParams] = Field(None, description="PID参数最新值")
 
@@ -30,6 +31,7 @@ class LoopInstance(BaseModel):
                 "browseName": "flow_loop_model_1",
                 "displayName": "流量单回路实例_1",
                 "description": "创建根节点，用于组织模型结构",
+                "uriPath": "/system/root,/pid_zd/root,/pid_zd/instance,/pid_zd/053f3c45413b48bbafacec609d142e57,pid_zd/7a9a36aeca1a4998b0aa44f83ec9709d,/pid_zd/1f59615dc9d4464388e29829f95a49c6,pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                 "extendedAttr": {"loop_type": "流量"},
                 "pid_params": {
                     "PB": 71.43,
@@ -72,6 +74,7 @@ class LoopListResponse(BaseModel):
                         "browseName": "flow_loop_model_1",
                         "displayName": "流量单回路实例_1",
                         "description": "创建根节点，用于组织模型结构",
+                        "uriPath": "/system/root,/pid_zd/root,/pid_zd/instance,/pid_zd/053f3c45413b48bbafacec609d142e57,pid_zd/7a9a36aeca1a4998b0aa44f83ec9709d,/pid_zd/1f59615dc9d4464388e29829f95a49c6,pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                         "extendedAttr": {"loop_type": "流量"},
                         "pid_params": {
                             "PB": 71.43,
@@ -92,9 +95,10 @@ class LoopListResponse(BaseModel):
 
 class LoopInfoResponse(BaseModel):
     """回路属性查询响应模型"""
-    uri: str = Field(..., description="回路URI")
-    browseName: str = Field(..., description="回路浏览名称")
-    displayName: str = Field(..., description="回路显示名称")
+    uri: str = Field(None, description="回路URI")
+    browseName: str = Field(None, description="回路浏览名称")
+    displayName: str = Field(None, description="回路显示名称")
+    uriPath: str = Field(None, description="回路uriPath")
     description: Optional[str] = Field(None, description="回路描述")
     extendedAttr: Dict[str, Any] = Field(default_factory=dict, description="回路扩展属性")
     auto_control_status: Optional[Any] = Field(None, description="自控情况")
@@ -111,6 +115,7 @@ class LoopInfoResponse(BaseModel):
                 "browseName": "flow_loop_model_1",
                 "displayName": "流量单回路实例_1",
                 "description": "创建根节点，用于组织模型结构",
+                "uriPath": "/system/root,/pid_zd/root,/pid_zd/instance,/pid_zd/053f3c45413b48bbafacec609d142e57,pid_zd/7a9a36aeca1a4998b0aa44f83ec9709d,/pid_zd/1f59615dc9d4464388e29829f95a49c6,pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                 "extendedAttr": {"loop_type": "流量"},
                 "auto_control_status": "自动",
                 "action_type": "未知",
