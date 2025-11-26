@@ -4,16 +4,9 @@ from datetime import datetime
 import json
 import logging
 
-from core.agent.tools import  PIDOptimizationTool, detect_and_visualize, \
-    process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.algorithm.ls_pid_autotune_v5 import ModelType
+from api.services.expert_tuning_service import ExpertTuningService
 from core.data.bff_model_client import BFFModelClient
-from core.data.real_tsdb_client import get_default_database, query_raw_data
-from api.routes.time_util import parse_time_to_milliseconds, format_time_to_string
-import pandas as pd
-from core.algorithm.find_high_variability_periods import find_high_variability_periods
-from core.algorithm.ktl_simulator import KTLSimulator
-import numpy as np
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -27,8 +20,6 @@ DEFAULT_FIELD_MAPPING = {
     "ti": "ns=100;s=FIC101A_TI.In_Channel0",
     "td": "ns=100;s=FIC101A_TD.In_Channel0"
 }
-
-
 
 @router.post("/tuning-windows",
              summary="常规整定-自动筛选时间区间",
@@ -52,126 +43,25 @@ async def get_tuning_windows(
     - 每个窗口附带 group_key = "{pb}_{ti}_{td}_{sv}", 用于后续分组分析
     """
     try:
-        # 时间默认值：最近一天
-        if end_time is None:
-            end_time = int(datetime.now().timestamp() * 1000)
-        if start_time is None:
-            start_time = end_time - 24 * 60 * 60 * 1000  # 1天
-
-        # 时间转换与校验
-        start_time_ms = parse_time_to_milliseconds(start_time)
-        end_time_ms = parse_time_to_milliseconds(end_time)
-        if start_time_ms >= end_time_ms:
-            raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
-
-        # 固定设备与字段（与现有分析接口保持一致）
-        # table = "PID_FEP_Gateway_Device_001default"
-        # required_fields = DEFAULT_FIELD_MAPPING
-        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
-        # 查询历史插值数据（数据访问层负责分页与解析）
-        db = get_default_database()
-        history_data = process_query_tsdb_data_interpolated(
-            db=db,
-            table_name=table,
-            required_fields=required_fields,
-            start_time=start_time_ms,
-            end_time=end_time_ms,
-            is_filter=is_filter,
-            window=window_sec
-        )
-        if not history_data:
-            return {
-                "table": table,
-                "start_time": start_time,
-                "end_time": end_time,
-                "total_windows": 0,
-                "windows": []
-            }
-
-        # 构建DataFrame用于窗口筛选与分组键计算
-        df = pd.DataFrame(history_data)
-        column = analyst_column or "pv"
-        if "timestamp" not in df.columns or column not in df.columns:
-            raise HTTPException(status_code=500, detail=f"历史数据缺少必要字段: timestamp 或 {column}")
-
-        # 构建分析序列（索引为datetime）
-        ts_index = pd.to_datetime(df["timestamp"], unit="ms")
-        series = pd.Series(df[column].values, index=ts_index)
-
-        # 高波动窗口识别
-        high_windows = find_high_variability_periods(
-            series,
+        # 调用Service层获取整定时间窗口
+        result = ExpertTuningService.get_tuning_windows(
+            loop_uri=loop_uri,
+            start_time=start_time,
+            end_time=end_time,
             window_size=window_size,
             step_size=step_size,
-            variability_threshold=variability_threshold
+            variability_threshold=variability_threshold,
+            analyst_column=analyst_column,
+            window_sec=window_sec,
+            is_filter=is_filter
         )
 
-        # 生成窗口输出，附加group_key（取窗口内最后一条记录的参数值）
-        windows_out = []
-        for win in high_windows:
-            start_dt = win.get("start_time")
-            end_dt = win.get("end_time")
-            start_ms = int(start_dt.timestamp() * 1000) if start_dt is not None else None
-            end_ms = int(end_dt.timestamp() * 1000) if end_dt is not None else None
-
-            win_df = df[(df["timestamp"] >= start_ms) & (
-                        df["timestamp"] <= end_ms)] if start_ms is not None and end_ms is not None else df
-            if len(win_df) > 0:
-                last = win_df.iloc[-1]
-                pb = last.get("pb")
-                ti = last.get("ti")
-                td = last.get("td")
-                sv = last.get("sv")
-                group_key = f"{pb}_{ti}_{td}_{sv}"
-                kp = last.get("kp")
-                ki = last.get("ki")
-                kd = last.get("kd")
-            else:
-                group_key = None
-                kp = ki = kd = None
-
-            var = float(win.get("variance", 0.0))
-            std_val = float(win.get("std", 0.0))
-            # step_deg = float(win.get("step_degree", 0.0))
-            windows_out.append({
-                "start_timestamp": start_ms,
-                "end_timestamp": end_ms,
-                "variance": var,
-                "std": std_val,
-                # "step_degree": step_deg,
-                "group_key": group_key,
-                "last_pid": {"kp": kp, "ki": ki, "kd": kd}
-            })
-
-        # 选取标准差最大的窗口
-        std_max_window = None
-        if windows_out:
-            try:
-                std_max_window = max(windows_out, key=lambda w: w.get("std", 0.0))
-            except Exception:
-                std_max_window = windows_out[0]
-
-        return {
-            "table": table,
-            "start_time": start_time,
-            "end_time": end_time,
-            "params": {
-                "window_size": window_size,
-                "step_size": step_size,
-                "variability_threshold": variability_threshold,
-                "analyst_column": analyst_column or "pv",
-                "window_sec": window_sec,
-                "is_filter": is_filter
-            },
-            "total_windows": len(windows_out),
-            "std_max_window": std_max_window
-        }
+        return result
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"时间区间筛选失败: {str(e)}")
-
 
 @router.post("/auto-tuning",
              summary="常规整定-智能PID参数整定",
@@ -217,213 +107,22 @@ async def auto_tuning(
     - 未指定时自动根据模型类型计算最优值
     """
     try:
-        # 参数验证
-        if mode not in ["auto", "manual"]:
-            mode = 'auto'
-            # raise HTTPException(status_code=400, detail="mode参数必须为'auto'或'manual'")
-
-        # 时间范围处理
-        if end_time is None:
-            end_time = int(datetime.now().timestamp() * 1000)
-        if start_time is None:
-            start_time = end_time - 24 * 60 * 60 * 1000  # 默认1天
-        logger.info(f"将在时间范围 {start_time} - {end_time} 内筛选最佳整定区间")
-
-        # 时间格式转换
-        start_time_ms = parse_time_to_milliseconds(start_time)
-        end_time_ms = parse_time_to_milliseconds(end_time)
-
-        if start_time_ms >= end_time_ms:
-            raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
-
-        # 固定设备与字段配置
-        # table = "PID_FEP_Gateway_Device_001default"
-        # required_fields = DEFAULT_FIELD_MAPPING
-        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
-
-        db = get_default_database()
-
-        # 初始化变量
-        qualified_windows = []
-        best_window = None
-        window_data = []
-
-        # 根据模式执行不同逻辑
-        if mode == "auto":
-            # 自动筛选模式
-            logger.info(f"执行自动整定，时间范围：{start_time} - {end_time}")
-
-            # 获取历史数据
-            history_data = process_query_tsdb_data_interpolated(
-                db=db,
-                table_name=table,
-                required_fields=required_fields,
-                start_time=start_time_ms,
-                end_time=end_time_ms,
-                is_filter=is_filter,
-                window=window_sec
-            )
-
-            if not history_data or len(history_data) == 0:
-                return {
-                    "mode": mode,
-                    "message": "指定时间范围内无数据"
-                }
-
-            # 构建DataFrame用于窗口检测
-            df = pd.DataFrame(history_data)
-            if "timestamp" not in df.columns or "pv" not in df.columns or "mv" not in df.columns:
-                raise HTTPException(status_code=500, detail="历史数据缺少必要字段")
-
-            # 使用阶跃响应检测筛选最佳窗口
-            from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
-
-            # 滑动窗口检测阶跃响应
-            window_size_sec = window_size * 60
-            step_size_sec = step_size * 60
-
-            # 转换为numpy数组
-            t_array = (df["timestamp"].values - df["timestamp"].values[0]) / 1000  # 相对时间（秒）
-            pv_array = df["pv"].values
-            mv_array = df["mv"].values
-
-            # 使用采样间隔换算为“点数”窗口与步长
-            dt_seconds = float((df["timestamp"].values[1] - df["timestamp"].values[0]) / 1000) if len(
-                df["timestamp"].values) > 1 else 1.0
-            window_size_points = max(1, int(window_size_sec / dt_seconds))
-            step_size_points = max(1, int(step_size_sec / dt_seconds))
-
-            qualified_windows = []
-            total_windows_to_check = len(range(0, max(0, len(t_array) - window_size_points), step_size_points))
-            logger.info(f"开始扫描时间窗口，总共需检查 {total_windows_to_check} 个窗口")
-
-            for i in range(0, max(0, len(t_array) - window_size_points), step_size_points):
-                # 窗口范围（按点数）
-                window_start_idx = i
-                window_end_idx = min(i + window_size_points, len(t_array))
-
-                if window_end_idx - window_start_idx < 60:  # 至少60个点
-                    continue
-
-                t_window = np.array(t_array[window_start_idx:window_end_idx])
-                pv_window = np.array(pv_array[window_start_idx:window_end_idx])
-                mv_window = np.array(mv_array[window_start_idx:window_end_idx])
-                # 检测阶跃响应
-                step_info = SystemIdentifier.detect_step_response_in_window(
-                    t_window, pv_window, mv_window,
-                    step_threshold=0.05,
-                    response_ratio=0.1
-                )
-
-                if step_info.get('has_step') and step_info.get('confidence', 0) >= confidence_threshold:
-                    # 记录窗口信息
-                    window_start_ms = int(df["timestamp"].values[window_start_idx])
-                    window_end_ms = int(df["timestamp"].values[window_end_idx - 1])
-
-                    qualified_windows.append({
-                        "start_timestamp": window_start_ms,
-                        "end_timestamp": window_end_ms,
-                        "confidence": step_info.get('confidence'),
-                        "step_size": step_info.get('step_size'),
-                        "response_magnitude": step_info.get('response_magnitude'),
-                        "data_indices": (window_start_idx, window_end_idx)
-                    })
-
-            if not qualified_windows:
-                logger.warning(f"在 {total_windows_to_check} 个窗口中未找到符合条件的阶跃响应")
-                return {
-                    "mode": mode,
-                    "message": f"未找到符合条件的阶跃响应窗口（已检查{total_windows_to_check}个窗口），建议：1)降低confidence_threshold（当前{confidence_threshold}）2)增加window_size 3)调整时间范围",
-                    "total_windows_checked": total_windows_to_check,
-                    "qualified_windows": 0,
-                    "suggestion": {
-                        "current_confidence_threshold": confidence_threshold,
-                        "suggested_confidence_threshold": max(0.3, confidence_threshold - 0.2),
-                        "current_window_size_minutes": window_size,
-                        "suggested_window_size_minutes": window_size + 60
-                    }
-                }
-
-            # 选择置信度最高的窗口
-            best_window = max(qualified_windows, key=lambda x: x['confidence'])
-            logger.info(
-                f"找到 {len(qualified_windows)} 个合格窗口，选择最佳窗口：置信度={best_window['confidence']:.3f}, 阶跃大小={best_window.get('step_size', 'N/A'):.2f}, 时间范围: {format_time_to_string(best_window['start_timestamp'])} - {format_time_to_string(best_window['end_timestamp'])}")
-            # 提取最佳窗口数据用于整定
-            # start_idx, end_idx = best_window['data_indices']
-            window_data = process_query_tsdb_data_interpolated(
-                db=db,
-                table_name=table,
-                required_fields=required_fields,
-                start_time=best_window['start_timestamp'],
-                end_time=best_window['end_timestamp'],
-                is_filter=is_filter
-            )
-
-        else:
-            # 手动指定模式
-            logger.info(f"执行手动整定，时间范围：{start_time} - {end_time}")
-
-            # 直接查询指定时间范围的数据
-            window_data = process_query_tsdb_data_interpolated(
-                db=db,
-                table_name=table,
-                required_fields=required_fields,
-                start_time=start_time_ms,
-                end_time=end_time_ms,
-                is_filter=is_filter,
-                window=1
-            )
-
-            if not window_data or len(window_data) == 0:
-                return {
-                    "mode": mode,
-                    "message": "指定时间范围内无数据"
-                }
-
-            best_window = {
-                "start_timestamp": start_time_ms,
-                "end_timestamp": end_time_ms,
-                "confidence": None,
-                "step_size": None,
-                "response_magnitude": None
-            }
-
-        # 执行PID参数整定
-        optimization_tool = PIDOptimizationTool()
-
-        # 如果指定了lambda_val，需要传递给整定工具
-        # 这里通过修改工具调用方式实现
-        optimization_result = optimization_tool._run(
-            history_data=window_data,
-            is_lambda=True,
-            model_type=model_type
+        # 调用Service层执行自动整定
+        result = ExpertTuningService.auto_tuning(
+            mode=mode,
+            loop_uri=loop_uri,
+            start_time=start_time,
+            end_time=end_time,
+            model_type=model_type,
+            lambda_val=lambda_val,
+            window_size=window_size,
+            step_size=step_size,
+            confidence_threshold=confidence_threshold,
+            window_sec=window_sec,
+            is_filter=is_filter
         )
 
-        # 解析结果
-        try:
-            result_data = json.loads(optimization_result)
-
-            # 构建返回数据
-            response = {
-                "mode": mode,
-                "table": table,
-                "time_range": {
-                    "start_time": format_time_to_string(best_window["start_timestamp"]),
-                    "end_time": format_time_to_string(best_window["end_timestamp"]),
-                    "duration_seconds": (best_window["end_timestamp"] - best_window["start_timestamp"]) / 1000
-                },
-                "model_type": model_type.value,
-                "lambda_tuning_enabled": True,
-                "optimization_result": result_data
-            }
-
-            return response
-
-        except json.JSONDecodeError:
-            return {
-                "mode": mode,
-                "message": f"参数整定失败: {optimization_result}"
-            }
+        return result
 
     except HTTPException:
         raise
@@ -431,6 +130,93 @@ async def auto_tuning(
         logger.error(f"自动整定失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"参数整定失败: {str(e)}")
 
+@router.get("/detect_and_visualize",
+            summary="设备状态识别",
+            operation_id="设备状态识别",
+            description="智能识别时间区间数据状态（稳态、非稳态）")
+async def auto_detect_and_visualize(
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+                                 examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
+        start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
+        end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式")
+):
+    try:
+        # 调用Service层执行状态识别
+        result = ExpertTuningService.detect_and_visualize_service(
+            loop_uri=loop_uri,
+            start_time=start_time,
+            end_time=end_time
+        )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"识别失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"识别失败: {str(e)}")
+
+@router.post("/calculate-pid",
+             summary="PID计算",
+             operation_id="根据KTL和模型类型计算PID参数",
+             description="根据输入的模型参数(K、T、L)和模型类型，直接计算对应的PID参数")
+async def calculate_pid(
+        K: float = Query(..., description="增益系数 K", examples=[0.5, 1.0, 2.0]),
+        T1: float = Query(..., description="时间常数 T1 (秒)", examples=[10.0, 30.0, 50.0]),
+        T2: Optional[float] = Query(None, description="二阶时间常数 T2 (秒，仅二阶模型需要)", examples=[10.0, 20.0]),
+        L: Optional[float] = Query(0, description="滞后时间 L (秒)", examples=[0, 1.0, 5.0]),
+        lambda_val: Optional[float] = Query(None, description="Lambda值（期望闭环时间常数），不指定时自动计算",
+                                            examples=[10.0, 30.0]),
+        model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
+                                      examples=["FOPDT", "FO", "SOPDT", "SO", "FO_INTEGRATOR", "SO_INTEGRATOR"])
+):
+    """
+    **直接PID参数计算接口**
+
+    根据输入的系统模型参数(K、T、L等)和模型类型，使用Lambda方法直接计算PID参数。
+
+    **参数说明：**
+    - K: 系统增益，值越大系统反应越灵敏
+    - T: 时间常数，决定系统响应速度
+    - T2: 仅用于二阶模型(SOPDT, SO, SO_INTEGRATOR)
+    - L: 滞后时间，仅用于带滞后的模型(FOPDT, SOPDT)
+    - lambda_val: Lambda值，越小响应越快但风险越大；越大响应越慢但更稳定
+    - model_type: 选择对应的模型类型
+
+    **模型类型说明：**
+    - FOPDT: 一阶加纯滞后模型 G(s) = K/(Ts+1)*e^(-Ls) - 通用工业过程
+    - FO: 一阶模型 G(s) = K/(Ts+1) - 无滞后系统
+    - SOPDT: 二阶加纯滞后模型 G(s) = K/((T1s+1)(T2s+1))*e^(-Ls) - 温度、化学过程
+    - SO: 纯二阶模型 G(s) = K/((T1s+1)(T2s+1)) - 无滞后二阶系统
+    - FO_INTEGRATOR: 一阶积分模型 G(s) = K/(s(Ts+1)) - 流量累积、液位控制
+    - SO_INTEGRATOR: 二阶积分模型 G(s) = K/(s^2(T1s+1)(T2s+1)) - 双积分过程
+
+    **返回值：**
+    - params: 计算的PID参数 (Kp, Ki, Kd)
+    - model_type: 使用的模型类型
+    - lambda: 实际使用的Lambda值
+    - recommendations: 针对选定模型类型的应用建议
+    """
+    try:
+        # 调用Service层计算PID参数
+        result = ExpertTuningService.calculate_pid(
+            K=K,
+            T1=T1,
+            T2=T2,
+            L=L,
+            lambda_val=lambda_val,
+            model_type=model_type
+        )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"PID参数计算失败: {str(e)}"
+        )
 
 @router.post("/generate-all-curves",
              summary="仿真曲线生成（拟合、闭环、阶跃响应）",

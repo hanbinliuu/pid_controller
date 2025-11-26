@@ -14,7 +14,7 @@ import os
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
 
-from core.utils.pid_converter import PIDConverter
+from api.services.conversion_service import ConversionService
 
 router = APIRouter()
 
@@ -89,22 +89,14 @@ async def convert_pid_to_classical(params: PIDParameters):
     包含原始PID参数和转换后的经典控制参数，便于对比验证
     """
     try:
-        classical = PIDConverter.pid_to_classical(params.kp, params.ki, params.kd)
-        
-        response_data = {
-            "standard": {
-                "kp": params.kp,
-                "ki": params.ki, 
-                "kd": params.kd
-            },
-            "classical": classical
-        }
-        
-        return ConversionResponse(
-            success=True,
-            message="PID参数转换为经典控制参数成功",
-            data=response_data
+        # 调用Service层执行转换
+        result = ConversionService.convert_pid_to_classical(
+            kp=params.kp, 
+            ki=params.ki, 
+            kd=params.kd
         )
+        
+        return result
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"转换失败: {str(e)}")
@@ -142,25 +134,14 @@ async def convert_classical_to_pid(params: ClassicalParameters):
     - 不同品牌控制器之间的参数迁移
     """
     try:
-        pid = PIDConverter.classical_to_pid(
-            params.proportional_band,
-            params.integral_time,
-            params.derivative_time
+        # 调用Service层执行转换
+        result = ConversionService.convert_classical_to_pid(
+            proportional_band=params.proportional_band,
+            integral_time=params.integral_time,
+            derivative_time=params.derivative_time
         )
         
-        response_data = {
-            "classical": {
-                "proportional_band": params.proportional_band,
-                "integral_time": params.integral_time,
-                "derivative_time": params.derivative_time
-            },
-            "standard": pid
-        }
-        
-        return ConversionResponse(
-            message="经典控制参数转换为PID参数成功",
-            data=response_data
-        )
+        return result
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"转换失败: {str(e)}")
@@ -170,7 +151,6 @@ async def convert_classical_to_pid(params: ClassicalParameters):
              response_model=ConversionResponse,
              summary="PID参数格式化与双重表示",
              operation_id="PID参数格式化与双重表示",
-
              description="将PID参数进行格式化处理，同时提供标准形式和经典控制形式的双重表示，便于不同应用场景使用")
 async def format_pid_parameters(params: PIDParameters):
     """
@@ -200,15 +180,15 @@ async def format_pid_parameters(params: PIDParameters):
     - 便于参数审核和验证
     """
     try:
-        formatted = PIDConverter.format_pid_parameters(
-            params.kp, params.ki, params.kd, include_classical=True
+        # 调用Service层执行格式化
+        result = ConversionService.format_pid_parameters(
+            kp=params.kp, 
+            ki=params.ki, 
+            kd=params.kd, 
+            include_classical=True
         )
         
-        return ConversionResponse(
-            success=True,
-            message="参数格式化成功",
-            data=formatted
-        )
+        return result
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"格式化失败: {str(e)}")
@@ -218,7 +198,6 @@ async def format_pid_parameters(params: PIDParameters):
              response_model=ValidationResponse,
              summary="PID参数有效性验证",
              operation_id="PID参数有效性验证",
-
              description="对PID控制器参数进行全面的有效性检查，包括数值范围、稳定性分析等，确保参数的可用性和安全性")
 async def validate_pid_parameters(params: PIDParameters):
     """
@@ -250,36 +229,23 @@ async def validate_pid_parameters(params: PIDParameters):
     - 系统安全性评估
     """
     try:
-        validation = PIDConverter.validate_pid_parameters(
-            params.kp, params.ki, params.kd
+        # 调用Service层执行验证
+        validation = ConversionService.validate_pid_parameters(
+            kp=params.kp, 
+            ki=params.ki, 
+            kd=params.kd
         )
         
-        # 生成验证消息
-        issues = []
-        if not validation['kp_valid']:
-            issues.append("Kp参数无效")
-        if not validation['ki_valid']:
-            issues.append("Ki参数无效")
-        if not validation['kd_valid']:
-            issues.append("Kd参数无效")
-        if not validation['stable']:
-            issues.append("系统可能不稳定 (Kp <= 0)")
-            
-        message = "所有参数有效" if not issues else f"发现问题: {', '.join(issues)}"
-        
-        return ValidationResponse(
-            **validation,
-            message=message
-        )
+        return validation
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"验证失败: {str(e)}")
 
 
 @router.get("/conversion-formulas",
-            summary="获取PID参数转换公式",
-            operation_id="获取PID参数转换公式",
-            description="获取PID标准参数与经典控制参数之间转换的数学公式和详细说明，包含理论基础和注意事项")
+           summary="获取PID参数转换公式",
+           operation_id="获取PID参数转换公式",
+           description="获取PID标准参数与经典控制参数之间转换的数学公式和详细说明，包含理论基础和注意事项")
 async def get_conversion_formulas():
     """
     **获取PID参数转换公式详解**
@@ -296,7 +262,7 @@ async def get_conversion_formulas():
     **2. 经典控制 → PID：**
     - 比例增益: Kp = 100 / PB(%)
     - 积分增益: Ki = Kp / Ti(s)
-    - 微分增益: Kd = Td(s) × Kp
+    - 微分增益: Kd = Td(s) * Kp
     
     **理论说明：**
     - 比例带反映控制器的放大倍数
@@ -309,37 +275,15 @@ async def get_conversion_formulas():
     - 不同控制器间的参数转换
     - 控制理论教学和培训
     """
-    formulas = {
-        "pid_to_classical": {
-            "proportional_band": "PB(%) = 100 / Kp",
-            "integral_time": "Ti(s) = Kp / Ki",
-            "derivative_time": "Td(s) = Kd / Kp"
-        },
-        "classical_to_pid": {
-            "kp": "Kp = 100 / PB(%)",
-            "ki": "Ki = Kp / Ti(s)",
-            "kd": "Kd = Td(s) * Kp"
-        },
-        "notes": [
-            "比例带PB表示控制器输出100%变化时对应的过程变量变化百分比",
-            "积分时间Ti表示积分作用达到比例作用同样效果所需的时间",
-            "微分时间Td表示微分作用提前的时间量",
-            "当Ki=0时，积分时间为无穷大(纯比例或PD控制)",
-            "当Kp=0时，系统通常不稳定"
-        ]
-    }
+    # 调用Service层获取转换公式
+    formulas = ConversionService.get_conversion_formulas()
     
-    return {
-        "success": True,
-        "message": "转换公式获取成功",
-        "data": formulas
-    }
+    return formulas
 
 
 @router.get("/examples",
             summary="获取PID参数转换示例",
             operation_id="获取PID参数转换示例",
-
             description="获取典型PID控制场景的参数转换示例，包含常见控制器配置和应用说明，便于理解和参考")
 async def get_conversion_examples():
     """
@@ -375,35 +319,7 @@ async def get_conversion_examples():
     - 参数配置的起始点
     - 控制系统设计指导
     """
-    examples = [
-        {
-            "name": "典型PI控制器",
-            "pid": {"kp": 2.0, "ki": 0.5, "kd": 0.0},
-            "classical": {"proportional_band": 50.0, "integral_time": 4.0, "derivative_time": 0.0},
-            "description": "适用于过程控制，无微分作用避免噪声影响"
-        },
-        {
-            "name": "PID控制器",
-            "pid": {"kp": 1.5, "ki": 0.3, "kd": 0.08},
-            "classical": {"proportional_band": 66.67, "integral_time": 5.0, "derivative_time": 0.053},
-            "description": "完整PID控制，适用于需要快速响应的系统"
-        },
-        {
-            "name": "纯比例控制",
-            "pid": {"kp": 4.0, "ki": 0.0, "kd": 0.0},
-            "classical": {"proportional_band": 25.0, "integral_time": None, "derivative_time": 0.0},
-            "description": "最简单的控制方式，适用于稳态精度要求不高的场合"
-        },
-        {
-            "name": "PD控制器",
-            "pid": {"kp": 1.0, "ki": 0.0, "kd": 0.1},
-            "classical": {"proportional_band": 100.0, "integral_time": None, "derivative_time": 0.1},
-            "description": "适用于积分饱和严重的系统"
-        }
-    ]
+    # 调用Service层获取转换示例
+    examples = ConversionService.get_conversion_examples()
     
-    return {
-        "success": True,
-        "message": "转换示例获取成功",
-        "data": examples
-    }
+    return examples

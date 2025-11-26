@@ -8,9 +8,8 @@ from fastapi import APIRouter, HTTPException, Query, Header
 from pydantic import Field,BaseModel
 
 from api.routes.time_util import parse_time_to_milliseconds
-from core.agent.tools import process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
+from api.services.device_data_service import DeviceDataService
 from core.data.bff_model_client import BFFModelClient
-from core.data.real_tsdb_client import query_raw_data, get_default_database
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -54,67 +53,23 @@ async def get_point_history_data_tsdb(
                            examples=[1500])
 ):
     try:
-        # # 参数验证
-        # if not table or not table.strip():
-        #     raise HTTPException(
-        #         status_code=400,
-        #         detail="表名参数不能为空"
-        #     )
-        if end_time is None:
-            end_time = int(datetime.now().timestamp() * 1000)
-
-        if start_time is None:
-            start_time = end_time - 60 * 60 * 1000  # 默认1小时
-        # 时间格式转换和验证
-        try:
-            start_time_ms = parse_time_to_milliseconds(start_time)
-            end_time_ms = parse_time_to_milliseconds(end_time)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"时间格式错误: {str(e)}"
-            )
-
-        # 验证时间范围
-        if start_time_ms >= end_time_ms:
-            raise HTTPException(
-                status_code=400,
-                detail="开始时间必须小于结束时间"
-            )
-
-        # 使用环境变量中的数据库名
-        db = get_default_database()
-
-        # 使用新的查询方法
-        result = query_raw_data(
-            db=db,
-            table=table_name,
-            fields=(["time"] + (fields or [])),
-            start_time=start_time_ms,
-            end_time=end_time_ms,
+        # 调用Service层查询测点历史数据
+        result = DeviceDataService.query_point_history_data_tsdb(
+            table_name=table_name,
+            fields=fields,
+            start_time=start_time,
+            end_time=end_time,
             limit=limit
         )
-        # history_data = json.dumps(result, ensure_ascii=False, indent=2)
 
-        # 格式化响应数据
-        response_data = {
-            "table": table_name,
-            "start_time": start_time,
-            "end_time": end_time,
-            "totalRecords": len(result.values or []),
-            "data": {
-                "columns": result.columns,
-                "values": result.values,
-            }
-        }
-
-        return response_data
+        return result
 
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"获取历史数据失败: {str(e)}"
         )
+
 @router.get("/history-data-raw",
             summary="回路测点数据查询",
             # operation_id="测点数据查询",
@@ -130,61 +85,15 @@ async def get_history_data_raw(
                                                     "2025-01-02"])
 
 ):
-
-    # table = "PID_FEP_Gateway_Device_001default"
-    # if not fields:
-    #     required_fields = DEFAULT_FIELD_MAPPING
-    # else:
-    #     required_fields = fields
-    # required_fields = DEFAULT_FIELD_MAPPING
-
     try:
-        # 时间默认值：最近2小时
-        if end_time is None:
-            end_time = int(datetime.now().timestamp() * 1000)
-
-        if start_time is None:
-            start_time = end_time - 2 * 60 * 60 * 1000  # 默认2小时
-        # 时间格式转换和验证
-        try:
-            start_time_ms = parse_time_to_milliseconds(start_time)
-            end_time_ms = parse_time_to_milliseconds(end_time)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"时间格式错误: {str(e)}"
-            )
-
-        # 验证时间范围
-        if start_time_ms >= end_time_ms:
-            raise HTTPException(
-                status_code=400,
-                detail="开始时间必须小于结束时间"
-            )
-        # 使用环境变量中的数据库名
-        db = get_default_database()
-        # 将字段列表转换为字段映射map
-        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
-
-        # 使用新的查询方法
-        history_data = process_query_tsdb_data_raw(
-            db=db,
-            table_name=table,
-            required_fields=required_fields,
-            start_time=start_time_ms,
-            end_time=end_time_ms
+        # 调用Service层查询原始历史数据
+        result = DeviceDataService.query_history_data_raw(
+            loop_uri=loop_uri,
+            start_time=start_time,
+            end_time=end_time
         )
-        logger.info(history_data)
-        # 格式化响应数据
-        response_data = {
-            "table": table,
-            "start_time": start_time,
-            "end_time": end_time,
-            "totalRecords": len(history_data),
-            "data": history_data
-        }
 
-        return response_data
+        return result
 
     except Exception as e:
         raise HTTPException(
@@ -209,63 +118,16 @@ async def get_history_zhongkong_interpolated(
         is_filter: bool = Query(None, required=False, description="是否过滤，获取最新一组pid值数据",
                                           examples=[True]),
 ):
-    if end_time is None:
-        end_time = int(datetime.now().timestamp() * 1000)
-
-    if start_time is None:
-        start_time = end_time - 60 * 60 * 1000  # 默认1小时
-    # table_name="PID_FEP_Gateway_Device_001default"
-    # if table:
-    #     table_name = table
-    # required_fields = DEFAULT_FIELD_MAPPING
-    table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
     try:
-        # 参数验证
-        if not table or not table.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="表名参数不能为空"
-            )
-
-        # 时间格式转换和验证
-        try:
-            start_time_ms = parse_time_to_milliseconds(start_time)
-            end_time_ms = parse_time_to_milliseconds(end_time)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"时间格式错误: {str(e)}"
-            )
-
-        # 验证时间范围
-        if start_time_ms >= end_time_ms:
-            raise HTTPException(
-                status_code=400,
-                detail="开始时间必须小于结束时间"
-            )
-        # 使用环境变量中的数据库名
-        db = get_default_database()
-
-        # 使用新的查询方法
-        history_data = process_query_tsdb_data_interpolated(
-            db=db,
-            table_name=table,
-            required_fields=required_fields,
-            start_time=start_time_ms,
-            end_time=end_time_ms,
+        # 调用Service层查询插值历史数据
+        result = DeviceDataService.query_history_data_interpolated(
+            loop_uri=loop_uri,
+            start_time=start_time,
+            end_time=end_time,
             is_filter=is_filter
         )
-        # logger.info(history_data)
-        # 格式化响应数据
-        response_data = {
-            "table": table,
-            "start_time": start_time,
-            "end_time": end_time,
-            "totalRecords": len(history_data),
-            "data": history_data
-        }
 
-        return response_data
+        return result
 
     except Exception as e:
         raise HTTPException(

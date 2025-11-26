@@ -9,6 +9,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Query
 
+from core.data.bff_model_client import Config
 from api.services.bff_service import BFFService
 
 router = APIRouter()
@@ -47,7 +48,7 @@ async def get_point_paths(
     }
     """
     try:
-        # 使用BFF服务查询
+        # 调用Service层查询
         result = BFFService.get_point_paths(project_path)
         
         return result
@@ -109,7 +110,7 @@ async def query_current_raw_values(
     }
     """
     try:
-        # 使用BFF服务查询
+        # 调用Service层查询
         result = BFFService.get_point_values(point_names, loop_uri, point_path)
         
         return result
@@ -165,7 +166,7 @@ async def get_table_and_points(
     }
     """
     try:
-        # 使用BFF服务查询
+        # 调用Service层查询
         result = BFFService.get_table_and_points(project_path, point_path)
         
         return result
@@ -243,7 +244,7 @@ async def get_next_level_submodel(
     }
     """
     try:
-        # 使用BFF服务查询
+        # 调用Service层查询
         result = BFFService.get_next_level_submodel(identifier)
         
         logger.info(f"BFF查询成功，模型标识符: {identifier}, 子模型数量: {result.get('total', 0)}")
@@ -319,7 +320,7 @@ async def list_instances_under_tree(
     }
     """
     try:
-        # 使用BFF服务查询
+        # 调用Service层查询
         result = BFFService.list_instances_under_tree(
             model_identifier_list=model_identifier_list,
             start_identifier_list=start_identifier_list,
@@ -383,7 +384,7 @@ async def query_nodes_detail(
     }
     """
     try:
-        # 使用BFF服务查询
+        # 调用Service层查询
         result = BFFService.query_nodes_by_uris(uris)
         
         logger.info(f"BFF查询成功，节点详细信数量: {result.get('total', 0)}")
