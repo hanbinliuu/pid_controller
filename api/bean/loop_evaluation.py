@@ -116,7 +116,27 @@ class LoopEvaluation(SQLModel, table=True):
         default=None,
         description="总时间 (秒)"
     )
+    pt_count: Optional[int] = Field(
+        default=None,
+        description="数据点数量"
+    )
+    pv_sum_value: Optional[int] = Field(
+        default=None,
+        description="过程变量和"
+    )
+    pv_sum_squares: Optional[int] = Field(
+        default=None,
+        description="过程变量平方和"
+    )
+    mv_sum_value: Optional[int] = Field(
+        default=None,
+        description="操纵变量和"
+    )
 
+    mv_sum_squares: Optional[int] = Field(
+        default=None,
+        description="操纵变量平方和"
+    )
     # 时间戳
     created_time: datetime = Field(
         default_factory=datetime.now,
