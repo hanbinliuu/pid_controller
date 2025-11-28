@@ -601,7 +601,8 @@ class LoopMonitoringService:
     @staticmethod
     def calculate_performance_status_by_plant_24h(
             plant_uri: Optional[str] = None,
-            max_workers: int = 5
+            max_workers: int = 5,
+            data_span: int = 24
     ) -> Dict[str, Any]:
         """
         计算指定装置下所有回路过去24小时的性能状态（并行计算）
@@ -645,7 +646,8 @@ class LoopMonitoringService:
             # 使用批量计算方法
             return LoopMonitoringService.calculate_performance_status_batch(
                 loop_uris=loop_uris,
-                max_workers=max_workers
+                max_workers=max_workers,
+                data_span=data_span
             )
 
         except Exception as e:

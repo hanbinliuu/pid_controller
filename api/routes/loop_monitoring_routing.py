@@ -210,7 +210,8 @@ async def get_performance_status_batch_24h(
         
         result = LoopMonitoringService.calculate_performance_status_batch(
             loop_uris=loop_uris,
-            max_workers=max_workers
+            max_workers=max_workers,
+            data_span=24
         )
         
         return {
