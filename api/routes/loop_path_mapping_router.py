@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+"""
+路由层 - 回路路径映射API接口
+"""
+import logging
+from typing import Optional, List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlmodel import Session
+
+from core.database.database import get_db
+from api.services.loop_path_mapping_service import LoopPathMappingService
+from api.bean.loop_path_mapping import LoopPathMapping
+
+logger = logging.getLogger(__name__)
+
+# 创建路由
+router = APIRouter(prefix="/api/v1", tags=["回路路径映射"])
+
+
+@router.post("/loop-path-mapping",
+            summary="创建回路路径映射",
+            operation_id="create_loop_path_mapping",
+            response_model=Dict[str, Any])
+async def create_loop_path_mapping(
+    loop_uri: str = Query(..., description="回路 URI"),
+    loop_path: str = Query(..., description="回路路径"),
+    loop_name: Optional[str] = Query(None, description="回路名称"),
+    pv_field: Optional[str] = Query(None, description="PV字段名"),
+    sv_field: Optional[str] = Query(None, description="SV字段名"),
+    mv_field: Optional[str] = Query(None, description="MV字段名"),
+    op_field: Optional[str] = Query(None, description="OP字段名"),
+    auto_status_field: Optional[str] = Query(None, description="自动状态字段名"),
+    pb_field: Optional[str] = Query(None, description="PB(比例带)字段名"),
+    ti_field: Optional[str] = Query(None, description="TI(积分时间常数)字段名"),
+    td_field: Optional[str] = Query(None, description="TD(微分时间常数)字段名"),
+    description: Optional[str] = Query(None, description="描述"),
+    db: Session = Depends(get_db)
+):
+    """
+    创建回路URI与路径的映射关系
+    
+    创建成功时返回创建的映射对象
+    """
+    try:
+        mapping = LoopPathMappingService.create_mapping(
+            db,
+            loop_uri=loop_uri,
+            loop_path=loop_path,
+            loop_name=loop_name,
+            pv_field=pv_field,
+            sv_field=sv_field,
+            mv_field=mv_field,
+            op_field=op_field,
+            auto_status_field=auto_status_field,
+            pb_field=pb_field,
+            ti_field=ti_field,
+            td_field=td_field,
+            description=description
+        )
+        
+        return {
+            "code": 0,
+            "message": "创建成功",
+            "data": {
+                "id": mapping.id,
+                "loop_uri": mapping.loop_uri,
+                "loop_path": mapping.loop_path,
+                "loop_name": mapping.loop_name,
+                "created_time": mapping.created_time.isoformat()
+            }
+        }
+    except Exception as e:
+        logger.error(f"创建回路路径映射失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"创建回路路径映射失败: {str(e)}"
+        )
+
+
+@router.get("/loop-path-mapping/by-uri",
+           summary="根据loop_uri查询映射",
+           operation_id="get_mapping_by_uri",
+           response_model=Dict[str, Any])
+async def get_mapping_by_uri(
+    loop_uri: str = Query(..., description="回路URI"),
+    db: Session = Depends(get_db)
+):
+    """
+    根据回路URI查询其对应的路径映射关系
+    """
+    try:
+        mapping = LoopPathMappingService.get_mapping_by_uri(db, loop_uri)
+        
+        if not mapping:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到loop_uri为 {loop_uri} 的映射记录"
+            )
+        
+        return {
+            "code": 0,
+            "message": "查询成功",
+            "data": {
+                "id": mapping.id,
+                "loop_uri": mapping.loop_uri,
+                "loop_path": mapping.loop_path,
+                "loop_name": mapping.loop_name,
+                "pv_field": mapping.pv_field,
+                "sv_field": mapping.sv_field,
+                "mv_field": mapping.mv_field,
+                "op_field": mapping.op_field,
+                "auto_status_field": mapping.auto_status_field,
+                "pb_field": mapping.pb_field,
+                "ti_field": mapping.ti_field,
+                "td_field": mapping.td_field,
+                "description": mapping.description,
+                "created_time": mapping.created_time.isoformat(),
+                "updated_time": mapping.updated_time.isoformat(),
+                "is_active": mapping.is_active
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查询回路路径映射失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询回路路径映射失败: {str(e)}"
+        )
+
+
+@router.get("/loop-path-mapping/by-path",
+           summary="根据loop_path查询映射",
+           operation_id="get_mapping_by_path",
+           response_model=Dict[str, Any])
+async def get_mapping_by_path(
+    loop_path: str = Query(..., description="回路路径"),
+    db: Session = Depends(get_db)
+):
+    """
+    根据回路路径查询其对应的URI映射关系
+    """
+    try:
+        mapping = LoopPathMappingService.get_mapping_by_path(db, loop_path)
+        
+        if not mapping:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到loop_path为 {loop_path} 的映射记录"
+            )
+        
+        return {
+            "code": 0,
+            "message": "查询成功",
+            "data": {
+                "id": mapping.id,
+                "loop_uri": mapping.loop_uri,
+                "loop_path": mapping.loop_path,
+                "loop_name": mapping.loop_name,
+                "pv_field": mapping.pv_field,
+                "sv_field": mapping.sv_field,
+                "mv_field": mapping.mv_field,
+                "op_field": mapping.op_field,
+                "auto_status_field": mapping.auto_status_field,
+                "pb_field": mapping.pb_field,
+                "ti_field": mapping.ti_field,
+                "td_field": mapping.td_field,
+                "description": mapping.description,
+                "created_time": mapping.created_time.isoformat(),
+                "updated_time": mapping.updated_time.isoformat(),
+                "is_active": mapping.is_active
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查询回路路径映射失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询回路路径映射失败: {str(e)}"
+        )
+
+
+@router.get("/loop-path-mapping/list",
+           summary="分页查询映射列表",
+           operation_id="list_loop_path_mapping",
+           response_model=Dict[str, Any])
+async def list_loop_path_mapping(
+    loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
+    loop_uri: Optional[str] = Query(None, description="回路URI（模糊匹配）"),
+    loop_path: Optional[str] = Query(None, description="回路路径（模糊匹配）"),
+    page_no: int = Query(1, description="页码，从1开始"),
+    page_size: int = Query(10, description="每页数量"),
+    db: Session = Depends(get_db)
+):
+    """
+    分页查询所有回路路径映射关系
+    """
+    try:
+        result = LoopPathMappingService.list_mappings(
+            db,
+            loop_name=loop_name,
+            loop_uri=loop_uri,
+            loop_path=loop_path,
+            page_no=page_no,
+            page_size=page_size
+        )
+        
+        mappings = result["mappings"]
+        pagination = result["pagination"]
+        
+        return {
+            "code": 0,
+            "message": "查询成功",
+            "data": {
+                "mappings": [
+                    {
+                        "id": m.id,
+                        "loop_uri": m.loop_uri,
+                        "loop_path": m.loop_path,
+                        "loop_name": m.loop_name,
+                        "pv_field": m.pv_field,
+                        "sv_field": m.sv_field,
+                        "mv_field": m.mv_field,
+                        "op_field": m.op_field,
+                        "auto_status_field": m.auto_status_field,
+                        "pb_field": m.pb_field,
+                        "ti_field": m.ti_field,
+                        "td_field": m.td_field,
+                        "description": m.description,
+                        "created_time": m.created_time.isoformat(),
+                        "updated_time": m.updated_time.isoformat(),
+                        "is_active": m.is_active
+                    }
+                    for m in mappings
+                ],
+                "pagination": pagination
+            }
+        }
+    except Exception as e:
+        logger.error(f"查询回路路径映射列表失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询回路路径映射列表失败: {str(e)}"
+        )
+
+
+@router.put("/loop-path-mapping",
+           summary="更新回路路径映射",
+           operation_id="update_loop_path_mapping",
+           response_model=Dict[str, Any])
+async def update_loop_path_mapping(
+    loop_uri: str = Query(..., description="回路 URI"),
+    loop_path: Optional[str] = Query(None, description="新的回路路径"),
+    loop_name: Optional[str] = Query(None, description="新的回路名称"),
+    pv_field: Optional[str] = Query(None, description="新的PV字段名"),
+    sv_field: Optional[str] = Query(None, description="新的SV字段名"),
+    mv_field: Optional[str] = Query(None, description="新的MV字段名"),
+    op_field: Optional[str] = Query(None, description="新的OP字段名"),
+    auto_status_field: Optional[str] = Query(None, description="新的自动状态字段名"),
+    pb_field: Optional[str] = Query(None, description="新的PB(比例带)字段名"),
+    ti_field: Optional[str] = Query(None, description="新的TI(积分时间常数)字段名"),
+    td_field: Optional[str] = Query(None, description="新的TD(微分时间常数)字段名"),
+    description: Optional[str] = Query(None, description="新的描述"),
+    db: Session = Depends(get_db)
+):
+    """
+    更新回路路径映射关系
+    """
+    try:
+        mapping = LoopPathMappingService.update_mapping(
+            db,
+            loop_uri=loop_uri,
+            loop_path=loop_path,
+            loop_name=loop_name,
+            pv_field=pv_field,
+            sv_field=sv_field,
+            mv_field=mv_field,
+            op_field=op_field,
+            auto_status_field=auto_status_field,
+            pb_field=pb_field,
+            ti_field=ti_field,
+            td_field=td_field,
+            description=description
+        )
+        
+        if not mapping:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到loop_uri为 {loop_uri} 的映射记录"
+            )
+        
+        return {
+            "code": 0,
+            "message": "更新成功",
+            "data": {
+                "id": mapping.id,
+                "loop_uri": mapping.loop_uri,
+                "loop_path": mapping.loop_path,
+                "loop_name": mapping.loop_name,
+                "updated_time": mapping.updated_time.isoformat()
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新回路路径映射失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"更新回路路径映射失败: {str(e)}"
+        )
+
+
+@router.delete("/loop-path-mapping",
+              summary="删除回路路径映射",
+              operation_id="delete_loop_path_mapping",
+              response_model=Dict[str, Any])
+async def delete_loop_path_mapping(
+    loop_uri: str = Query(..., description="回路URI"),
+    db: Session = Depends(get_db)
+):
+    """
+    删除指定的回路路径映射关系
+    """
+    try:
+        success = LoopPathMappingService.delete_mapping(db, loop_uri)
+        
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到loop_uri为 {loop_uri} 的映射记录"
+            )
+        
+        return {
+            "code": 0,
+            "message": "删除成功",
+            "data": {}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除回路路径映射失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"删除回路路径映射失败: {str(e)}"
+        )
+
+
+@router.get("/loop-path-mapping/maps/uri-to-path",
+           summary="获取URI到路径映射字典",
+           operation_id="get_uri_to_path_map",
+           response_model=Dict[str, Any])
+async def get_uri_to_path_map(db: Session = Depends(get_db)):
+    """
+    获取所有回路的URI到路径映射字典，用于快速查询
+    """
+    try:
+        uri_to_path = LoopPathMappingService.get_uri_to_path_map(db)
+        
+        return {
+            "code": 0,
+            "message": "查询成功",
+            "data": uri_to_path
+        }
+    except Exception as e:
+        logger.error(f"获取URI到路径映射字典失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取URI到路径映射字典失败: {str(e)}"
+        )
+
+
+@router.get("/loop-path-mapping/maps/path-to-uri",
+           summary="获取路径到URI映射字典",
+           operation_id="get_path_to_uri_map",
+           response_model=Dict[str, Any])
+async def get_path_to_uri_map(db: Session = Depends(get_db)):
+    """
+    获取所有回路的路径到URI映射字典，用于快速查询
+    """
+    try:
+        path_to_uri = LoopPathMappingService.get_path_to_uri_map(db)
+        
+        return {
+            "code": 0,
+            "message": "查询成功",
+            "data": path_to_uri
+        }
+    except Exception as e:
+        logger.error(f"获取路径到URI映射字典失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取路径到URI映射字典失败: {str(e)}"
+        )
+
+
+@router.post("/loop-path-mapping/batch",
+            summary="批量创建映射",
+            operation_id="batch_create_loop_path_mapping",
+            response_model=Dict[str, Any])
+async def batch_create_loop_path_mapping(
+    mapping_list: List[Dict[str, Any]],
+    db: Session = Depends(get_db)
+):
+    """
+    批量创建回路路径映射关系
+    
+    请求体示例：
+    ```json
+    [
+      {
+        "loop_uri": "/pid_zd/abc123",
+        "loop_path": "/设备/反应器/温度",
+        "loop_name": "温度控制",
+        "pv_field": "TEMP_PV"
+      }
+    ]
+    ```
+    """
+    try:
+        if not mapping_list:
+            raise HTTPException(
+                status_code=400,
+                detail="映射列表不能为空"
+            )
+        
+        mappings = LoopPathMappingService.batch_create_mappings(db, mapping_list)
+        
+        return {
+            "code": 0,
+            "message": f"批量创建成功，共创建 {len(mappings)} 条记录",
+            "data": {
+                "count": len(mappings),
+                "mappings": [
+                    {
+                        "id": m.id,
+                        "loop_uri": m.loop_uri,
+                        "loop_path": m.loop_path
+                    }
+                    for m in mappings
+                ]
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量创建回路路径映射失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"批量创建回路路径映射失败: {str(e)}"
+        )

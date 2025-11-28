@@ -15,6 +15,8 @@ sys.path.insert(0, project_root)
 from api.main import app
 # 导入数据库初始化函数
 from core.database.database import init_database
+# 导入定时任务初始化函数
+from api.tasks import init_cron_tasks, shutdown_cron_tasks
 
 # 配置日志
 def setup_logging():
@@ -62,6 +64,14 @@ try:
 except Exception as e:
     logger.error(f"数据库初始化失败: {str(e)}")
     logger.warning("服务将继续启动，但数据库功能可能不可用")
+
+# 初始化定时任务
+try:
+    init_cron_tasks()
+    logger.info("定时任务初始化成功")
+except Exception as e:
+    logger.error(f"定时任务初始化失败: {str(e)}")
+    logger.warning("应用将继续启动，但定时任务功能可能不可用")
 
 
 

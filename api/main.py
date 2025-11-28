@@ -10,6 +10,9 @@ from api.routes.device_data_route import router as iotda_router
 from api.routes.bff_route import router as bff_router
 from api.routes.expert_tuning_route import router as expert_tuning_router
 from api.routes.tuning_record_router import router as tuning_record_router
+from api.routes.loop_monitoring_routing import router as loop_monitoring_router
+from api.routes.loop_path_mapping_router import router as loop_path_mapping_router
+from api.routes.cron_task_router import router as cron_task_router
 
 # 导入中间件
 from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware
@@ -18,6 +21,8 @@ from fastapi.openapi.docs import (
     get_redoc_html,
     get_swagger_ui_html,
 )
+from fastapi.responses import FileResponse
+
 app = FastAPI(
     title='PID 整定 API',
     description='PID控制系统智能分析与自动化调优服务',
@@ -55,6 +60,9 @@ app.include_router(loop_router, prefix='/api/loop', tags=['回路管理'])
 app.include_router(tuning_record_router, prefix='/api/tuning-records', tags=['整定记录'])
 app.include_router(iotda_router, prefix='/api/data_query', tags=['时序数据查询接口'])
 app.include_router(bff_router, prefix='/api/bff', tags=['BFF模型'])
+app.include_router(loop_monitoring_router, prefix='/api/monitoring', tags=['回路监控'])
+app.include_router(loop_path_mapping_router, tags=['回路路径映射'])
+app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
 
 
 @app.get('/health')
@@ -71,6 +79,13 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs"
     }
+    
+@app.get("/monitoring")
+async def monitoring_page():
+    """回路监控页面"""
+    return FileResponse("static/monitoring/index.html")
+
+
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
     return get_swagger_ui_html(

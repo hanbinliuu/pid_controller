@@ -64,6 +64,8 @@ def init_database():
     try:
         # 导入所有模型以确保它们被注册
         from api.bean import tuning_record
+        from api.bean import loop_evaluation
+        from api.bean import loop_path_mapping
 
         # 创建所有表
         SQLModel.metadata.create_all(engine)

@@ -172,7 +172,8 @@ class BFFModelClient:
         'sv': 'SV',
         'pb': 'PB',
         'ti': 'TI',
-        'td': 'TD'
+        'td': 'TD',
+        'auto': 'AUTO'
     }
 
     def __init__(self, device_uri: Optional[str] = None, point_path: Optional[str] = None, pid_point_map:Dict[str, str] = None, timeout: int = None):

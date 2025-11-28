@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from core.data.bff_model_client import BFFModelClient
-from api.bean.loop_response import LoopListResponse, LoopInstance, PIDParams, Pagination, LoopInfoResponse
+from api.bean.loop_response import LoopListResponse, LoopInstance, LoopStatus, Pagination, LoopInfoResponse
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class LoopService:
                     loop_configs = [
                         {
                             'loop_uri': instance['uri'],
-                            'point_names': ['PB', 'TI', 'TD']
+                            'point_names': ['PB', 'TI', 'TD','PV','SV','MV']
                         }
                         for instance in instances
                     ]
@@ -75,11 +75,14 @@ class LoopService:
                         # 将PID参数添加到每个回路实例中
                         for instance in instances:
                             loop_uri = instance['uri']
-                            pid_values = loop_values.get(loop_uri, {})
+                            loop_statu_values = loop_values.get(loop_uri, {})
                             instance['pid_params'] = {
-                                'PB': pid_values.get('PB'),
-                                'TI': pid_values.get('TI'),
-                                'TD': pid_values.get('TD')
+                                'PB': loop_statu_values.get('PB'),
+                                'TI': loop_statu_values.get('TI'),
+                                'TD': loop_statu_values.get('TD'),
+                                'PV': loop_statu_values.get('PV'),
+                                'SV': loop_statu_values.get('SV'),
+                                'MV': loop_statu_values.get('MV')
                             }
                         
                         logger.info(f"成功查询 {len(loop_values)} 个回路的PID参数")
@@ -91,7 +94,10 @@ class LoopService:
                             instance['pid_params'] = {
                                 'PB': None,
                                 'TI': None,
-                                'TD': None
+                                'TD': None,
+                                'PV': None,
+                                'SV': None,
+                                'MV': None
                             }
 
                 # 转换为响应模型
@@ -104,10 +110,14 @@ class LoopService:
                             description=instance.get('description'),
                             uriPath=instance.get('uriPath'),
                             extendedAttr=instance.get('extendedAttr', {}),
-                            pid_params=PIDParams(
+                            pid_params=LoopStatus(
                                 PB=instance.get('pid_params', {}).get('PB'),
                                 TI=instance.get('pid_params', {}).get('TI'),
-                                TD=instance.get('pid_params', {}).get('TD')
+                                TD=instance.get('pid_params', {}).get('TD'),
+                                PV=instance.get('pid_params', {}).get('PV'),
+                                SV=instance.get('pid_params', {}).get('SV'),
+                                MV=instance.get('pid_params', {}).get('MV'),
+                                AUTO=instance.get('pid_params', {}).get('AUTO')
                             ) if instance.get('pid_params') else None
                         )
                         for instance in instances

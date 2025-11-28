@@ -485,7 +485,7 @@ class PerformanceEvaluator:
                 if isinstance(s, (int, float)):
                     is_auto.append(bool(s))
                 elif isinstance(s, str):
-                    is_auto.append(s.lower() in ["auto","1","true","自动"]) 
+                    is_auto.append(s.lower() in ["auto","1","255","true","自动"])
                 elif isinstance(s, bool):
                     is_auto.append(s)
                 else:

@@ -7,11 +7,15 @@ from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
 
-class PIDParams(BaseModel):
-    """PID参数模型"""
+class LoopStatus(BaseModel):
+    """回路状态"""
     PB: Optional[float] = Field(None, description="比例带 (%)")
     TI: Optional[float] = Field(None, description="积分时间 (秒)")
     TD: Optional[float] = Field(None, description="微分时间 (秒)")
+    PV: Optional[float] = Field(None, description="过程量")
+    MV: Optional[float] = Field(None, description="阀位量")
+    SV: Optional[float] = Field(None, description="目标量")
+    AUTO: Optional[str] = Field(None, description="自动控制状态")
 
 
 class LoopInstance(BaseModel):
@@ -22,7 +26,7 @@ class LoopInstance(BaseModel):
     description: Optional[str] = Field(None, description="描述")
     uriPath: str = Field(None, description="回路uriPath")
     extendedAttr: Dict[str, Any] = Field(default_factory=dict, description="扩展属性")
-    pid_params: Optional[PIDParams] = Field(None, description="PID参数最新值")
+    loop_status: Optional[LoopStatus] = Field(None, description="回路最新状态参数")
 
     class Config:
         json_schema_extra = {
@@ -33,10 +37,14 @@ class LoopInstance(BaseModel):
                 "description": "创建根节点，用于组织模型结构",
                 "uriPath": "/system/root,/pid_zd/root,/pid_zd/instance,/pid_zd/053f3c45413b48bbafacec609d142e57,pid_zd/7a9a36aeca1a4998b0aa44f83ec9709d,/pid_zd/1f59615dc9d4464388e29829f95a49c6,pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                 "extendedAttr": {"loop_type": "流量"},
-                "pid_params": {
+                "loop_status": {
                     "PB": 71.43,
                     "TI": 3.11,
-                    "TD": 2.0
+                    "TD": 2.0,
+                    "PV": 0.0,
+                    "MV": 0.0,
+                    "SV": 0.0,
+                    "AUTO": "自动"
                 }
             }
         }
@@ -76,10 +84,14 @@ class LoopListResponse(BaseModel):
                         "description": "创建根节点，用于组织模型结构",
                         "uriPath": "/system/root,/pid_zd/root,/pid_zd/instance,/pid_zd/053f3c45413b48bbafacec609d142e57,pid_zd/7a9a36aeca1a4998b0aa44f83ec9709d,/pid_zd/1f59615dc9d4464388e29829f95a49c6,pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                         "extendedAttr": {"loop_type": "流量"},
-                        "pid_params": {
+                        "loop_status": {
                             "PB": 71.43,
                             "TI": 3.11,
-                            "TD": 2.0
+                            "TD": 2.0,
+                            "PV": 0.0,
+                            "MV": 0.0,
+                            "SV": 0.0,
+                            "AUTO": "自动"
                         }
                     }
                 ],
