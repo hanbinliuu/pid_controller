@@ -9,7 +9,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Query
 
-from api.bean.loop_response import LoopListResponse, LoopInstance, LoopStatus, Pagination, LoopInfoResponse
+from api.response.loop_response import LoopListResponse, LoopInfoResponse
 from api.services.loop_service import LoopService
 
 router = APIRouter()
