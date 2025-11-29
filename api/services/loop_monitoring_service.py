@@ -278,7 +278,7 @@ class LoopMonitoringService:
             time_span: int = 24
     ) -> Dict[str, Any]:
         """
-        根据过去24小时数据计算回路的性能状态ÒÒ
+        根据过去历史数据计算回路的性能状态ÒÒ
         
         计算四个维度的性能指标：
         1. 投入度维度：自控率
@@ -316,7 +316,7 @@ class LoopMonitoringService:
 
             # 检查数据有效性
             if not history_data or not history_data.get('data'):
-                logger.warning(f"回路 {loop_uri} 无过去24小时数据")
+                logger.warning(f"回路 {loop_uri} 无历史数据")
                 return {
                     "loop_uri": loop_uri,
                     "status": "无数据",
@@ -474,7 +474,7 @@ class LoopMonitoringService:
             }
 
         except Exception as e:
-            logger.error(f"计算回路 {loop_uri} 过去24小时性能状态失败: {str(e)}")
+            logger.error(f"计算回路 {loop_uri} 过去性能状态失败: {str(e)}")
             return {
                 "loop_uri": loop_uri,
                 "status": "计算失败",
@@ -493,7 +493,7 @@ class LoopMonitoringService:
             data_span: int = 24
     ) -> Dict[str, Any]:
         """
-        批量计算多个回路过去24小时的性能状态（并行计算）
+        批量计算多个回路性能状态（并行计算）
         
         使用线程池并行计算多个回路的性能指标，提高计算效率。
         
@@ -600,7 +600,7 @@ class LoopMonitoringService:
             }
 
     @staticmethod
-    def calculate_performance_status(
+    def calculate_performance_status_plant(
             plant_uri: Optional[str] = None,
             max_workers: int = 5,
             data_span: int = 24

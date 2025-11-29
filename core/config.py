@@ -178,6 +178,18 @@ class Config:
         int
     )
     
+    # 写入性能评估结果配置
+    TASK_LOOP_PERFORMANCE_PERSIST_ENABLE: bool = _get_config(
+        'task.loop_performance.persist.enable',
+        True,
+        bool
+    )
+    TASK_LOOP_PERFORMANCE_PERSIST_MIN_SCORE: float = _get_config(
+        'task.loop_performance.persist.min_score',
+        0.0,
+        float
+    )
+    
     # 模型树加载任务配置
     TASK_LOAD_MODEL_TREE_ENABLE: bool = _get_config(
         'task.load_model_tree.enable',

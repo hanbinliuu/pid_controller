@@ -90,9 +90,9 @@ async def get_loop_trend_data(
         ),
         time_range: int = Query(
             1,
-            description="时间范围（小时），支持1/4/12",
+            description="时间范围（小时），支持1/4/12/24",
             ge=1,
-            le=12
+            le=24
         )
 ) -> Dict[str, Any]:
     """
@@ -137,7 +137,7 @@ async def get_performance_status(
     )
 ) -> Dict[str, Any]:
     """
-    查询回路过去24小时的性能状态
+    查询回路过去的性能状态
     
     功能说明：
     - 计算自控率（投入度维度）
@@ -152,7 +152,10 @@ async def get_performance_status(
             loop_uri=loop_uri
         )
         
-        return result
+        return {
+            "loop_uri": loop_uri,
+            "performance_status": result
+        }
         
     except Exception as e:
         logger.error(f"查询回路性能状态失败: {str(e)}")
@@ -163,12 +166,12 @@ async def get_performance_status(
 
 
 @router.post(
-    "/performance-status-batch-24h",
-    summary="批量查询多个回路24小时性能状态（并行计算）",
-    operation_id="批量查询回路24小时性能状态",
+    "/performance-status-batch",
+    summary="批量查询多个回路性能状态（并行计算）",
+    operation_id="批量查询回路性能状态",
     description="批量查询多个回路的性能状态，使用线程池并行计算以提高效率"
 )
-async def get_performance_status_batch_24h(
+async def get_performance_status_batch(
     loop_uris: List[str] = Query(
         ...,
         description="回路 URI 列表",
@@ -182,7 +185,7 @@ async def get_performance_status_batch_24h(
     )
 ) -> Dict[str, Any]:
     """
-    批量查询多个回路的24小时性能状态
+    批量查询多个回路的性能状态
     
     功能说明：
     - 支持同时查询多个回路的性能状态
@@ -204,7 +207,10 @@ async def get_performance_status_batch_24h(
             data_span=24
         )
         
-        return result
+        return {
+            "loop_uri": loop_uris,
+            "performance_status": result
+        }
         
     except HTTPException:
         raise
@@ -217,9 +223,9 @@ async def get_performance_status_batch_24h(
 
 
 @router.get(
-    "/performance-status-by-plant-24h",
-    summary="查询层级内所有回路24小时性能状态（并行计算）",
-    operation_id="查询层级内回路24小时性能状态",
+    "/performance-status-by-plant",
+    summary="查询层级内所有回路性能状态（并行计算）",
+    operation_id="查询层级内回路性能状态",
     description="查询指定层级内下所有回路的性能状态，自动获取层级内所有回路并并行计算"
 )
 async def get_performance_status_by_plant_24h(
@@ -236,7 +242,7 @@ async def get_performance_status_by_plant_24h(
     )
 ) -> Dict[str, Any]:
     """
-    查询装置内所有回路的24小时性能状态
+    查询装置内所有回路的性能状态
     
     功能说明：
     - 自动获取装置下的所有回路
@@ -246,12 +252,15 @@ async def get_performance_status_by_plant_24h(
     - 记录计算失败的回路详情
     """
     try:
-        result = LoopMonitoringService.calculate_performance_status(
+        result = LoopMonitoringService.calculate_performance_status_plant(
             plant_uri=plant_uri,
             max_workers=max_workers
         )
         
-        return result
+        return {
+            "plant_uri": plant_uri,
+            "performance_status": result
+        }
         
     except Exception as e:
         logger.error(f"查询装置回路性能状态失败: {str(e)}")
