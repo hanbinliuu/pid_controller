@@ -66,10 +66,7 @@ async def get_loop_realtime_status(
             page_size=page_size
         )
         
-        return {
-            "status": "success",
-            "data": result
-        }
+        return result
         
     except Exception as e:
         logger.error(f"查询回路实时状态失败: {str(e)}")
@@ -117,11 +114,7 @@ async def get_loop_trend_data(
             end_time=end_time
         )
         
-        return {
-            "status": "success",
-            "data": trend_data
-        }
-        
+        return trend_data
     except Exception as e:
         logger.error(f"查询回路趋势数据失败: {str(e)}")
         raise HTTPException(
@@ -136,7 +129,7 @@ async def get_loop_trend_data(
     operation_id="查询回路性能状态",
     description="根据历史数据计算回路的性能等级，稳定性，精确性，高效性等指标"
 )
-async def get_performance_status_last_24h(
+async def get_performance_status(
     loop_uri: str = Query(
         ...,
         description="回路 URI",
@@ -159,10 +152,7 @@ async def get_performance_status_last_24h(
             loop_uri=loop_uri
         )
         
-        return {
-            "status": "success",
-            "data": result
-        }
+        return result
         
     except Exception as e:
         logger.error(f"查询回路性能状态失败: {str(e)}")
@@ -214,10 +204,7 @@ async def get_performance_status_batch_24h(
             data_span=24
         )
         
-        return {
-            "status": "success",
-            "data": result
-        }
+        return result
         
     except HTTPException:
         raise
@@ -259,15 +246,12 @@ async def get_performance_status_by_plant_24h(
     - 记录计算失败的回路详情
     """
     try:
-        result = LoopMonitoringService.calculate_performance_status_by_plant_24h(
+        result = LoopMonitoringService.calculate_performance_status(
             plant_uri=plant_uri,
             max_workers=max_workers
         )
         
-        return {
-            "status": "success",
-            "data": result
-        }
+        return result
         
     except Exception as e:
         logger.error(f"查询装置回路性能状态失败: {str(e)}")

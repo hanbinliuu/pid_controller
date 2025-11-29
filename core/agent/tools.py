@@ -1378,8 +1378,8 @@ def process_query_tsdb_data_interpolated(db: str,
     field_mapping = required_fields
     query_field_list = list(field_mapping.values())
     
-    # 定义仅查询必要的字段（不包括PID参数）
-    pid_fields = [field_mapping.get(key) for key in ['mv', 'pv', 'sv', 'pb', 'ti', 'td'] if field_mapping.get(key)]
+    # 定义仅查询必要的字段
+    pid_fields = [field_mapping.get(key) for key in ['mv', 'pv', 'sv', 'pb', 'ti', 'td','auto'] if field_mapping.get(key)]
     query_fields = [field for field in query_field_list if field not in pid_fields]
     
     all_records = []

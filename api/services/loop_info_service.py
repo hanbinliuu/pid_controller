@@ -19,12 +19,11 @@ class LoopInfoService:
     def create_mapping(
         db: Session,
         loop_uri: str,
-        loop_path: str,
+        loop_path: Optional[str] = None,
         loop_name: Optional[str] = None,
         pv_field: Optional[str] = None,
         sv_field: Optional[str] = None,
         mv_field: Optional[str] = None,
-        op_field: Optional[str] = None,
         auto_status_field: Optional[str] = None,
         pb_field: Optional[str] = None,
         ti_field: Optional[str] = None,
@@ -37,12 +36,11 @@ class LoopInfoService:
         Args:
             db: 数据库会话
             loop_uri: 回路URI
-            loop_path: 回路路径
+            loop_path: PID相关参数的相对路径
             loop_name: 回路名称
             pv_field: PV字段
             sv_field: SV字段
             mv_field: MV字段
-            op_field: OP字段
             auto_status_field: 自动状态字段
             pb_field: PB(比例带)字段
             ti_field: TI(积分时间常数)字段
@@ -60,7 +58,6 @@ class LoopInfoService:
                 "pv_field": pv_field,
                 "sv_field": sv_field,
                 "mv_field": mv_field,
-                "op_field": op_field,
                 "auto_status_field": auto_status_field,
                 "pb_field": pb_field,
                 "ti_field": ti_field,
@@ -90,7 +87,7 @@ class LoopInfoService:
         return LoopInfoDAO.get_by_loop_uri(db, loop_uri)
     
     @staticmethod
-    def get_mapping_by_path(db: Session, loop_path: str) -> Optional[LoopInfo]:
+    def get_mapping_by_path(db: Session, loop_path: str) -> List[LoopInfo]:
         """
         根据loop_path获取映射关系
         
@@ -158,7 +155,6 @@ class LoopInfoService:
         pv_field: Optional[str] = None,
         sv_field: Optional[str] = None,
         mv_field: Optional[str] = None,
-        op_field: Optional[str] = None,
         auto_status_field: Optional[str] = None,
         pb_field: Optional[str] = None,
         ti_field: Optional[str] = None,
@@ -171,12 +167,11 @@ class LoopInfoService:
         Args:
             db: 数据库会话
             loop_uri: 回路URI（用于查找要更新的记录）
-            loop_path: 新的回路路径
+            loop_path: 新的PID相关参数相对路径
             loop_name: 新的回路名称
             pv_field: 新的PV字段
             sv_field: 新的SV字段
             mv_field: 新的MV字段
-            op_field: 新的OP字段
             auto_status_field: 新的自动状态字段
             pb_field: 新的PB(比例带)字段
             ti_field: 新的TI(积分时间常数)字段
@@ -198,8 +193,6 @@ class LoopInfoService:
                 update_data["sv_field"] = sv_field
             if mv_field is not None:
                 update_data["mv_field"] = mv_field
-            if op_field is not None:
-                update_data["op_field"] = op_field
             if auto_status_field is not None:
                 update_data["auto_status_field"] = auto_status_field
             if pb_field is not None:

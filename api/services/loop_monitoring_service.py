@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from api.services.device_data_service import DeviceDataService
 from core.client.bff_model_client import BFFModelClient
 from api.bean.loop_response import LoopInstance, LoopStatus
 from core.algorithm.stability_rate import PerformanceEvaluator
@@ -195,12 +196,12 @@ class LoopMonitoringService:
             包含趋势数据的字典
         """
         try:
-            with BFFModelClient(device_uri=loop_uri) as client:
                 # 查询历史插值数据
-                history_data = client.query_history_data_interpolated(
+                history_data = DeviceDataService.query_history_data_interpolated(
+                    loop_uri=loop_uri,
                     start_time=start_time,
                     end_time=end_time,
-                    limit=1000  # 限制数据点数量
+                    window=1000  # 限制数据点数量
                 )
 
                 # 检查是否有数据
@@ -277,7 +278,7 @@ class LoopMonitoringService:
             time_span: int = 24
     ) -> Dict[str, Any]:
         """
-        根据过去24小时数据计算回路的性能状态
+        根据过去24小时数据计算回路的性能状态ÒÒ
         
         计算四个维度的性能指标：
         1. 投入度维度：自控率
@@ -305,13 +306,13 @@ class LoopMonitoringService:
             end_time_ms = int(end_time.timestamp() * 1000)
             start_time_ms = int(start_time.timestamp() * 1000)
             # 查询历史数据
-            with BFFModelClient(device_uri=loop_uri) as client:
-                history_data = client.query_history_data_interpolated(
-                    start_time=start_time_ms,
-                    end_time=end_time_ms,
-                    winow=1,
-                    limit=10000  # 24小时内的最大数据点
-                )
+            history_data = DeviceDataService.query_history_data_interpolated(
+                loop_uri=loop_uri,
+                start_time=start_time_ms,
+                end_time=end_time_ms,
+                window=60
+            )
+
 
             # 检查数据有效性
             if not history_data or not history_data.get('data'):
@@ -339,17 +340,17 @@ class LoopMonitoringService:
             for point in data_points:
                 if isinstance(point, dict):
                     ts = point.get('timestamp')
-                    pv = point.get('PV')
-                    sv = point.get('SV')
-                    mv = point.get('MV')
-                    auto_status = point.get('AUTO', 255)  # 默认为自动
+                    pv = point.get('pv')
+                    sv = point.get('sv')
+                    mv = point.get('mv')
+                    auto_status = point.get('auto_status', 255)  # 默认为自动
+                    timestamps.append(ts)
+                    pv_values.append(pv)
+                    sv_values.append(sv)
+                    mv_values.append(mv)
+                    auto_status_values.append(auto_status)
+                    # if ts is not None and pv is not None and sv is not None:
 
-                    if ts is not None and pv is not None and sv is not None:
-                        timestamps.append(ts)
-                        pv_values.append(pv)
-                        sv_values.append(sv)
-                        mv_values.append(mv if mv is not None else 0)
-                        auto_status_values.append(auto_status)
 
             # 检查是否有足够的数据点
             if len(timestamps) < 10:
@@ -599,13 +600,13 @@ class LoopMonitoringService:
             }
 
     @staticmethod
-    def calculate_performance_status_by_plant_24h(
+    def calculate_performance_status(
             plant_uri: Optional[str] = None,
             max_workers: int = 5,
             data_span: int = 24
     ) -> Dict[str, Any]:
         """
-        计算指定装置下所有回路过去24小时的性能状态（并行计算）
+        计算指定装置下所有回路的性能状态（并行计算）
         
         Args:
             plant_uri: 装置URI，如果为None则查询所有装置

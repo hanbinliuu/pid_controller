@@ -37,12 +37,12 @@ async def register_cron_task(
     try:
         # 定义任务函数映射
         from api.tasks.calculate_loop_performance import calculate_loop_performance
-        from api.tasks.load_model_tree import load_model_tree_and_sync
+        from api.tasks.load_loop_info import load_loop_list_and_sync
         
         # 任务映射表
         task_function_map = {
             'calculate_loop_performance': calculate_loop_performance,
-            'load_model_tree': load_model_tree_and_sync
+            'load_model_tree': load_loop_list_and_sync
         }
         
         task_args_map = {
@@ -354,17 +354,17 @@ async def stop_all_cron_tasks() -> Dict[str, Any]:
 
 @router.post(
     "/trigger-load-model-tree",
-    summary="手动触发加载模型树任务",
-    operation_id="手动触发加载模型树",
-    description="立即执行一次模型树加载任务，将BFF模型树同步到数据库"
+    summary="手动触发加载回路列表任务",
+    operation_id="手动触发加载回路列表",
+    description="立即执行一次回路列表加载任务，将BFF模型树同步到数据库"
 )
 async def trigger_load_model_tree() -> Dict[str, Any]:
-    """手动触发加载模型树任务"""
+    """手动触发加载回路列表任务"""
     try:
-        from api.tasks.load_model_tree import load_model_tree_and_sync
+        from api.tasks.load_loop_info import load_loop_list_and_sync
         
-        logger.info("手动触发模型树加载任务")
-        result = load_model_tree_and_sync()
+        logger.info("手动触发回路列表加载任务")
+        result = load_loop_list_and_sync()
         
         return {
             "status": "success",
@@ -372,7 +372,44 @@ async def trigger_load_model_tree() -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error(f"手动触发模型树加载失败: {str(e)}")
+        logger.error(f"手动触发回路列表加载失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"执行失败: {str(e)}"
+        )
+
+
+@router.post(
+    "/trigger-performance-evaluation",
+    summary="手动触发性能评估任务",
+    operation_id="手动触发性能评估",
+    description="立即执行一次回路性能评估任务，计算所有激活回路的性能状态"
+)
+async def trigger_performance_evaluation(
+    max_workers: int = Query(5, description="并行计算的最大线程数", ge=1, le=20)
+) -> Dict[str, Any]:
+    """
+    手动触发性能评估任务
+    
+    Args:
+        max_workers: 并行计算的最大线程数，默认5，范围1-20
+    
+    Returns:
+        计算结果，包含成功、失败的回路数量等信息
+    """
+    try:
+        from api.tasks.calculate_loop_performance import calculate_loop_performance
+        
+        logger.info(f"手动触发性能评估任务，线程数: {max_workers}")
+        result = calculate_loop_performance(max_workers=max_workers)
+        
+        return {
+            "status": "success",
+            "data": result
+        }
+        
+    except Exception as e:
+        logger.error(f"手动触发性能评估失败: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"执行失败: {str(e)}"

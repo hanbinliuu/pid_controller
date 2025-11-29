@@ -59,34 +59,40 @@ class LoopInfoDAO:
         return db.exec(statement).first()
     
     @staticmethod
-    def get_by_loop_uri(db: Session, loop_uri: str) -> Optional[LoopInfo]:
+    def get_by_loop_uri(db: Session, loop_uri: str, include_inactive: bool = False) -> Optional[LoopInfo]:
         """
         根据loop_uri查询映射记录
         
         Args:
             db: 数据库会话
             loop_uri: 回路URI
+            include_inactive: 是否包含已逻辑删除的回路，默认False
         
         Returns:
-            Optional[LoopInfo]: 映射对象，不存在则返回None
+            Optional[LoopInfo]: 映射对象，不存在或已逻辑删除则返回None
         """
         statement = select(LoopInfo).where(LoopInfo.loop_uri == loop_uri)
+        if not include_inactive:
+            statement = statement.where(LoopInfo.is_active == True)
         return db.exec(statement).first()
     
     @staticmethod
-    def get_by_loop_path(db: Session, loop_path: str) -> Optional[LoopInfo]:
+    def get_by_loop_path(db: Session, loop_path: str, include_inactive: bool = False) -> List[LoopInfo]:
         """
         根据loop_path查询映射记录
         
         Args:
             db: 数据库会话
             loop_path: 回路路径
+            include_inactive: 是否包含已逻辑删除的回路，默认False
         
         Returns:
-            Optional[LoopInfo]: 映射对象，不存在则返回None
+            Optional[LoopInfo]: 映射对象，不存在或已逻辑删除则返回None
         """
-        statement = select(LoopInfo).where(LoopInfo.loop_path == loop_path)
-        return db.exec(statement).first()
+        statement = select(LoopInfo).where(LoopInfo.loop_path.like(f"%{loop_path}%"))
+        if not include_inactive:
+            statement = statement.where(LoopInfo.is_active == True)
+        return db.exec(statement).all()
     
     @staticmethod
     def get_all_active(db: Session) -> List[LoopInfo]:

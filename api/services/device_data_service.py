@@ -162,7 +162,7 @@ class DeviceDataService:
         loop_uri: str = None,
         start_time: Union[int, str] = None,
         end_time: Union[int, str] = None,
-        window: int = None,
+        window: int = 1,
         is_filter: bool = None
     ) -> Dict[str, Any]:
         """

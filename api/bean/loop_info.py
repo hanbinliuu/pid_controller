@@ -35,13 +35,11 @@ class LoopInfo(SQLModel, table=True):
         unique=True,
         sa_column_kwargs={"comment": "回路URI，唯一标识一个回路"}
     )
-
     
     loop_path: Optional[str] = Field(
         default=None,
         max_length=500,
-        index=True,
-        sa_column_kwargs={"comment": "回路路径"}
+        sa_column_kwargs={"comment": "PID相关参数的相对路径"}
     )
     
     loop_name: Optional[str] = Field(
@@ -132,13 +130,12 @@ class LoopInfo(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
-                "loop_path": "/设备/反应器/温度控制回路",
+                "loop_path": "/system/root,/pid_zd/root,/pid_zd/instance,/pid_zd/053f3c45413b48bbafacec609d142e57,/pid_zd/7a9a36aeca1a4998b0aa44f83ec9709d,/pid_zd/1f59615dc9d44b4388e29829f95a49c6,/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                 "loop_name": "FIC101A流量控制回路",
                 "point_path":"/loop_state_parameters",
                 "pv_field": "FIC101A_PV",
                 "sv_field": "FIC101A_SV",
                 "mv_field": "FIC101A_MV",
-                "op_field": "FIC101A_OP",
                 "auto_status_field": "FIC101A_AUTO",
                 "pb_field": "FIC101A_PB",
                 "ti_field": "FIC101A_TI",

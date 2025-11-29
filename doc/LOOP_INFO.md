@@ -17,7 +17,6 @@
 | pv_field | VARCHAR(200) | PV（过程变量）字段名 | 否 |
 | sv_field | VARCHAR(200) | SV（设定值）字段名 | 否 |
 | mv_field | VARCHAR(200) | MV（操纵变量）字段名 | 否 |
-| op_field | VARCHAR(200) | OP（控制器输出）字段名 | 否 |
 | auto_status_field | VARCHAR(200) | 自动/手动状态字段名 | 否 |
 | description | VARCHAR(500) | 描述或备注 | 否 |
 | created_time | DATETIME | 创建时间 | 否 |

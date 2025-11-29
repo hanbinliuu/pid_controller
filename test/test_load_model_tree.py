@@ -10,7 +10,7 @@ import logging
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from api.tasks.load_model_tree import load_model_tree_and_sync
+from api.tasks.load_loop_info import load_loop_list_and_sync
 
 # 配置日志
 logging.basicConfig(
@@ -29,7 +29,7 @@ def test_load_model_tree():
     
     try:
         # 执行任务
-        result = load_model_tree_and_sync()
+        result = load_loop_list_and_sync()
         
         # 输出结果
         logger.info("\n任务执行结果:")

@@ -161,6 +161,34 @@ class Config:
             'auto': _get_config('bff.model.pid_point.auto', 'AUTO')
         }
     
+    # ==================== 定时任务配置 ====================
+    # 回路性能计算任务配置
+    TASK_LOOP_PERFORMANCE_ENABLE: bool = _get_config(
+        'task.loop_performance.enable',
+        True,
+        bool
+    )
+    TASK_LOOP_PERFORMANCE_CRON: str = _get_config(
+        'task.loop_performance.cron',
+        '0 * * * *'  # 默认每小时执行
+    )
+    TASK_LOOP_PERFORMANCE_MAX_WORKERS: int = _get_config(
+        'task.loop_performance.max_workers',
+        5,
+        int
+    )
+    
+    # 模型树加载任务配置
+    TASK_LOAD_MODEL_TREE_ENABLE: bool = _get_config(
+        'task.load_model_tree.enable',
+        True,
+        bool
+    )
+    TASK_LOAD_MODEL_TREE_CRON: str = _get_config(
+        'task.load_model_tree.cron',
+        '0 0 * * *'  # 默认每天00:00执行
+    )
+    
     # ==================== 数据库配置 ====================
     # 数据库连接配置
     DB_HOST: str = _get_config('db.host', '192.168.201.113')
