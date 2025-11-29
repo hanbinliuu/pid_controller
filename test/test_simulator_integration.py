@@ -10,7 +10,7 @@ import os
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from core.data.pid_data_simulator import PIDDataSimulator, quick_generate_data
+from core.client.pid_data_simulator import PIDDataSimulator, quick_generate_data
 from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool
 
 def test_simulator_with_analysis_tools():

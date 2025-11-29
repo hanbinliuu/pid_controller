@@ -27,7 +27,7 @@ async def register_cron_task(
     注册定时任务
     
     Cron表达式示例：
-    - '0 * * * *'      : 每小时的第0分钟
+    - '0 * * * *'      : 每小时的30分钟
     - '0 0 * * *'      : 每天的00:00
     - '0 2 * * *'      : 每天的02:00
     - '*/30 * * * *'    : 每30分钟
@@ -35,14 +35,32 @@ async def register_cron_task(
     - '0 0 * * 0'       : 每周日的00:00
     """
     try:
-        # 定义任务函数
-        from api.tasks import calculate_loop_performance
+        # 定义任务函数映射
+        from api.tasks.calculate_loop_performance import calculate_loop_performance
+        from api.tasks.load_model_tree import load_model_tree_and_sync
+        
+        # 任务映射表
+        task_function_map = {
+            'calculate_loop_performance': calculate_loop_performance,
+            'load_model_tree': load_model_tree_and_sync
+        }
+        
+        task_args_map = {
+            'calculate_loop_performance': {'max_workers': 5},
+            'load_model_tree': {}
+        }
+        
+        if task_id not in task_function_map:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的任务ID，支持的任务: {list(task_function_map.keys())}"
+            )
         
         success = task_manager.register_task(
             task_id=task_id,
             cron_expression=cron_expression,
-            task_func=calculate_loop_performance,
-            task_args={'max_workers': 5}
+            task_func=task_function_map[task_id],
+            task_args=task_args_map.get(task_id, {})
         )
         
         if not success:
@@ -331,4 +349,31 @@ async def stop_all_cron_tasks() -> Dict[str, Any]:
         raise HTTPException(
             status_code=500,
             detail=f"停止失败: {str(e)}"
+        )
+
+
+@router.post(
+    "/trigger-load-model-tree",
+    summary="手动触发加载模型树任务",
+    operation_id="手动触发加载模型树",
+    description="立即执行一次模型树加载任务，将BFF模型树同步到数据库"
+)
+async def trigger_load_model_tree() -> Dict[str, Any]:
+    """手动触发加载模型树任务"""
+    try:
+        from api.tasks.load_model_tree import load_model_tree_and_sync
+        
+        logger.info("手动触发模型树加载任务")
+        result = load_model_tree_and_sync()
+        
+        return {
+            "status": "success",
+            "data": result
+        }
+        
+    except Exception as e:
+        logger.error(f"手动触发模型树加载失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"执行失败: {str(e)}"
         )

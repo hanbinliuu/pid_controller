@@ -9,8 +9,8 @@ from typing import Optional, List, Union, Dict, Any
 from datetime import datetime
 
 from core.agent.tools import process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
-from core.data.bff_model_client import BFFModelClient
-from core.data.real_tsdb_client import query_raw_data, get_default_database
+from core.client.bff_model_client import BFFModelClient
+from core.client.real_tsdb_client import query_raw_data, get_default_database
 from api.routes.time_util import parse_time_to_milliseconds
 
 logger = logging.getLogger(__name__)
@@ -162,6 +162,7 @@ class DeviceDataService:
         loop_uri: str = None,
         start_time: Union[int, str] = None,
         end_time: Union[int, str] = None,
+        window: int = None,
         is_filter: bool = None
     ) -> Dict[str, Any]:
         """
@@ -211,6 +212,7 @@ class DeviceDataService:
                 required_fields=required_fields,
                 start_time=start_time_ms,
                 end_time=end_time_ms,
+                window=window,
                 is_filter=is_filter
             )
             

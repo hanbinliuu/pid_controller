@@ -11,7 +11,8 @@ from api.routes.bff_route import router as bff_router
 from api.routes.expert_tuning_route import router as expert_tuning_router
 from api.routes.tuning_record_router import router as tuning_record_router
 from api.routes.loop_monitoring_routing import router as loop_monitoring_router
-from api.routes.loop_path_mapping_router import router as loop_path_mapping_router
+from api.routes.loop_info_router import router as loop_info_router
+from api.routes.device_evaluation_router import router as device_evaluation_router
 from api.routes.cron_task_router import router as cron_task_router
 
 # 导入中间件
@@ -61,7 +62,8 @@ app.include_router(tuning_record_router, prefix='/api/tuning-records', tags=['�
 app.include_router(iotda_router, prefix='/api/data_query', tags=['时序数据查询接口'])
 app.include_router(bff_router, prefix='/api/bff', tags=['BFF模型'])
 app.include_router(loop_monitoring_router, prefix='/api/monitoring', tags=['回路监控'])
-app.include_router(loop_path_mapping_router, tags=['回路路径映射'])
+app.include_router(loop_info_router, tags=['回路信息'])
+app.include_router(device_evaluation_router, tags=['装置评估'])
 app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
 
 

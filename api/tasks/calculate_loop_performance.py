@@ -18,7 +18,7 @@ def calculate_loop_performance(max_workers: int = 5) -> dict:
         logger.info("开始计算全部回路的性能状态...")
 
         # 使用BFF客户端获取所有回路
-        from core.data.bff_model_client import BFFModelClient
+        from core.client.bff_model_client import BFFModelClient
 
         with BFFModelClient() as client:
             model_identifier_list = ['/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243']

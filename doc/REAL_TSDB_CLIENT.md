@@ -65,7 +65,7 @@ TSDB_DEBUG=false
 ### 代码配置
 
 ```python
-from core.data.real_tsdb_client import TSDBConfig, RealTSDBDataSource
+from core.client.real_tsdb_client import TSDBConfig, RealTSDBDataSource
 
 # 创建配置
 config = TSDBConfig(
@@ -84,7 +84,7 @@ client = RealTSDBDataSource(config)
 ### 1. 工厂方式创建（推荐）
 
 ```python
-from core.data.real_tsdb_client import TSDBClientFactory
+from core.client.real_tsdb_client import TSDBClientFactory
 
 # 自动根据环境变量选择数据源
 client = TSDBClientFactory.create_client()
@@ -99,7 +99,7 @@ mock_client = TSDBClientFactory.create_client(use_real_tsdb=False)
 ### 2. 直接创建实际客户端
 
 ```python
-from core.data.real_tsdb_client import TSDBClientFactory
+from core.client.real_tsdb_client import TSDBClientFactory
 
 # 使用默认配置
 client = TSDBClientFactory.create_real_client()
@@ -115,7 +115,7 @@ client = TSDBClientFactory.create_real_client(
 ### 3. 与现有API集成
 
 ```python
-from core.data.mock_tsdb_client import get_query_engine, query_raw_data
+from core.client.mock_tsdb_client import get_query_engine, query_raw_data
 
 # 获取查询引擎（自动选择数据源）
 engine = get_query_engine()
@@ -171,7 +171,7 @@ result = query_raw_data(request_data)
 ### 1. 基本查询
 
 ```python
-from core.data.real_tsdb_client import TSDBClientFactory
+from core.client.real_tsdb_client import TSDBClientFactory
 from datetime import datetime, timedelta
 
 # 创建客户端
@@ -259,7 +259,7 @@ export USE_REAL_TSDB=false
 ### 在代码中动态切换
 
 ```python
-from core.data.mock_tsdb_client import get_query_engine
+from core.client.mock_tsdb_client import get_query_engine
 
 # 在开发环境使用模拟数据
 dev_engine = get_query_engine(use_real_tsdb=False)

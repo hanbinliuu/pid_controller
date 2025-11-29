@@ -11,8 +11,8 @@ import matplotlib
 
 from api.routes.time_util import parse_time_to_milliseconds
 from core.algorithm.detector import StabilityDetector
-from core.data.bff_model_client import BFFModelClient
-from core.data.real_tsdb_client import query_raw_data, query_read_interpolated
+from core.client.bff_model_client import BFFModelClient
+from core.client.real_tsdb_client import query_raw_data, query_read_interpolated
 from core.utils import pid_converter
 from core.utils.pid_converter import process_lists_optimized
 

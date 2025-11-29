@@ -6,7 +6,7 @@ import logging
 
 from core.algorithm.ls_pid_autotune_v5 import ModelType
 from api.services.expert_tuning_service import ExpertTuningService
-from core.data.bff_model_client import BFFModelClient
+from core.client.bff_model_client import BFFModelClient
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

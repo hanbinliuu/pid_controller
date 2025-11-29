@@ -9,7 +9,7 @@ import os
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.data.bff_model_client import BFFModelClient
+from core.client.bff_model_client import BFFModelClient
 
 
 def test_dict_format_extraction():

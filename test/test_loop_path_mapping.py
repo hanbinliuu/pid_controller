@@ -11,7 +11,7 @@ from sqlmodel import Session, create_engine, SQLModel
 from sqlmodel import Session as SQLModelSession
 
 # 导入模型
-from api.bean.loop_path_mapping import LoopPathMapping
+from api.bean.loop_info import LoopInfo
 from api.dao.loop_path_mapping_dao import LoopPathMappingDAO
 from api.services.loop_path_mapping_service import LoopPathMappingService
 

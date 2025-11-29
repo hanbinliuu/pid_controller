@@ -8,9 +8,24 @@ BFF模型查询路由 - MVC架构的Controller层
 import logging
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
-from core.data.bff_model_client import Config
+from core.client.bff_model_client import Config
 from api.services.bff_service import BFFService
+
+
+class SearchByModelsRequest(BaseModel):
+    """按模型类型查询实例的请求体"""
+    includeSubType: bool = True
+    modelUriList: List[str]
+    startUri: str
+
+
+class QueryInstanceTreeRequest(BaseModel):
+    """查询实例树的请求体"""
+    startUri: str
+    modelUriList: Optional[List[str]] = None
+    includeSubType: bool = True
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -345,6 +360,7 @@ async def list_instances_under_tree(
         )
 
 
+
 @router.post(
     "/nodes-detail",
     summary="根据URI查询节点详细信息",
@@ -392,8 +408,76 @@ async def query_nodes_detail(
         return result
     
     except Exception as e:
-        logger.error(f"查询节点详细信息失败: {str(e)}")
+        logger.error(f"查询节点详细信失败: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"查询节点详细信息失败: {str(e)}"
+            detail=f"查询节点详细信失败: {str(e)}"
+        )
+
+
+@router.post(
+    "/instance-tree",
+    summary="查询实例树",
+    operation_id="查询实例树",
+    description="查询从指定节点开始的实例树（树形结构）"
+)
+async def get_instance_tree(
+    request: QueryInstanceTreeRequest
+) -> Dict[str, Any]:
+    """
+    查询实例树（树形结构）
+    
+    请求体示例：
+    {
+        "startUri": "/pid_zd/1f59615dc9d44b4388e29829f95a49c6",
+        "modelUriList": ["/system/401", "/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"],
+        "includeSubType": true
+    }
+    
+    功能说明：
+    - 查询从指定节点开始的完整树结构
+    - 支持任意深度的嵌套节点
+    - 返回根节点和所有子节点信息
+    - 可选指定模型URI列表进行过滤
+    
+    返回格式：
+    {
+        "result": {
+            "node": {
+                "uri": "/pid_zd/1f59615dc9d44b4388e29829f95a49c6",
+                "browseName": "instance",
+                "displayName": "PID参数整定_勿删",
+                "description": "创建根节点，用于组织模型结构",
+                "extendedAttr": {}
+            },
+            "children": [
+                {
+                    "uri": "/pid_zd/xxx",
+                    "browseName": "xxx",
+                    "displayName": "xxx",
+                    "description": "xxx",
+                    "extendedAttr": {},
+                    "children": [...]
+                }
+            ]
+        }
+    }
+    """
+    try:
+        # 调用Service层查询
+        result = BFFService.query_instance_tree(
+            start_uri=request.startUri,
+            model_uri_list=request.modelUriList,
+            include_sub_type=request.includeSubType
+        )
+        
+        logger.info(f"BFF查询实例树成功，起始URI: {request.startUri}")
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"查询实例树失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询实例树失败: {str(e)}"
         )

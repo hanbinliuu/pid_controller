@@ -11,8 +11,8 @@ from datetime import datetime
 
 from core.agent.tools import TemperatureAnalysisTool, PIDOptimizationTool
 from core.algorithm.ls_pid_autotune_v5 import ModelType
-from core.data.bff_model_client import BFFModelClient
-from core.data.real_tsdb_client import get_default_database
+from core.client.bff_model_client import BFFModelClient
+from core.client.real_tsdb_client import get_default_database
 from api.routes.time_util import parse_time_to_milliseconds
 from core.agent.tools import process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 

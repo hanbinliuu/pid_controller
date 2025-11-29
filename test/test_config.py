@@ -16,7 +16,7 @@ os.environ['BFF_MODEL_PROJECT_PATH'] = '/pid_zd/ce716ffbade5426e8faf18467d1d5a83
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core.config import Config
-from core.data.bff_model_client import BFFModelClient, query_pid_values
+from core.client.bean.bff_model_client import BFFModelClient, query_pid_values
 
 
 def test_config_loading():
@@ -112,7 +112,7 @@ def show_usage_examples():
     
     example_code = '''
 # 方式1: 使用默认配置（从环境变量）
-from core.data.bff_model_client import BFFModelClient
+from core.client.bff_model_client import BFFModelClient
 
 client = BFFModelClient()
 response = client.query_common_fields()
@@ -124,7 +124,7 @@ client = BFFModelClient(
 )
 
 # 方式3: 使用便捷函数（推荐）
-from core.data.bff_model_client import query_pid_values
+from core.client.bff_model_client import query_pid_values
 
 # 使用默认配置
 values = query_pid_values()

@@ -161,20 +161,13 @@ class BFFModelClient:
     DEFAULT_LIST_INSTANCE_PATH = "/bff/v2/instance/listInstanceUnderInstanceTree"
     DEFAULT_GET_NEXT_LEVEL_SUBMODEL_PATH = "/bff/v2/model/getNextLevelSubModel"
     DEFAULT_QUERY_NODES_BY_URIS_PATH = "/bff/aggquery/v2/model/queryNodesByUris"
+    DEFAULT_QUERY_INSTANCE_TREE_PATH = "/bff/v2/instance/searchByModels"
     DEFAULT_TIMEOUT = Config.BFF_MODEL_TIMEOUT
     DEFAULT_DEVICE_URI = Config.BFF_MODEL_PROJECT_PATH
     DEFAULT_POINT_PATH = Config.BFF_MODEL_POINT_PATH
 
-    # pid控制字段与模型browse_name名称映照关系
-    DEFAULT_PID_POINT_MAP = {
-        'mv': 'MV',
-        'pv': 'PV',
-        'sv': 'SV',
-        'pb': 'PB',
-        'ti': 'TI',
-        'td': 'TD',
-        'auto': 'AUTO'
-    }
+    # pid控制字段与模型browse_name名称映照关系（从配置文件加载）
+    DEFAULT_PID_POINT_MAP = Config.get_pid_point_map()
 
     def __init__(self, device_uri: Optional[str] = None, point_path: Optional[str] = None, pid_point_map:Dict[str, str] = None, timeout: int = None):
         """
@@ -1064,6 +1057,78 @@ class BFFModelClient:
             logger.error(f"BFF节点查询失败: {str(e)}")
             raise
 
+    def query_instance_tree(
+            self,
+            start_uri: str,
+            model_uri_list: Optional[List[str]] = None,
+            include_sub_type: bool = True
+    ) -> Dict[str, Any]:
+        """
+        查询实例树（树形结构）
+        
+        Args:
+            start_uri: 起始搜索URI，如 '/pid_zd/1f59615dc9d44b4388e29829f95a49c6'
+            model_uri_list: 模型URI列表，可选
+            include_sub_type: 是否包含子类型，默认True
+        
+        Returns:
+            树形结构数据，包含根节点和所有子节点
+            
+        Example:
+            >>> client = BFFModelClient()
+            >>> result = client.search_instances_by_models(
+            ...     start_uri='/pid_zd/1f59615dc9d44b4388e29829f95a49c6'
+            ... )
+        """
+        url = f"{self.base_url}{self.DEFAULT_QUERY_INSTANCE_TREE_PATH}"
+        
+        # 构建请求体
+        payload = {
+            'startUri': start_uri,
+            'includeSubType': include_sub_type,
+            'modelUriList': model_uri_list
+        }
+        
+        # 如果提供了modelUriList，添加到请求体中
+        if model_uri_list:
+            payload['modelUriList'] = model_uri_list
+        
+        try:
+            logger.info(f"查询实例树，起始URI: {start_uri}")
+            logger.debug(f"请求URL: {url}")
+            logger.debug(f"请求体: {payload}")
+            
+            response = self.session.post(
+                url,
+                json=payload,
+                timeout=self.timeout
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            # 检查响应状态
+            if result.get('code') != 200:
+                logger.error(f"BFF返回错误: {result.get('message')}")
+                return {
+                    'result': {
+                        'node': None,
+                        'children': []
+                    },
+                    'error': result.get('message')
+                }
+            
+            logger.info(f"成功查询实例树，起始URI: {start_uri}")
+            
+            return result
+        
+        except requests.exceptions.Timeout:
+            logger.error(f"请求超时（{self.timeout}秒）")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"BFF实例树查询失败: {str(e)}")
+            raise
+
     def query_current_raw_values(
             self,
             point_names: List[str],
@@ -1351,4 +1416,35 @@ def list_instances(
             contain_sub_model=contain_sub_model,
             page_no=page_no,
             page_size=page_size
+        )
+
+
+def query_instance_tree(
+        start_uri: str,
+        model_uri_list: Optional[List[str]] = None,
+        include_sub_type: bool = True,
+        timeout: int = None
+) -> Dict[str, Any]:
+    """
+    便捷函数：查询实例树（树形结构）
+    
+    Args:
+        start_uri: 起始搜索URI
+        model_uri_list: 模型URI列表，可选
+        include_sub_type: 是否包含子类型，默认True
+        timeout: 请求超时时间
+        
+    Returns:
+        树形结构数据响应
+        
+    Example:
+        >>> # 使用默认配置查询实例树
+        >>> result = query_instance_tree('/pid_zd/1f59615dc9d44b4388e29829f95a49c6')
+        >>> print(f"树查询成功")
+    """
+    with BFFModelClient(timeout=timeout) as client:
+        return client.query_instance_tree(
+            start_uri=start_uri,
+            model_uri_list=model_uri_list,
+            include_sub_type=include_sub_type
         )

@@ -9,7 +9,7 @@ from pydantic import Field,BaseModel
 
 from api.routes.time_util import parse_time_to_milliseconds
 from api.services.device_data_service import DeviceDataService
-from core.data.bff_model_client import BFFModelClient
+from core.client.bff_model_client import BFFModelClient
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

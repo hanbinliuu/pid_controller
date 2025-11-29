@@ -15,8 +15,8 @@ import numpy as np
 from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.algorithm.ls_pid_autotune_v5 import ModelType
-from core.data.bff_model_client import BFFModelClient
-from core.data.real_tsdb_client import get_default_database
+from core.client.bff_model_client import BFFModelClient
+from core.client.real_tsdb_client import get_default_database
 from api.routes.time_util import parse_time_to_milliseconds, format_time_to_string
 from core.algorithm.find_high_variability_periods import find_high_variability_periods
 from core.algorithm.ktl_simulator import KTLSimulator

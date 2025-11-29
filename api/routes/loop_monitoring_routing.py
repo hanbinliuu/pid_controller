@@ -131,10 +131,10 @@ async def get_loop_trend_data(
 
 
 @router.get(
-    "/performance-status-24h",
-    summary="查询回路24小时性能状态",
-    operation_id="查询回路24小时性能状态",
-    description="根据过去24小时数据计算回路的性能等级，稳定性，精确性，高效性等指标"
+    "/performance-status",
+    summary="查询回路性能状态",
+    operation_id="查询回路性能状态",
+    description="根据历史数据计算回路的性能等级，稳定性，精确性，高效性等指标"
 )
 async def get_performance_status_last_24h(
     loop_uri: str = Query(
@@ -275,3 +275,5 @@ async def get_performance_status_by_plant_24h(
             status_code=500,
             detail=f"查询装置回路性能状态失败: {str(e)}"
         )
+
+    #装置回路性能评估统计

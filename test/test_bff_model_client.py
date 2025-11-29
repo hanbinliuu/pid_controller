@@ -26,7 +26,7 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.data.bff_model_client import BFFModelClient, query_pid_values, query_specific_fields
+from core.client.bff_model_client import BFFModelClient, query_pid_values, query_specific_fields
 import json
 
 

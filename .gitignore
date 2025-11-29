@@ -13,3 +13,14 @@ mesh-table/*.log
 .venv
 
 .idea
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Configuration files (keep example files only)
+config/application.properties
+!config/application.properties.example

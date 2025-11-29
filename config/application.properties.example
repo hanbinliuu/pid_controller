@@ -55,6 +55,7 @@ bff.model.root_uri=/pid_zd/instance
 bff.model.loop_model_uri=/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243
 
 # PID控制字段与模型browse_name名称映射关系
+# 这些配置定义了PID控制字段（小写）与模型节点名称（大写）的映射
 bff.model.pid_point.mv=MV
 bff.model.pid_point.pv=PV
 bff.model.pid_point.sv=SV

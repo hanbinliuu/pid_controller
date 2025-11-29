@@ -11,7 +11,7 @@ import os
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-from core.data.mock_tsdb_client import (
+from core.client.mock_tsdb_client import (
     query_raw_data, 
     TimeParamQueryEngine, 
     MockTSDBDataSource,

@@ -1,50 +1,50 @@
 #!/usr/bin/env python3
 """
-DAO层 - loop_uri 与 loop_path 映射关系数据访问对象 - 使用SQLModel
+DAO层 - 回路信息数据访问对象 - 使用SQLModel
 """
 import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from sqlmodel import Session, select, func, desc
 
-from api.bean.loop_path_mapping import LoopPathMapping
+from api.bean.loop_info import LoopInfo
 
 logger = logging.getLogger(__name__)
 
 
-class LoopPathMappingDAO:
-    """回路路径映射DAO"""
+class LoopInfoDAO:
+    """回路信息DAO"""
     
     @staticmethod
-    def create(db: Session, mapping_data: Dict[str, Any]) -> LoopPathMapping:
+    def create(db: Session, mapping_data: Dict[str, Any]) -> LoopInfo:
         """
-        创建回路URI与路径映射记录 - SQLModel方式
+        创建回路信息记录 - SQLModel方式
         
         Args:
             db: 数据库会话
             mapping_data: 映射数据字典
         
         Returns:
-            LoopPathMapping: 创建的映射对象
+            LoopInfo: 创建的映射对象
         """
         try:
             # SQLModel自动进行数据验证
-            mapping = LoopPathMapping(**mapping_data)
+            mapping = LoopInfo(**mapping_data)
             
             db.add(mapping)
             db.commit()
             db.refresh(mapping)
             
-            logger.info(f"创建回路映射记录成功: ID={mapping.id}, loop_uri={mapping.loop_uri}")
+            logger.info(f"创建回路信息记录成功: ID={mapping.id}, loop_uri={mapping.loop_uri}")
             return mapping
             
         except Exception as e:
             db.rollback()
-            logger.error(f"创建回路映射记录失败: {str(e)}")
+            logger.error(f"创建回路信息记录失败: {str(e)}")
             raise
     
     @staticmethod
-    def get_by_id(db: Session, mapping_id: int) -> Optional[LoopPathMapping]:
+    def get_by_id(db: Session, mapping_id: int) -> Optional[LoopInfo]:
         """
         根据ID查询映射记录 - SQLModel方式
         
@@ -53,13 +53,13 @@ class LoopPathMappingDAO:
             mapping_id: 映射记录ID
         
         Returns:
-            Optional[LoopPathMapping]: 映射对象，不存在则返回None
+            Optional[LoopInfo]: 映射对象，不存在则返回None
         """
-        statement = select(LoopPathMapping).where(LoopPathMapping.id == mapping_id)
+        statement = select(LoopInfo).where(LoopInfo.id == mapping_id)
         return db.exec(statement).first()
     
     @staticmethod
-    def get_by_loop_uri(db: Session, loop_uri: str) -> Optional[LoopPathMapping]:
+    def get_by_loop_uri(db: Session, loop_uri: str) -> Optional[LoopInfo]:
         """
         根据loop_uri查询映射记录
         
@@ -68,13 +68,13 @@ class LoopPathMappingDAO:
             loop_uri: 回路URI
         
         Returns:
-            Optional[LoopPathMapping]: 映射对象，不存在则返回None
+            Optional[LoopInfo]: 映射对象，不存在则返回None
         """
-        statement = select(LoopPathMapping).where(LoopPathMapping.loop_uri == loop_uri)
+        statement = select(LoopInfo).where(LoopInfo.loop_uri == loop_uri)
         return db.exec(statement).first()
     
     @staticmethod
-    def get_by_loop_path(db: Session, loop_path: str) -> Optional[LoopPathMapping]:
+    def get_by_loop_path(db: Session, loop_path: str) -> Optional[LoopInfo]:
         """
         根据loop_path查询映射记录
         
@@ -83,13 +83,13 @@ class LoopPathMappingDAO:
             loop_path: 回路路径
         
         Returns:
-            Optional[LoopPathMapping]: 映射对象，不存在则返回None
+            Optional[LoopInfo]: 映射对象，不存在则返回None
         """
-        statement = select(LoopPathMapping).where(LoopPathMapping.loop_path == loop_path)
+        statement = select(LoopInfo).where(LoopInfo.loop_path == loop_path)
         return db.exec(statement).first()
     
     @staticmethod
-    def get_all_active(db: Session) -> List[LoopPathMapping]:
+    def get_all_active(db: Session) -> List[LoopInfo]:
         """
         查询所有激活的映射记录
         
@@ -97,11 +97,11 @@ class LoopPathMappingDAO:
             db: 数据库会话
         
         Returns:
-            List[LoopPathMapping]: 激活的映射记录列表
+            List[LoopInfo]: 激活的映射记录列表
         """
-        statement = select(LoopPathMapping).where(
-            LoopPathMapping.is_active == True
-        ).order_by(LoopPathMapping.created_time.desc())
+        statement = select(LoopInfo).where(
+            LoopInfo.is_active == True
+        ).order_by(LoopInfo.created_time.desc())
         return db.exec(statement).all()
     
     @staticmethod
@@ -131,38 +131,38 @@ class LoopPathMappingDAO:
         """
         try:
             # 构建select语句
-            statement = select(LoopPathMapping)
+            statement = select(LoopInfo)
             
             # 回路名称筛选（模糊匹配）
             if loop_name:
-                statement = statement.where(LoopPathMapping.loop_name.like(f"%{loop_name}%"))
+                statement = statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
             
             # 回路URI筛选（模糊匹配）
             if loop_uri:
-                statement = statement.where(LoopPathMapping.loop_uri.like(f"%{loop_uri}%"))
+                statement = statement.where(LoopInfo.loop_uri.like(f"%{loop_uri}%"))
             
             # 回路路径筛选（模糊匹配）
             if loop_path:
-                statement = statement.where(LoopPathMapping.loop_path.like(f"%{loop_path}%"))
+                statement = statement.where(LoopInfo.loop_path.like(f"%{loop_path}%"))
             
             # 激活状态筛选
             if is_active is not None:
-                statement = statement.where(LoopPathMapping.is_active == is_active)
+                statement = statement.where(LoopInfo.is_active == is_active)
             
             # 按创建时间倒序排列
-            statement = statement.order_by(desc(LoopPathMapping.created_time))
+            statement = statement.order_by(desc(LoopInfo.created_time))
             
             # 获取总数
-            count_statement = select(func.count()).select_from(LoopPathMapping)
+            count_statement = select(func.count()).select_from(LoopInfo)
             # 应用相同的筛选条件到计数查询
             if loop_name:
-                count_statement = count_statement.where(LoopPathMapping.loop_name.like(f"%{loop_name}%"))
+                count_statement = count_statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
             if loop_uri:
-                count_statement = count_statement.where(LoopPathMapping.loop_uri.like(f"%{loop_uri}%"))
+                count_statement = count_statement.where(LoopInfo.loop_uri.like(f"%{loop_uri}%"))
             if loop_path:
-                count_statement = count_statement.where(LoopPathMapping.loop_path.like(f"%{loop_path}%"))
+                count_statement = count_statement.where(LoopInfo.loop_path.like(f"%{loop_path}%"))
             if is_active is not None:
-                count_statement = count_statement.where(LoopPathMapping.is_active == is_active)
+                count_statement = count_statement.where(LoopInfo.is_active == is_active)
             
             total = db.exec(count_statement).one()
             
@@ -174,7 +174,7 @@ class LoopPathMappingDAO:
             # 计算总页数
             pages = (total + page_size - 1) // page_size if total > 0 else 0
             
-            logger.info(f"查询回路映射记录成功，总数: {total}, 当前页: {page_no}")
+            logger.info(f"查询回路信息记录成功，总数: {total}, 当前页: {page_no}")
             
             return {
                 "mappings": mappings,
@@ -187,11 +187,11 @@ class LoopPathMappingDAO:
             }
             
         except Exception as e:
-            logger.error(f"查询回路映射记录失败: {str(e)}")
+            logger.error(f"查询回路信息记录失败: {str(e)}")
             raise
     
     @staticmethod
-    def update(db: Session, mapping_id: int, update_data: Dict[str, Any]) -> Optional[LoopPathMapping]:
+    def update(db: Session, mapping_id: int, update_data: Dict[str, Any]) -> Optional[LoopInfo]:
         """
         更新映射记录 - SQLModel方式
         
@@ -201,10 +201,10 @@ class LoopPathMappingDAO:
             update_data: 更新数据字典
         
         Returns:
-            Optional[LoopPathMapping]: 更新后的映射对象
+            Optional[LoopInfo]: 更新后的映射对象
         """
         try:
-            statement = select(LoopPathMapping).where(LoopPathMapping.id == mapping_id)
+            statement = select(LoopInfo).where(LoopInfo.id == mapping_id)
             mapping = db.exec(statement).first()
             
             if not mapping:
@@ -223,16 +223,16 @@ class LoopPathMappingDAO:
             db.commit()
             db.refresh(mapping)
             
-            logger.info(f"更新回路映射记录成功: ID={mapping_id}")
+            logger.info(f"更新回路信息记录成功: ID={mapping_id}")
             return mapping
             
         except Exception as e:
             db.rollback()
-            logger.error(f"更新回路映射记录失败: {str(e)}")
+            logger.error(f"更新回路信息记录失败: {str(e)}")
             raise
     
     @staticmethod
-    def update_by_loop_uri(db: Session, loop_uri: str, update_data: Dict[str, Any]) -> Optional[LoopPathMapping]:
+    def update_by_loop_uri(db: Session, loop_uri: str, update_data: Dict[str, Any]) -> Optional[LoopInfo]:
         """
         根据loop_uri更新映射记录
         
@@ -242,10 +242,10 @@ class LoopPathMappingDAO:
             update_data: 更新数据字典
         
         Returns:
-            Optional[LoopPathMapping]: 更新后的映射对象
+            Optional[LoopInfo]: 更新后的映射对象
         """
         try:
-            statement = select(LoopPathMapping).where(LoopPathMapping.loop_uri == loop_uri)
+            statement = select(LoopInfo).where(LoopInfo.loop_uri == loop_uri)
             mapping = db.exec(statement).first()
             
             if not mapping:
@@ -264,12 +264,12 @@ class LoopPathMappingDAO:
             db.commit()
             db.refresh(mapping)
             
-            logger.info(f"更新回路映射记录成功: loop_uri={loop_uri}")
+            logger.info(f"更新回路信息记录成功: loop_uri={loop_uri}")
             return mapping
             
         except Exception as e:
             db.rollback()
-            logger.error(f"更新回路映射记录失败: {str(e)}")
+            logger.error(f"更新回路信息记录失败: {str(e)}")
             raise
     
     @staticmethod
@@ -285,7 +285,7 @@ class LoopPathMappingDAO:
             bool: 是否删除成功
         """
         try:
-            statement = select(LoopPathMapping).where(LoopPathMapping.id == mapping_id)
+            statement = select(LoopInfo).where(LoopInfo.id == mapping_id)
             mapping = db.exec(statement).first()
             
             if not mapping:
@@ -295,12 +295,12 @@ class LoopPathMappingDAO:
             db.delete(mapping)
             db.commit()
             
-            logger.info(f"删除回路映射记录成功: ID={mapping_id}, loop_uri={mapping.loop_uri}")
+            logger.info(f"删除回路信息记录成功: ID={mapping_id}, loop_uri={mapping.loop_uri}")
             return True
             
         except Exception as e:
             db.rollback()
-            logger.error(f"删除回路映射记录失败: {str(e)}")
+            logger.error(f"删除回路信息记录失败: {str(e)}")
             raise
     
     @staticmethod
@@ -316,7 +316,7 @@ class LoopPathMappingDAO:
             bool: 是否删除成功
         """
         try:
-            statement = select(LoopPathMapping).where(LoopPathMapping.loop_uri == loop_uri)
+            statement = select(LoopInfo).where(LoopInfo.loop_uri == loop_uri)
             mapping = db.exec(statement).first()
             
             if not mapping:
@@ -326,12 +326,12 @@ class LoopPathMappingDAO:
             db.delete(mapping)
             db.commit()
             
-            logger.info(f"删除回路映射记录成功: loop_uri={loop_uri}")
+            logger.info(f"删除回路信息记录成功: loop_uri={loop_uri}")
             return True
             
         except Exception as e:
             db.rollback()
-            logger.error(f"删除回路映射记录失败: {str(e)}")
+            logger.error(f"删除回路信息记录失败: {str(e)}")
             raise
     
     @staticmethod
@@ -346,8 +346,8 @@ class LoopPathMappingDAO:
             Dict[str, str]: uri到path的映射字典
         """
         try:
-            statement = select(LoopPathMapping).where(
-                LoopPathMapping.is_active == True
+            statement = select(LoopInfo).where(
+                LoopInfo.is_active == True
             )
             mappings = db.exec(statement).all()
             
@@ -370,8 +370,8 @@ class LoopPathMappingDAO:
             Dict[str, str]: path到uri的映射字典
         """
         try:
-            statement = select(LoopPathMapping).where(
-                LoopPathMapping.is_active == True
+            statement = select(LoopInfo).where(
+                LoopInfo.is_active == True
             )
             mappings = db.exec(statement).all()
             

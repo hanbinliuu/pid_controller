@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import logging
 
 from api.routes.time_util import format_time_to_string
-from core.data.tsdb_data_source import DataPoint, TSDBDataSource
+from core.client.tsdb_data_source import DataPoint, TSDBDataSource
 
 # 设置日志
 logger = logging.getLogger(__name__)

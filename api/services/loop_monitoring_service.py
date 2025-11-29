@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from core.data.bff_model_client import BFFModelClient
+from core.client.bff_model_client import BFFModelClient
 from api.bean.loop_response import LoopInstance, LoopStatus
 from core.algorithm.stability_rate import PerformanceEvaluator
 
@@ -75,13 +75,13 @@ class LoopMonitoringService:
                     try:
                         point_values = client.query_current_raw_values(
                             point_names=['PV', 'SV', 'MV', 'AUTO'],
-                            device_uri=loop_uri
+                            loop_uri=loop_uri
                         )
 
                         # 获取量程信息
                         range_values = client.query_current_raw_values(
                             point_names=['PVH', 'PVL', 'SVH', 'SVL', 'MVH', 'MVL'],
-                            device_uri=loop_uri
+                            loop_uri=loop_uri
                         )
 
                         # 判断回路类型
@@ -309,7 +309,7 @@ class LoopMonitoringService:
                 history_data = client.query_history_data_interpolated(
                     start_time=start_time_ms,
                     end_time=end_time_ms,
-                    window_size=1000,
+                    winow=1,
                     limit=10000  # 24小时内的最大数据点
                 )
 

@@ -8,7 +8,7 @@ import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from core.data.bff_model_client import BFFModelClient
+from core.client.bff_model_client import BFFModelClient
 from api.bean.loop_response import LoopListResponse, LoopInstance, LoopStatus, Pagination, LoopInfoResponse
 
 logger = logging.getLogger(__name__)

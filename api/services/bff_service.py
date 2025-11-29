@@ -7,7 +7,7 @@ BFF模型查询业务服务层
 import logging
 from typing import List, Dict, Any, Optional
 
-from core.data.bff_model_client import BFFModelClient
+from core.client.bff_model_client import BFFModelClient
 
 logger = logging.getLogger(__name__)
 
@@ -200,4 +200,36 @@ class BFFService:
                 return result
         except Exception as e:
             logger.error(f"查询节点详细信息失败: {str(e)}")
+            raise
+
+    @staticmethod
+    def query_instance_tree(
+            start_uri: str,
+            model_uri_list: Optional[List[str]] = None,
+            include_sub_type: bool = True
+    ) -> Dict[str, Any]:
+        """
+        查询实例树（树形结构）
+        
+        Args:
+            start_uri: 起始搜索URI
+            model_uri_list: 模型URI列表，可选
+            include_sub_type: 是否包含子类型
+            
+        Returns:
+            树形结构数据，包含根节点和所有子节点
+        """
+        try:
+            with BFFModelClient() as client:
+                result = client.query_instance_tree(
+                    start_uri=start_uri,
+                    model_uri_list=model_uri_list,
+                    include_sub_type=include_sub_type
+                )
+                
+                logger.info(f"查询实例树成功，起始URI: {start_uri}")
+                
+                return result
+        except Exception as e:
+            logger.error(f"查询实例树失败: {str(e)}")
             raise

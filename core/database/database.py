@@ -5,6 +5,7 @@ SQLModel = SQLAlchemy + Pydantic
 """
 import logging
 from typing import Generator
+from contextlib import contextmanager
 from sqlmodel import create_engine, Session, SQLModel
 from sqlalchemy import event, pool
 from core.config import Config
@@ -42,18 +43,60 @@ def receive_close(dbapi_conn, connection_record):
 
 
 
-
 def get_db() -> Generator[Session, None, None]:
     """
     获取数据库会话的依赖函数 - SQLModel方式
     
-    用法：
+    用法（FastAPI依赖注入）：
         @router.get("/items")
         def get_items(db: Session = Depends(get_db)):
             return db.exec(select(Item)).all()
     """
     with Session(engine) as session:
         yield session
+
+
+@contextmanager
+def get_db_session() -> Generator[Session, None, None]:
+    """
+    获取数据库会话的上下文管理器 - 用于普通Python代码
+    
+    用法（普通代码）：
+        with get_db_session() as db:
+            result = db.exec(select(Item)).all()
+    
+    自动处理会话的开启和关闭，无需手动管理
+    """
+    session = Session(engine)
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def create_db_session() -> Session:
+    """
+    创建一个新的数据库会话 - 需要手动管理会话生命周期
+    
+    用法：
+        db = create_db_session()
+        try:
+            result = db.exec(select(Item)).all()
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    
+    注意：使用完毕后必须手动调用 db.close()
+    推荐使用 get_db_session() 上下文管理器，更安全
+    """
+    return Session(engine)
 
 
 def init_database():
@@ -65,11 +108,24 @@ def init_database():
         # 导入所有模型以确保它们被注册
         from api.bean import tuning_record
         from api.bean import loop_evaluation
-        from api.bean import loop_path_mapping
-
+        from api.bean import loop_info
+        from api.bean import device_evaluation
+        
         # 创建所有表
         SQLModel.metadata.create_all(engine)
         logger.info(f"数据库初始化成功: {DATABASE_URL}")
     except Exception as e:
         logger.error(f"数据库初始化失败: {str(e)}")
         raise
+
+
+# 导出常用接口
+__all__ = [
+    'engine',
+    'get_db',
+    'get_db_session',
+    'create_db_session',
+    'init_database',
+    'Session',
+    'SQLModel'
+]

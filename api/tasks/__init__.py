@@ -5,6 +5,7 @@
 import logging
 
 from api.tasks.calculate_loop_performance import calculate_loop_performance
+from api.tasks.load_model_tree import load_model_tree_and_sync
 from api.tasks.cron_tasks import task_manager
 from api.services.loop_monitoring_service import LoopMonitoringService
 
@@ -28,6 +29,29 @@ def init_cron_tasks():
         loop_performance_cron = os.getenv('LOOP_PERFORMANCE_CRON', '0 * * * *')  # 默认每小时
         max_workers = int(os.getenv('TASK_MAX_WORKERS', '5'))
         
+        # 模型树加载任务配置
+        enable_load_model_tree = os.getenv('ENABLE_LOAD_MODEL_TREE_TASK', 'true').lower() == 'true'
+        load_model_tree_cron = os.getenv('LOAD_MODEL_TREE_CRON', '0 0 * * *')  # 默认每天00:00执行
+        
+        # 注册模型树加载任务
+        if enable_load_model_tree:
+            logger.info(f"注册模型树加载任务, Cron: {load_model_tree_cron}")
+            
+            success = task_manager.register_task(
+                task_id='load_model_tree',
+                cron_expression=load_model_tree_cron,
+                task_func=load_model_tree_and_sync,
+                task_args={}
+            )
+            
+            if success:
+                # 自动启动任务
+                task_manager.start_task('load_model_tree')
+                logger.info("✓ 模型树加载任务已启动")
+            else:
+                logger.warning("模型树加载任务注册失败")
+        
+        # 注册回路性能计算任务
         if enable_loop_performance:
             logger.info(f"注册回路性能计算任务, Cron: {loop_performance_cron}")
             

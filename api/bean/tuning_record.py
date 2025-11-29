@@ -23,78 +23,83 @@ class TuningRecord(SQLModel, table=True):
         default=None,
         primary_key=True,
         index=True,
-        description="记录ID"
+        sa_column_kwargs={"comment": "记录ID"}
     )
     
     # 回路信息
-    loop_uri: str = Field(
+    loop_uri: Optional[str] = Field(
+        default=None,
         max_length=500,
         index=True,
-        description="回路URI"
+        sa_column_kwargs={"comment": "回路URI"}
     )
-    loop_name: str = Field(
+    loop_name: Optional[str] = Field(
+        default=None,
         max_length=200,
         index=True,
-        description="回路名称"
+        sa_column_kwargs={"comment": "回路名称"}
     )
     description: Optional[str] = Field(
         default=None,
         max_length=500,
-        description="描述"
+        sa_column_kwargs={"comment": "描述"}
     )
     
     # 整定信息
-    tuning_method: str = Field(
+    tuning_method: Optional[str] = Field(
+        default=None,
         max_length=50,
         index=True,
-        description="整定方法"
+        sa_column_kwargs={"comment": "整定方法"}
     )
-    tuning_time: datetime = Field(
+    tuning_time: Optional[datetime] = Field(
+        default=None,
         index=True,
-        description="整定时间"
+        sa_column_kwargs={"comment": "整定时间"}
     )
-    operator: str = Field(
+    operator: Optional[str] = Field(
+        default=None,
         max_length=100,
-        description="操作人员"
+        sa_column_kwargs={"comment": "操作人员"}
     )
     
     # 参数信息
-    before_params: str = Field(
+    before_params: Optional[str] = Field(
+        default=None,
         max_length=200,
-        description="整定前参数"
+        sa_column_kwargs={"comment": "整定前参数"}
     )
-    after_params: str = Field(
+    after_params: Optional[str] = Field(
+        default=None,
         max_length=200,
-        description="整定后参数"
+        sa_column_kwargs={"comment": "整定后参数"}
     )
     
     # 状态和备注
-    status: str = Field(
-        default="成功",
+    status: Optional[str] = Field(
+        default=None,
         max_length=50,
-        description="状态"
+        sa_column_kwargs={"comment": "状态"}
     )
     remark: Optional[str] = Field(
         default=None,
-        sa_column=Column(Text),
-        description="备注"
+        sa_column=Column(Text, comment="备注")
     )
     
     # 详细数据（JSON格式）
     tuning_details: Optional[Dict[str, Any]] = Field(
         default=None,
-        sa_column=Column(JSON),
-        description="整定详情"
+        sa_column=Column(JSON, comment="整定详情")
     )
     
     # 时间戳
-    created_time: datetime = Field(
-        default_factory=datetime.now,
-        description="创建时间"
+    created_time: Optional[datetime] = Field(
+        default=None,
+        sa_column_kwargs={"comment": "创建时间"}
     )
-    updated_time: datetime = Field(
-        default_factory=datetime.now,
-        description="更新时间"
+    updated_time: Optional[datetime] = Field(
+        default=None,
+        sa_column_kwargs={"comment": "更新时间"}
     )
     
     class Config:

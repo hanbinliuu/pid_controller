@@ -24,7 +24,7 @@ def test_real_tsdb_client():
     print("=" * 60)
     
     try:
-        from core.data.real_tsdb_client import TSDBClientFactory, TSDBConfig, RealTSDBDataSource
+        from core.client.real_tsdb_client import TSDBClientFactory, TSDBConfig, RealTSDBDataSource
         
         # 1. 测试工厂方法创建客户端
         print("\n1. 📋 测试客户端创建...")
@@ -114,7 +114,7 @@ def test_tsdb_factory():
     print("-" * 40)
     
     try:
-        from core.data.real_tsdb_client import TSDBClientFactory
+        from core.client.real_tsdb_client import TSDBClientFactory
         
         # 测试环境变量控制
         print("1. 🎛️  测试环境变量控制...")
@@ -156,7 +156,7 @@ def test_integration_with_existing_api():
     print("-" * 40)
     
     try:
-        from core.data.tsdb_api import get_query_engine, query_raw_data
+        from core.client.tsdb_api import get_query_engine, query_raw_data
         
         # 测试获取查询引擎
         print("1. 🎯 测试查询引擎...")
