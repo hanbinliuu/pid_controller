@@ -4,6 +4,7 @@
 """
 import logging
 from typing import List, Optional, Dict, Any
+from datetime import datetime, date
 from sqlmodel import Session
 
 from api.dao.device_evaluation_dao import DeviceEvaluationDAO
@@ -14,6 +15,60 @@ logger = logging.getLogger(__name__)
 
 class DeviceEvaluationService:
     """装置评估业务逻辑服务"""
+    
+    @staticmethod
+    def create_or_update_evaluation(
+        db: Session,
+        device_uri: str,
+        device_name: str,
+        statistics_date: date,
+        loop_count: int,
+        auto_loop_count: int,
+        auto_control_rate: float,
+        stable_loop_count: int,
+        stability_rate: float,
+        conditional_excluded_loop_count: int,
+        parent_device_uri: Optional[str] = None
+    ) -> DeviceEvaluation:
+        """
+        按天和装置URI创建或更新评估记录
+        如果同一天同一装置已存在记录，则更新；否则创建新记录
+        
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI
+            device_name: 装置名称
+            statistics_date: 统计日期(只包含年月日)
+            loop_count: 回路数
+            auto_loop_count: 自动回路数
+            auto_control_rate: 自控率
+            stable_loop_count: 平稳回路数
+            stability_rate: 平稳率
+            conditional_excluded_loop_count: 条件剔除回路数
+            parent_device_uri: 父类装置URI
+        
+        Returns:
+            DeviceEvaluation: 创建或更新的评估对象
+        """
+        try:
+            evaluation_data = {
+                "device_name": device_name,
+                "loop_count": loop_count,
+                "auto_loop_count": auto_loop_count,
+                "auto_control_rate": auto_control_rate,
+                "stable_loop_count": stable_loop_count,
+                "stability_rate": stability_rate,
+                "conditional_excluded_loop_count": conditional_excluded_loop_count,
+                "parent_device_uri": parent_device_uri
+            }
+            
+            return DeviceEvaluationDAO.upsert_by_device_uri_and_date(
+                db, device_uri, statistics_date, evaluation_data
+            )
+            
+        except Exception as e:
+            logger.error(f"创建/更新装置评估记录失败: {str(e)}")
+            raise
     
     @staticmethod
     def create_evaluation(

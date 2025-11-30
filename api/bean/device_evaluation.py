@@ -49,10 +49,11 @@ class DeviceEvaluation(SQLModel, table=True):
         sa_column_kwargs={"comment": "装置名称"}
     )
 
-    # 统计时间
+    # 统计时间(按天统计)
     statistics_time: Optional[datetime] = Field(
         default=None,
-        sa_column_kwargs={"comment": "统计时间"}
+        index=True,
+        sa_column_kwargs={"comment": "统计时间(按天)"}
     )
 
     # 评估指标
@@ -107,14 +108,15 @@ class DeviceEvaluation(SQLModel, table=True):
                 "device_uri": "/plant/0b521c82a96d4107a564e4c2678bdeca",
                 "parent_device_uri": "/plant/parent_uri_example",
                 "device_name": "常减压装置",
-                "statistics_time": "2023-10-01T00:00:00",
+                "statistics_time": "2023-10-01",
                 "loop_count": 45,
                 "auto_loop_count": 38,
                 "auto_control_rate": 84.4,
                 "stable_loop_count": 40,
                 "stability_rate": 88.9,
                 "conditional_excluded_loop_count": 2
-            }
+            },
+            "description": "装置评估记录,按天和装置URI唯一索引,自动更新已存在记录"
         }
 
     def __repr__(self) -> str:

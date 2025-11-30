@@ -83,7 +83,11 @@ async def get_point_paths(
     description="查询指定项目路径下所有PID控制测点的当前值"
 )
 async def query_current_raw_values(
-        point_names: List[str],
+        point_names: List[str]=Query(
+            None,
+            description="测点列表",
+            example=["PV","MV","SV","PB","TI","TD","AUTO"]
+        ),
         loop_uri: Optional[str] = Query(
             None,
             description="实例 URI，默认从环境变量 BFF_MODEL_PROJECT_PATH 读取",
@@ -92,7 +96,7 @@ async def query_current_raw_values(
         point_path: Optional[str] = Query(
             None,
             description="测点路径，默认从环境变量 BFF_MODEL_POINT_PATH 读取",
-            example="loop_state_parameters"
+            example="/loop_state_parameters"
         )
 ) -> Dict[str, Any]:
     """

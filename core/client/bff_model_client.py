@@ -248,6 +248,7 @@ class BFFModelClient:
                   "PB": "/PID_FEP_Gateway_Device_001default/ns=100;s=FIC101A_PB.In_Channel0",
                   "TI": "/PID_FEP_Gateway_Device_001default/ns=100;s=FIC101A_TI.In_Channel0",
                   "TD": "/PID_FEP_Gateway_Device_001default/ns=100;s=FIC101A_TD.In_Channel0"
+                  "AUTO": "/PID_FEP_Gateway_Device_001default/ns=100;s=FIC101A_AUTO.In_Channel0"
                 }
             }
         """

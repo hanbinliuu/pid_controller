@@ -4,7 +4,7 @@ DAO层 - 装置评估数据访问对象 - 使用SQLModel
 """
 import logging
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 from sqlmodel import Session, select, func, desc
 
 from api.bean.device_evaluation import DeviceEvaluation
@@ -72,6 +72,98 @@ class DeviceEvaluationDAO:
         """
         statement = select(DeviceEvaluation).where(DeviceEvaluation.device_uri == device_uri)
         return db.exec(statement).first()
+    
+    @staticmethod
+    def get_by_device_uri_and_date(db: Session, device_uri: str, statistics_date: date) -> Optional[DeviceEvaluation]:
+        """
+        根据device_uri和统计日期查询评估记录
+        
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI
+            statistics_date: 统计日期(只包含年月日)
+        
+        Returns:
+            Optional[DeviceEvaluation]: 评估对象，不存在则返回None
+        """
+        # 转换日期为datetime(当天00:00:00)
+        start_datetime = datetime.combine(statistics_date, datetime.min.time())
+        end_datetime = datetime.combine(statistics_date, datetime.max.time())
+        
+        statement = select(DeviceEvaluation).where(
+            DeviceEvaluation.device_uri == device_uri,
+            DeviceEvaluation.statistics_time >= start_datetime,
+            DeviceEvaluation.statistics_time <= end_datetime
+        )
+        return db.exec(statement).first()
+    
+    @staticmethod
+    def upsert_by_device_uri_and_date(
+        db: Session,
+        device_uri: str,
+        statistics_date: date,
+        evaluation_data: Dict[str, Any]
+    ) -> DeviceEvaluation:
+        """
+        按装置URI和统计日期进行更新插入(upsert)
+        如果记录已存在则更新，否则创建新记录
+        
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI
+            statistics_date: 统计日期(只包含年月日)
+            evaluation_data: 评估数据字典
+        
+        Returns:
+            DeviceEvaluation: 创建或更新的评估对象
+        """
+        try:
+            # 确保统计时间为当天00:00:00
+            statistics_datetime = datetime.combine(statistics_date, datetime.min.time())
+            evaluation_data['statistics_time'] = statistics_datetime
+            evaluation_data['device_uri'] = device_uri
+            
+            # 查找是否存在记录
+            existing = DeviceEvaluationDAO.get_by_device_uri_and_date(
+                db, device_uri, statistics_date
+            )
+            
+            if existing:
+                # 更新现有记录
+                for key, value in evaluation_data.items():
+                    if hasattr(existing, key) and key not in ['id', 'created_time']:
+                        setattr(existing, key, value)
+                
+                existing.updated_time = datetime.now()
+                db.add(existing)
+                db.commit()
+                db.refresh(existing)
+                
+                logger.info(
+                    f"更新装置评估记录: device_uri={device_uri}, "
+                    f"date={statistics_date}, id={existing.id}"
+                )
+                return existing
+            else:
+                # 创建新记录
+                evaluation_data['created_time'] = datetime.now()
+                evaluation_data['updated_time'] = datetime.now()
+                evaluation = DeviceEvaluation(**evaluation_data)
+                
+                db.add(evaluation)
+                db.commit()
+                db.refresh(evaluation)
+                
+                logger.info(
+                    f"创建装置评估记录: device_uri={device_uri}, "
+                    f"date={statistics_date}, id={evaluation.id}"
+                )
+                return evaluation
+                
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Upsert装置评估记录失败: {str(e)}")
+            raise
     
     @staticmethod
     def query_list(

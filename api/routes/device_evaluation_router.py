@@ -4,6 +4,7 @@
 """
 import logging
 from typing import Optional, List, Dict, Any
+from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
@@ -15,6 +16,83 @@ logger = logging.getLogger(__name__)
 
 # 创建路由
 router = APIRouter(prefix="/api/v1", tags=["装置评估"])
+
+
+@router.post("/device-evaluation/upsert",
+            summary="按天和装置URI创建或更新评估",
+            operation_id="upsert_device_evaluation",
+            response_model=Dict[str, Any])
+async def upsert_device_evaluation(
+    device_uri: str = Query(..., description="装置 URI"),
+    device_name: str = Query(..., description="装置名称"),
+    statistics_date: str = Query(..., description="统计日期(格式: YYYY-MM-DD)"),
+    loop_count: int = Query(..., description="回路数"),
+    auto_loop_count: int = Query(..., description="自动回路数"),
+    auto_control_rate: float = Query(..., description="自控率"),
+    stable_loop_count: int = Query(..., description="平稳回路数"),
+    stability_rate: float = Query(..., description="平稳率"),
+    conditional_excluded_loop_count: int = Query(..., description="条件剔除回路数"),
+    parent_device_uri: Optional[str] = Query(None, description="父类装置URI"),
+    db: Session = Depends(get_db)
+):
+    """
+    按天和装置URI创建或更新装置评估记录
+    
+    - 如果同一天同一装置已存在记录，则更新
+    - 否则创建新记录
+    - statistics_date 只保留日期部分，时间为00:00:00
+    """
+    try:
+        # 解析日期字符串
+        try:
+            stats_date = datetime.strptime(statistics_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"日期格式错误，应为 YYYY-MM-DD 格式，得到: {statistics_date}"
+            )
+        
+        evaluation = DeviceEvaluationService.create_or_update_evaluation(
+            db,
+            device_uri=device_uri,
+            device_name=device_name,
+            statistics_date=stats_date,
+            loop_count=loop_count,
+            auto_loop_count=auto_loop_count,
+            auto_control_rate=auto_control_rate,
+            stable_loop_count=stable_loop_count,
+            stability_rate=stability_rate,
+            conditional_excluded_loop_count=conditional_excluded_loop_count,
+            parent_device_uri=parent_device_uri
+        )
+        
+        return {
+            "code": 0,
+            "message": "操作成功",
+            "data": {
+                "id": evaluation.id,
+                "device_uri": evaluation.device_uri,
+                "device_name": evaluation.device_name,
+                "parent_device_uri": evaluation.parent_device_uri,
+                "statistics_time": evaluation.statistics_time.date().isoformat(),
+                "loop_count": evaluation.loop_count,
+                "auto_loop_count": evaluation.auto_loop_count,
+                "auto_control_rate": evaluation.auto_control_rate,
+                "stable_loop_count": evaluation.stable_loop_count,
+                "stability_rate": evaluation.stability_rate,
+                "conditional_excluded_loop_count": evaluation.conditional_excluded_loop_count,
+                "created_time": evaluation.created_time.isoformat(),
+                "updated_time": evaluation.updated_time.isoformat()
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建/更新装置评估失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"创建/更新装置评估失败: {str(e)}"
+        )
 
 
 @router.post("/device-evaluation",

@@ -13,6 +13,7 @@ from api.routes.tuning_record_router import router as tuning_record_router
 from api.routes.loop_monitoring_routing import router as loop_monitoring_router
 from api.routes.loop_info_router import router as loop_info_router
 from api.routes.device_evaluation_router import router as device_evaluation_router
+from api.routes.loop_evaluation_router import router as loop_evaluation_router
 from api.routes.cron_task_router import router as cron_task_router
 
 # 导入中间件
@@ -64,6 +65,7 @@ app.include_router(bff_router, prefix='/api/bff', tags=['BFF模型'])
 app.include_router(loop_monitoring_router, prefix='/api/monitoring', tags=['回路监控'])
 app.include_router(loop_info_router, tags=['回路信息'])
 app.include_router(device_evaluation_router, tags=['装置评估'])
+app.include_router(loop_evaluation_router, tags=['回路评估'])
 app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
 
 

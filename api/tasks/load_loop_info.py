@@ -194,30 +194,42 @@ def _sync_loop_to_db(db, instance: Dict[str, Any]) -> str:
     uri_path = instance.get('uriPath', '')  # 从模型中获取完整URI路径
     description = instance.get('description', '')
     
-    # 查询回路的测点信息
-    point_mapping = _query_loop_points(loop_uri)
+
     
     # 准备数据
     loop_data = {
         "loop_uri": loop_uri,
-        "loop_path": uri_path,  # URI路径：优先从模型获取，否则使用配置
+        "loop_path": uri_path,  # URI路径：从模型获取
         "loop_name": loop_name,
         "point_path": DEFAULT_POINT_PATH,  # 测点相对路径：从配置文件中获取
         "description": description,
         "is_active": True,
         "updated_time": datetime.now()
     }
-    
+    # 查询回路的模型绑定时序测点信息
+    # point_mapping = _query_loop_points(loop_uri)
+    # if point_mapping:
+    #     loop_data.update({
+    #         "pv_field": point_mapping.get('PV'),
+    #         "sv_field": point_mapping.get('SV'),
+    #         "mv_field": point_mapping.get('MV'),
+    #         "pb_field": point_mapping.get('PB'),
+    #         "ti_field": point_mapping.get('TI'),
+    #         "td_field": point_mapping.get('TD'),
+    #         "auto_status_field": point_mapping.get('AUTO')
+    #     })
+    #查询配置文件中配置的测点字段
+    point_mapping = Config.get_pid_point_map()
     # 添加测点字段
     if point_mapping:
         loop_data.update({
-            "pv_field": point_mapping.get('PV'),
-            "sv_field": point_mapping.get('SV'),
-            "mv_field": point_mapping.get('MV'),
-            "pb_field": point_mapping.get('PB'),
-            "ti_field": point_mapping.get('TI'),
-            "td_field": point_mapping.get('TD'),
-            "auto_status_field": point_mapping.get('AUTO')
+            "pv_field": point_mapping.get('pv'),
+            "sv_field": point_mapping.get('sv'),
+            "mv_field": point_mapping.get('mv'),
+            "pb_field": point_mapping.get('pb'),
+            "ti_field": point_mapping.get('ti'),
+            "td_field": point_mapping.get('td'),
+            "auto_status_field": point_mapping.get('auto')
         })
     
     if existing_loop:

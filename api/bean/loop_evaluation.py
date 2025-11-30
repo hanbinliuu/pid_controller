@@ -3,7 +3,7 @@
 回路评估对象Bean类
 定义回路性能评估的数据结构
 """
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, Dict, Any
 
 from sqlalchemy import Text
@@ -57,7 +57,8 @@ class LoopEvaluation(SQLModel, table=True):
     )
     tuning_time: Optional[datetime] = Field(
         default=None,
-        sa_column_kwargs={"comment": "整定时间"}
+        index=True,
+        sa_column_kwargs={"comment": "整定时间(按天)"}
     )
     operator: Optional[str] = Field(
         default=None,
@@ -160,13 +161,15 @@ class LoopEvaluation(SQLModel, table=True):
                 "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                 "loop_name": "FIC101A流量控制回路",
                 "tuning_method": "Lambda整定",
+                "tuning_time": "2023-10-01",
                 "performance_score": 85.5,
                 "auto_control_rate": 92.3,
                 "stability_rate": 88.7,
                 "auto_control_time": 78900,
                 "stable_time": 75600,
                 "total_time": 85400
-            }
+            },
+            "description": "回路评估记录,按天和回路URI唯一索引,自动更新已存在记录"
         }
 
     def __repr__(self) -> str:

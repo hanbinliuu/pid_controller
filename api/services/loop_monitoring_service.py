@@ -342,7 +342,7 @@ class LoopMonitoringService:
                     pv = point.get('pv')
                     sv = point.get('sv')
                     mv = point.get('mv')
-                    auto_status = point.get('auto_status', 255)  # 默认为自动
+                    auto_status = point.get('auto', 255)  # 默认为自动
                     timestamps.append(ts)
                     pv_values.append(pv)
                     sv_values.append(sv)

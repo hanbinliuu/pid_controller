@@ -51,9 +51,9 @@ def calculate_loop_performance(max_workers: int = 5) -> dict:
                 for item in result.get('results', []):
                     status = item.get('status')
                     loop_uri = item.get('loop_uri')
-                    if status not in ['优秀', '良好', '一般', '差']:
-                        # 跳过失败或异常结果
-                        continue
+                    # if status not in ['优秀', '良好', '一般', '差']:
+                    #     # 跳过失败或异常结果
+                    #     continue
 
                     # 获取回路名称
                     mapping = LoopInfoDAO.get_by_loop_uri(db, loop_uri, include_inactive=True)
