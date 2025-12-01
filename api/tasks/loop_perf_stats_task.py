@@ -61,7 +61,7 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
             with get_db_session() as db:
                 for item in result.get('results', []):
                     status = item.get('status')
-                    if status not in ['优秀', '良好', '一般', '差']:
+                    if status not in ['优秀', '良好', '一般', '差', '开环', '条件剔除']:
                         continue
 
                     loop_uri = item.get('loop_uri')
@@ -86,6 +86,7 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                     evaluation_data = {
                         "loop_uri": loop_uri,
                         "loop_name": loop_name,
+                        "status": status,
                         "assessment_time": assessment_time,
                         "performance_score": item.get('comprehensive_score'),
                         "auto_control_rate": metrics.get('auto_control_rate'),

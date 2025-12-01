@@ -44,6 +44,12 @@ class LoopEvaluation(SQLModel, table=True):
         sa_column_kwargs={"comment": "回路名称"}
     )
 
+    status: Optional[str] = Field(
+        default=None,
+        max_length=50,
+        index=True,
+        sa_column_kwargs={"comment": "评估结果"}
+    )
 
     assessment_time: Optional[datetime] = Field(
         default=None,

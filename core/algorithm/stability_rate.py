@@ -455,10 +455,25 @@ class PerformanceEvaluator:
             auto_time = float(np.sum(dt[auto_pairs])) if len(dt) else 0.0
             total_time = float(t[-1] - t[0]) if len(t) > 1 else 0.0
             rate = (auto_time / total_time * 100.0) if total_time > 0 else 0.0
+
+            open_loop = False
+            first_false = -1
+            for i in range(len(is_auto)-1, -1, -1):
+                if not is_auto[i]:
+                    first_false = i
+                else:
+                    break
+            if first_false >= 0:
+                not_auto_time = float(t[-1] - t[first_false])
+                # TODO: 检测是否为8小时以上, 需要通过环境参数配置
+                if not_auto_time >= (3600 * 4):
+                    open_loop = True
+
             return {
                 "auto_control_rate": float(rate),
                 "auto_control_time": int(auto_time),
-                "total_time": int(total_time)
+                "total_time": int(total_time),
+                "open_loop": open_loop,
             }
         except Exception as e:
             logger.error(f"自控率计算失败: {str(e)}")

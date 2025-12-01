@@ -380,6 +380,8 @@ class LoopMonitoringService:
             t_auto = auto_control_result.get('auto_control_time', 0)
             # 手动运行时长
             t_total = auto_control_result.get('total_time', 0)
+            # 开环状态
+            open_loop = auto_control_result.get('open_loop', False)
 
             # 2. 计算平稳率（稳定性维度）
             stability_result = PerformanceEvaluator.calculate_stability_rate_auto(
@@ -459,6 +461,10 @@ class LoopMonitoringService:
                 status = "一般"
             else:
                 status = "差"
+
+            # 判断开环
+            if open_loop:
+                status = "开环"
 
             return {
                 "loop_uri": loop_uri,
