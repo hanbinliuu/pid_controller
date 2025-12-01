@@ -374,7 +374,12 @@ class LoopMonitoringService:
                 time=time_seconds,
                 auto_status=auto_status_values
             )
+            # 自控率
             auto_control_rate = auto_control_result.get('auto_control_rate', 0)
+            # 自动运行时长
+            t_auto = auto_control_result.get('auto_control_time', 0)
+            # 手动运行时长
+            t_total = auto_control_result.get('total_time', 0)
 
             # 2. 计算平稳率（稳定性维度）
             stability_result = PerformanceEvaluator.calculate_stability_rate_auto(
@@ -384,7 +389,10 @@ class LoopMonitoringService:
                 auto_status=auto_status_values,
                 threshold_percent=2.0
             )
+            # 平稳率
             stability_rate = stability_result.get('stability_rate', 0)
+            # 平稳运行时长
+            t_stable = stability_result.get('stable_time', 0)
 
             # 3. 计算精确性（标准偏差）
             precision_result = PerformanceEvaluator.calculate_precision_std_auto(
@@ -394,6 +402,10 @@ class LoopMonitoringService:
                 use_SV=True
             )
             precision_std = precision_result.get('sigma_sp', 0)  # 相对设定值的标准差
+            # 过程变量和
+            pv_sum_value = precision_result.get('pv_sum_value', 0)
+            # 过程变量平方和
+            pv_sum_squares = precision_result.get('pv_sum_squares', 0)
 
             # 4. 计算高效性（阀门活动度）
             efficiency_result = PerformanceEvaluator.calculate_valve_activity_auto(
@@ -402,6 +414,10 @@ class LoopMonitoringService:
                 auto_status=auto_status_values
             )
             valve_activity_cac = efficiency_result.get('cac', 0)  # 累计绝对变化
+            # 操纵变量和
+            mv_sum_value = efficiency_result.get('mv_sum_value', 0)
+            # 操纵变量平方和
+            mv_sum_squares = efficiency_result.get('mv_sum_squares', 0)
 
             # 计算综合评分（四维度加权）
             # 权重：自控率 20%，平稳率 40%，精确性 30%，高效性 10%
@@ -466,7 +482,14 @@ class LoopMonitoringService:
                     "precision": 0.3,
                     "efficiency": 0.1
                 },
-                "data_points_count": len(timestamps),
+                "t_auto": t_auto,
+                "t_total": t_total,
+                "t_stable": t_stable,
+                "pv_sum_value": pv_sum_value,
+                "pv_sum_squares": pv_sum_squares,
+                "mv_sum_value": mv_sum_value,
+                "mv_sum_squares": mv_sum_squares,
+                "pt_count": len(timestamps),
                 "time_range": {
                     "start": start_time.isoformat(),
                     "end": end_time.isoformat()

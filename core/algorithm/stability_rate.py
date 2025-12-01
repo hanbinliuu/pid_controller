@@ -560,7 +560,9 @@ class PerformanceEvaluator:
             return {
                 "sigma_sv ": sigma_sv ,
                 "sigma_mean": sigma_mean,
-                "pv_mean": pv_mean
+                "pv_mean": pv_mean,
+                "pv_sum_value": float(np.sum(pv_auto)),
+                "pv_sum_squares": float(np.sum(pv_auto ** 2)),
             }
         except Exception as e:
             logger.error(f"自动期精确性(标准差)计算失败: {str(e)}")
@@ -603,7 +605,9 @@ class PerformanceEvaluator:
             sigma_op = float(np.std(op_auto)) if op_auto.size > 1 else None
             return {
                 "cac": cac,
-                "sigma_op": sigma_op
+                "sigma_op": sigma_op,
+                "mv_sum_value": float(np.sum(op_auto)),
+                "mv_sum_squares": float(np.sum(op_auto ** 2)),
             }
         except Exception as e:
             logger.error(f"自动期阀门活动度计算失败: {str(e)}")
