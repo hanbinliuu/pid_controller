@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from api.routes.excluded_loop_router import router as excluded_loop_router
 from api.routes.loop_router import router as loop_router
 # 导入所有路由
 from api.routes.analysis_router import router as analysis_router
@@ -66,6 +67,8 @@ app.include_router(loop_monitoring_router, prefix='/api/monitoring', tags=['回�
 app.include_router(loop_info_router, tags=['回路信息'])
 app.include_router(device_evaluation_router, tags=['装置评估'])
 app.include_router(loop_evaluation_router, tags=['回路评估'])
+
+app.include_router(excluded_loop_router, tags=['剔除回路管理'])
 app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
 
 
