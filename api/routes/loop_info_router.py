@@ -14,7 +14,7 @@ from api.bean.loop_info import LoopInfo
 logger = logging.getLogger(__name__)
 
 # 创建路由
-router = APIRouter(prefix="/api/v1", tags=["回路信息"])
+router = APIRouter(prefix="/api/v1")
 
 
 # @router.post("/loop-info",

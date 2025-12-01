@@ -22,7 +22,7 @@ from api.middleware.exceptions import (
 logger = logging.getLogger(__name__)
 
 # 创建路由
-router = APIRouter(prefix="/api/v1", tags=["条件剔除"])
+router = APIRouter(prefix="/api/v1")
 
 
 # 请求体模型

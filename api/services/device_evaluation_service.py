@@ -9,6 +9,8 @@ from sqlmodel import Session
 
 from api.dao.device_evaluation_dao import DeviceEvaluationDAO
 from api.bean.device_evaluation import DeviceEvaluation
+from api.bean.loop_info import LoopInfo
+from sqlmodel import select
 
 logger = logging.getLogger(__name__)
 
@@ -257,3 +259,43 @@ class DeviceEvaluationService:
             bool: 是否删除成功
         """
         return DeviceEvaluationDAO.delete(db, evaluation_id)
+    
+    @staticmethod
+    def get_device_loops(
+        db: Session,
+        device_uri: str
+    ) -> List[LoopInfo]:
+        """
+        获取装置下的回路列表
+        
+        通过回路loop_uri模糊匹配装置URI来查找装置下的所有回路
+        
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI
+        Returns:
+            Dict: 包含回路列表和统计信息
+        """
+        try:
+            # 构建SQL查询
+            statement = select(LoopInfo).where(
+                LoopInfo.loop_path.like(f"%{device_uri}%") # loop_path包含装置URI
+            )
+
+            
+            # 按创建时间排序
+            statement = statement.order_by(LoopInfo.created_time.desc())
+            statement = statement.where(LoopInfo.is_active == True)
+
+            loops = db.exec(statement).all()
+            
+            # 转换为返回格式
+            loop_list = []
+            for loop in loops:
+                loop_list.append(loop)
+
+            return loop_list
+            
+        except Exception as e:
+            logger.error(f"获取装置回路列表失败: {str(e)}")
+            raise

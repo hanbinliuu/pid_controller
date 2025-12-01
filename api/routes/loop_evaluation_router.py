@@ -15,7 +15,7 @@ from api.bean.loop_evaluation import LoopEvaluation
 logger = logging.getLogger(__name__)
 
 # 创建路由
-router = APIRouter(prefix="/api/v1", tags=["回路评估"])
+router = APIRouter(prefix="/api/v1")
 
 
 @router.get("/loop-evaluation/{evaluation_id}",

@@ -107,7 +107,7 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
     
     统计逻辑：
     1. 从BFF获取所有装置列表（使用BFFService.get_all_devices()）
-    2. 对每个装置，从树形结构中查询其下的回路列表
+    2. 对每个装置，查询其下的回路列表
     3. 查询回路评估数据并按装置汇总统计
     4. 写入装置评估表（按天和装置URI更新）
     
@@ -138,66 +138,20 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
             # 使用封装的BFFService获取所有装置列表
             all_devices = BFFService.get_all_devices()
             logger.info(f"从BFF查询到 {len(all_devices)} 个装置")
-            
-            # 对每个装置，查询其子节点（回路）
-            with BFFModelClient() as client:
-                for device in all_devices:
-                    device_uri = device.get('uri')
-                    device_name = device.get('displayName', device.get('browseName', ''))
-                    parent_device_uri = device.get('parentUri')
-                    
-                    if not device_uri:
-                        continue
-                    
-                    # 查询装置下的子节点树形结构
-                    try:
-                        tree_result = client.list_instances_under_tree(
-                            start_uri=device_uri,
-                            model_uri_list=None,
-                            include_sub_type=True
-                        )
-                        
-                        # 从树中提取回路节点
-                        device_loops = []
-                        
-                        def extract_loops(node: Dict[str, Any]):
-                            """递归提取回路节点"""
-                            if not node:
-                                return
-                            
-                            node_info = node.get('node', {})
-                            node_uri = node_info.get('uri')
-                            node_name = node_info.get('displayName', node_info.get('browseName', ''))
-                            
-                            # 如果当前节点是激活的回路
-                            if node_uri in active_loop_uris:
-                                device_loops.append({
-                                    'loop_uri': node_uri,
-                                    'loop_name': node_name,
-                                    'device_uri': device_uri,
-                                    'device_name': device_name,
-                                    'parent_device_uri': parent_device_uri
-                                })
-                            
-                            # 递归处理子节点
-                            for child in node.get('children', []):
-                                extract_loops(child)
-                        
-                        # 从根节点开始提取回路
-                        result = tree_result.get('result', {})
-                        if result:
-                            extract_loops(result)
-                        
-                        # 如果装置下有回路，则记录
-                        if device_loops:
-                            device_loops_map[device_uri] = device_loops
-                            logger.debug(f"装置 {device_name} ({device_uri}): {len(device_loops)} 个回路")
-                    
-                    except Exception as e:
-                        logger.warning(f"查询装置 {device_uri} 的回路失败: {str(e)}")
-                        continue
-                
-                logger.info(f"共找到 {len(device_loops_map)} 个有回路的装置")
+
+            # todo  获取装置的回路列表
+            device_loops_map={}
+            for device in all_devices:
+                device_uri = device.get('uri')
+                device_name = device.get('displayName', device.get('browseName', ''))
+                device_loops_map[device_uri] = []
+                device_loops_map[device_uri].append({
+                    'loop_uri': device_uri,
+                    'loop_name': device_name,
+                    'device_uri': device_uri,
+                    'device_name': device_name,
+                })
+
         
         except Exception as e:
             logger.error(f"从BFF查询装置列表失败: {str(e)}")
