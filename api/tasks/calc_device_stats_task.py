@@ -167,11 +167,11 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                         continue
 
                     # 自控率判断：auto_control_rate >= 80%
-                    if evaluation.auto_control_rate and evaluation.auto_control_rate >= 80:
+                    if evaluation.auto_control_rate and evaluation.auto_control_rate >= 0.8:
                         auto_control_loops += 1
 
                     # 平稳率判断：stability_rate >= 80%
-                    if evaluation.stability_rate and evaluation.stability_rate >= 80:
+                    if evaluation.stability_rate and evaluation.stability_rate >= 0.8:
                         stable_loops += 1
 
                 # 计算比率
