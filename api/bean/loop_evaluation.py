@@ -80,20 +80,20 @@ class LoopEvaluation(SQLModel, table=True):
         default=None,
         sa_column_kwargs={"comment": "数据点数量"}
     )
-    pv_sum_value: Optional[int] = Field(
+    pv_sum_value: Optional[float] = Field(
         default=None,
         sa_column_kwargs={"comment": "过程变量和"}
     )
-    pv_sum_squares: Optional[int] = Field(
+    pv_sum_squares: Optional[float] = Field(
         default=None,
         sa_column_kwargs={"comment": "过程变量平方和"}
     )
-    mv_sum_value: Optional[int] = Field(
+    mv_sum_value: Optional[float] = Field(
         default=None,
         sa_column_kwargs={"comment": "操纵变量和"}
     )
 
-    mv_sum_squares: Optional[int] = Field(
+    mv_sum_squares: Optional[float] = Field(
         default=None,
         sa_column_kwargs={"comment": "操纵变量平方和"}
     )
