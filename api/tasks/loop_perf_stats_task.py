@@ -8,7 +8,11 @@ from api.dao.loop_evaluation_dao import LoopEvaluationDAO
 
 logger = logging.getLogger(__name__)
 
-def calculate_loop_performance(max_workers: int = 5) -> dict:
+# -------------------
+# 回路性能定时统计任务
+# -------------------
+
+def calc_loop_performance(max_workers: int = 5) -> dict:
     """
     计算全部回路的性能状态
     从数据库loop_info表中加载激活的回路列表

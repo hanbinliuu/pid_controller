@@ -36,12 +36,12 @@ async def register_cron_task(
     """
     try:
         # 定义任务函数映射
-        from api.tasks.calculate_loop_performance import calculate_loop_performance
+        from api.tasks.loop_perf_stats_task import calc_loop_performance
         from api.tasks.load_loop_info import load_loop_list_and_sync
         
         # 任务映射表
         task_function_map = {
-            'calculate_loop_performance': calculate_loop_performance,
+            'calculate_loop_performance': calc_loop_performance,
             'load_model_tree': load_loop_list_and_sync
         }
         
@@ -398,10 +398,10 @@ async def trigger_performance_evaluation(
         计算结果，包含成功、失败的回路数量等信息
     """
     try:
-        from api.tasks.calculate_loop_performance import calculate_loop_performance
+        from api.tasks.loop_perf_stats_task import calc_loop_performance
         
         logger.info(f"手动触发性能评估任务，线程数: {max_workers}")
-        result = calculate_loop_performance(max_workers=max_workers)
+        result = calc_loop_performance(max_workers=max_workers)
         
         return {
             "status": "success",

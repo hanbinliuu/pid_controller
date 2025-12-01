@@ -4,7 +4,7 @@
 """
 import logging
 
-from api.tasks.calculate_loop_performance import calculate_loop_performance
+from api.tasks.loop_perf_stats_task import calc_loop_performance
 from api.tasks.load_loop_info import load_loop_list_and_sync
 from api.tasks.cron_tasks import task_manager
 from api.services.loop_monitoring_service import LoopMonitoringService
@@ -49,7 +49,7 @@ def init_cron_tasks():
             success = task_manager.register_task(
                 task_id='calculate_loop_performance',
                 cron_expression=Config.TASK_LOOP_PERFORMANCE_CRON,
-                task_func=calculate_loop_performance,
+                task_func=calc_loop_performance,
                 task_args={'max_workers': Config.TASK_LOOP_PERFORMANCE_MAX_WORKERS}
             )
             
