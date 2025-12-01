@@ -8,6 +8,7 @@ from datetime import datetime
 from sqlmodel import Session, select, func, desc, or_
 
 from api.bean.excluded_loop import ExcludedLoop
+from api.bean.loop_info import LoopInfo
 
 logger = logging.getLogger(__name__)
 
@@ -80,22 +81,21 @@ class ExcludedLoopDAO:
     @staticmethod
     def query_list(
         db: Session,
-        name: Optional[str] = None,
+        loop_name: Optional[str] = None,
+        device_uri: Optional[str] = None,
         uri: Optional[str] = None,
-        type: Optional[str] = None,
-        is_excluded: Optional[bool] = None,
         page_no: int = 1,
         page_size: int = 10
     ) -> Dict[str, Any]:
         """
         查询剔除记录列表 - SQLModel方式
+        关联loop_info表获取回路名称
         
         Args:
             db: 数据库会话
-            name: 名称筛选（模糊匹配）
-            uri: URI筛选（模糊匹配）
-            type: 类型筛选（回路/装置）
-            is_excluded: 是否剔除
+            loop_name: 回路名称筛选（模糊匹配）
+            device_uri: 装置URI筛选（模糊匹配loop_info.loop_path字段）
+            uri: 回路URI筛选（模糊匹配）
             page_no: 页码
             page_size: 每页数量
         
@@ -103,46 +103,71 @@ class ExcludedLoopDAO:
             Dict: 包含记录列表和分页信息的字典
         """
         try:
-            # 构建select语句
-            statement = select(ExcludedLoop)
+            # 构建select语句，关联loop_info表
+            statement = select(
+                ExcludedLoop,
+                LoopInfo.loop_name
+            ).join(
+                LoopInfo,
+                ExcludedLoop.uri == LoopInfo.loop_uri
+            )
             
-            # 名称筛选（模糊匹配）
-            if name:
-                statement = statement.where(ExcludedLoop.name.like(f"%{name}%"))
+            # 回路名称筛选（模糊匹配）
+            if loop_name:
+                statement = statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
             
-            # URI筛选（模糊匹配）
+            # 装置URI筛选（模糊匹配loop_path字段）
+            if device_uri:
+                statement = statement.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
+            
+            # 回路URI筛选（模糊匹配）
             if uri:
                 statement = statement.where(ExcludedLoop.uri.like(f"%{uri}%"))
-            
-            # 类型筛选
-            if type:
-                statement = statement.where(ExcludedLoop.type == type)
-            
-            # 剔除状态筛选
-            if is_excluded is not None:
-                statement = statement.where(ExcludedLoop.is_excluded == is_excluded)
             
             # 按创建时间倒序排列
             statement = statement.order_by(desc(ExcludedLoop.created_time))
             
-            # 获取总数
+            # 获取总数 - 需要应用相同的筛选条件
             count_statement = select(func.count()).select_from(ExcludedLoop)
-            # 应用相同的筛选条件到计数查询
-            if name:
-                count_statement = count_statement.where(ExcludedLoop.name.like(f"%{name}%"))
+            
+            # 关联loop_info表（与主查询保持一致，使用join）
+            count_statement = count_statement.join(
+                LoopInfo,
+                ExcludedLoop.uri == LoopInfo.loop_uri
+            )
+            
+            # 回路名称筛选
+            if loop_name:
+                count_statement = count_statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
+            
+            # 装置URI筛选（模糊匹配loop_path字段）
+            if device_uri:
+                count_statement = count_statement.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
+            
+            # 回路URI筛选
             if uri:
                 count_statement = count_statement.where(ExcludedLoop.uri.like(f"%{uri}%"))
-            if type:
-                count_statement = count_statement.where(ExcludedLoop.type == type)
-            if is_excluded is not None:
-                count_statement = count_statement.where(ExcludedLoop.is_excluded == is_excluded)
             
             total = db.exec(count_statement).one()
             
             # 分页
             offset = (page_no - 1) * page_size
             statement = statement.offset(offset).limit(page_size)
-            excluded_loops = db.exec(statement).all()
+            results = db.exec(statement).all()
+            
+            # 组装结果，添加loop_name字段
+            excluded_loops = []
+            for excluded_loop, loop_name_value in results:
+                # 创建一个字典包含所有字段
+                loop_dict = {
+                    "id": excluded_loop.id,
+                    "uri": excluded_loop.uri,
+                    "loop_name": loop_name_value,  # 从loop_info表关联获取
+                    "reason": excluded_loop.reason,
+                    "created_time": excluded_loop.created_time,
+                    "updated_time": excluded_loop.updated_time
+                }
+                excluded_loops.append(loop_dict)
             
             # 计算总页数
             pages = (total + page_size - 1) // page_size if total > 0 else 0
@@ -161,6 +186,60 @@ class ExcludedLoopDAO:
             
         except Exception as e:
             logger.error(f"查询条件剔除记录失败: {str(e)}")
+            raise
+    
+    @staticmethod
+    def get_all_uris(
+        db: Session,
+        loop_name: Optional[str] = None,
+        device_uri: Optional[str] = None,
+        uri: Optional[str] = None
+    ) -> List[str]:
+        """
+        获取所有剔除回路URI列表（支持筛选）
+        
+        Args:
+            db: 数据库会话
+            loop_name: 回路名称筛选（模糊匹配）
+            device_uri: 装置URI筛选（模糊匹配loop_path字段）
+            uri: 回路URI筛选（模糊匹配）
+        
+        Returns:
+            List[str]: URI列表
+        """
+        try:
+            # 构建select语句
+            statement = select(ExcludedLoop.uri)
+            
+            # 如果有loop_name或device_uri筛选，需要关联loop_info表
+            if loop_name or device_uri:
+                statement = statement.join(
+                    LoopInfo,
+                    ExcludedLoop.uri == LoopInfo.loop_uri
+                )
+            
+            # 回路名称筛选（模糊匹配）
+            if loop_name:
+                statement = statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
+            
+            # 装置URI筛选（模糊匹配loop_path字段）
+            if device_uri:
+                statement = statement.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
+            
+            # 回路URI筛选（模糊匹配）
+            if uri:
+                statement = statement.where(ExcludedLoop.uri.like(f"%{uri}%"))
+            
+            # 按创建时间排序
+            statement = statement.order_by(ExcludedLoop.created_time)
+            
+            results = db.exec(statement).all()
+            
+            logger.info(f"获取剔除URI列表成功，总数: {len(results)}")
+            return list(results)
+            
+        except Exception as e:
+            logger.error(f"获取剔除URI列表失败: {str(e)}")
             raise
     
     @staticmethod

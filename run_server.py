@@ -87,11 +87,14 @@ except Exception as e:
 if __name__ == "__main__":
     # 获取日志级别并转换为uvicorn格式
     log_level = os.getenv('LOG_LEVEL', 'INFO').lower()
+    # 是否启用热加载（开发环境可设置为True，生产环境应为False）
+    enable_reload = os.getenv('ENABLE_RELOAD', 'True').lower() == 'false'
     
     logger.info("启动PID整定软件 API服务器...")
     logger.info("API文档地址: http://localhost:8001/docs")
     logger.info(f"Uvicorn日志级别: {log_level}")
-    
+    logger.info(f"热加载状态: {'启用' if enable_reload else '禁用'}")
+
     uvicorn.run(
         "run_server:app",
         host="0.0.0.0", 

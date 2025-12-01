@@ -34,25 +34,6 @@ class ExcludedLoop(SQLModel, table=True):
         sa_column_kwargs={"comment": "回路/装置URI"}
     )
     
-    name: Optional[str] = Field(
-        default=None,
-        max_length=200,
-        sa_column_kwargs={"comment": "回路/装置名称"}
-    )
-    
-    # 剔除状态
-    is_excluded: bool = Field(
-        default=True,
-        sa_column_kwargs={"comment": "是否剔除"}
-    )
-    
-    # 类型
-    type: str = Field(
-        max_length=50,
-        index=True,
-        sa_column_kwargs={"comment": "类型（装置、回路）"}
-    )
-    
     # 剔除原因
     reason: Optional[str] = Field(
         default=None,
@@ -79,12 +60,9 @@ class ExcludedLoop(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
-                "name": "FIC101A",
-                "is_excluded": True,
-                "type": "回路",
                 "reason": "数据质量差"
             }
         }
 
     def __repr__(self) -> str:
-        return f"<ExcludedLoop(id={self.id}, name={self.name}, uri={self.uri}, type={self.type}, is_excluded={self.is_excluded})>"
+        return f"<ExcludedLoop(id={self.id}, uri={self.uri}, reason={self.reason})>"

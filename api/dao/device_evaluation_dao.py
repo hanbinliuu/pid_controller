@@ -131,7 +131,7 @@ class DeviceEvaluationDAO:
             if existing:
                 # 更新现有记录
                 for key, value in evaluation_data.items():
-                    if hasattr(existing, key) and key not in ['id', 'created_time']:
+                    if hasattr(existing, key) and key not in ['id', 'statistics_time']:
                         setattr(existing, key, value)
                 
                 existing.updated_time = datetime.now()

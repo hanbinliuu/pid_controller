@@ -609,8 +609,8 @@ async def get_device_loops(
         )
         
         return {
-            "loop_count": len(result),
-            "loop_list": result
+            "count": len(result),
+            "loops": result
         }
     
     except BusinessException:
