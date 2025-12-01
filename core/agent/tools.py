@@ -1424,6 +1424,8 @@ def process_query_tsdb_data_interpolated(db: str,
                     record["ti"] = value_row[i]
                 elif column == field_mapping.get("td"):
                     record["td"] = value_row[i]
+                elif column == field_mapping.get("auto"):
+                    record["auto"] = value_row[i]
                 else:
                     record[column] = value_row[i]
         all_records.append(record)
