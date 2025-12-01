@@ -109,7 +109,7 @@ class LoopService:
                             description=instance.get('description'),
                             uriPath=instance.get('uriPath'),
                             extendedAttr=instance.get('extendedAttr', {}),
-                            pid_params=LoopStatus(
+                            loop_status=LoopStatus(
                                 PB=instance.get('pid_params', {}).get('PB'),
                                 TI=instance.get('pid_params', {}).get('TI'),
                                 TD=instance.get('pid_params', {}).get('TD'),
@@ -154,7 +154,7 @@ class LoopService:
                 # 判断是否获取回路节点信息成功
                 if len(nodes_result) == 0:
                     return LoopInfoResponse(
-                        uri=loop_uri,
+                        uri=None,
                         browseName=None,
                         displayName=None,
                         description=None,

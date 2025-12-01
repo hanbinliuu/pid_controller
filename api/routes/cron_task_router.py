@@ -38,16 +38,19 @@ async def register_cron_task(
         # 定义任务函数映射
         from api.tasks.loop_perf_stats_task import calc_loop_performance
         from api.tasks.load_loop_info import load_loop_list_and_sync
+        from api.tasks.calc_device_stats_task import calc_device_statistics
         
         # 任务映射表
         task_function_map = {
             'calculate_loop_performance': calc_loop_performance,
-            'load_model_tree': load_loop_list_and_sync
+            'load_model_tree': load_loop_list_and_sync,
+            'calculate_device_statistics': calc_device_statistics
         }
         
         task_args_map = {
             'calculate_loop_performance': {'max_workers': 5},
-            'load_model_tree': {}
+            'load_model_tree': {},
+            'calculate_device_statistics': {}
         }
         
         if task_id not in task_function_map:
@@ -410,6 +413,58 @@ async def trigger_performance_evaluation(
         
     except Exception as e:
         logger.error(f"手动触发性能评估失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"执行失败: {str(e)}"
+        )
+
+
+@router.post(
+    "/trigger-device-statistics",
+    summary="手动触发装置统计任务",
+    operation_id="手动触发装置统计",
+    description="立即执行一次装置性能统计任务，按天统计各装置的自控率、平稳率等指标"
+)
+async def trigger_device_statistics(
+    statistics_date: str = Query(None, description="统计日期（YYYY-MM-DD格式），默认为今天", example="2025-12-01")
+) -> Dict[str, Any]:
+    """
+    手动触发装置统计任务
+    
+    Args:
+        statistics_date: 统计日期，默认为今天
+    
+    Returns:
+        统计结果，包含装置数、回路数、成功/失败数量等信息
+    """
+    try:
+        from api.tasks.calc_device_stats_task import calc_device_statistics
+        from datetime import datetime, date
+        
+        # 解析统计日期
+        if statistics_date:
+            try:
+                stats_date = datetime.strptime(statistics_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"日期格式错误，应为 YYYY-MM-DD 格式: {statistics_date}"
+                )
+        else:
+            stats_date = date.today()
+        
+        logger.info(f"手动触发装置统计任务，统计日期: {stats_date}")
+        result = calc_device_statistics(statistics_date=stats_date)
+        
+        return {
+            "status": "success",
+            "data": result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"手动触发装置统计失败 - statistics_date={statistics_date}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"执行失败: {str(e)}"
