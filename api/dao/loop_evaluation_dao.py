@@ -30,23 +30,23 @@ class LoopEvaluationDAO:
         data = evaluation_data.copy()
         
         # 处理整定时间：确保为datetime类型，并规范化为当天00:00:00
-        if 'tuning_time' in data and data['tuning_time']:
-            tuning_time = data['tuning_time']
-            if isinstance(tuning_time, str):
+        if 'assessmen_time' in data and data['assessmen_time']:
+            assessmen_time = data['assessmen_time']
+            if isinstance(assessmen_time, str):
                 # 字符串转datetime
                 try:
-                    tuning_time = datetime.strptime(tuning_time.split()[0], "%Y-%m-%d")
+                    assessmen_time = datetime.strptime(assessmen_time.split()[0], "%Y-%m-%d")
                 except ValueError:
-                    logger.warning(f"整定时间格式错误: {tuning_time}，使用当前日期")
-                    tuning_time = datetime.now()
-            elif isinstance(tuning_time, date) and not isinstance(tuning_time, datetime):
+                    logger.warning(f"整定时间格式错误: {assessmen_time}，使用当前日期")
+                    assessmen_time = datetime.now()
+            elif isinstance(assessmen_time, date) and not isinstance(assessmen_time, datetime):
                 # date转datetime
-                tuning_time = datetime.combine(tuning_time, datetime.min.time())
-            elif isinstance(tuning_time, datetime):
+                assessmen_time = datetime.combine(assessmen_time, datetime.min.time())
+            elif isinstance(assessmen_time, datetime):
                 # datetime规范化为当天00:00:00
-                tuning_time = datetime.combine(tuning_time.date(), datetime.min.time())
+                assessmen_time = datetime.combine(assessmen_time.date(), datetime.min.time())
             
-            data['tuning_time'] = tuning_time
+            data['assessmen_time'] = assessmen_time
         
         # 设置时间戳
         now = datetime.now()
@@ -110,7 +110,6 @@ class LoopEvaluationDAO:
         db: Session,
         loop_name: Optional[str] = None,
         loop_uri: Optional[str] = None,
-        tuning_method: Optional[str] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         min_performance_score: Optional[float] = None,
@@ -124,7 +123,6 @@ class LoopEvaluationDAO:
             db: 数据库会话
             loop_name: 回路名称筛选
             loop_uri: 节点uri
-            tuning_method: 整定方法筛选
             start_time: 开始时间
             end_time: 结束时间
             min_performance_score: 最小性能评分
@@ -144,15 +142,12 @@ class LoopEvaluationDAO:
             # 回路名称筛选（模糊匹配）
             if loop_uri:
                 statement = statement.where(LoopEvaluation.loop_uri.like(f"%{loop_uri}%"))
-            # 整定方法筛选（精确匹配）
-            if tuning_method and tuning_method != "全部方法":
-                statement = statement.where(LoopEvaluation.tuning_method == tuning_method)
             
             # 时间范围筛选
             if start_time:
                 try:
                     start_dt = datetime.strptime(start_time, "%Y-%m-%d")
-                    statement = statement.where(LoopEvaluation.tuning_time >= start_dt)
+                    statement = statement.where(LoopEvaluation.assessmen_time >= start_dt)
                 except ValueError:
                     logger.warning(f"开始时间格式错误: {start_time}")
             
@@ -160,7 +155,7 @@ class LoopEvaluationDAO:
                 try:
                     # 结束时间包含当天的23:59:59
                     end_dt = datetime.strptime(end_time + " 23:59:59", "%Y-%m-%d %H:%M:%S")
-                    statement = statement.where(LoopEvaluation.tuning_time <= end_dt)
+                    statement = statement.where(LoopEvaluation.assessmen_time <= end_dt)
                 except ValueError:
                     logger.warning(f"结束时间格式错误: {end_time}")
             
@@ -169,25 +164,23 @@ class LoopEvaluationDAO:
                 statement = statement.where(LoopEvaluation.performance_score >= min_performance_score)
             
             # 按整定时间倒序排列
-            statement = statement.order_by(desc(LoopEvaluation.tuning_time))
+            statement = statement.order_by(desc(LoopEvaluation.assessmen_time))
             
             # 获取总数
             count_statement = select(func.count()).select_from(LoopEvaluation)
             # 应用相同的筛选条件到计数查询
             if loop_name:
                 count_statement = count_statement.where(LoopEvaluation.loop_name.like(f"%{loop_name}%"))
-            if tuning_method and tuning_method != "全部方法":
-                count_statement = count_statement.where(LoopEvaluation.tuning_method == tuning_method)
             if start_time:
                 try:
                     start_dt = datetime.strptime(start_time, "%Y-%m-%d")
-                    count_statement = count_statement.where(LoopEvaluation.tuning_time >= start_dt)
+                    count_statement = count_statement.where(LoopEvaluation.assessmen_time >= start_dt)
                 except ValueError:
                     pass
             if end_time:
                 try:
                     end_dt = datetime.strptime(end_time + " 23:59:59", "%Y-%m-%d %H:%M:%S")
-                    count_statement = count_statement.where(LoopEvaluation.tuning_time <= end_dt)
+                    count_statement = count_statement.where(LoopEvaluation.assessmen_time <= end_dt)
                 except ValueError:
                     pass
             if min_performance_score is not None:
@@ -311,32 +304,32 @@ class LoopEvaluationDAO:
         statement = select(LoopEvaluation).where(
             LoopEvaluation.loop_uri == loop_uri
         ).order_by(
-            desc(LoopEvaluation.tuning_time)
+            desc(LoopEvaluation.assessmen_time)
         ).limit(limit)
         
         return db.exec(statement).all()
     
     @staticmethod
-    def get_by_loop_uri_and_date(db: Session, loop_uri: str, tuning_date: date) -> Optional[LoopEvaluation]:
+    def get_by_loop_uri_and_date(db: Session, loop_uri: str, assessmen_time: date) -> Optional[LoopEvaluation]:
         """
         根据loop_uri和整定日期查询评估记录
         
         Args:
             db: 数据库会话
             loop_uri: 回路URI
-            tuning_date: 整定日期(只包含年月日)
+            assessmen_time: 整定日期(只包含年月日)
         
         Returns:
             Optional[LoopEvaluation]: 评估对象，不存在则返回None
         """
         # 转换日期为datetime(当天00:00:00)
-        start_datetime = datetime.combine(tuning_date, datetime.min.time())
-        end_datetime = datetime.combine(tuning_date, datetime.max.time())
+        start_datetime = datetime.combine(assessmen_time, datetime.min.time())
+        end_datetime = datetime.combine(assessmen_time, datetime.max.time())
         
         statement = select(LoopEvaluation).where(
             LoopEvaluation.loop_uri == loop_uri,
-            LoopEvaluation.tuning_time >= start_datetime,
-            LoopEvaluation.tuning_time <= end_datetime
+            LoopEvaluation.assessmen_time >= start_datetime,
+            LoopEvaluation.assessmen_time <= end_datetime
         )
         return db.exec(statement).first()
     
@@ -344,7 +337,7 @@ class LoopEvaluationDAO:
     def upsert_by_loop_uri_and_date(
         db: Session,
         loop_uri: str,
-        tuning_date: date,
+        assessmen_time: date,
         evaluation_data: Dict[str, Any]
     ) -> LoopEvaluation:
         """
@@ -354,7 +347,7 @@ class LoopEvaluationDAO:
         Args:
             db: 数据库会话
             loop_uri: 回路URI
-            tuning_date: 整定日期(只包含年月日)
+            assessmen_time: 整定日期(只包含年月日)
             evaluation_data: 评估数据字典
         
         Returns:
@@ -363,11 +356,11 @@ class LoopEvaluationDAO:
         try:
             # 强制设置关键字段
             evaluation_data['loop_uri'] = loop_uri
-            evaluation_data['tuning_time'] = tuning_date
+            evaluation_data['assessmen_time'] = assessmen_time
             
             # 查找是否存在记录
             existing = LoopEvaluationDAO.get_by_loop_uri_and_date(
-                db, loop_uri, tuning_date
+                db, loop_uri, assessmen_time
             )
             
             if existing:
@@ -385,7 +378,7 @@ class LoopEvaluationDAO:
                 
                 logger.info(
                     f"更新回路评估记录: loop_uri={loop_uri}, "
-                    f"date={tuning_date}, id={existing.id}, loop_name={existing.loop_name}"
+                    f"date={assessmen_time}, id={existing.id}, loop_name={existing.loop_name}"
                 )
                 return existing
             else:
@@ -399,7 +392,7 @@ class LoopEvaluationDAO:
                 
                 logger.info(
                     f"创建回路评估记录: loop_uri={loop_uri}, "
-                    f"date={tuning_date}, id={evaluation.id}, loop_name={evaluation.loop_name}"
+                    f"date={assessmen_time}, id={evaluation.id}, loop_name={evaluation.loop_name}"
                 )
                 return evaluation
                 
@@ -407,7 +400,7 @@ class LoopEvaluationDAO:
             db.rollback()
             logger.error(
                 f"Upsert回路评估记录失败: loop_uri={loop_uri}, "
-                f"date={tuning_date}, 错误: {str(e)}"
+                f"date={assessmen_time}, 错误: {str(e)}"
             )
             raise
     
@@ -454,7 +447,7 @@ class LoopEvaluationDAO:
         
         Args:
             db: 数据库会话
-            upsert_data_list: upsert数据列表，每项需包含loop_uri, tuning_date和其他评估数据
+            upsert_data_list: upsert数据列表，每项需包含loop_uri, assessmen_time和其他评估数据
         
         Returns:
             List[LoopEvaluation]: 创建或更新的评估对象列表
@@ -463,20 +456,20 @@ class LoopEvaluationDAO:
             results = []
             for upsert_data in upsert_data_list:
                 loop_uri = upsert_data.get('loop_uri')
-                tuning_date = upsert_data.get('tuning_date') or upsert_data.get('tuning_time')
+                assessmen_time = upsert_data.get('assessmen_time') or upsert_data.get('assessmen_time')
                 
-                if not loop_uri or not tuning_date:
+                if not loop_uri or not assessmen_time:
                     logger.warning(f"批量upsert数据缺少必要字段: {upsert_data}")
                     continue
                 
-                # 转换tuning_date为date类型
-                if isinstance(tuning_date, str):
-                    tuning_date = datetime.strptime(tuning_date.split()[0], "%Y-%m-%d").date()
-                elif isinstance(tuning_date, datetime):
-                    tuning_date = tuning_date.date()
+                # 转换assessmen_time为date类型
+                if isinstance(assessmen_time, str):
+                    assessmen_time = datetime.strptime(assessmen_time.split()[0], "%Y-%m-%d").date()
+                elif isinstance(assessmen_time, datetime):
+                    assessmen_time = assessmen_time.date()
                 
                 result = LoopEvaluationDAO.upsert_by_loop_uri_and_date(
-                    db, loop_uri, tuning_date, upsert_data
+                    db, loop_uri, assessmen_time, upsert_data
                 )
                 results.append(result)
             
