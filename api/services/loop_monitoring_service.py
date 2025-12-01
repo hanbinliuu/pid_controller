@@ -309,6 +309,7 @@ class LoopMonitoringService:
                 loop_uri=loop_uri,
                 start_time=start_time_ms,
                 end_time=end_time_ms,
+                is_filter=False,
                 window=60
             )
 
