@@ -16,6 +16,47 @@ class LoopEvaluationDAO:
     """回路评估DAO"""
     
     @staticmethod
+    def _prepare_evaluation_data(evaluation_data: Dict[str, Any], is_update: bool = False) -> Dict[str, Any]:
+        """
+        预处理评估数据，统一数据格式和时间处理
+        
+        Args:
+            evaluation_data: 原始评估数据字典
+            is_update: 是否为更新操作
+        
+        Returns:
+            Dict[str, Any]: 处理后的数据字典
+        """
+        data = evaluation_data.copy()
+        
+        # 处理整定时间：确保为datetime类型，并规范化为当天00:00:00
+        if 'tuning_time' in data and data['tuning_time']:
+            tuning_time = data['tuning_time']
+            if isinstance(tuning_time, str):
+                # 字符串转datetime
+                try:
+                    tuning_time = datetime.strptime(tuning_time.split()[0], "%Y-%m-%d")
+                except ValueError:
+                    logger.warning(f"整定时间格式错误: {tuning_time}，使用当前日期")
+                    tuning_time = datetime.now()
+            elif isinstance(tuning_time, date) and not isinstance(tuning_time, datetime):
+                # date转datetime
+                tuning_time = datetime.combine(tuning_time, datetime.min.time())
+            elif isinstance(tuning_time, datetime):
+                # datetime规范化为当天00:00:00
+                tuning_time = datetime.combine(tuning_time.date(), datetime.min.time())
+            
+            data['tuning_time'] = tuning_time
+        
+        # 设置时间戳
+        now = datetime.now()
+        if not is_update:
+            data.setdefault('created_time', now)
+        data['updated_time'] = now
+        
+        return data
+    
+    @staticmethod
     def create(db: Session, evaluation_data: Dict[str, Any]) -> LoopEvaluation:
         """
         创建回路评估记录 - SQLModel方式
@@ -28,19 +69,25 @@ class LoopEvaluationDAO:
             LoopEvaluation: 创建的评估对象
         """
         try:
+            # 预处理数据
+            processed_data = LoopEvaluationDAO._prepare_evaluation_data(evaluation_data, is_update=False)
+            
             # SQLModel自动进行数据验证
-            evaluation = LoopEvaluation(**evaluation_data)
+            evaluation = LoopEvaluation(**processed_data)
             
             db.add(evaluation)
             db.commit()
             db.refresh(evaluation)
             
-            logger.info(f"创建回路评估记录成功: ID={evaluation.id}, 回路={evaluation.loop_name}")
+            logger.info(
+                f"创建回路评估记录成功: ID={evaluation.id}, "
+                f"回路={evaluation.loop_name}, URI={evaluation.loop_uri}"
+            )
             return evaluation
             
         except Exception as e:
             db.rollback()
-            logger.error(f"创建回路评估记录失败: {str(e)}")
+            logger.error(f"创建回路评估记录失败: {str(e)}, 数据: {evaluation_data}")
             raise
     
     @staticmethod
@@ -193,24 +240,28 @@ class LoopEvaluationDAO:
                 logger.warning(f"未找到ID为 {evaluation_id} 的评估记录")
                 return None
             
-            # 更新字段
-            for key, value in update_data.items():
-                if hasattr(evaluation, key):
-                    setattr(evaluation, key, value)
+            # 预处理更新数据
+            processed_data = LoopEvaluationDAO._prepare_evaluation_data(update_data, is_update=True)
             
-            # 更新updated_at
-            evaluation.updated_time = datetime.now()
+            # 更新字段（排除不应更新的字段）
+            excluded_fields = {'id', 'created_time'}
+            for key, value in processed_data.items():
+                if key not in excluded_fields and hasattr(evaluation, key):
+                    setattr(evaluation, key, value)
             
             db.add(evaluation)
             db.commit()
             db.refresh(evaluation)
             
-            logger.info(f"更新回路评估记录成功: ID={evaluation_id}")
+            logger.info(
+                f"更新回路评估记录成功: ID={evaluation_id}, "
+                f"回路={evaluation.loop_name}, URI={evaluation.loop_uri}"
+            )
             return evaluation
             
         except Exception as e:
             db.rollback()
-            logger.error(f"更新回路评估记录失败: {str(e)}")
+            logger.error(f"更新回路评估记录失败: ID={evaluation_id}, 错误: {str(e)}")
             raise
     
     @staticmethod
@@ -310,10 +361,9 @@ class LoopEvaluationDAO:
             LoopEvaluation: 创建或更新的评估对象
         """
         try:
-            # 确保整定时间为当天00:00:00
-            tuning_datetime = datetime.combine(tuning_date, datetime.min.time())
-            evaluation_data['tuning_time'] = tuning_datetime
+            # 强制设置关键字段
             evaluation_data['loop_uri'] = loop_uri
+            evaluation_data['tuning_time'] = tuning_date
             
             # 查找是否存在记录
             existing = LoopEvaluationDAO.get_by_loop_uri_and_date(
@@ -322,25 +372,26 @@ class LoopEvaluationDAO:
             
             if existing:
                 # 更新现有记录
-                for key, value in evaluation_data.items():
-                    if hasattr(existing, key) and key not in ['id', 'created_time']:
+                processed_data = LoopEvaluationDAO._prepare_evaluation_data(evaluation_data, is_update=True)
+                
+                excluded_fields = {'id', 'created_time'}
+                for key, value in processed_data.items():
+                    if key not in excluded_fields and hasattr(existing, key):
                         setattr(existing, key, value)
                 
-                existing.updated_time = datetime.now()
                 db.add(existing)
                 db.commit()
                 db.refresh(existing)
                 
                 logger.info(
                     f"更新回路评估记录: loop_uri={loop_uri}, "
-                    f"date={tuning_date}, id={existing.id}"
+                    f"date={tuning_date}, id={existing.id}, loop_name={existing.loop_name}"
                 )
                 return existing
             else:
                 # 创建新记录
-                evaluation_data['created_time'] = datetime.now()
-                evaluation_data['updated_time'] = datetime.now()
-                evaluation = LoopEvaluation(**evaluation_data)
+                processed_data = LoopEvaluationDAO._prepare_evaluation_data(evaluation_data, is_update=False)
+                evaluation = LoopEvaluation(**processed_data)
                 
                 db.add(evaluation)
                 db.commit()
@@ -348,13 +399,93 @@ class LoopEvaluationDAO:
                 
                 logger.info(
                     f"创建回路评估记录: loop_uri={loop_uri}, "
-                    f"date={tuning_date}, id={evaluation.id}"
+                    f"date={tuning_date}, id={evaluation.id}, loop_name={evaluation.loop_name}"
                 )
                 return evaluation
                 
         except Exception as e:
             db.rollback()
-            logger.error(f"Upsert回路评估记录失败: {str(e)}")
+            logger.error(
+                f"Upsert回路评估记录失败: loop_uri={loop_uri}, "
+                f"date={tuning_date}, 错误: {str(e)}"
+            )
+            raise
+    
+    @staticmethod
+    def batch_create(db: Session, evaluations_data: List[Dict[str, Any]]) -> List[LoopEvaluation]:
+        """
+        批量创建回路评估记录
+        
+        Args:
+            db: 数据库会话
+            evaluations_data: 评估数据字典列表
+        
+        Returns:
+            List[LoopEvaluation]: 创建的评估对象列表
+        """
+        try:
+            evaluations = []
+            for evaluation_data in evaluations_data:
+                processed_data = LoopEvaluationDAO._prepare_evaluation_data(evaluation_data, is_update=False)
+                evaluation = LoopEvaluation(**processed_data)
+                evaluations.append(evaluation)
+            
+            db.add_all(evaluations)
+            db.commit()
+            
+            for evaluation in evaluations:
+                db.refresh(evaluation)
+            
+            logger.info(f"批量创建回路评估记录成功，共 {len(evaluations)} 条")
+            return evaluations
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"批量创建回路评估记录失败: {str(e)}")
+            raise
+    
+    @staticmethod
+    def batch_upsert_by_loop_uri_and_date(
+        db: Session,
+        upsert_data_list: List[Dict[str, Any]]
+    ) -> List[LoopEvaluation]:
+        """
+        批量按回路URI和整定日期进行更新插入(upsert)
+        
+        Args:
+            db: 数据库会话
+            upsert_data_list: upsert数据列表，每项需包含loop_uri, tuning_date和其他评估数据
+        
+        Returns:
+            List[LoopEvaluation]: 创建或更新的评估对象列表
+        """
+        try:
+            results = []
+            for upsert_data in upsert_data_list:
+                loop_uri = upsert_data.get('loop_uri')
+                tuning_date = upsert_data.get('tuning_date') or upsert_data.get('tuning_time')
+                
+                if not loop_uri or not tuning_date:
+                    logger.warning(f"批量upsert数据缺少必要字段: {upsert_data}")
+                    continue
+                
+                # 转换tuning_date为date类型
+                if isinstance(tuning_date, str):
+                    tuning_date = datetime.strptime(tuning_date.split()[0], "%Y-%m-%d").date()
+                elif isinstance(tuning_date, datetime):
+                    tuning_date = tuning_date.date()
+                
+                result = LoopEvaluationDAO.upsert_by_loop_uri_and_date(
+                    db, loop_uri, tuning_date, upsert_data
+                )
+                results.append(result)
+            
+            logger.info(f"批量upsert回路评估记录成功，共处理 {len(results)} 条")
+            return results
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"批量upsert回路评估记录失败: {str(e)}")
             raise
     
     @staticmethod
