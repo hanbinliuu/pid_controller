@@ -36,63 +36,19 @@ class LoopEvaluation(SQLModel, table=True):
         index=True,
         sa_column_kwargs={"comment": "回路URI"}
     )
+
     loop_name: Optional[str] = Field(
         default=None,
         max_length=200,
         index=True,
         sa_column_kwargs={"comment": "回路名称"}
     )
-    description: Optional[str] = Field(
-        default=None,
-        max_length=500,
-        sa_column_kwargs={"comment": "描述"}
-    )
 
-    # 整定信息
-    tuning_method: Optional[str] = Field(
-        default=None,
-        max_length=50,
-        index=True,
-        sa_column_kwargs={"comment": "整定方法"}
-    )
-    tuning_time: Optional[datetime] = Field(
+
+    assessmen_time: Optional[datetime] = Field(
         default=None,
         index=True,
-        sa_column_kwargs={"comment": "整定时间(按天)"}
-    )
-    operator: Optional[str] = Field(
-        default=None,
-        max_length=100,
-        sa_column_kwargs={"comment": "操作人员"}
-    )
-
-    # 参数信息
-    before_params: Optional[str] = Field(
-        default=None,
-        max_length=200,
-        sa_column_kwargs={"comment": "整定前参数"}
-    )
-    after_params: Optional[str] = Field(
-        default=None,
-        max_length=200,
-        sa_column_kwargs={"comment": "整定后参数"}
-    )
-
-    # 状态和备注
-    status: Optional[str] = Field(
-        default=None,
-        max_length=50,
-        sa_column_kwargs={"comment": "状态"}
-    )
-    remark: Optional[str] = Field(
-        default=None,
-        sa_column=Column(Text, comment="备注")
-    )
-
-    # 详细数据（JSON格式）
-    tuning_details: Optional[Dict[str, Any]] = Field(
-        default=None,
-        sa_column=Column(JSON, comment="整定详情")
+        sa_column_kwargs={"comment": "评估时间(按天)"}
     )
 
     # 性能评估指标
@@ -102,11 +58,11 @@ class LoopEvaluation(SQLModel, table=True):
     )
     auto_control_rate: Optional[float] = Field(
         default=None,
-        sa_column_kwargs={"comment": "自动控制率 (%)"}
+        sa_column_kwargs={"comment": "自控率 (%)"}
     )
     stability_rate: Optional[float] = Field(
         default=None,
-        sa_column_kwargs={"comment": "稳定性评分 (%)"}
+        sa_column_kwargs={"comment": "平稳率 (%)"}
     )
     auto_control_time: Optional[int] = Field(
         default=None,

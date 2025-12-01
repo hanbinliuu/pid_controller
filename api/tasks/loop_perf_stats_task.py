@@ -77,12 +77,12 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                         total_seconds = None
 
                     metrics = item.get('performance_metrics') or {}
-
+                    tuning_date = datetime.now().date()
                     evaluation_data = {
                         "loop_uri": loop_uri,
                         "loop_name": loop_name,
                         "tuning_method": "PerformanceEvaluation",
-                        "tuning_time": datetime.now(),
+                        "tuning_time": tuning_date,
                         "status": status,
                         "performance_score": item.get('comprehensive_score'),
                         "auto_control_rate": metrics.get('auto_control_rate'),
@@ -93,7 +93,7 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                     }
 
                     try:
-                        LoopEvaluationDAO.create(db, evaluation_data)
+                        LoopEvaluationDAO.upsert_by_loop_uri_and_date(db,loop_uri=loop_uri,tuning_date=tuning_date, evaluation_data=evaluation_data)
                         persisted_count += 1
                     except Exception as e:
                         logger.warning(f"写入评估明细失败 [{loop_uri}]: {str(e)}")
