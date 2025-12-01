@@ -47,6 +47,8 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                 "loop_count": 0
             }
 
+        # todo: 条件剔除回路不参与计算
+
         logger.info(f"从数据库加载到 {len(loop_uris)} 个激活回路，开始计算性能状态...")
 
         # 批量计算性能状态
