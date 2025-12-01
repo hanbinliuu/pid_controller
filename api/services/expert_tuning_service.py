@@ -17,10 +17,13 @@ from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
 from core.algorithm.ls_pid_autotune_v5 import ModelType
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
+from core.database.database import get_db_session
 from api.routes.time_util import parse_time_to_milliseconds, format_time_to_string
 from core.algorithm.find_high_variability_periods import find_high_variability_periods
 from core.algorithm.ktl_simulator import KTLSimulator
 from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
+from api.dao.tuning_record_dao import TuningRecordDAO
+from api.dao.loop_info_dao import LoopInfoDAO
 
 logger = logging.getLogger(__name__)
 
@@ -400,16 +403,59 @@ class ExpertTuningService:
                     "optimization_result": result_data
                 }
 
+                # 写入整定成功记录到数据库
+                try:
+                    _save_tuning_record(
+                        loop_uri=loop_uri,
+                        result_data=result_data,
+                        mode=mode,
+                        model_type=model_type.value,
+                        status="成功"
+                    )
+                except Exception as record_err:
+                    logger.warning(f"整定记录写入失败（不影响整定结果）: {str(record_err)}")
+
                 return response
 
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as json_err:
+                # JSON解析失败，记录失败状态
+                error_msg = f"参数整定失败: {optimization_result}"
+                
+                # 写入整定失败记录
+                try:
+                    _save_tuning_record(
+                        loop_uri=loop_uri,
+                        result_data=None,
+                        mode=mode,
+                        model_type=model_type.value,
+                        status="失败",
+                        error_message=error_msg
+                    )
+                except Exception as record_err:
+                    logger.warning(f"失败记录写入失败: {str(record_err)}")
+                
                 return {
                     "mode": mode,
-                    "message": f"参数整定失败: {optimization_result}"
+                    "message": error_msg
                 }
 
         except Exception as e:
-            logger.error(f"自动整定失败: {str(e)}", exc_info=True)
+            error_msg = f"自动整定失败: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            
+            # 写入整定失败记录
+            try:
+                _save_tuning_record(
+                    loop_uri=loop_uri,
+                    result_data=None,
+                    mode=mode,
+                    model_type=model_type.value,
+                    status="失败",
+                    error_message=error_msg
+                )
+            except Exception as record_err:
+                logger.warning(f"失败记录写入失败: {str(record_err)}")
+            
             raise
 
     @staticmethod
@@ -621,3 +667,75 @@ def _get_model_recommendations(model_type: str) -> Dict[str, str]:
         "model_description": recommendations.get(model_type, "未知模型类型"),
         "lambda_selection_tip": "可通过调整lambda_val参数：减小使响应快但波动增加，增大使响应慢但更稳定"
     }
+
+
+def _save_tuning_record(
+    loop_uri: str,
+    result_data: Optional[Dict[str, Any]],
+    mode: str,
+    model_type: str,
+    operator: str,
+    status: str = "成功",
+    error_message: Optional[str] = None
+) -> None:
+    """
+    保存整定记录到数据库（支持成功和失败状态）
+    
+    Args:
+        loop_uri: 回路URI
+        result_data: 整定结果数据（失败时为None）
+        mode: 整定模式 (auto/manual)
+        model_type: 模型类型
+        operator: 操作人
+        status: 整定状态 (成功/失败)
+        error_message: 错误信息（失败时使用）
+    """
+    try:
+        with get_db_session() as db:
+            # 获取回路名称
+            loop_info = LoopInfoDAO.get_by_loop_uri(db, loop_uri, include_inactive=True)
+            loop_name = loop_info.loop_name if loop_info else None
+            description = loop_info.description if loop_info else None
+            
+            # 根据状态处理参数
+            if status == "成功" and result_data:
+                # 提取整定前后参数
+                current_params = result_data.get('current_params', {})
+                tuning_suggestions = result_data.get('tuning_suggestions', {})
+                lambda_params = tuning_suggestions.get('lambda_suggested_params', {})
+                suggested_params = lambda_params.get('params', {})
+                
+                # 格式化参数字符串
+                before_params_str = f"Kp:{current_params.get('Kp', 0):.2f}, Ti:{current_params.get('Ti', 0):.2f}, Td:{current_params.get('Td', 0):.2f}"
+                after_params_str = f"Kp:{suggested_params.get('Kp', 0):.2f}, Ti:{suggested_params.get('Ti', 0):.2f}, Td:{suggested_params.get('Td', 0):.2f}"
+                remark = f"模式: {mode}, 模型类型: {model_type}"
+            else:
+                # 失败情况
+                before_params_str = None
+                after_params_str = None
+                remark = f"模式: {mode}, 模型类型: {model_type}, 错误: {error_message or '未知错误'}"
+            
+            # 创建整定记录
+            record_data = {
+                "loop_uri": loop_uri,
+                "loop_name": loop_name,
+                "description": description,
+                "tuning_method": f"常规整定",
+                "tuning_time": datetime.now(),
+                "operator": "system",  # 操作人
+                "before_params": before_params_str,
+                "after_params": after_params_str,
+                "status": status,
+                "remark": remark,
+                "tuning_details": result_data if result_data else {"error": error_message},  # 存储完整的整定结果或错误信息
+                "created_time": datetime.now(),
+                "updated_time": datetime.now()
+            }
+            
+            # 写入数据库
+            TuningRecordDAO.create(db, record_data)
+            logger.info(f"整定记录写入成功: loop_uri={loop_uri}, method=常规整定, status={status}, status={status}")
+            
+    except Exception as e:
+        logger.error(f"保存整定记录失败: {str(e)}")
+        raise

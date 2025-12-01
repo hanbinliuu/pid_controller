@@ -88,7 +88,7 @@ async def query_tuning_records(
     loop_name: Optional[str] = Query(
         None,
         description="回路名称筛选",
-        example="LIC-401"
+        example="流量单回路实例_1"
     ),
     tuning_method: Optional[str] = Query(
         None,
@@ -221,48 +221,48 @@ async def get_tuning_record(
         )
 
 
-@router.delete(
-    "/{record_id}",
-    summary="删除整定记录",
-    operation_id="删除整定记录",
-    description="根据ID删除整定记录"
-)
-async def delete_tuning_record(
-    record_id: int,
-    db: Session = Depends(get_db)
-) -> Dict[str, Any]:
-    """
-    删除整定记录
-    
-    功能说明：
-    - 根据记录ID删除记录
-    
-    返回格式：
-    {
-        "message": "整定记录删除成功",
-        "id": 1
-    }
-    """
-    try:
-        # 调用Service层删除
-        success = TuningRecordService.delete_record(db, record_id)
-        
-        if not success:
-            raise HTTPException(
-                status_code=404,
-                detail=f"未找到ID为 {record_id} 的整定记录"
-            )
-        
-        return {
-            "message": "整定记录删除成功",
-            "id": record_id
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除整定记录失败: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"删除整定记录失败: {str(e)}"
-        )
+# @router.delete(
+#     "/{record_id}",
+#     summary="删除整定记录",
+#     operation_id="删除整定记录",
+#     description="根据ID删除整定记录"
+# )
+# async def delete_tuning_record(
+#     record_id: int,
+#     db: Session = Depends(get_db)
+# ) -> Dict[str, Any]:
+#     """
+#     删除整定记录
+#
+#     功能说明：
+#     - 根据记录ID删除记录
+#
+#     返回格式：
+#     {
+#         "message": "整定记录删除成功",
+#         "id": 1
+#     }
+#     """
+#     try:
+#         # 调用Service层删除
+#         success = TuningRecordService.delete_record(db, record_id)
+#
+#         if not success:
+#             raise HTTPException(
+#                 status_code=404,
+#                 detail=f"未找到ID为 {record_id} 的整定记录"
+#             )
+#
+#         return {
+#             "message": "整定记录删除成功",
+#             "id": record_id
+#         }
+#
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         logger.error(f"删除整定记录失败: {str(e)}")
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"删除整定记录失败: {str(e)}"
+#         )
