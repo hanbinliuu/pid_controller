@@ -116,17 +116,21 @@ class LoopEvaluation(SQLModel, table=True):
             "example": {
                 "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                 "loop_name": "FIC101A流量控制回路",
-                "tuning_method": "Lambda整定",
-                "tuning_time": "2023-10-01",
+                "assessmen_time": "2025-12-01 00:00:00",
                 "performance_score": 85.5,
                 "auto_control_rate": 92.3,
                 "stability_rate": 88.7,
-                "auto_control_time": 78900,
+                "auto_control_time": 79200,
                 "stable_time": 75600,
-                "total_time": 85400
+                "total_time": 86400,
+                "pt_count": 1440,
+                "pv_sum_value": 14400,
+                "pv_sum_squares": 144000,
+                "mv_sum_value": 43200,
+                "mv_sum_squares": 1296000
             },
-            "description": "回路评估记录,按天和回路URI唯一索引,自动更新已存在记录"
+            "description": "回路评估记录，按天和回路URI进行性能评估，记录自控率、平稳率等关键指标"
         }
 
     def __repr__(self) -> str:
-        return f"<LoopEvaluation(id={self.id}, loop_name={self.loop_name}, method={self.tuning_method})>"
+        return f"<LoopEvaluation(id={self.id}, loop_name={self.loop_name}, score={self.performance_score})>"
