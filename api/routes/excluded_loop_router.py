@@ -40,6 +40,7 @@ class BatchExcludeRequest(BaseModel):
 async def add_excluded_loop(
     uri: str = Query(..., description="回路/装置URI"),
     type: str = Query(..., description="类型（回路/装置）"),
+    name: Optional[str] = Query(None, description="回路/装置名称"),
     reason: Optional[str] = Query(None, description="剔除原因"),
     is_excluded: bool = Query(True, description="是否剔除"),
     db: Session = Depends(get_db)
@@ -59,7 +60,7 @@ async def add_excluded_loop(
             )
         
         excluded = ExcludedLoopService.add_excluded(
-            db, uri, type, reason, is_excluded
+            db, uri, type, name, reason, is_excluded
         )
         
         return {
@@ -67,6 +68,7 @@ async def add_excluded_loop(
             "message": "添加成功",
             "data": {
                 "id": excluded.id,
+                "name": excluded.name,
                 "uri": excluded.uri,
                 "type": excluded.type,
                 "is_excluded": excluded.is_excluded,
@@ -193,6 +195,7 @@ async def get_excluded_loop_by_id(
             "message": "查询成功",
             "data": {
                 "id": excluded.id,
+                "name": excluded.name,
                 "uri": excluded.uri,
                 "type": excluded.type,
                 "is_excluded": excluded.is_excluded,
@@ -218,6 +221,7 @@ async def get_excluded_loop_by_id(
            operation_id="list_excluded_loops",
            response_model=Dict[str, Any])
 async def list_excluded_loops(
+    name: Optional[str] = Query(None, description="名称（模糊匹配）"),
     uri: Optional[str] = Query(None, description="URI（模糊匹配）"),
     type: Optional[str] = Query(None, description="类型（回路/装置）"),
     is_excluded: Optional[bool] = Query(None, description="是否剔除"),
@@ -231,6 +235,7 @@ async def list_excluded_loops(
     try:
         result = ExcludedLoopService.list_excluded(
             db,
+            name=name,
             uri=uri,
             type=type,
             is_excluded=is_excluded,
@@ -248,6 +253,7 @@ async def list_excluded_loops(
                 "excluded_loops": [
                     {
                         "id": e.id,
+                        "name": e.name,
                         "uri": e.uri,
                         "type": e.type,
                         "is_excluded": e.is_excluded,
@@ -274,6 +280,7 @@ async def list_excluded_loops(
            response_model=Dict[str, Any])
 async def update_excluded_loop(
     excluded_id: int,
+    name: Optional[str] = Query(None, description="新的名称"),
     uri: Optional[str] = Query(None, description="新的URI"),
     type: Optional[str] = Query(None, description="新的类型"),
     reason: Optional[str] = Query(None, description="新的剔除原因"),
@@ -292,7 +299,7 @@ async def update_excluded_loop(
             )
         
         excluded = ExcludedLoopService.update_excluded(
-            db, excluded_id, uri, type, reason, is_excluded
+            db, excluded_id, uri, type, name, reason, is_excluded
         )
         
         if not excluded:
@@ -306,6 +313,7 @@ async def update_excluded_loop(
             "message": "更新成功",
             "data": {
                 "id": excluded.id,
+                "name": excluded.name,
                 "uri": excluded.uri,
                 "type": excluded.type,
                 "is_excluded": excluded.is_excluded,

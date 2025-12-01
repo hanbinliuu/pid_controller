@@ -163,24 +163,24 @@ class BFFModelClient:
     DEFAULT_QUERY_NODES_BY_URIS_PATH = "/bff/aggquery/v2/model/queryNodesByUris"
     DEFAULT_QUERY_INSTANCE_TREE_PATH = "/bff/v2/instance/searchByModels"
     DEFAULT_TIMEOUT = Config.BFF_MODEL_TIMEOUT
-    DEFAULT_DEVICE_URI = Config.BFF_MODEL_PROJECT_PATH
+    DEFAULT_LOOP_URI = Config.BFF_MODEL_LOOP_URI
     DEFAULT_POINT_PATH = Config.BFF_MODEL_POINT_PATH
 
     # pid控制字段与模型browse_name名称映照关系（从配置文件加载）
     DEFAULT_PID_POINT_MAP = Config.get_pid_point_map()
 
-    def __init__(self, device_uri: Optional[str] = None, point_path: Optional[str] = None, pid_point_map:Dict[str, str] = None, timeout: int = None):
+    def __init__(self, loop_uri: Optional[str] = None, point_path: Optional[str] = None, pid_point_map:Dict[str, str] = None, timeout: int = None):
         """
         初始化BFF模型查询客户端
         
         Args:
-            device_uri: 设备URI（如：/pid_zd/ce716ffbade5426e8faf18467d1d5a83），默认从环境变量 DEFAULT_DEVICE_URI 读取
+            loop_uri: 回路URI（如：/pid_zd/ce716ffbade5426e8faf18467d1d5a83），默认从环境变量 DEFAULT_DEVICE_URI 读取
             point_path: 测点相对路径，默认从环境变量 DEFAULT_POINT_PATH 读取
             pid_point_map：pid查询参数与测点名称映射关系，默认从DEFAULT_PID_POINT_MAP 读取
             timeout: 请求超时时间（秒），默认从环境变量 BFF_MODEL_TIMEOUT 读取
         """
         self.base_url = self.DEFAULT_BASE_URL
-        self.device_uri = device_uri if device_uri is not None else self.DEFAULT_DEVICE_URI
+        self.device_uri = loop_uri if loop_uri is not None else self.DEFAULT_LOOP_URI
         self.point_path = point_path if point_path is not None else self.DEFAULT_POINT_PATH
         self.timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         self.session = requests.Session()
@@ -532,7 +532,7 @@ class BFFModelClient:
         try:
             logger.info(f"根据loop_uri查询测点: {loop_uri}")
 
-            with BFFModelClient(device_uri=loop_uri) as client:
+            with BFFModelClient(loop_uri=loop_uri) as client:
                 # 查询常用字段
                 query_result = client.query_common_fields()
 
@@ -1330,7 +1330,7 @@ def query_pid_values(
     便捷函数：查询PID控制相关的所有字段值
     
     Args:
-        project_path: 项目路径前缀，默认从环境变量 BFF_MODEL_PROJECT_PATH 读取
+        project_path: 项目路径前缀，默认从环境变量 BFF_MODEL_LOOP_URI 读取
         base_url: BFF服务基础URL，默认从环境变量 BFF_MODEL_BASE_URL 读取
         timeout: 请求超时时间，默认从环境变量 BFF_MODEL_TIMEOUT 读取
         
@@ -1345,7 +1345,7 @@ def query_pid_values(
         >>> # 覆盖项目路径
         >>> values = query_pid_values(project_path="/pid_zd/custom_project_id")
     """
-    with BFFModelClient(device_uri=project_path, point_path=point_path, timeout=timeout) as client:
+    with BFFModelClient(loop_uri=project_path, point_path=point_path, timeout=timeout) as client:
         query_result = client.query_common_fields()
         raw_response = query_result.get('raw_response', {})
         return client.parse_response(raw_response)
@@ -1376,7 +1376,7 @@ def query_specific_fields(
         >>> # 覆盖项目路径
         >>> values = query_specific_fields(['mv', 'pv'], project_path="/pid_zd/custom_project_id")
     """
-    with BFFModelClient(device_uri=project_path, point_path=point_path, timeout=timeout) as client:
+    with BFFModelClient(loop_uri=project_path, point_path=point_path, timeout=timeout) as client:
         response = client.query_custom_fields(field_keys)
         return client.parse_response(response)
 

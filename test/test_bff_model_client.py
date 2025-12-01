@@ -11,7 +11,7 @@ BFF模型查询客户端测试脚本
 1. 环境变量（推荐）：
    - BFF_MODEL_BASE_URL: BFF服务基础URL
    - BFF_MODEL_TIMEOUT: 请求超时时间
-   - BFF_MODEL_PROJECT_PATH: 项目路径前缀
+   - BFF_MODEL_LOOP_URI: 项目路径前缀
    
 2. 代码中覆盖：
    client = BFFModelClient(project_path="/pid_zd/custom_id")
@@ -141,7 +141,7 @@ def test_build_browse_path():
     print(f"PV完整路径: {path2}")
     
     # 使用自定义项目路径
-    custom_client = BFFModelClient(device_uri="/pid_zd/custom_project_id")
+    custom_client = BFFModelClient(loop_uri="/pid_zd/custom_project_id")
     path3 = custom_client.build_browse_path('ns_100_s_FIC101A_SV_In_Channel0')
     print(f"\n自定义项目路径: {custom_client.device_uri}")
     print(f"SV完整路径: {path3}")

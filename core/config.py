@@ -125,8 +125,8 @@ class Config:
         'http://bff-model-product-infra-system.sit-cloud.ieccloud.hollicube.com'
     )
     BFF_MODEL_TIMEOUT: int = _get_config('bff.model.timeout', '30', int)
-    BFF_MODEL_PROJECT_PATH: str = _get_config(
-        'bff.model.project_path',
+    BFF_MODEL_LOOP_URI: str = _get_config(
+        'bff.model.loop_uri',
         '/pid_zd/0b521c82a96d4107a564e4c2678bdeca'
     )
     BFF_MODEL_POINT_PATH: str = _get_config(
@@ -140,6 +140,11 @@ class Config:
     BFF_MODEL_LOOP_MODEL_URI: str = _get_config(
         'bff.model.loop_model_uri',
         '/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243'
+    )
+    # BFF装置模型URI（通用文件夹类型）
+    BFF_MODEL_DEVICE_MODEL_URI: str = _get_config(
+        'bff.model.device_model_uri',
+        '/system/401'
     )
     
     # PID控制字段与模型browse_name名称映射关系
@@ -234,7 +239,7 @@ class Config:
         return {
             'base_url': cls.BFF_MODEL_BASE_URL,
             'timeout': cls.BFF_MODEL_TIMEOUT,
-            'project_path': cls.BFF_MODEL_PROJECT_PATH,
+            'loop_uri': cls.BFF_MODEL_LOOP_URI,
             'point_path': cls.BFF_MODEL_POINT_PATH
         }
     
@@ -280,7 +285,7 @@ class Config:
         print(f"USE_REAL_TSDB: {cls.USE_REAL_TSDB}")
         print(f"TSDB_BASE_URL: {cls.TSDB_BASE_URL}")
         print(f"BFF_MODEL_BASE_URL: {cls.BFF_MODEL_BASE_URL}")
-        print(f"BFF_MODEL_PROJECT_PATH: {cls.BFF_MODEL_PROJECT_PATH}")
+        print(f"BFF_MODEL_LOOP_URI: {cls.BFF_MODEL_LOOP_URI}")
         print(f"WORKFLOW_BASE_URL: {cls.WORKFLOW_BASE_URL}")
         print("=" * 60)
 

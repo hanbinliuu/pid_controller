@@ -11,12 +11,12 @@ import sys
 # 实际使用时应该在 .env 文件中配置
 os.environ['BFF_MODEL_BASE_URL'] = 'http://bff-model-product-infra-system.sit-cloud.ieccloud.hollicube.com'
 os.environ['BFF_MODEL_TIMEOUT'] = '30'
-os.environ['BFF_MODEL_PROJECT_PATH'] = '/pid_zd/ce716ffbade5426e8faf18467d1d5a83'
+os.environ['BFF_MODEL_LOOP_URI'] = '/pid_zd/ce716ffbade5426e8faf18467d1d5a83'
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core.config import Config
-from core.client.bean.bff_model_client import BFFModelClient, query_pid_values
+from core.client.bff_model_client import BFFModelClient, query_pid_values
 
 
 def test_config_loading():
@@ -84,21 +84,21 @@ def test_environment_variable_override():
     print("=" * 70)
     
     # 保存原始环境变量
-    original_project_path = os.environ.get('BFF_MODEL_PROJECT_PATH')
+    original_loop_uri = os.environ.get('BFF_MODEL_LOOP_URI')
     
     # 临时修改环境变量
     new_path = "/pid_zd/test_override_path"
-    os.environ['BFF_MODEL_PROJECT_PATH'] = new_path
+    os.environ['BFF_MODEL_LOOP_URI'] = new_path
     
     # 重新导入配置（在实际应用中不需要这样做，因为配置在启动时加载一次）
     from core.config import Config as ConfigReload
     
-    print(f"\n环境变量 BFF_MODEL_PROJECT_PATH: {new_path}")
-    print(f"Config.BFF_MODEL_PROJECT_PATH: {ConfigReload.BFF_MODEL_PROJECT_PATH}")
+    print(f"\n环境变量 BFF_MODEL_LOOP_URI: {new_path}")
+    print(f"Config.BFF_MODEL_LOOP_URI: {ConfigReload.BFF_MODEL_LOOP_URI}")
     
     # 恢复原始环境变量
     if original_project_path:
-        os.environ['BFF_MODEL_PROJECT_PATH'] = original_project_path
+        os.environ['BFF_MODEL_LOOP_URI'] = original_loop_uri
     
     print("\n注意: 在实际应用中，配置在程序启动时加载一次")
     print("      运行时修改环境变量不会影响已加载的配置")
@@ -136,7 +136,7 @@ values = query_pid_values(project_path="/pid_zd/another_project")
 # 在 .env 文件中设置:
 # BFF_MODEL_BASE_URL=http://your-bff-server.com
 # BFF_MODEL_TIMEOUT=30
-# BFF_MODEL_PROJECT_PATH=/pid_zd/your_project_id
+# BFF_MODEL_LOOP_URI=/pid_zd/your_project_id
 '''
     
     print(example_code)
@@ -154,7 +154,7 @@ def show_env_file_template():
 # BFF模型查询配置
 BFF_MODEL_BASE_URL=http://bff-model-product-infra-system.sit-cloud.ieccloud.hollicube.com
 BFF_MODEL_TIMEOUT=30
-BFF_MODEL_PROJECT_PATH=/pid_zd/ce716ffbade5426e8faf18467d1d5a83
+BFF_MODEL_LOOP_URI=/pid_zd/ce716ffbade5426e8faf18467d1d5a83
 
 # 注意:
 # 1. .env 文件不应该提交到 Git（已在 .gitignore 中）

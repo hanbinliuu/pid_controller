@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 async def get_point_paths(
     project_path: Optional[str] = Query(
         None,
-        description="项目路径前缀，默认从环境变量BFF_MODEL_PROJECT_PATH读取",
+        description="项目路径前缀，默认从BFF_MODEL_LOOP_URI读取",
         example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
     )
 ) -> Dict[str, Any]:
@@ -90,7 +90,7 @@ async def query_current_raw_values(
         ),
         loop_uri: Optional[str] = Query(
             None,
-            description="实例 URI，默认从环境变量 BFF_MODEL_PROJECT_PATH 读取",
+            description="实例 URI，默认从 BFF_MODEL_LOOP_URI 读取",
             example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
         ),
         point_path: Optional[str] = Query(
@@ -151,7 +151,7 @@ async def query_current_raw_values(
 async def get_table_and_points(
     project_path: Optional[str] = Query(
         None,
-        description="项目路径前缀，默认从环境变量BFF_MODEL_PROJECT_PATH读取",
+        description="项目路径前缀，默认从BFF_MODEL_LOOP_URI读取",
         example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
     ),
     point_path: Optional[str] = Query(

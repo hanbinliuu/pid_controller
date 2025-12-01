@@ -60,7 +60,7 @@ class LoopService:
                     loop_configs = [
                         {
                             'loop_uri': instance['uri'],
-                            'point_names': ['PB', 'TI', 'TD','PV','SV','MV']
+                            'point_names': ['PB', 'TI', 'TD','PV','SV','MV','AUTO']
                         }
                         for instance in instances
                     ]
@@ -81,7 +81,8 @@ class LoopService:
                                 'TD': loop_statu_values.get('TD'),
                                 'PV': loop_statu_values.get('PV'),
                                 'SV': loop_statu_values.get('SV'),
-                                'MV': loop_statu_values.get('MV')
+                                'MV': loop_statu_values.get('MV'),
+                                'AUTO': loop_statu_values.get('AUTO')
                             }
                         
                         logger.info(f"成功查询 {len(loop_values)} 个回路的PID参数")
@@ -96,7 +97,8 @@ class LoopService:
                                 'TD': None,
                                 'PV': None,
                                 'SV': None,
-                                'MV': None
+                                'MV': None,
+                                'AUTO': None
                             }
 
                 # 转换为响应模型
@@ -148,7 +150,7 @@ class LoopService:
         """
         try:
             # 使用BFF客户端查询回路测点值
-            with BFFModelClient(device_uri=loop_uri) as client:
+            with BFFModelClient(loop_uri=loop_uri) as client:
                 # 查询回路节点信息
                 nodes_result = client.query_nodes_by_uris([loop_uri]).get("nodes")
                 # 判断是否获取回路节点信息成功
@@ -221,7 +223,7 @@ class LoopService:
         """
         try:
             # 使用BFF客户端查询
-            with BFFModelClient(device_uri=loop_uri) as client:
+            with BFFModelClient(loop_uri=loop_uri) as client:
                 result = client.query_current_raw_values(point_names)
 
                 logger.info(f"BFF查询成功，测点数量: {len(result)}")

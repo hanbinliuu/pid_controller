@@ -21,6 +21,7 @@ class ExcludedLoopService:
         db: Session,
         uri: str,
         type: str,
+        name: Optional[str] = None,
         reason: Optional[str] = None,
         is_excluded: bool = True
     ) -> ExcludedLoop:
@@ -32,6 +33,7 @@ class ExcludedLoopService:
             db: 数据库会话
             uri: 回路/装置URI
             type: 类型（回路/装置）
+            name: 回路/装置名称
             reason: 剔除原因
             is_excluded: 是否剔除
         
@@ -44,6 +46,8 @@ class ExcludedLoopService:
                 "is_excluded": is_excluded
             }
             
+            if name is not None:
+                excluded_data["name"] = name
             if reason is not None:
                 excluded_data["reason"] = reason
             
@@ -121,6 +125,7 @@ class ExcludedLoopService:
     @staticmethod
     def list_excluded(
         db: Session,
+        name: Optional[str] = None,
         uri: Optional[str] = None,
         type: Optional[str] = None,
         is_excluded: Optional[bool] = None,
@@ -132,6 +137,7 @@ class ExcludedLoopService:
         
         Args:
             db: 数据库会话
+            name: 名称筛选
             uri: URI筛选
             type: 类型筛选
             is_excluded: 是否剔除
@@ -143,6 +149,7 @@ class ExcludedLoopService:
         """
         return ExcludedLoopDAO.query_list(
             db,
+            name=name,
             uri=uri,
             type=type,
             is_excluded=is_excluded,
@@ -156,6 +163,7 @@ class ExcludedLoopService:
         excluded_id: int,
         uri: Optional[str] = None,
         type: Optional[str] = None,
+        name: Optional[str] = None,
         reason: Optional[str] = None,
         is_excluded: Optional[bool] = None
     ) -> Optional[ExcludedLoop]:
@@ -167,6 +175,7 @@ class ExcludedLoopService:
             excluded_id: 剔除记录ID
             uri: 新的URI
             type: 新的类型
+            name: 新的名称
             reason: 新的剔除原因
             is_excluded: 新的剔除状态
         
@@ -180,6 +189,8 @@ class ExcludedLoopService:
                 update_data["uri"] = uri
             if type is not None:
                 update_data["type"] = type
+            if name is not None:
+                update_data["name"] = name
             if reason is not None:
                 update_data["reason"] = reason
             if is_excluded is not None:

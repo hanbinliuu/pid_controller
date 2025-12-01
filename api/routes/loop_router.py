@@ -83,7 +83,7 @@ async def list_instances_under_tree(
 async def query_loop_info(
         loop_uri: Optional[str] = Query(
             None,
-            description="回路 URI，默认从环境变量 BFF_MODEL_PROJECT_PATH 读取",
+            description="回路 URI，默认从 BFF_MODEL_LOOP_URI 读取",
             example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
         )
 ) -> LoopInfoResponse:
@@ -120,7 +120,7 @@ async def query_loop_values(
         point_names: List[str],
         loop_uri: Optional[str] = Query(
             None,
-            description="回路 URI，默认从环境变量 BFF_MODEL_PROJECT_PATH 读取",
+            description="回路 URI，默认从 BFF_MODEL_LOOP_URI 读取",
             example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
         )
 ) -> Dict[str, Any]:

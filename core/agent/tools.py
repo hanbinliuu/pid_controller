@@ -1739,7 +1739,7 @@ def query_table_and_points(
         ... )
     """
     try:
-        with BFFModelClient(device_uri=project_path, point_path=point_path) as client:
+        with BFFModelClient(loop_uri=project_path, point_path=point_path) as client:
             # 查询常用字段
             query_result = client.query_common_fields()
             

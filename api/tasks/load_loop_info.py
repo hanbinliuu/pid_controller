@@ -256,7 +256,7 @@ def _query_loop_points(loop_uri: str) -> Dict[str, str]:
         测点名称映射字典，如 {'MV': 'ns=100;s=xxx', 'PV': 'ns=100;s=yyy', ...}
     """
     try:
-        with BFFModelClient(device_uri=loop_uri) as client:
+        with BFFModelClient(loop_uri=loop_uri) as client:
             # 查询常用PID控制字段
             # query_common_fields 返回字典，键为字段名（如 'MV', 'PV'），值为测点路径
             point_mapping = client.query_common_fields()

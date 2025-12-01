@@ -80,6 +80,7 @@ class ExcludedLoopDAO:
     @staticmethod
     def query_list(
         db: Session,
+        name: Optional[str] = None,
         uri: Optional[str] = None,
         type: Optional[str] = None,
         is_excluded: Optional[bool] = None,
@@ -91,6 +92,7 @@ class ExcludedLoopDAO:
         
         Args:
             db: 数据库会话
+            name: 名称筛选（模糊匹配）
             uri: URI筛选（模糊匹配）
             type: 类型筛选（回路/装置）
             is_excluded: 是否剔除
@@ -103,6 +105,10 @@ class ExcludedLoopDAO:
         try:
             # 构建select语句
             statement = select(ExcludedLoop)
+            
+            # 名称筛选（模糊匹配）
+            if name:
+                statement = statement.where(ExcludedLoop.name.like(f"%{name}%"))
             
             # URI筛选（模糊匹配）
             if uri:
@@ -122,6 +128,8 @@ class ExcludedLoopDAO:
             # 获取总数
             count_statement = select(func.count()).select_from(ExcludedLoop)
             # 应用相同的筛选条件到计数查询
+            if name:
+                count_statement = count_statement.where(ExcludedLoop.name.like(f"%{name}%"))
             if uri:
                 count_statement = count_statement.where(ExcludedLoop.uri.like(f"%{uri}%"))
             if type:

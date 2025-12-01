@@ -8,6 +8,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from core.client.bff_model_client import BFFModelClient
+from core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class BFFService:
             项目路径、测点路径、字段映射信息
         """
         try:
-            with BFFModelClient(device_uri=project_path) as client:
+            with BFFModelClient(loop_uri=project_path) as client:
                 common_field_map = client.query_common_fields()
                 
                 logger.info(f"查询BFF测点路径成功，项目路径: {client.device_uri}")
@@ -59,7 +60,7 @@ class BFFService:
             测点名称到值的映射
         """
         try:
-            with BFFModelClient(device_uri=loop_uri, point_path=point_path) as client:
+            with BFFModelClient(loop_uri=loop_uri, point_path=point_path) as client:
                 result = client.query_current_raw_values(point_names)
                 
                 logger.info(f"查询BFF测点当前值成功，测点数量: {len(result)}")
@@ -85,7 +86,7 @@ class BFFService:
             项目路径、表名、测点列表等信息
         """
         try:
-            with BFFModelClient(device_uri=project_path, point_path=point_path) as client:
+            with BFFModelClient(loop_uri=project_path, point_path=point_path) as client:
                 query_result = client.query_common_fields()
                 
                 table_and_points = BFFModelClient.extract_table_and_points_from_paths(query_result)
@@ -152,7 +153,7 @@ class BFFService:
         Args:
             model_identifier_list: 模型标识符列表
             start_identifier_list: 起始标识符列表
-            contain_sub_model: 是否包含子模型
+            contain_sub_model: 是否包含子模型类型实例
             page_no: 页码
             page_size: 每页数量
             
@@ -232,4 +233,70 @@ class BFFService:
                 return result
         except Exception as e:
             logger.error(f"查询实例树失败: {str(e)}")
+            raise
+    
+    @staticmethod
+    def get_all_devices() -> List[Dict[str, Any]]:
+        """
+        获取所有装置列表
+        
+        使用内置参数：
+        - model_identifier_list: /system/401 (装置模型URI)
+        - start_identifier_list: /pid_zd/instance (根节点URI)
+        - 自动分页获取全部装置
+        
+        Returns:
+            装置列表，每个装置包含: uri, browseName, displayName, parentUri 等字段
+        """
+        try:
+            all_devices = []
+            page_no = 1
+            page_size = 100  # 每页100条
+            
+            # 内置参数
+            model_identifier_list = [Config.BFF_MODEL_DEVICE_MODEL_URI]  # /system/401
+            start_identifier_list = [Config.BFF_MODEL_ROOT_URI]  # /pid_zd/instance
+            
+            logger.info(
+                f"开始获取装置列表 - "
+                f"模型标识符: {model_identifier_list}, "
+                f"起始标识符: {start_identifier_list}"
+            )
+            
+            with BFFModelClient() as client:
+                while True:
+                    # 分页查询
+                    result = client.list_instances_under_tree(
+                        model_identifier_list=model_identifier_list,
+                        start_identifier_list=start_identifier_list,
+                        contain_sub_model=True,
+                        page_no=page_no,
+                        page_size=page_size
+                    )
+                    
+                    instances = result.get('instances', [])
+                    if not instances:
+                        break
+                    
+                    all_devices.extend(instances)
+                    
+                    # 检查是否还有更多页
+                    pagination = result.get('pagination', {})
+                    total_pages = pagination.get('pages', 0)
+                    
+                    logger.debug(
+                        f"已加载第 {page_no}/{total_pages} 页，"
+                        f"当前总数: {len(all_devices)}"
+                    )
+                    
+                    if page_no >= total_pages:
+                        break
+                    
+                    page_no += 1
+            
+            logger.info(f"获取装置列表成功，总数: {len(all_devices)}")
+            return all_devices
+            
+        except Exception as e:
+            logger.error(f"获取装置列表失败: {str(e)}")
             raise

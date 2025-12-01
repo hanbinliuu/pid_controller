@@ -10,12 +10,20 @@ from sqlmodel import Session
 
 from core.database.database import get_db
 from api.services.device_evaluation_service import DeviceEvaluationService
+from api.services.bff_service import BFFService
 from api.bean.device_evaluation import DeviceEvaluation
+from api.middleware.exceptions import (
+    BusinessException,
+    ValidationException,
+    DataProcessException,
+    ExternalServiceException,
+    NotFoundException
+)
 
 logger = logging.getLogger(__name__)
 
 # 创建路由
-router = APIRouter(prefix="/api/v1", tags=["装置评估"])
+router = APIRouter(prefix="/api/v1", tags=["装置评估", "装置管理"])
 
 
 @router.post("/device-evaluation/upsert",
@@ -355,4 +363,217 @@ async def delete_device_evaluation(
         raise HTTPException(
             status_code=500,
             detail=f"删除装置评估失败: {str(e)}"
+        )
+
+
+# ==================== 装置管理接口 ====================
+
+@router.get("/devices/list",
+           summary="获取所有装置列表",
+           operation_id="get_all_devices",
+           response_model=Dict[str, Any])
+async def get_all_devices():
+    """
+    从BFF获取所有装置列表
+    
+    - 自动分页获取全部装置
+    - 使用内置参数：model_identifier_list=/system/401, start_identifier_list=/pid_zd/instance
+    
+    返回装置列表，包含：
+    - uri: 装置URI
+    - browseName: 浏览名称
+    - displayName: 显示名称
+    - parentUri: 父节点URI
+    - description: 描述
+    - extendedAttr: 扩展属性
+    """
+    try:
+        logger.info("开始获取装置列表")
+        
+        devices = BFFService.get_all_devices()
+        
+        return {
+            "code": 0,
+            "message": "查询成功",
+            "data": {
+                "devices": devices,
+                "total": len(devices)
+            }
+        }
+    except BusinessException:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取装置列表失败: {str(e)}", exc_info=True)
+        raise ExternalServiceException(
+            message=f"获取装置列表失败: {str(e)}",
+            data={"error": str(e)}
+        )
+
+
+@router.get("/devices/{device_uri:path}",
+           summary="根据URI查询装置详情",
+           operation_id="get_device_by_uri",
+           response_model=Dict[str, Any])
+async def get_device_by_uri(device_uri: str):
+    """
+    根据装置URI查询装置详细信息
+    
+    Args:
+        device_uri: 装置URI（路径参数）
+    """
+    try:
+        logger.info(f"查询装置详情 - URI: {device_uri}")
+        
+        # 调用BFF查询单个节点信息
+        result = BFFService.query_nodes_by_uris([device_uri])
+        nodes = result.get('nodes', [])
+        
+        if not nodes:
+            raise NotFoundException(
+                message=f"未找到URI为 {device_uri} 的装置",
+                data={"device_uri": device_uri}
+            )
+        
+        device = nodes[0]
+        
+        return {
+            "code": 0,
+            "message": "查询成功",
+            "data": device
+        }
+    except BusinessException:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查询装置详情失败 - URI: {device_uri}: {str(e)}", exc_info=True)
+        raise ExternalServiceException(
+            message=f"查询装置详情失败: {str(e)}",
+            data={"device_uri": device_uri}
+        )
+
+
+@router.get("/devices/search",
+           summary="搜索装置",
+           operation_id="search_devices",
+           response_model=Dict[str, Any])
+async def search_devices(
+    keyword: Optional[str] = Query(None, description="搜索关键词（匹配URI或名称）"),
+    parent_uri: Optional[str] = Query(None, description="父节点URI"),
+    page_no: int = Query(1, description="页码，从1开始", ge=1),
+    page_size: int = Query(10, description="每页数量", ge=1, le=100)
+):
+    """
+    搜索装置列表
+    
+    - 支持按关键词搜索（匹配URI或displayName）
+    - 支持按父节点URI筛选
+    - 支持分页
+    """
+    try:
+        logger.info(f"搜索装置 - 关键词: {keyword}, 父节点: {parent_uri}")
+        
+        # 获取所有装置
+        all_devices = BFFService.get_all_devices()
+        
+        # 过滤装置
+        filtered_devices = all_devices
+        
+        if keyword:
+            filtered_devices = [
+                d for d in filtered_devices
+                if keyword.lower() in d.get('uri', '').lower() 
+                or keyword.lower() in d.get('displayName', '').lower()
+                or keyword.lower() in d.get('browseName', '').lower()
+            ]
+        
+        if parent_uri:
+            filtered_devices = [
+                d for d in filtered_devices
+                if d.get('parentUri') == parent_uri
+            ]
+        
+        # 分页
+        total = len(filtered_devices)
+        start = (page_no - 1) * page_size
+        end = start + page_size
+        page_devices = filtered_devices[start:end]
+        
+        pages = (total + page_size - 1) // page_size if total > 0 else 0
+        
+        return {
+            "code": 0,
+            "message": "查询成功",
+            "data": {
+                "devices": page_devices,
+                "pagination": {
+                    "total": total,
+                    "pages": pages,
+                    "pageNo": page_no,
+                    "pageSize": page_size
+                }
+            }
+        }
+    except BusinessException:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"搜索装置失败: {str(e)}", exc_info=True)
+        raise DataProcessException(
+            message=f"搜索装置失败: {str(e)}",
+            data={"keyword": keyword, "parent_uri": parent_uri}
+        )
+
+
+@router.post("/devices/batch-query",
+            summary="批量查询装置详情",
+            operation_id="batch_query_devices",
+            response_model=Dict[str, Any])
+async def batch_query_devices(
+    uris: List[str] = Query(..., description="装置URI列表")
+):
+    """
+    批量查询装置详细信息
+    
+    Args:
+        uris: 装置URI列表
+    """
+    try:
+        if not uris:
+            raise ValidationException(
+                message="URI列表不能为空",
+                data={"uris": uris}
+            )
+        
+        logger.info(f"批量查询装置 - 数量: {len(uris)}")
+        
+        result = BFFService.query_nodes_by_uris(uris)
+        nodes = result.get('nodes', [])
+        
+        return {
+            "code": 0,
+            "message": "查询成功",
+            "data": {
+                "devices": nodes,
+                "total": len(nodes)
+            }
+        }
+    except BusinessException:
+        raise
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"参数验证失败: {str(e)}", exc_info=True)
+        raise ValidationException(
+            message=f"参数验证失败: {str(e)}",
+            data={"uris": uris}
+        )
+    except Exception as e:
+        logger.error(f"批量查询装置失败: {str(e)}", exc_info=True)
+        raise ExternalServiceException(
+            message=f"批量查询装置失败: {str(e)}",
+            data={"uri_count": len(uris)}
         )
