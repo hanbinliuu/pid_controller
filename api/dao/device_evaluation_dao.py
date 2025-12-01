@@ -166,6 +166,50 @@ class DeviceEvaluationDAO:
             raise
     
     @staticmethod
+    def batch_upsert_by_device_uri_and_date(
+        db: Session,
+        upsert_data_list: List[Dict[str, Any]]
+    ) -> List[DeviceEvaluation]:
+        """
+        批量按装置URI和统计日期进行更新插入(upsert)
+        
+        Args:
+            db: 数据库会话
+            upsert_data_list: upsert数据列表，每项需包含device_uri, statistics_date和其他评估数据
+        
+        Returns:
+            List[DeviceEvaluation]: 创建或更新的评估对象列表
+        """
+        try:
+            results = []
+            for upsert_data in upsert_data_list:
+                device_uri = upsert_data.get('device_uri')
+                statistics_date = upsert_data.get('statistics_date')
+                
+                if not device_uri or not statistics_date:
+                    logger.warning(f"批量upsert数据缺少必要字段: {upsert_data}")
+                    continue
+                
+                # 转换statistics_date为date类型
+                if isinstance(statistics_date, str):
+                    statistics_date = datetime.strptime(statistics_date.split()[0], "%Y-%m-%d").date()
+                elif isinstance(statistics_date, datetime):
+                    statistics_date = statistics_date.date()
+                
+                result = DeviceEvaluationDAO.upsert_by_device_uri_and_date(
+                    db, device_uri, statistics_date, upsert_data
+                )
+                results.append(result)
+            
+            logger.info(f"批量upsert装置评估记录成功，共处理 {len(results)} 条")
+            return results
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"批量upsert装置评估记录失败: {str(e)}")
+            raise
+    
+    @staticmethod
     def query_list(
         db: Session,
         device_name: Optional[str] = None,

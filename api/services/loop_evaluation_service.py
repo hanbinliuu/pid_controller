@@ -226,3 +226,24 @@ class LoopEvaluationService:
             Dict: 统计信息
         """
         return LoopEvaluationDAO.get_statistics(db)
+    
+    @staticmethod
+    def get_evaluations_by_uris(
+        db: Session,
+        uris: List[str],
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None
+    ) -> List[LoopEvaluation]:
+        """
+        根据URI列表批量查询回路评估记录
+        
+        Args:
+            db: 数据库会话
+            uris: 回路URI列表
+            start_time: 开始时间(yyyy-mm-dd)
+            end_time: 结束时间(yyyy-mm-dd)
+        
+        Returns:
+            List[LoopEvaluation]: 评估记录列表
+        """
+        return LoopEvaluationDAO.get_evaluations_by_uris(db, uris, start_time, end_time)

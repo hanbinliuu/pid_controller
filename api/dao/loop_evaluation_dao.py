@@ -532,3 +532,100 @@ class LoopEvaluationDAO:
         except Exception as e:
             logger.error(f"获取评估统计信息失败: {str(e)}")
             raise
+    
+    @staticmethod
+    def get_evaluations_by_uris(
+        db: Session,
+        uris: List[str],
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None
+    ) -> List[LoopEvaluation]:
+        """
+        根据URI列表批量查询回路评估记录
+        
+        Args:
+            db: 数据库会话
+            uris: 回路URI列表
+            start_time: 开始时间(yyyy-mm-dd)
+            end_time: 结束时间(yyyy-mm-dd)
+        
+        Returns:
+            List[LoopEvaluation]: 评估记录列表
+        """
+        try:
+            # 构建select语句
+            statement = select(LoopEvaluation)
+            
+            # URI筛选（如果提供了URI列表）
+            if uris:
+                statement = statement.where(
+                    LoopEvaluation.loop_uri.in_(uris)
+                )
+            
+            # 按整定时间倒序排列
+            statement = statement.order_by(desc(LoopEvaluation.tuning_time))
+            
+            # 时间范围筛选
+            if start_time:
+                try:
+                    start_dt = datetime.strptime(start_time, "%Y-%m-%d")
+                    statement = statement.where(LoopEvaluation.tuning_time >= start_dt)
+                except ValueError:
+                    pass
+            
+            if end_time:
+                try:
+                    end_dt = datetime.strptime(end_time + " 23:59:59", "%Y-%m-%d %H:%M:%S")
+                    statement = statement.where(LoopEvaluation.tuning_time <= end_dt)
+                except ValueError:
+                    pass
+            
+            evaluations = db.exec(statement).all()
+            
+            logger.info(f"根据URI列表查询回路评估记录成功，共 {len(evaluations)} 条")
+            return evaluations
+            
+        except Exception as e:
+            logger.error(f"根据URI列表查询回路评估记录失败: {str(e)}")
+            raise
+    
+    @staticmethod
+    def get_by_uris_and_date(
+        db: Session,
+        uris: List[str],
+        assessment_date: date
+    ) -> List[LoopEvaluation]:
+        """
+        根据URI列表和评估日期批量查询回路评估记录
+        
+        Args:
+            db: 数据库会话
+            uris: 回路URI列表
+            assessment_date: 评估日期(只包含年月日)
+        
+        Returns:
+            List[LoopEvaluation]: 评估记录列表
+        """
+        try:
+            if not uris:
+                return []
+            
+            # 转换日期为datetime范围
+            start_datetime = datetime.combine(assessment_date, datetime.min.time())
+            end_datetime = datetime.combine(assessment_date, datetime.max.time())
+            
+            # 构建select语句
+            statement = select(LoopEvaluation).where(
+                LoopEvaluation.loop_uri.in_(uris),
+                LoopEvaluation.assessment_time >= start_datetime,
+                LoopEvaluation.assessment_time <= end_datetime
+            )
+            
+            evaluations = db.exec(statement).all()
+            
+            logger.debug(f"根据URI列表和日期查询回路评估记录成功，共 {len(evaluations)} 条")
+            return evaluations
+            
+        except Exception as e:
+            logger.error(f"根据URI列表和日期查询回路评估记录失败: {str(e)}")
+            raise
