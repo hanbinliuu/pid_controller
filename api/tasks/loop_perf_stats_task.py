@@ -27,10 +27,17 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
         logger.info("开始计算全部回路的性能状态...")
 
         # 从数据库加载所有激活的回路
-        with get_db_session() as db:
-            active_loops = LoopInfoDAO.get_all_active(db)
-            loop_uris = [loop.loop_uri for loop in active_loops if loop.loop_uri]
 
+        # 回路 URI 列表
+        loop_uris = []
+        # 回路URI -> 回路名称 映射
+        loop_names = {}
+        with get_db_session() as db:
+            # 从 loop_info 表中加载所有激活的回路
+            active_loops = LoopInfoDAO.get_all_active(db)
+            for loop in active_loops:
+                loop_uris.append(loop.loop_uri)
+                loop_names[loop.loop_uri] = loop.loop_name
 
         if not loop_uris:
             logger.warning("未获取到任何激活的回路")
@@ -54,14 +61,12 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
             with get_db_session() as db:
                 for item in result.get('results', []):
                     status = item.get('status')
-                    loop_uri = item.get('loop_uri')
-                    # if status not in ['优秀', '良好', '一般', '差']:
-                    #     # 跳过失败或异常结果
-                    #     continue
+                    if status not in ['优秀', '良好', '一般', '差']:
+                        continue
 
+                    loop_uri = item.get('loop_uri')
                     # 获取回路名称
-                    mapping = LoopInfoDAO.get_by_loop_uri(db, loop_uri, include_inactive=True)
-                    loop_name = mapping.loop_name if mapping else None
+                    loop_name = loop_names.get(loop_uri)
 
                     # 解析时间范围，计算总秒数
                     time_range = item.get('time_range') or {}
@@ -77,23 +82,26 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                         total_seconds = None
 
                     metrics = item.get('performance_metrics') or {}
-                    tuning_date = datetime.now().date()
+                    assessment_time = datetime.now().date()
                     evaluation_data = {
                         "loop_uri": loop_uri,
                         "loop_name": loop_name,
-                        "tuning_method": "PerformanceEvaluation",
-                        "tuning_time": tuning_date,
-                        "status": status,
+                        "assessment_time": assessment_time,
                         "performance_score": item.get('comprehensive_score'),
                         "auto_control_rate": metrics.get('auto_control_rate'),
                         "stability_rate": metrics.get('stability_rate'),
+                        "auto_control_time": item.get('t_auto'),
+                        "stable_time": item.get('t_stable'),
                         "total_time": total_seconds,
-                        "pt_count": item.get('data_points_count'),
-                        "tuning_details": item  # 保存完整评估明细
+                        "pt_count": item.get('pt_count'),
+                        "pv_sum_value": item.get("pv_sum_value"),
+                        "pv_sum_squares": item.get("pv_sum_squares"),
+                        "mv_sum_value": item.get("mv_sum_value"),
+                        "mv_sum_squares": item.get("mv_sum_squares"),
                     }
 
                     try:
-                        LoopEvaluationDAO.upsert_by_loop_uri_and_date(db,loop_uri=loop_uri,tuning_date=tuning_date, evaluation_data=evaluation_data)
+                        LoopEvaluationDAO.upsert_by_loop_uri_and_date(db, loop_uri, assessment_time, evaluation_data)
                         persisted_count += 1
                     except Exception as e:
                         logger.warning(f"写入评估明细失败 [{loop_uri}]: {str(e)}")

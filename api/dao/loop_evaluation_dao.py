@@ -317,26 +317,26 @@ class LoopEvaluationDAO:
         return db.exec(statement).all()
     
     @staticmethod
-    def get_by_loop_uri_and_date(db: Session, loop_uri: str, tuning_date: date) -> Optional[LoopEvaluation]:
+    def get_by_loop_uri_and_date(db: Session, loop_uri: str, assessment_date: date) -> Optional[LoopEvaluation]:
         """
         根据loop_uri和整定日期查询评估记录
         
         Args:
             db: 数据库会话
             loop_uri: 回路URI
-            tuning_date: 整定日期(只包含年月日)
+            assessment_date: 评估日期(只包含年月日)
         
         Returns:
             Optional[LoopEvaluation]: 评估对象，不存在则返回None
         """
         # 转换日期为datetime(当天00:00:00)
-        start_datetime = datetime.combine(tuning_date, datetime.min.time())
-        end_datetime = datetime.combine(tuning_date, datetime.max.time())
+        start_datetime = datetime.combine(assessment_date, datetime.min.time())
+        end_datetime = datetime.combine(assessment_date, datetime.max.time())
         
         statement = select(LoopEvaluation).where(
             LoopEvaluation.loop_uri == loop_uri,
-            LoopEvaluation.tuning_time >= start_datetime,
-            LoopEvaluation.tuning_time <= end_datetime
+            LoopEvaluation.assessment_time >= start_datetime,
+            LoopEvaluation.assessment_time <= end_datetime
         )
         return db.exec(statement).first()
     
@@ -344,7 +344,7 @@ class LoopEvaluationDAO:
     def upsert_by_loop_uri_and_date(
         db: Session,
         loop_uri: str,
-        tuning_date: date,
+        assessment_date: date,
         evaluation_data: Dict[str, Any]
     ) -> LoopEvaluation:
         """
@@ -354,7 +354,7 @@ class LoopEvaluationDAO:
         Args:
             db: 数据库会话
             loop_uri: 回路URI
-            tuning_date: 整定日期(只包含年月日)
+            assessment_date: 评估日期(只包含年月日)
             evaluation_data: 评估数据字典
         
         Returns:
@@ -363,11 +363,11 @@ class LoopEvaluationDAO:
         try:
             # 强制设置关键字段
             evaluation_data['loop_uri'] = loop_uri
-            evaluation_data['tuning_time'] = tuning_date
+            evaluation_data['assessment_time'] = assessment_date
             
             # 查找是否存在记录
             existing = LoopEvaluationDAO.get_by_loop_uri_and_date(
-                db, loop_uri, tuning_date
+                db, loop_uri, assessment_date
             )
             
             if existing:
@@ -385,7 +385,7 @@ class LoopEvaluationDAO:
                 
                 logger.info(
                     f"更新回路评估记录: loop_uri={loop_uri}, "
-                    f"date={tuning_date}, id={existing.id}, loop_name={existing.loop_name}"
+                    f"date={assessment_date}, id={existing.id}, loop_name={existing.loop_name}"
                 )
                 return existing
             else:
@@ -399,7 +399,7 @@ class LoopEvaluationDAO:
                 
                 logger.info(
                     f"创建回路评估记录: loop_uri={loop_uri}, "
-                    f"date={tuning_date}, id={evaluation.id}, loop_name={evaluation.loop_name}"
+                    f"date={assessment_date}, id={evaluation.id}, loop_name={evaluation.loop_name}"
                 )
                 return evaluation
                 
@@ -407,7 +407,7 @@ class LoopEvaluationDAO:
             db.rollback()
             logger.error(
                 f"Upsert回路评估记录失败: loop_uri={loop_uri}, "
-                f"date={tuning_date}, 错误: {str(e)}"
+                f"date={assessment_date}, 错误: {str(e)}"
             )
             raise
     
