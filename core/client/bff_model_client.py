@@ -754,12 +754,12 @@ class BFFModelClient:
             简化后的实例列表，包含uri, browseName, displayName, description, extendedAttr
 
         Example:
-            >>> client = BFFModelClient()
-            >>> result = client.list_instances_under_tree(
-            ...     model_identifier_list=['/pid_zd/460b81c8e216459c9fd159dbacfc9b10'],
-            ...     start_identifier_list=['/pid_zd/5cf9d861d28240ce82da84fe43946fde']
-            ... )
-            >>> print(result)
+            # >>> client = BFFModelClient()
+            # >>> result = client.list_instances_under_tree(
+            # ...     model_identifier_list=['/pid_zd/460b81c8e216459c9fd159dbacfc9b10'],
+            # ...     start_identifier_list=['/pid_zd/5cf9d861d28240ce82da84fe43946fde']
+            # ... )
+            # >>> print(result)
             {
                 'instances': [
                     {
@@ -834,6 +834,7 @@ class BFFModelClient:
                     'uri': item.get('uri'),
                     'browseName': item.get('browseName'),
                     'displayName': item.get('displayName'),
+                    'parentUri': item.get('parentUri'),
                     'description': item.get('description'),
                     'extendedAttr': item.get('extendedAttr', {}),
                     'uriPath': item.get('uriPath'),
