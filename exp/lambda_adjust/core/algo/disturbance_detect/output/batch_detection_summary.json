@@ -1,0 +1,115 @@
+{
+  "total_files": 12,
+  "processed_files": 12,
+  "failed_files": 0,
+  "results": [
+    {
+      "file": "response_1761644174772.json",
+      "scenario_type": "scenario_1",
+      "non_steady_count": 1,
+      "steady_state_count": 2,
+      "setpoint_change_count": 0,
+      "recovered_non_steady_count": 1,
+      "result_file": "response_1761644174772_detection_result.json"
+    },
+    {
+      "file": "response_1761662371845.json",
+      "scenario_type": "steady_only",
+      "non_steady_count": 1,
+      "steady_state_count": 1,
+      "setpoint_change_count": 1,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1761662371845_detection_result.json"
+    },
+    {
+      "file": "response_1761662461575.json",
+      "scenario_type": "steady_only",
+      "non_steady_count": 1,
+      "steady_state_count": 1,
+      "setpoint_change_count": 1,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1761662461575_detection_result.json"
+    },
+    {
+      "file": "response_1762241923959.json",
+      "scenario_type": "scenario_3",
+      "non_steady_count": 1,
+      "steady_state_count": 0,
+      "setpoint_change_count": 0,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1762241923959_detection_result.json"
+    },
+    {
+      "file": "response_1762697026580.json",
+      "scenario_type": "scenario_3",
+      "non_steady_count": 2,
+      "steady_state_count": 1,
+      "setpoint_change_count": 0,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1762697026580_detection_result.json"
+    },
+    {
+      "file": "response_1762697451204.json",
+      "scenario_type": "scenario_3",
+      "non_steady_count": 1,
+      "steady_state_count": 1,
+      "setpoint_change_count": 1,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1762697451204_detection_result.json"
+    },
+    {
+      "file": "response_1762697546477.json",
+      "scenario_type": "scenario_3",
+      "non_steady_count": 2,
+      "steady_state_count": 1,
+      "setpoint_change_count": 1,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1762697546477_detection_result.json"
+    },
+    {
+      "file": "response_1762697645221.json",
+      "scenario_type": "scenario_2",
+      "non_steady_count": 2,
+      "steady_state_count": 1,
+      "setpoint_change_count": 2,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1762697645221_detection_result.json"
+    },
+    {
+      "file": "response_1762741206598.json",
+      "scenario_type": "scenario_2",
+      "non_steady_count": 1,
+      "steady_state_count": 3,
+      "setpoint_change_count": 2,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1762741206598_detection_result.json"
+    },
+    {
+      "file": "response_1762751239110.json",
+      "scenario_type": "scenario_2",
+      "non_steady_count": 1,
+      "steady_state_count": 4,
+      "setpoint_change_count": 4,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1762751239110_detection_result.json"
+    },
+    {
+      "file": "response_1762851425410.json",
+      "scenario_type": "scenario_1",
+      "non_steady_count": 1,
+      "steady_state_count": 1,
+      "setpoint_change_count": 0,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1762851425410_detection_result.json"
+    },
+    {
+      "file": "response_1762854151682.json",
+      "scenario_type": "scenario_2",
+      "non_steady_count": 1,
+      "steady_state_count": 1,
+      "setpoint_change_count": 1,
+      "recovered_non_steady_count": 0,
+      "result_file": "response_1762854151682_detection_result.json"
+    }
+  ]
+}

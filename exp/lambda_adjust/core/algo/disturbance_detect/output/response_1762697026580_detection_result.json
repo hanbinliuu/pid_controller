@@ -1,0 +1,80 @@
+{
+  "scenario_type": "scenario_3",
+  "metadata": {
+    "table": "PID_FEP_Gateway_Device_001default",
+    "start_time": "2025-11-07 17:45:00",
+    "end_time": "2025-11-07 18:21:00",
+    "totalRecords": 2160,
+    "setpoint": 7,
+    "setpoint_range": 0.0
+  },
+  "segments": [
+    {
+      "start_idx": 0,
+      "end_idx": 108,
+      "start_time": 0.0,
+      "end_time": 107.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 108,
+      "end_idx": 1117,
+      "start_time": 108.0,
+      "end_time": 1116.0,
+      "segment_type": "steady_state",
+      "description": "稳态段",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 1117,
+      "end_idx": 2160,
+      "start_time": 1117.0,
+      "end_time": 2159.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    }
+  ],
+  "non_steady_segments": [
+    {
+      "start_idx": 0,
+      "end_idx": 108,
+      "start_time": 0.0,
+      "end_time": 107.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 1117,
+      "end_idx": 2160,
+      "start_time": 1117.0,
+      "end_time": 2159.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    }
+  ],
+  "steady_state_segments": [
+    {
+      "start_idx": 108,
+      "end_idx": 1117,
+      "start_time": 108.0,
+      "end_time": 1116.0,
+      "segment_type": "steady_state",
+      "description": "稳态段",
+      "setpoint_direction": null
+    }
+  ],
+  "setpoint_change_segments": [],
+  "recovered_non_steady_segments": [],
+  "summary": {
+    "total_segments": 3,
+    "non_steady_count": 2,
+    "steady_state_count": 1,
+    "setpoint_change_count": 0,
+    "recovered_non_steady_count": 0
+  }
+}

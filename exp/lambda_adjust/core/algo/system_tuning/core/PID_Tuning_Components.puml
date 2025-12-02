@@ -1,0 +1,153 @@
+@startuml PID_Tuning_Components
+!theme cerulean-outline
+title PID整定算法 - 组件交互图
+
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle rectangle
+skinparam packageStyle frame
+
+' ========== 数据层 ==========
+package "数据层 (data/)" as DataLayer #LightYellow {
+  component "DataAnalyzer\nanalyzer.py" as DataAnalyzer {
+    portin "JSON数据" as DA_in
+    portout "分段数据" as DA_out
+  }
+  note bottom of DataAnalyzer
+    **主要方法:**
+    - classify_case()
+    - detect_setpoint_changes()
+    - is_steady_state()
+    - extract_tuning_segment()
+    - find_disturbance_start()
+  end note
+
+  component "DataPreprocessor\npreprocessor.py" as DataPreprocessor {
+    portin "原始数据" as DP_in
+    portout "预处理数据" as DP_out
+  }
+  note bottom of DataPreprocessor
+    **主要方法:**
+    - detect_control_scenario()
+    - detect_model_type()
+    - detect_control_mode()
+    - preprocess_temperature_data()
+    - preprocess_level_data()
+  end note
+}
+
+' ========== 模型层 ==========
+package "模型层 (model/)" as ModelLayer #LightCyan {
+  component "ModelIdentifier\nidentifier.py" as ModelIdentifier {
+    portin "预处理数据" as MI_in
+    portout "模型参数" as MI_out
+  }
+  note bottom of ModelIdentifier
+    **主要方法:**
+    - identify_fopdt()
+    - identify_second_order()
+    - identify_integral_delay()
+    - estimate_initial_guess()
+  end note
+
+  component "StabilityDetector\nstability/detector.py" as StabilityDetector {
+    portin "PV/SV数据" as SD_in
+    portout "稳态判断" as SD_out
+  }
+  note bottom of StabilityDetector
+    **主要方法:**
+    - is_steady_state()
+    - detect_non_steady_segments()
+    - find_disturbance_start()
+  end note
+
+  component "OperationalIdentifier\noperational_identifier.py" as OpIdentifier {
+    portin "闭环数据" as OI_in
+    portout "增强辨识" as OI_out
+  }
+}
+
+' ========== PID层 ==========
+package "PID层 (pid/)" as PIDLayer #LightGreen {
+  component "PIDTuner\ntuner.py" as PIDTuner {
+    portin "模型参数" as PT_in
+    portout "PID参数" as PT_out
+  }
+  note bottom of PIDTuner
+    **主要方法:**
+    - lambda_tuning()
+    - lambda_tuning_for_temperature()
+    - lambda_tuning_for_level()
+    - cohen_coon_tuning()
+  end note
+
+  component "PIDEvaluator\nevaluator.py" as PIDEvaluator {
+    portin "仿真结果" as PE_in
+    portout "性能指标" as PE_out
+  }
+  note bottom of PIDEvaluator
+    **主要方法:**
+    - evaluate()
+    - calculate_iae/ise/itae()
+    - assess_stability()
+  end note
+
+  component "PIDSimulator\nsimulator.py" as PIDSimulator {
+    portin "PID+模型" as PS_in
+    portout "仿真曲线" as PS_out
+  }
+}
+
+' ========== 整定逻辑层 ==========
+package "整定逻辑层 (tuning/)" as TuningLayer #LightPink {
+  component "SystemIdentifier\nidentifier.py" as SystemIdentifier {
+    portin "JSON输入" as SI_in
+    portout "整定结果" as SI_out
+  }
+  note bottom of SystemIdentifier
+    **主入口:**
+    - auto_identify_from_json()
+    - auto_tune_from_json()
+    - _tune_single_segment()
+    - _tune_multiple_segments()
+  end note
+
+  component "SystemTuningLogic\nlogic.py" as TuningLogic {
+    portin "段数据" as TL_in
+    portout "整定策略" as TL_out
+  }
+  note bottom of TuningLogic
+    **主要方法:**
+    - detect_case_type()
+    - check_segment_steady_state()
+    - _check_oscillation()
+  end note
+}
+
+' ========== 工具层 ==========
+package "工具层 (utils/)" as UtilsLayer #Wheat {
+  component "DataQualityChecker\ndata_quality.py" as QualityChecker {
+    portin "原始数据" as QC_in
+    portout "质量报告" as QC_out
+  }
+
+  component "ParameterValidator\nparameter_validator.py" as ParamValidator {
+    portin "PID参数" as PV_in
+    portout "验证结果" as PV_out
+  }
+}
+
+' ========== 连接关系 ==========
+' 主流程
+SystemIdentifier --> QualityChecker : 1.数据质量检查
+SystemIdentifier --> DataAnalyzer : 2.数据分段
+SystemIdentifier --> TuningLogic : 3.整定策略
+TuningLogic --> StabilityDetector : 稳态检测
+SystemIdentifier --> DataPreprocessor : 4.预处理
+SystemIdentifier --> ModelIdentifier : 5.模型辨识
+ModelIdentifier --> OpIdentifier : 闭环增强
+SystemIdentifier --> PIDTuner : 6.PID整定
+SystemIdentifier --> ParamValidator : 7.参数验证
+SystemIdentifier --> PIDEvaluator : 8.性能评估
+PIDEvaluator --> PIDSimulator : 仿真验证
+
+@enduml

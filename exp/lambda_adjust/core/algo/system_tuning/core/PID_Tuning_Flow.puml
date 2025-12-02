@@ -1,0 +1,448 @@
+@startuml PID_Tuning_Algorithm_Flow
+!theme cerulean-outline
+title PID自动整定算法完整流程图\n(包含每步输入/输出)
+
+skinparam backgroundColor #FEFEFE
+skinparam ActivityFontSize 12
+skinparam NoteFontSize 10
+
+|#LightBlue|主入口|
+start
+:=== 主入口 ===
+**SystemIdentifier.auto_identify_from_json()**
+文件: tuning/identifier.py (L530-629);
+
+note right
+  **输入:**
+  - json_data: JSON数据对象
+    {"data": [{"timestamp", "pv", "mv", "sv"}, ...]}
+  - setpoint: 设定值(可选, 自动提取)
+  - tuning_method: 整定方法枚举
+  - current_pid: 当前PID参数(可选)
+  
+  **输出:**
+  - result: 整定结果字典或None
+end note
+
+:解析JSON数据
+提取 t, pv, mv, sv 数组;
+
+|#LightGreen|数据质量检查|
+
+:=== 步骤0: 数据质量预检 ===
+**DataQualityChecker.assess_data_quality()**
+文件: utils/data_quality.py;
+
+note right
+  **输入:**
+  - pv: 过程变量数组
+  - mv: 操作变量数组
+  - t: 时间数组
+  
+  **输出:**
+  - quality_report: 质量报告字典
+    {is_acceptable, score, issues[], warnings[]}
+  
+  **检查项:**
+  1. 数据长度检查 (>=50点)
+  2. PV/MV变化检查 (std>0.001)
+  3. 信噪比检查
+  4. 缺失数据检查
+  5. 采样一致性检查
+  6. 数据范围检查
+  7. NaN/Inf检查
+end note
+
+if (数据质量合格?) then (是)
+else (否)
+  :抛出 DataQualityException;
+  stop
+endif
+
+|#LightYellow|数据分析|
+
+:=== 步骤1: 设定值变化检测 ===
+**DataAnalyzer.detect_setpoint_changes()**
+文件: data/analyzer.py (L290-310);
+
+note right
+  **输入:**
+  - sv_array: 设定值数组
+  - threshold: 变化阈值(默认0.5)
+  
+  **输出:**
+  - change_indices: 变化点索引列表
+  - segments: 分段列表
+    [(start_idx, end_idx, sv_value), ...]
+end note
+
+:根据设定值变化点切分数据为多个段;
+
+|#LightPink|稳态检测|
+
+:=== 步骤2: 各段稳态检查 ===
+**SystemTuningLogic.check_segment_steady_state()**
+文件: tuning/logic.py (L36-144);
+
+note right
+  **输入:**
+  - segment_data: 段数据(t, pv, mv, sv)
+  - threshold: 稳态判断阈值
+  
+  **输出:**
+  - is_steady: 是否稳态(bool)
+  - steady_info: 稳态信息字典
+    {mean, std, cv, oscillation_count}
+  
+  **调用:**
+  → DataAnalyzer.is_setpoint_changing()
+  → DataAnalyzer.is_steady_state()
+  → StabilityDetector.is_steady_state()
+  → SystemTuningLogic._check_oscillation()
+end note
+
+:=== 稳定性检测器 ===
+**StabilityDetector.is_steady_state()**
+文件: model/stability/detector.py;
+
+note right
+  **输入:**
+  - pv: 过程变量数组
+  - sv: 设定值(标量或数组)
+  - threshold: 偏差阈值
+  
+  **输出:**
+  - is_steady: bool
+  - confidence: 置信度(0-1)
+  - non_steady_segments: 非稳态段列表
+    [(start_idx, end_idx), ...]
+end note
+
+if (存在非稳态段?) then (是)
+  :确定需要整定的段;
+else (否)
+  :返回 ALREADY_STABLE
+  无需整定;
+  stop
+endif
+
+|#LightCyan|场景检测|
+
+:=== 步骤3: 控制场景检测 ===
+**DataPreprocessor.detect_control_scenario()**
+文件: data/preprocessor.py (L163-198);
+
+note right
+  **输入:**
+  - pv: 过程变量数组
+  - mv: 操作变量数组
+  - t: 时间数组
+  
+  **输出:**
+  - scenario: 场景类型字符串
+    "temperature" | "level" | "flow"
+  
+  **判断依据:**
+  - 响应速度
+  - PV/MV比例
+  - 波动特性
+end note
+
+|#Wheat|数据预处理|
+
+:=== 步骤4: 数据预处理 ===
+根据场景选择预处理方法;
+
+partition "温控场景" {
+  :preprocess_temperature_data()
+  文件: data/preprocessor.py (L15-29);
+  note right
+    **输入:** t, pv, mv
+    **输出:** t_proc, pv_proc, mv_proc
+    **处理:** 去瞬态、平滑滤波
+  end note
+}
+
+partition "液位场景" {
+  :preprocess_level_data()
+  文件: data/preprocessor.py (L32-160);
+  note right
+    **输入:** t, pv, mv
+    **输出:** t_proc, pv_proc, mv_proc
+    **处理:** 去异常值、滤波、去周期波动
+  end note
+}
+
+|#Lavender|模型检测|
+
+:=== 步骤5: 模型类型检测 ===
+**DataPreprocessor.detect_model_type()**
+文件: data/preprocessor.py (L201-282);
+
+note right
+  **输入:**
+  - t: 时间数组(预处理后)
+  - pv: 过程变量数组(预处理后)
+  - mv: 操作变量数组(预处理后)
+  - scenario: 控制场景
+  
+  **输出:**
+  - model_type: 模型类型字符串
+    "fopdt" | "first_order" | "second_order" 
+    | "integral_delay" | "fopdt_with_heat_loss"
+  
+  **判断依据:**
+  - 响应曲线形状
+  - 超调量
+  - 积分特性
+end note
+
+|#Thistle|模型辨识|
+
+:=== 步骤6: 模型参数辨识 ===
+**ModelIdentifier.identify_xxx()**
+文件: model/identifier.py;
+
+note right
+  **通用输入:**
+  - t: 时间数组
+  - pv: 过程变量数组
+  - mv: 操作变量数组
+  - sv: 设定值(可选)
+  - current_pid: 当前PID(可选)
+  
+  **通用输出:**
+  - K: 系统增益
+  - T: 时间常数
+  - L: 纯滞后时间
+  - model_fit_error: 拟合误差
+end note
+
+partition "初始参数估计" {
+  :estimate_initial_guess_from_operational_data()
+  文件: model/identifier.py (L220-282);
+  note right
+    **调用链:**
+    → _estimate_lag_from_correlation()
+    → _estimate_gain_from_correlation()
+    → _estimate_time_constant_from_response_speed()
+    → OperationalDataIdentifier.identify_from_closed_loop_data()
+    
+    **输出:**
+    - initial_K, initial_T, initial_L
+  end note
+}
+
+partition "非线性优化" {
+  :scipy.optimize.least_squares()
+  最小化 ||pv_sim - pv_actual||²;
+  note right
+    **输入:**
+    - 初始参数估计值
+    - 参数边界约束
+    - 残差函数
+    
+    **输出:**
+    - 优化后的 K, T, L
+  end note
+}
+
+switch (模型类型?)
+case (FOPDT)
+  :identify_fopdt()
+  (L352-366);
+  note right
+    **模型:** G(s) = K·e^(-Ls) / (Ts+1)
+    **输出:** {K, T, L}
+  end note
+case (二阶系统)
+  :identify_second_order()
+  (L381-383);
+  note right
+    **模型:** G(s) = K·e^(-Ls) / (T1s+1)(T2s+1)
+    **输出:** {K, T1, T2, L}
+  end note
+case (积分-延迟)
+  :identify_integral_delay()
+  (L386-388);
+  note right
+    **模型:** G(s) = K·e^(-Ls) / s
+    **输出:** {K, L}
+  end note
+case (带热损FOPDT)
+  :identify_fopdt_with_heat_loss()
+  (L369-371);
+  note right
+    **模型:** 含热损失项
+    **输出:** {K, T, L, heat_loss}
+  end note
+endswitch
+
+|#LightGreen|控制模式检测|
+
+:=== 步骤7: 控制模式检测 ===
+**DataPreprocessor.detect_control_mode()**
+文件: data/preprocessor.py (L285-331);
+
+note right
+  **输入:**
+  - pv: 过程变量数组
+  - mv: 操作变量数组
+  - noise_level: 噪声水平
+  - disturbance_freq: 扰动频率
+  
+  **输出:**
+  - mode: 控制模式枚举
+    STANDARD | ANTI_NOISE | ANTI_DISTURBANCE
+  
+  **判断依据:**
+  - 噪声水平 → ANTI_NOISE
+  - 扰动频繁 → ANTI_DISTURBANCE
+  - 正常情况 → STANDARD
+end note
+
+|#Gold|PID整定|
+
+:=== 步骤8: PID参数整定 ===
+**PIDTuner.lambda_tuning() / cohen_coon_tuning()**
+文件: pid/tuner.py;
+
+note right
+  **通用输入:**
+  - K: 系统增益
+  - T: 时间常数
+  - L: 纯滞后时间
+  - scenario: 控制场景
+  - mode: 控制模式
+  - lambda_factor: λ因子(可选)
+  
+  **通用输出:**
+  - Pb: 比例带(%)
+  - Ti: 积分时间(秒)
+  - Td: 微分时间(秒)
+end note
+
+switch (整定方法?)
+case (Lambda)
+  :_lambda_tuning_core()
+  文件: pid/tuner.py (L13-85);
+  note right
+    **Lambda公式:**
+    λ = lambda_factor × T
+    Kp = (T + L/2) / (K × (λ + L/2))
+    Ti = T + L/2
+    Td = (T × L) / (2T + L)
+    Pb = 100 / Kp
+  end note
+case (Cohen-Coon)
+  :cohen_coon_tuning()
+  文件: pid/tuner.py (L158-188);
+  note right
+    **Cohen-Coon公式:**
+    τ = L / (L + T)
+    Kp = (1/K) × (T/L) × (1.35 + 0.25τ)
+    Ti = L × (2.5 - 2τ) / (1 - 0.39τ)
+    Td = 0.37 × L / (1 - 0.81τ)
+  end note
+endswitch
+
+partition "场景特定调整" {
+  :根据场景应用调整系数;
+  note right
+    **温控:** 较慢响应, 增大Ti
+    **液位:** 抗扰动, 调整Kp
+    **流量:** 快速响应, 减小Ti
+  end note
+}
+
+partition "模式特定调整" {
+  :根据控制模式微调;
+  note right
+    **ANTI_NOISE:** 减小Kp, 增大Ti
+    **ANTI_DISTURBANCE:** 适当增大Kp
+    **STANDARD:** 无额外调整
+  end note
+}
+
+|#PaleGreen|参数验证|
+
+:=== 步骤9: 参数验证 ===
+**ParameterValidator.validate_pid_params()**
+文件: utils/parameter_validator.py;
+
+note right
+  **输入:**
+  - pb, ti, td: PID参数
+  - model_params: 模型参数{K, T, L}
+  - scenario: 控制场景
+  
+  **输出:**
+  - is_valid: bool
+  - warnings: 警告列表
+  - suggestions: 建议列表
+  - quality_score: 质量评分(0-100)
+  
+  **验证层级:**
+  1. 基本范围检查
+  2. 参数比例关系检查
+  3. 特殊组合检查
+  4. 场景特定检查
+  5. 基于模型参数的检查
+end note
+
+if (参数验证通过?) then (是)
+else (否)
+  :应用建议调整 或 返回警告;
+endif
+
+|#LightSteelBlue|性能评估|
+
+:=== 步骤10: 性能评估(可选) ===
+**PIDEvaluator.evaluate()**
+文件: pid/evaluator.py;
+
+note right
+  **输入:**
+  - t: 时间数组
+  - pv: 实际PV
+  - sv: 设定值
+  - mv: 控制输出
+  - pid_params: PID参数
+  
+  **输出:**
+  - iae: 积分绝对误差
+  - ise: 积分平方误差
+  - itae: 积分时间绝对误差
+  - settling_time: 稳定时间
+  - overshoot: 超调量(%)
+  - oscillation_count: 振荡次数
+  - steady_state_error: 稳态误差
+  - overall_score: 综合评分(0-100)
+  - grade: 等级(A/B/C/D/F)
+end note
+
+|#LightBlue|结果输出|
+
+:=== 返回整定结果 ===;
+
+note right
+  **最终输出:**
+  {
+    "pb": 比例带(%),
+    "ti": 积分时间(秒),
+    "td": 微分时间(秒),
+    "model_type": 模型类型,
+    "model_params": {K, T, L},
+    "scenario": 控制场景,
+    "mode": 控制模式,
+    "tuning_method": 整定方法,
+    "validation": 验证结果,
+    "evaluation": 性能评估结果,
+    "segment_info": 分段信息,
+    "quality_report": 数据质量报告
+  }
+end note
+
+stop
+
+@enduml

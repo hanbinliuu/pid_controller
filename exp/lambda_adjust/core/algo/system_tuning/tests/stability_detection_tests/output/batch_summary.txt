@@ -1,0 +1,83 @@
+================================================================================
+批量稳定性检测汇总报告
+================================================================================
+
+处理时间: 2025-11-25 09:29:41
+输入文件夹: /Users/lhb/Documents/pycharmProject/hollicube/pid-agent-mvp/exp/lambda_adjust/data_simulation/zhongkong
+输出文件夹: /Users/lhb/Documents/pycharmProject/pid-agent-mvp/exp/lambda_adjust/core/algo/system_tuning/tests/stability_detection_tests/output
+参数: tol=0.5, std_tol=0.2
+
+总计: 11 个文件
+成功: 11 个文件
+失败: 0 个文件
+
+--------------------------------------------------------------------------------
+详细结果:
+--------------------------------------------------------------------------------
+
+文件: response_1761644174772.json
+  状态: ✅ 成功
+  非稳态段数量: 2
+  扰动起始点数量: 2
+  输出文件: response_1761644174772_stability_detection.png
+
+文件: response_1761662461575.json
+  状态: ✅ 成功
+  非稳态段数量: 0
+  扰动起始点数量: 0
+  输出文件: response_1761662461575_stability_detection.png
+
+文件: response_1762241923959.json
+  状态: ✅ 成功
+  非稳态段数量: 1
+  扰动起始点数量: 1
+  输出文件: response_1762241923959_stability_detection.png
+
+文件: response_1762697026580.json
+  状态: ✅ 成功
+  非稳态段数量: 1
+  扰动起始点数量: 1
+  输出文件: response_1762697026580_stability_detection.png
+
+文件: response_1762697451204.json
+  状态: ✅ 成功
+  非稳态段数量: 0
+  扰动起始点数量: 0
+  输出文件: response_1762697451204_stability_detection.png
+
+文件: response_1762697546477.json
+  状态: ✅ 成功
+  非稳态段数量: 1
+  扰动起始点数量: 1
+  输出文件: response_1762697546477_stability_detection.png
+
+文件: response_1762697645221.json
+  状态: ✅ 成功
+  非稳态段数量: 2
+  扰动起始点数量: 2
+  输出文件: response_1762697645221_stability_detection.png
+
+文件: response_1762741206598.json
+  状态: ✅ 成功
+  非稳态段数量: 1
+  扰动起始点数量: 1
+  输出文件: response_1762741206598_stability_detection.png
+
+文件: response_1762751239110.json
+  状态: ✅ 成功
+  非稳态段数量: 2
+  扰动起始点数量: 2
+  输出文件: response_1762751239110_stability_detection.png
+
+文件: response_1762851425410.json
+  状态: ✅ 成功
+  非稳态段数量: 1
+  扰动起始点数量: 1
+  输出文件: response_1762851425410_stability_detection.png
+
+文件: response_1762854151682.json
+  状态: ✅ 成功
+  非稳态段数量: 1
+  扰动起始点数量: 1
+  输出文件: response_1762854151682_stability_detection.png
+

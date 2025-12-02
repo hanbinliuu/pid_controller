@@ -1,0 +1,212 @@
+@startuml PID_Tuning_Sequence
+!theme cerulean-outline
+title PID整定算法 - 时序图(含输入输出)
+
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+actor "调用方" as Client
+participant "SystemIdentifier\ntuning/identifier.py" as SI
+participant "DataQualityChecker\nutils/data_quality.py" as QC
+participant "DataAnalyzer\ndata/analyzer.py" as DA
+participant "SystemTuningLogic\ntuning/logic.py" as TL
+participant "StabilityDetector\nmodel/stability/detector.py" as SD
+participant "DataPreprocessor\ndata/preprocessor.py" as DP
+participant "ModelIdentifier\nmodel/identifier.py" as MI
+participant "PIDTuner\npid/tuner.py" as PT
+participant "ParameterValidator\nutils/parameter_validator.py" as PV
+participant "PIDEvaluator\npid/evaluator.py" as PE
+
+== 主入口调用 ==
+Client -> SI : auto_identify_from_json(\n  json_data, setpoint, tuning_method, current_pid)
+activate SI
+
+note right of SI
+  **输入参数:**
+  json_data = {"data": [{"timestamp", "pv", "mv", "sv"}, ...]}
+  setpoint = 目标设定值(可选)
+  tuning_method = TuningMethod.LAMBDA
+  current_pid = {"pb", "ti", "td"}(可选)
+end note
+
+SI -> SI : 解析JSON\n提取 t[], pv[], mv[], sv[]
+
+== Step 0: 数据质量检查 ==
+SI -> QC : assess_data_quality(pv, mv, t)
+activate QC
+note right of QC
+  **执行检查:**
+  1. 长度 >= 50
+  2. PV/MV有变化
+  3. 无NaN/Inf
+  4. 信噪比OK
+  5. 采样一致
+end note
+QC --> SI : {is_acceptable: bool,\n score: 85,\n issues: [],\n warnings: []}
+deactivate QC
+
+alt 质量不合格
+  SI --> Client : raise DataQualityException
+end
+
+== Step 1: 设定值变化检测 ==
+SI -> DA : detect_setpoint_changes(sv[], threshold=0.5)
+activate DA
+DA --> SI : {change_indices: [100, 500],\n segments: [(0,99,5.0), (100,499,10.0), (500,999,15.0)]}
+deactivate DA
+
+note right of DA
+  **输出:**
+  检测到2个SV变化点
+  共3个数据段
+end note
+
+== Step 2: 各段稳态检查 ==
+loop 对每个segment
+  SI -> TL : check_segment_steady_state(segment_data, threshold)
+  activate TL
+  
+  TL -> DA : is_setpoint_changing(sv_segment)
+  DA --> TL : False
+  
+  TL -> DA : is_steady_state(pv, sv, threshold)
+  activate DA
+  DA -> SD : is_steady_state(pv, sv)
+  activate SD
+  SD --> DA : {is_steady: False,\n confidence: 0.3,\n non_steady_segments: [(20,80)]}
+  deactivate SD
+  DA --> TL : {is_steady: False, segments: [...]}
+  deactivate DA
+  
+  TL -> TL : _check_oscillation(pv)
+  note right of TL
+    检测振荡特征
+    计算振荡次数和幅度
+  end note
+  
+  TL --> SI : {is_steady: False,\n oscillation_count: 5,\n cv: 0.15}
+  deactivate TL
+end
+
+SI -> SI : 确定需要整定的段\n(首个非稳态段开始)
+
+== Step 3: 场景检测(执行一次) ==
+SI -> DP : detect_control_scenario(pv, mv, t)
+activate DP
+note right of DP
+  **分析特征:**
+  - 响应速度
+  - PV范围
+  - MV/PV比例
+end note
+DP --> SI : scenario = "temperature"
+deactivate DP
+
+== Step 4: 数据预处理 ==
+SI -> DP : preprocess_temperature_data(t, pv, mv)
+activate DP
+note right of DP
+  **处理步骤:**
+  1. 去除瞬态响应
+  2. 平滑滤波
+  3. 去除异常点
+end note
+DP --> SI : (t_proc, pv_proc, mv_proc)
+deactivate DP
+
+== Step 5: 模型类型检测 ==
+SI -> DP : detect_model_type(t_proc, pv_proc, mv_proc, scenario)
+activate DP
+note right of DP
+  **分析:**
+  - 响应曲线形状
+  - 超调量
+  - 积分特性
+end note
+DP --> SI : model_type = "fopdt"
+deactivate DP
+
+== Step 6: 模型参数辨识 ==
+SI -> MI : identify_fopdt(t, pv, mv, sv, current_pid)
+activate MI
+
+MI -> MI : estimate_initial_guess_from_operational_data()
+note right of MI
+  **初始估计:**
+  - 互相关估计滞后L
+  - 增益估计K
+  - 响应速度估计T
+end note
+
+MI -> MI : scipy.optimize.least_squares(\n  residual_func, x0=[K,T,L], bounds)
+note right of MI
+  **非线性优化:**
+  最小化 ||pv_sim - pv||²
+end note
+
+MI --> SI : {K: 1.5, T: 60.0, L: 5.0,\n model_fit_error: 0.02}
+deactivate MI
+
+== Step 7: 控制模式检测 ==
+SI -> DP : detect_control_mode(pv, mv, noise_level)
+activate DP
+DP --> SI : mode = Mode.STANDARD
+deactivate DP
+
+== Step 8: PID参数整定 ==
+SI -> PT : lambda_tuning_for_temperature_control(\n  K=1.5, T=60.0, L=5.0, mode=STANDARD)
+activate PT
+
+note right of PT
+  **Lambda整定公式:**
+  λ = 0.8 × T = 48.0
+  Kp = (T + L/2) / (K × (λ + L/2))
+     = (60 + 2.5) / (1.5 × (48 + 2.5))
+     = 62.5 / 75.75 = 0.825
+  Ti = T + L/2 = 62.5
+  Td = (T × L) / (2T + L) = 2.4
+  Pb = 100 / Kp = 121.2%
+end note
+
+PT --> SI : {pb: 121.2, ti: 62.5, td: 2.4}
+deactivate PT
+
+== Step 9: 参数验证 ==
+SI -> PV : validate_pid_params(\n  pb=121.2, ti=62.5, td=2.4,\n  model={K,T,L}, scenario="temperature")
+activate PV
+
+note right of PV
+  **验证层级:**
+  1. 范围: 10 < pb < 500 ✓
+  2. 比例: ti > td ✓
+  3. 组合: td/ti < 0.5 ✓
+  4. 场景: 温控ti偏大OK ✓
+  5. 模型: pb与K,T,L相符 ✓
+end note
+
+PV --> SI : {is_valid: true,\n quality_score: 92,\n warnings: [],\n suggestions: []}
+deactivate PV
+
+== Step 10: 性能评估(可选) ==
+SI -> PE : evaluate(t, pv, sv, mv, pid_params)
+activate PE
+
+note right of PE
+  **评估指标:**
+  - IAE = 150.3
+  - ISE = 89.2
+  - ITAE = 45.6
+  - settling_time = 180s
+  - overshoot = 5.2%
+  - oscillation = 2
+end note
+
+PE --> SI : {iae: 150.3, ise: 89.2,\n settling_time: 180,\n overshoot: 5.2,\n overall_score: 85,\n grade: "B"}
+deactivate PE
+
+== 返回结果 ==
+SI --> Client : **整定结果**\n{\n  pb: 121.2,\n  ti: 62.5,\n  td: 2.4,\n  model_type: "fopdt",\n  model_params: {K:1.5, T:60, L:5},\n  scenario: "temperature",\n  mode: "STANDARD",\n  validation: {...},\n  evaluation: {...}\n}
+deactivate SI
+
+@enduml

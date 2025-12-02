@@ -1,0 +1,99 @@
+{
+  "scenario_type": "scenario_3",
+  "metadata": {
+    "table": "PID_FEP_Gateway_Device_001default",
+    "start_time": "2025-11-07 17:32:15",
+    "end_time": "2025-11-07 17:42:50",
+    "totalRecords": 635,
+    "setpoint": 2,
+    "setpoint_range": 5.0
+  },
+  "segments": [
+    {
+      "start_idx": 0,
+      "end_idx": 120,
+      "start_time": 0.0,
+      "end_time": 119.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 120,
+      "end_idx": 290,
+      "start_time": 120.0,
+      "end_time": 289.0,
+      "segment_type": "steady_state",
+      "description": "稳态段",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 290,
+      "end_idx": 373,
+      "start_time": 290.0,
+      "end_time": 372.0,
+      "segment_type": "setpoint_change",
+      "description": "设定值调整过程（不算非稳态）",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 373,
+      "end_idx": 635,
+      "start_time": 373.0,
+      "end_time": 634.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    }
+  ],
+  "non_steady_segments": [
+    {
+      "start_idx": 0,
+      "end_idx": 120,
+      "start_time": 0.0,
+      "end_time": 119.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 373,
+      "end_idx": 635,
+      "start_time": 373.0,
+      "end_time": 634.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    }
+  ],
+  "steady_state_segments": [
+    {
+      "start_idx": 120,
+      "end_idx": 290,
+      "start_time": 120.0,
+      "end_time": 289.0,
+      "segment_type": "steady_state",
+      "description": "稳态段",
+      "setpoint_direction": null
+    }
+  ],
+  "setpoint_change_segments": [
+    {
+      "start_idx": 290,
+      "end_idx": 373,
+      "start_time": 290.0,
+      "end_time": 372.0,
+      "segment_type": "setpoint_change",
+      "description": "设定值调整过程（不算非稳态）",
+      "setpoint_direction": null
+    }
+  ],
+  "recovered_non_steady_segments": [],
+  "summary": {
+    "total_segments": 4,
+    "non_steady_count": 2,
+    "steady_state_count": 1,
+    "setpoint_change_count": 1,
+    "recovered_non_steady_count": 0
+  }
+}

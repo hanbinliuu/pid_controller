@@ -1,0 +1,99 @@
+{
+  "scenario_type": "scenario_1",
+  "metadata": {
+    "table": "PID_FEP_Gateway_Device_001default",
+    "start_time": "2025-10-28 17:00:00",
+    "end_time": "2025-10-28 17:30:00",
+    "totalRecords": 1500,
+    "setpoint": 5,
+    "setpoint_range": 0.0
+  },
+  "segments": [
+    {
+      "start_idx": 0,
+      "end_idx": 781,
+      "start_time": 0.0,
+      "end_time": 780.0,
+      "segment_type": "steady_state",
+      "description": "稳态段",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 781,
+      "end_idx": 1088,
+      "start_time": 781.0,
+      "end_time": 1087.0,
+      "segment_type": "recovered_non_steady",
+      "description": "已恢复的非稳态段（稳态->非稳态->稳态，不需要重新整定）",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 1088,
+      "end_idx": 1268,
+      "start_time": 1088.0,
+      "end_time": 1267.0,
+      "segment_type": "steady_state",
+      "description": "稳态段",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 1268,
+      "end_idx": 1500,
+      "start_time": 1268.0,
+      "end_time": 1499.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    }
+  ],
+  "non_steady_segments": [
+    {
+      "start_idx": 1268,
+      "end_idx": 1500,
+      "start_time": 1268.0,
+      "end_time": 1499.0,
+      "segment_type": "non_steady_state",
+      "description": "非稳态段（需要重新整定PID参数）",
+      "setpoint_direction": null
+    }
+  ],
+  "steady_state_segments": [
+    {
+      "start_idx": 0,
+      "end_idx": 781,
+      "start_time": 0.0,
+      "end_time": 780.0,
+      "segment_type": "steady_state",
+      "description": "稳态段",
+      "setpoint_direction": null
+    },
+    {
+      "start_idx": 1088,
+      "end_idx": 1268,
+      "start_time": 1088.0,
+      "end_time": 1267.0,
+      "segment_type": "steady_state",
+      "description": "稳态段",
+      "setpoint_direction": null
+    }
+  ],
+  "setpoint_change_segments": [],
+  "recovered_non_steady_segments": [
+    {
+      "start_idx": 781,
+      "end_idx": 1088,
+      "start_time": 781.0,
+      "end_time": 1087.0,
+      "segment_type": "recovered_non_steady",
+      "description": "已恢复的非稳态段（稳态->非稳态->稳态，不需要重新整定）",
+      "setpoint_direction": null
+    }
+  ],
+  "summary": {
+    "total_segments": 4,
+    "non_steady_count": 1,
+    "steady_state_count": 2,
+    "setpoint_change_count": 0,
+    "recovered_non_steady_count": 1
+  }
+}

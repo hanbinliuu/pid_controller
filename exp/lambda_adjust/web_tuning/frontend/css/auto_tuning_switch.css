@@ -1,0 +1,186 @@
+/* ============================================================================
+   自动整定开关样式
+   ============================================================================ */
+
+/* 开关容器 */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 60px;
+    height: 34px;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+/* 滑块 */
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(148, 163, 184, 0.3);
+    transition: 0.4s;
+    border-radius: 34px;
+    border: 2px solid rgba(148, 163, 184, 0.5);
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 26px;
+    width: 26px;
+    left: 2px;
+    bottom: 2px;
+    background-color: white;
+    transition: 0.4s;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* 选中状态 */
+input:checked + .slider {
+    background-color: #10b981;
+    border-color: #10b981;
+}
+
+input:focus + .slider {
+    box-shadow: 0 0 1px #10b981;
+}
+
+input:checked + .slider:before {
+    transform: translateX(26px);
+}
+
+/* 悬停效果 */
+.slider:hover {
+    background-color: rgba(148, 163, 184, 0.4);
+}
+
+input:checked + .slider:hover {
+    background-color: #059669;
+}
+
+/* 禁用状态 */
+input:disabled + .slider {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* 自动整定控制面板动画 */
+#autoTuningControl {
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* 手动整定按钮 */
+#manualTuningBtn {
+    position: relative;
+    overflow: hidden;
+}
+
+#manualTuningBtn::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    transform: translate(-50%, -50%);
+    transition: width 0.6s, height 0.6s;
+}
+
+#manualTuningBtn:hover::before {
+    width: 300px;
+    height: 300px;
+}
+
+/* 状态指示器 */
+#autoTuningStatus {
+    transition: color 0.3s ease;
+}
+
+#autoTuningStatus.enabled {
+    color: #10b981 !important;
+}
+
+#autoTuningStatus.disabled {
+    color: #94a3b8 !important;
+}
+
+/* ============================================================================
+   小尺寸开关（用于回路卡片）
+   ============================================================================ */
+
+.switch-small {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+}
+
+.switch-small input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider-small {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(148, 163, 184, 0.3);
+    transition: 0.3s;
+    border-radius: 24px;
+    border: 2px solid rgba(148, 163, 184, 0.5);
+}
+
+.slider-small:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 1px;
+    bottom: 1px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+input:checked + .slider-small {
+    background-color: #10b981;
+    border-color: #10b981;
+}
+
+input:checked + .slider-small:before {
+    transform: translateX(20px);
+}
+
+.slider-small:hover {
+    background-color: rgba(148, 163, 184, 0.4);
+}
+
+input:checked + .slider-small:hover {
+    background-color: #059669;
+}

@@ -1,0 +1,1761 @@
+{
+  "loops": [
+    {
+      "name": "tmp",
+      "description": "",
+      "area": "默认区域",
+      "data_source": "opcua",
+      "pid_params": {
+        "pb": 10,
+        "ti": 200,
+        "td": 0
+      },
+      "performance": {
+        "score": 82.0,
+        "grade": "优秀",
+        "steady_error": 0.165,
+        "iae": 16.51,
+        "ise": 5.13,
+        "tv": 18.46,
+        "oscillation_count": 8,
+        "max_oscillation_amplitude": 1.014,
+        "max_control_effort": 51.31,
+        "last_update": "2025-12-01T23:17:36.905567"
+      },
+      "status": "active",
+      "opcua_config": {
+        "pv_node_id": "ns=2;i=1001",
+        "sv_node_id": "ns=2;i=1005",
+        "mv_node_id": "ns=2;i=1006",
+        "interval_ms": 1000,
+        "is_collecting": true
+      },
+      "id": "e0b7053c",
+      "created_at": "2025-11-27T14:32:10.692626",
+      "updated_at": "2025-12-01T23:17:44.692553",
+      "stability_status": {
+        "is_unsteady": false,
+        "last_check": "2025-12-01T23:17:44.691566",
+        "is_retuning": true,
+        "retuning_start_time": "2025-12-01T23:17:41.064601"
+      },
+      "tuning_history": [
+        {
+          "timestamp": "2025-12-01T13:53:52.830Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010019752670513329,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 91,
+            "grade": "A",
+            "steady_error": 0.1857652194463123,
+            "oscillation_count": 0,
+            "iae": 20.434174139094353,
+            "tv": 79.17374490705623,
+            "ise": 17.62005127681436,
+            "overshoot": 0,
+            "settling_time": 13.636363636363635,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 110,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T13:50:06.822Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 18.191859696292305,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            13.943738227917155,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 86,
+            "grade": "A",
+            "steady_error": 0.7136559230125755,
+            "oscillation_count": 0,
+            "iae": 54.237850148955744,
+            "tv": 18.267264804958188,
+            "ise": 47.09484886645122,
+            "overshoot": 0,
+            "settling_time": 74.07407407407408,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 108,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T13:22:14.674Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 29.22030705921378,
+            "td": 0
+          },
+          "model_params": [
+            0.05766531403594471,
+            22.427159276318292,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 89,
+            "grade": "A",
+            "steady_error": 0.3916220448832358,
+            "oscillation_count": 0,
+            "iae": 90.07307032314424,
+            "tv": 49.10212257572848,
+            "ise": 52.72710573945277,
+            "overshoot": 0,
+            "settling_time": 40.43478260869565,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 230,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T12:16:15.273Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000002,
+            149.99999133115787,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 86,
+            "grade": "A",
+            "steady_error": 0.9635407033331067,
+            "oscillation_count": 0,
+            "iae": 68.41138993665058,
+            "tv": 6.3890770976259645,
+            "ise": 66.45649927229587,
+            "overshoot": 0,
+            "settling_time": 99.00990099009901,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 101,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T12:09:27.907Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010042084243681922,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 95,
+            "grade": "A",
+            "steady_error": 0.020489331462181095,
+            "oscillation_count": 0,
+            "iae": 20.489331462181095,
+            "tv": 171.18222091874358,
+            "ise": 7.184176066120165,
+            "overshoot": 0,
+            "settling_time": 0.8999999999999999,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 1000,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T09:52:24.474Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000002,
+            149.9999863425903,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 79,
+            "grade": "B",
+            "steady_error": 1.5416201935630276,
+            "oscillation_count": 0,
+            "iae": 126.41285587216827,
+            "tv": 9.973317744556212,
+            "ise": 195.8263440164327,
+            "overshoot": 0,
+            "settling_time": 99.14529914529915,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 117,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T09:40:39.236Z",
+          "pid_params": {
+            "pb": 10.470459432527292,
+            "ti": 42.66179968058704,
+            "td": 0
+          },
+          "model_params": [
+            0.14636343107813057,
+            32.76676898506695,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 77.91773827104073,
+            "grade": "B",
+            "steady_error": 1.638053948586027,
+            "oscillation_count": 0,
+            "iae": 132.6823698354682,
+            "tv": 10.957262305699345,
+            "ise": 245.0637122655201,
+            "overshoot": 0,
+            "settling_time": 99.1304347826087,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 115,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T09:31:01.660Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000002,
+            149.9999978744125,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 93,
+            "grade": "A",
+            "steady_error": 0.4512881414085795,
+            "oscillation_count": 0,
+            "iae": 46.031390423675106,
+            "tv": 14.869447455441204,
+            "ise": 28.17832202857408,
+            "overshoot": 0,
+            "settling_time": 99.01960784313727,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 102,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T09:24:23.958Z",
+          "pid_params": {
+            "pb": 20,
+            "ti": 78.97903336142329,
+            "td": 0.4968346029400493
+          },
+          "model_params": [
+            0.05000000000000001,
+            78.47903336142329,
+            1
+          ],
+          "model_type": "fopdt",
+          "performance": {
+            "score": 67.00420326198659,
+            "grade": "B",
+            "steady_error": 3.0823589212005245,
+            "oscillation_count": 0,
+            "iae": 231.17691909003935,
+            "tv": 16.049720704868367,
+            "ise": 713.2553685867829,
+            "overshoot": 0,
+            "settling_time": 99.06542056074767,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 107,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T09:12:19.180Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 28.414047060094,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            21.806959276995382,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 79,
+            "grade": "B",
+            "steady_error": 1.0629404299160967,
+            "oscillation_count": 0,
+            "iae": 99.91640041211309,
+            "tv": 22.25231672931362,
+            "ise": 119.77503400161994,
+            "overshoot": 0,
+            "settling_time": 99.24812030075188,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 133,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T08:56:14.338Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.050000000162313776,
+            149.99998794466026,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 93,
+            "grade": "A",
+            "steady_error": 0.2973770487213485,
+            "oscillation_count": 0,
+            "iae": 29.737704872134852,
+            "tv": 16.81417952093679,
+            "ise": 11.603858862225298,
+            "overshoot": 0,
+            "settling_time": 99,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 100,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T08:41:36.420Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010038279700028134,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 100,
+            "grade": "A",
+            "steady_error": 0.004013734111128242,
+            "oscillation_count": 0,
+            "iae": 1.6054936444512968,
+            "tv": 56.90890050122719,
+            "ise": 0.03673869105065404,
+            "overshoot": 0,
+            "settling_time": 99.75,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 400,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T08:37:37.321Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010000000352698023,
+            1e-10
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 98,
+            "grade": "A",
+            "steady_error": 0.020871657132211594,
+            "oscillation_count": 0,
+            "iae": 3.4020801125504896,
+            "tv": 84.41147998848922,
+            "ise": 0.33154656161651724,
+            "overshoot": 0,
+            "settling_time": 99.38650306748467,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 163,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T08:21:55.769Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 40.045838101290194,
+            "td": 0
+          },
+          "model_params": [
+            0.11869255334916394,
+            27.8044908471463,
+            6
+          ],
+          "model_type": "fopdt",
+          "performance": {
+            "score": 77.46563192567822,
+            "grade": "B",
+            "steady_error": 1.4714886045502764,
+            "oscillation_count": 0,
+            "iae": 139.79141743227626,
+            "tv": 9.755166912203066,
+            "ise": 252.74891887867668,
+            "overshoot": 0,
+            "settling_time": 99.25925925925925,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 135,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T08:21:28.044Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 29.74275688089729,
+            "td": 0
+          },
+          "model_params": [
+            0.12061157733307276,
+            22.829043754536375,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 78.07919827664573,
+            "grade": "B",
+            "steady_error": 1.3178355153580144,
+            "oscillation_count": 0,
+            "iae": 100.15549916720909,
+            "tv": 11.930843522936136,
+            "ise": 162.08961144538023,
+            "overshoot": 0,
+            "settling_time": 97.22222222222221,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 108,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-30T15:26:55.816Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.050000000158378355,
+            149.99998882050795,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 70.41186746895815,
+            "grade": "B",
+            "steady_error": 2.3239831485556732,
+            "oscillation_count": 0,
+            "iae": 167.32678669600847,
+            "tv": 10.198123418983844,
+            "ise": 389.0916986396564,
+            "overshoot": 0,
+            "settling_time": 99.01960784313727,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 102,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-30T15:08:17.450Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000002,
+            149.99999675508298,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 86,
+            "grade": "A",
+            "steady_error": 0.7721563032833225,
+            "oscillation_count": 0,
+            "iae": 55.59525383639922,
+            "tv": 10.681251864059497,
+            "ise": 46.73030878249096,
+            "overshoot": 0,
+            "settling_time": 99.01960784313727,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 102,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-30T15:01:35.105Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000002,
+            149.99999661469383,
+            3
+          ],
+          "model_type": "fopdt",
+          "performance": {
+            "score": 86,
+            "grade": "A",
+            "steady_error": 0.9325879150014824,
+            "oscillation_count": 0,
+            "iae": 113.77572563018086,
+            "tv": 11.645358439227422,
+            "ise": 109.70307382107013,
+            "overshoot": 0,
+            "settling_time": 99.42196531791907,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 173,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-30T15:00:37.015Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 16.82226855186208,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            12.890206578355446,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 93,
+            "grade": "A",
+            "steady_error": 0.4823597022333801,
+            "oscillation_count": 0,
+            "iae": 55.95372545907209,
+            "tv": 46.321061860818745,
+            "ise": 35.44643040839945,
+            "overshoot": 0,
+            "settling_time": 50,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 116,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-29T16:39:32.053Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 24.02477266482054,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            18.43059435755426,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 79,
+            "grade": "B",
+            "steady_error": 1.0485135437066613,
+            "oscillation_count": 0,
+            "iae": 76.54148869058628,
+            "tv": 21.321362596478345,
+            "ise": 87.74433818309313,
+            "overshoot": 0,
+            "settling_time": 99.02912621359224,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 103,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-29T16:31:51.893Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 75.5268226938374,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000001,
+            50.35121512922493,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 79,
+            "grade": "B",
+            "steady_error": 1.3851956699550987,
+            "oscillation_count": 0,
+            "iae": 103.8896752466324,
+            "tv": 14.48395858308809,
+            "ise": 144.04706974150574,
+            "overshoot": 0,
+            "settling_time": 99.05660377358491,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 106,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-29T16:21:54.314Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 29.482360688932825,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            22.628738991486788,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 78.59110225480771,
+            "grade": "B",
+            "steady_error": 1.4912454711329364,
+            "oscillation_count": 0,
+            "iae": 119.29963769063491,
+            "tv": 25.81581597876415,
+            "ise": 192.68065373421882,
+            "overshoot": 0,
+            "settling_time": 99.12280701754386,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 114,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-29T16:10:39.312Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010025120470653832,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 86.23915127061558,
+            "grade": "A",
+            "steady_error": 0.43629860202400866,
+            "oscillation_count": 0,
+            "iae": 53.664728048953066,
+            "tv": 187.295268809698,
+            "ise": 83.59858788771666,
+            "overshoot": 0,
+            "settling_time": 24.390243902439025,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 123,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-29T16:02:57.384Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000001,
+            149.99998404728606,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 96,
+            "grade": "A",
+            "steady_error": 0.32673274429481214,
+            "oscillation_count": 0,
+            "iae": 86.91090998242002,
+            "tv": 16.128272003976083,
+            "ise": 34.5879086044589,
+            "overshoot": 0,
+            "settling_time": 99.62406015037594,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 266,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-29T15:53:16.908Z",
+          "pid_params": {
+            "pb": 15.345448029040941,
+            "ti": 157.47885997157016,
+            "td": 0
+          },
+          "model_params": [
+            0.12884043183081137,
+            104.98590664771345,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 86,
+            "grade": "A",
+            "steady_error": 0.9992060136109987,
+            "oscillation_count": 0,
+            "iae": 133.89360582387383,
+            "tv": 9.59007468110557,
+            "ise": 137.9529092555912,
+            "overshoot": 0,
+            "settling_time": 99.47643979057592,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 191,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-29T06:56:30.035Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010000717039804197,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 89,
+            "grade": "A",
+            "steady_error": 0.19112657064266292,
+            "oscillation_count": 0,
+            "iae": 25.802087036759495,
+            "tv": 175.10504014594144,
+            "ise": 24.514853113396164,
+            "overshoot": 0,
+            "settling_time": 13.333333333333334,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 135,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-29T06:48:41.713Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 12.340826257397914,
+            "td": 0
+          },
+          "model_params": [
+            0.060822643828583524,
+            9.442943274921472,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 89,
+            "grade": "A",
+            "steady_error": 0.2506701833903766,
+            "oscillation_count": 0,
+            "iae": 61.41419493064227,
+            "tv": 49.76751181731244,
+            "ise": 57.86085418937048,
+            "overshoot": 0,
+            "settling_time": 19.183673469387756,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 245,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T09:35:00.196Z",
+          "pid_params": {
+            "pb": 27.26899406350073,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.2289829340282134,
+            149.38524827597524,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 63.26594830514224,
+            "grade": "C",
+            "steady_error": 4.1785350913699455,
+            "oscillation_count": 0,
+            "iae": 488.8886056902836,
+            "tv": 16.166607363387094,
+            "ise": 2080.2977659324642,
+            "overshoot": 0,
+            "settling_time": 99.40119760479041,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 167,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T09:21:13.225Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 26.05693059920358,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            19.993792768618135,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 89,
+            "grade": "A",
+            "steady_error": 0.34567840438847747,
+            "oscillation_count": 0,
+            "iae": 133.77754249834078,
+            "tv": 51.39658992480469,
+            "ise": 115.07387456108454,
+            "overshoot": 0,
+            "settling_time": 27.906976744186046,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 387,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T09:19:01.154Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.001000000000225236,
+            1e-10
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 100,
+            "grade": "A",
+            "steady_error": 0.008528268456767197,
+            "oscillation_count": 0,
+            "iae": 1.3304098792556829,
+            "tv": 55.15804737081138,
+            "ise": 0.03918693290858587,
+            "overshoot": 0,
+            "settling_time": 99.35897435897436,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 156,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T09:10:33.752Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 29.600445217919557,
+            "td": 0
+          },
+          "model_params": [
+            0.050115501748985165,
+            22.719573244553505,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 86,
+            "grade": "A",
+            "steady_error": 0.7091202369846404,
+            "oscillation_count": 0,
+            "iae": 78.00322606831045,
+            "tv": 16.839074544618516,
+            "ise": 64.12838778108151,
+            "overshoot": 0,
+            "settling_time": 77.70700636942675,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 157,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T09:02:49.300Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 42.58753467626891,
+            "td": 0
+          },
+          "model_params": [
+            0.050000000000500006,
+            31.759642058668394,
+            2
+          ],
+          "model_type": "fopdt",
+          "performance": {
+            "score": 93,
+            "grade": "A",
+            "steady_error": 0.31428362601458987,
+            "oscillation_count": 0,
+            "iae": 83.5994445198809,
+            "tv": 11.495243260799803,
+            "ise": 39.74305025946843,
+            "overshoot": 0,
+            "settling_time": 45.26315789473684,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 380,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T09:00:24.837Z",
+          "pid_params": {
+            "pb": 29.960545474452978,
+            "ti": 114.38016479842868,
+            "td": 0
+          },
+          "model_params": [
+            0.25150377698680815,
+            76.25344319895245,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 59.26388969670117,
+            "grade": "C",
+            "steady_error": 5.190717705003793,
+            "oscillation_count": 0,
+            "iae": 570.9789475504173,
+            "tv": 17.335899989169786,
+            "ise": 2969.2460839561213,
+            "overshoot": 0,
+            "settling_time": 99.36305732484077,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 157,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T08:49:27.799Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.001006969076680297,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 100,
+            "grade": "A",
+            "steady_error": 0.0005789922726812751,
+            "oscillation_count": 0,
+            "iae": 0.21770109452815944,
+            "tv": 49.8653757621679,
+            "ise": 0.0036578412238779286,
+            "overshoot": 0,
+            "settling_time": 99.7340425531915,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 376,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T08:48:19.684Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            150,
+            20
+          ],
+          "model_type": "fopdt",
+          "performance": {
+            "score": 78,
+            "grade": "B",
+            "steady_error": 0.42303171563920416,
+            "oscillation_count": 3,
+            "iae": 1224.676816775496,
+            "tv": 870.9848811068961,
+            "ise": 2173.301677813026,
+            "overshoot": 4.199954387893882,
+            "settling_time": 99.96855345911949,
+            "rise_time": 79.51883507439062
+          },
+          "data_info": {
+            "data_points": 3180,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T08:46:20.654Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010030193412303272,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 100,
+            "grade": "A",
+            "steady_error": 0.014819514837223978,
+            "oscillation_count": 0,
+            "iae": 1.7635222656296534,
+            "tv": 56.83141859487594,
+            "ise": 0.07634268309534703,
+            "overshoot": 0,
+            "settling_time": 99.15966386554622,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 119,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T08:37:51.165Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 40.390771025322934,
+            "td": 0
+          },
+          "model_params": [
+            0.050000000000500006,
+            31.019823865633025,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 93,
+            "grade": "A",
+            "steady_error": 0.2860402987836365,
+            "oscillation_count": 0,
+            "iae": 76.65880007401458,
+            "tv": 11.168657460224019,
+            "ise": 34.319935934564704,
+            "overshoot": 0,
+            "settling_time": 42.93193717277487,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 382,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T08:23:43.066Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 31.429284503412532,
+            "td": 0
+          },
+          "model_params": [
+            0.050000000000500006,
+            24.126372694932716,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 89,
+            "grade": "A",
+            "steady_error": 0.4894443701918939,
+            "oscillation_count": 0,
+            "iae": 192.3516374854143,
+            "tv": 61.37123625987204,
+            "ise": 201.0145933170104,
+            "overshoot": 0,
+            "settling_time": 35.6234096692112,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 393,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T08:20:59.672Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010001940224171964,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 100,
+            "grade": "A",
+            "steady_error": 0.0037951242976106106,
+            "oscillation_count": 0,
+            "iae": 0.8804688370456617,
+            "tv": 50.04089183640853,
+            "ise": 0.019095029121024624,
+            "overshoot": 0,
+            "settling_time": 99.56896551724138,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 232,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T08:12:57.693Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 17.130620616938526,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            13.127400474568097,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 89,
+            "grade": "A",
+            "steady_error": 0.4367835221757497,
+            "oscillation_count": 0,
+            "iae": 80.36816808033795,
+            "tv": 49.63596522802611,
+            "ise": 64.64242721933016,
+            "overshoot": 0,
+            "settling_time": 36.95652173913043,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 184,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T08:07:59.621Z",
+          "pid_params": {
+            "pb": 14.158276496751867,
+            "ti": 134.99060668580694,
+            "td": 0
+          },
+          "model_params": [
+            0.11886351936012324,
+            89.99373779053796,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 70.17032031732566,
+            "grade": "B",
+            "steady_error": 2.0554111113094438,
+            "oscillation_count": 0,
+            "iae": 468.6337333785532,
+            "tv": 16.309925649826532,
+            "ise": 997.0881149119289,
+            "overshoot": 0,
+            "settling_time": 99.6923076923077,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 325,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T07:56:33.648Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 26.020338101961595,
+            "td": 0
+          },
+          "model_params": [
+            0.050000000000500006,
+            19.96564469381661,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 89,
+            "grade": "A",
+            "steady_error": 0.42265040867191456,
+            "oscillation_count": 0,
+            "iae": 134.82548036634074,
+            "tv": 51.984646125869475,
+            "ise": 118.26795404288997,
+            "overshoot": 0,
+            "settling_time": 34.1692789968652,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 319,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T07:39:23.497Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.001000000000432381,
+            1e-10
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 100,
+            "grade": "A",
+            "steady_error": 0.022160466975209042,
+            "oscillation_count": 0,
+            "iae": 2.5484537021490397,
+            "tv": 79.02055755230815,
+            "ise": 0.18714749933407343,
+            "overshoot": 0,
+            "settling_time": 99.1304347826087,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 115,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T07:32:17.938Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 47.741620195963534,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            35.72432322766426,
+            2
+          ],
+          "model_type": "fopdt",
+          "performance": {
+            "score": 86,
+            "grade": "A",
+            "steady_error": 0.5499792124883942,
+            "oscillation_count": 0,
+            "iae": 115.49563462256279,
+            "tv": 14.826174295981996,
+            "ise": 79.12444364497166,
+            "overshoot": 0,
+            "settling_time": 64,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 300,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T07:30:31.866Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 18.736917348019272,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            14.363013344630208,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 89,
+            "grade": "A",
+            "steady_error": 0.4575586401372805,
+            "oscillation_count": 0,
+            "iae": 88.76637618663241,
+            "tv": 49.61609407120895,
+            "ise": 72.52125706001816,
+            "overshoot": 0,
+            "settling_time": 38.659793814432994,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 194,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T07:13:49.298Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 44.48476373736963,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            34.169049028745874,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 86,
+            "grade": "A",
+            "steady_error": 0.9943871489007342,
+            "oscillation_count": 0,
+            "iae": 112.36574782578296,
+            "tv": 18.371690783739663,
+            "ise": 117.2562117693652,
+            "overshoot": 0,
+            "settling_time": 99.37888198757764,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 161,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T06:47:20.517Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000002,
+            149.9999965139702,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 67.69059521753067,
+            "grade": "B",
+            "steady_error": 3.3959550710420667,
+            "oscillation_count": 0,
+            "iae": 241.11281004398674,
+            "tv": 11.349846409116687,
+            "ise": 818.836010178743,
+            "overshoot": 0,
+            "settling_time": 99.00990099009901,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 101,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T06:40:33.852Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 61.183494017935054,
+            "td": 0
+          },
+          "model_params": [
+            0.05,
+            37.064226167642346,
+            20
+          ],
+          "model_type": "fopdt",
+          "performance": {
+            "score": 78.32398945528277,
+            "grade": "B",
+            "steady_error": 1.2799792674697155,
+            "oscillation_count": 0,
+            "iae": 263.6757290987614,
+            "tv": 23.971526541015038,
+            "ise": 396.90777453509526,
+            "overshoot": 0,
+            "settling_time": 99.65870307167235,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 293,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T05:32:16.545Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010025176551365328,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 96,
+            "grade": "A",
+            "steady_error": 0.028931011953902665,
+            "oscillation_count": 0,
+            "iae": 3.124549291021488,
+            "tv": 179.91735561695643,
+            "ise": 0.382947128590875,
+            "overshoot": 0,
+            "settling_time": 99.07407407407408,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 108,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-11-28T05:23:25.572Z",
+          "pid_params": {
+            "pb": 10,
+            "ti": 150,
+            "td": 0
+          },
+          "model_params": [
+            0.0010015288903629164,
+            1
+          ],
+          "model_type": "integral_delay",
+          "performance": {
+            "score": 100,
+            "grade": "A",
+            "steady_error": 0.018091859900602282,
+            "oscillation_count": 0,
+            "iae": 2.116747608370467,
+            "tv": 55.51645219447134,
+            "ise": 0.12767061971225668,
+            "overshoot": 0,
+            "settling_time": 99.14529914529915,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 117,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T23:03:28.093953",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000001,
+            149.9999835920588,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 93,
+            "grade": "A",
+            "steady_error": 0.3412634630674478,
+            "oscillation_count": 0,
+            "iae": 50.848255997049726,
+            "tv": 21.179800348459864,
+            "ise": 22.56080350339667,
+            "overshoot": 0,
+            "settling_time": 99.32885906040269,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 149,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        },
+        {
+          "timestamp": "2025-12-01T23:12:30.058341",
+          "pid_params": {
+            "pb": 10,
+            "ti": 200,
+            "td": 0
+          },
+          "model_params": [
+            0.05000000000000002,
+            149.99999980594222,
+            0
+          ],
+          "model_type": "first_order",
+          "performance": {
+            "score": 86,
+            "grade": "A",
+            "steady_error": 0.8273488945220878,
+            "oscillation_count": 0,
+            "iae": 62.051167089156586,
+            "tv": 9.041127911847248,
+            "ise": 53.578759340349436,
+            "overshoot": 0,
+            "settling_time": 99.06542056074767,
+            "rise_time": 0
+          },
+          "data_info": {
+            "data_points": 107,
+            "data_source": "opcua"
+          },
+          "tuning_method": "LAMBDA",
+          "control_mode": "STANDARD",
+          "is_steady_state": false
+        }
+      ],
+      "model_type": "integral_delay",
+      "model_params": [
+        1.0,
+        10.0,
+        2.0
+      ],
+      "param_validation": {
+        "valid": true,
+        "reason": "",
+        "message": "参数有效，相比当前参数变化显著（Pb:0.0%, Ti:814.0%, Td:0.0%），性能评分69.5",
+        "suggestion": ""
+      }
+    }
+  ]
+}
