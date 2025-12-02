@@ -114,7 +114,7 @@ class LoopInfoService:
         Returns:
             List[LoopInfo]: 映射关系列表
         """
-        return LoopInfoDAO.get_all_active(db)
+        return LoopInfoDAO.get_active_loops(db)
     
     @staticmethod
     def list_mappings(
