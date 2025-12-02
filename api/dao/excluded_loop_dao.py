@@ -84,6 +84,7 @@ class ExcludedLoopDAO:
         loop_name: Optional[str] = None,
         device_uri: Optional[str] = None,
         uri: Optional[str] = None,
+        loop_type: Optional[str] = None,
         page_no: int = 1,
         page_size: int = 10
     ) -> Dict[str, Any]:
@@ -106,7 +107,8 @@ class ExcludedLoopDAO:
             # 构建select语句，关联loop_info表
             statement = select(
                 ExcludedLoop,
-                LoopInfo.loop_name
+                LoopInfo.loop_name,
+                LoopInfo.loop_type
             ).join(
                 LoopInfo,
                 ExcludedLoop.uri == LoopInfo.loop_uri
@@ -123,6 +125,10 @@ class ExcludedLoopDAO:
             # 回路URI筛选（模糊匹配）
             if uri:
                 statement = statement.where(ExcludedLoop.uri.like(f"%{uri}%"))
+            
+            # 回路类型筛选（模糊匹配）
+            if loop_type:
+                statement = statement.where(LoopInfo.loop_type==loop_type)
             
             # 按创建时间倒序排列
             statement = statement.order_by(desc(ExcludedLoop.created_time))
@@ -148,6 +154,10 @@ class ExcludedLoopDAO:
             if uri:
                 count_statement = count_statement.where(ExcludedLoop.uri.like(f"%{uri}%"))
             
+            # 回路类型筛选
+            if loop_type:
+                count_statement = count_statement.where(LoopInfo.loop_type==loop_type)
+            
             total = db.exec(count_statement).one()
             
             # 分页
@@ -155,14 +165,15 @@ class ExcludedLoopDAO:
             statement = statement.offset(offset).limit(page_size)
             results = db.exec(statement).all()
             
-            # 组装结果，添加loop_name字段
+            # 组装结果，添加loop_name和loop_type字段
             excluded_loops = []
-            for excluded_loop, loop_name_value in results:
+            for excluded_loop, loop_name_value, loop_type_value in results:
                 # 创建一个字典包含所有字段
                 loop_dict = {
                     "id": excluded_loop.id,
                     "uri": excluded_loop.uri,
                     "loop_name": loop_name_value,  # 从loop_info表关联获取
+                    "loop_type": loop_type_value,  # 从loop_info表关联获取
                     "reason": excluded_loop.reason,
                     "created_time": excluded_loop.created_time,
                     "updated_time": excluded_loop.updated_time
@@ -193,7 +204,8 @@ class ExcludedLoopDAO:
         db: Session,
         loop_name: Optional[str] = None,
         device_uri: Optional[str] = None,
-        uri: Optional[str] = None
+        uri: Optional[str] = None,
+        loop_type: Optional[str] = None
     ) -> List[str]:
         """
         获取所有剔除回路URI列表（支持筛选）
@@ -211,8 +223,8 @@ class ExcludedLoopDAO:
             # 构建select语句
             statement = select(ExcludedLoop.uri)
             
-            # 如果有loop_name或device_uri筛选，需要关联loop_info表
-            if loop_name or device_uri:
+            # 如果有loop_name或device_uri或loop_type筛选，需要关联loop_info表
+            if loop_name or device_uri or loop_type:
                 statement = statement.join(
                     LoopInfo,
                     ExcludedLoop.uri == LoopInfo.loop_uri
@@ -229,6 +241,10 @@ class ExcludedLoopDAO:
             # 回路URI筛选（模糊匹配）
             if uri:
                 statement = statement.where(ExcludedLoop.uri.like(f"%{uri}%"))
+            
+            # 回路类型筛选（模糊匹配）
+            if loop_type:
+                statement = statement.where(LoopInfo.loop_type==loop_type)
             
             # 按创建时间排序
             statement = statement.order_by(ExcludedLoop.created_time)

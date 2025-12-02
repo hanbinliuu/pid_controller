@@ -95,7 +95,9 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                         if loop.loop_uri:
                             device_loops_map[device_uri].append({
                                 'loop_uri': loop.loop_uri,
-                                'loop_name': loop.loop_name
+                                'loop_name': loop.loop_name,
+                                'description': loop.description,
+                                'loop_type': loop.loop_type
                             })
         except Exception as e:
             logger.error(f"从BFF查询装置列表失败: {str(e)}")

@@ -163,6 +163,7 @@ class ExcludedLoopService:
         loop_name: Optional[str] = None,
         device_uri: Optional[str] = None,
         uri: Optional[str] = None,
+        loop_type: Optional[str] = None,
         page_no: int = 1,
         page_size: int = 10
     ) -> Dict[str, Any]:
@@ -174,6 +175,7 @@ class ExcludedLoopService:
             loop_name: 回路名称筛选
             device_uri: 装置URI筛选
             uri: 回路URI筛选
+            loop_type: 回路类型筛选
             page_no: 页码
             page_size: 每页数量
         
@@ -185,6 +187,7 @@ class ExcludedLoopService:
             loop_name=loop_name,
             device_uri=device_uri,
             uri=uri,
+            loop_type=loop_type,
             page_no=page_no,
             page_size=page_size
         )
@@ -194,7 +197,8 @@ class ExcludedLoopService:
         db: Session,
         loop_name: Optional[str] = None,
         device_uri: Optional[str] = None,
-        uri: Optional[str] = None
+        uri: Optional[str] = None,
+        loop_type: Optional[str] = None
     ) -> List[str]:
         """
         获取所有剔除回路URI列表（支持筛选）
@@ -204,11 +208,12 @@ class ExcludedLoopService:
             loop_name: 回路名称筛选
             device_uri: 装置URI筛选
             uri: 回路URI筛选
+            loop_type: 回路类型筛选
         
         Returns:
             List[str]: URI列表
         """
-        return ExcludedLoopDAO.get_all_uris(db, loop_name, device_uri, uri)
+        return ExcludedLoopDAO.get_all_uris(db, loop_name, device_uri, uri, loop_type)
     
     @staticmethod
     def update_excluded(

@@ -153,24 +153,26 @@ async def check_excluded_loop(
 
 
 @router.get("/excluded-loop/list",
-           summary="分页查询剔除列表",
+           summary="分页查询剖除列表",
            operation_id="list_excluded_loops",
            response_model=Dict[str, Any])
 async def list_excluded_loops(
     loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
     device_uri: Optional[str] = Query(None, description="装置URI（模糊匹配loop_path路径）"),
     uri: Optional[str] = Query(None, description="回路URI（模糊匹配）"),
+    loop_type: Optional[str] = Query(None, description="回路类型"),
     page_no: int = Query(1, description="页码，从1开始"),
     page_size: int = Query(10, description="每页数量"),
     db: Session = Depends(get_db)
 ):
     """
-    分页查询所有剔除回路记录
+    分页查询所有剖除回路记录
     
     支持的筛选条件：
     - loop_name: 回路名称模糊查询
     - device_uri: 装置URI筛选，模糊匹配回路的loop_path字段
     - uri: 回路URI模糊查询
+    - loop_type: 回路类型模糊查询
     """
     try:
         result = ExcludedLoopService.list_excluded(
@@ -178,6 +180,7 @@ async def list_excluded_loops(
             loop_name=loop_name,
             device_uri=device_uri,
             uri=uri,
+            loop_type=loop_type,
             page_no=page_no,
             page_size=page_size
         )
@@ -194,6 +197,7 @@ async def list_excluded_loops(
                         "id": e["id"] if isinstance(e, dict) else e.id,
                         "uri": e["uri"] if isinstance(e, dict) else e.uri,
                         "loop_name": e.get("loop_name") if isinstance(e, dict) else None,
+                        "loop_type": e.get("loop_type") if isinstance(e, dict) else None,
                         "reason": e["reason"] if isinstance(e, dict) else e.reason,
                         "created_time": e["created_time"].isoformat() if isinstance(e, dict) and e.get("created_time") else (e.created_time.isoformat() if hasattr(e, 'created_time') and e.created_time else None),
                         "updated_time": e["updated_time"].isoformat() if isinstance(e, dict) and e.get("updated_time") else (e.updated_time.isoformat() if hasattr(e, 'updated_time') and e.updated_time else None)
@@ -219,6 +223,7 @@ async def get_all_excluded_uris(
     loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
     device_uri: Optional[str] = Query(None, description="装置URI（模糊匹配loop_path路径）"),
     uri: Optional[str] = Query(None, description="回路URI（模糊匹配）"),
+    loop_type: Optional[str] = Query(None, description="回路类型"),
     db: Session = Depends(get_db)
 ):
     """
@@ -236,7 +241,8 @@ async def get_all_excluded_uris(
             db,
             loop_name=loop_name,
             device_uri=device_uri,
-            uri=uri
+            uri=uri,
+            loop_type=loop_type
         )
         
         return {

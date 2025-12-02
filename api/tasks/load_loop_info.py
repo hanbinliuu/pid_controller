@@ -194,6 +194,10 @@ def _sync_loop_to_db(db, instance: Dict[str, Any]) -> str:
     uri_path = instance.get('uriPath', '')  # 从模型中获取完整URI路径
     description = instance.get('description', '')
     
+    # 从扩展属性中提取回路类型
+    extended_attr = instance.get('extendedAttr', {})
+    loop_type = extended_attr.get('loop_type') or extended_attr.get('HLLX')  # 支持多种字段名
+    
 
     
     # 准备数据
@@ -201,6 +205,7 @@ def _sync_loop_to_db(db, instance: Dict[str, Any]) -> str:
         "loop_uri": loop_uri,
         "loop_path": uri_path,  # URI路径：从模型获取
         "loop_name": loop_name,
+        "loop_type": loop_type,  # 回路类型：从扩展属性获取
         "point_path": DEFAULT_POINT_PATH,  # 测点相对路径：从配置文件中获取
         "description": description,
         "is_active": True,
@@ -286,7 +291,7 @@ def _deactivate_missing_loops(db, current_loop_uris: set) -> int:
     """
     try:
         # 获取数据库中所有激活的回路
-        all_active_loops = LoopInfoDAO.get_all_active(db)
+        all_active_loops = LoopInfoDAO.get_active_loops(db)
         
         deactivated_count = 0
         for loop in all_active_loops:
