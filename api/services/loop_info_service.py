@@ -21,6 +21,7 @@ class LoopInfoService:
         loop_uri: str,
         loop_path: Optional[str] = None,
         loop_name: Optional[str] = None,
+        loop_type: Optional[str] = None,
         pv_field: Optional[str] = None,
         sv_field: Optional[str] = None,
         mv_field: Optional[str] = None,
@@ -38,6 +39,7 @@ class LoopInfoService:
             loop_uri: 回路URI
             loop_path: PID相关参数的相对路径
             loop_name: 回路名称
+            loop_type: 回路类型
             pv_field: PV字段
             sv_field: SV字段
             mv_field: MV字段
@@ -55,6 +57,7 @@ class LoopInfoService:
                 "loop_uri": loop_uri,
                 "loop_path": loop_path,
                 "loop_name": loop_name,
+                "loop_type": loop_type,
                 "pv_field": pv_field,
                 "sv_field": sv_field,
                 "mv_field": mv_field,
@@ -111,7 +114,7 @@ class LoopInfoService:
         Returns:
             List[LoopInfo]: 映射关系列表
         """
-        return LoopInfoDAO.get_all_active(db)
+        return LoopInfoDAO.get_active_loops(db)
     
     @staticmethod
     def list_mappings(
@@ -152,6 +155,7 @@ class LoopInfoService:
         loop_uri: str,
         loop_path: Optional[str] = None,
         loop_name: Optional[str] = None,
+        loop_type: Optional[str] = None,
         pv_field: Optional[str] = None,
         sv_field: Optional[str] = None,
         mv_field: Optional[str] = None,
@@ -169,6 +173,7 @@ class LoopInfoService:
             loop_uri: 回路URI（用于查找要更新的记录）
             loop_path: 新的PID相关参数相对路径
             loop_name: 新的回路名称
+            loop_type: 新的回路类型
             pv_field: 新的PV字段
             sv_field: 新的SV字段
             mv_field: 新的MV字段
@@ -187,6 +192,8 @@ class LoopInfoService:
                 update_data["loop_path"] = loop_path
             if loop_name is not None:
                 update_data["loop_name"] = loop_name
+            if loop_type is not None:
+                update_data["loop_type"] = loop_type
             if pv_field is not None:
                 update_data["pv_field"] = pv_field
             if sv_field is not None:

@@ -178,7 +178,8 @@ class WorkflowRequest(BaseModel):
     """工作流请求模型"""
     start_time: str = Field(..., description="开始时间", example="2025-10-08 17:30:37")
     end_time: str = Field(..., description="结束时间", example="2025-10-08 18:00:37")
-    loop_type: str =Field(..., description="回路类型", example="")
+    loop_type: str =Field(..., description="回路类型", example="流量")
+    loop_uri: str = Field(None, description="回路URI", example="")
     response_mode: str = Field("blocking", description="响应模式（流式/直连）", example=["blocking","streaming"])
     # user: str = Field("admin", description="用户名", example="admin")
 
@@ -242,7 +243,8 @@ async def run_workflow(
             "inputs": {
                 "start_time": request.start_time,
                 "end_time": request.end_time,
-                "loop_type": request.loop_type
+                "loop_type": request.loop_type,
+                "loop_uri": request.loop_uri
             },
             "response_mode": request.response_mode,
             "user": "pid-agent-api"

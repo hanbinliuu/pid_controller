@@ -23,7 +23,7 @@ from api.middleware.exceptions import (
 logger = logging.getLogger(__name__)
 
 # 创建路由
-router = APIRouter(prefix="/api/v1", tags=["装置评估", "装置管理"])
+router = APIRouter(prefix="/api/v1")
 
 
 @router.post("/device-evaluation/upsert",
@@ -412,7 +412,7 @@ async def get_all_devices():
         )
 
 
-@router.get("/devices/{device_uri:path}",
+@router.get("/devices/info/{device_uri:path}",
            summary="根据URI查询装置详情",
            operation_id="get_device_by_uri",
            response_model=Dict[str, Any])
@@ -576,4 +576,50 @@ async def batch_query_devices(
         raise ExternalServiceException(
             message=f"批量查询装置失败: {str(e)}",
             data={"uri_count": len(uris)}
+        )
+
+
+@router.get("/devices/loops-list",
+           summary="获取装置下的回路列表",
+           operation_id="get_device_loops",
+           response_model=Dict[str, Any])
+async def get_device_loops(
+    device_uri: Optional[str] = Query(None, description="装置URI（模糊匹配）"),
+    db: Session = Depends(get_db)
+):
+    """
+    获取装置下的回路列表
+    
+    通过回路loop_uri模糊匹配装置URI来查找装置下的所有回路
+    
+    Args:
+        device_uri: 装置URI（路径参数）
+        include_inactive: 是否包含非激活的回路，默认为False（只返回激活回路）
+    
+    Returns:
+        回路列表
+    """
+    try:
+        logger.info(f"获取装置回路列表 - 装置URI: {device_uri}")
+        
+        # 调用Service层方法
+        result = DeviceEvaluationService.get_device_loops(
+            db,
+            device_uri=device_uri
+        )
+        
+        return {
+            "count": len(result),
+            "loops": result
+        }
+    
+    except BusinessException:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取装置回路列表失败 - 装置URI: {device_uri}: {str(e)}", exc_info=True)
+        raise DataProcessException(
+            message=f"获取装置回路列表失败: {str(e)}",
+            data={"device_uri": device_uri}
         )

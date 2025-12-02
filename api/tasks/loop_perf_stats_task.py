@@ -34,7 +34,7 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
         loop_names = {}
         with get_db_session() as db:
             # 从 loop_info 表中加载所有激活的回路
-            active_loops = LoopInfoDAO.get_all_active(db)
+            active_loops = LoopInfoDAO.get_active_loops(db)
             for loop in active_loops:
                 loop_uris.append(loop.loop_uri)
                 loop_names[loop.loop_uri] = loop.loop_name

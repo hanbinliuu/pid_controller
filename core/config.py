@@ -206,6 +206,22 @@ class Config:
         '0 0 * * *'  # 默认每天00:00执行
     )
     
+    # 装置性能统计任务配置
+    TASK_DEVICE_STATS_ENABLE: bool = _get_config(
+        'task.device_stats.enable',
+        True,
+        bool
+    )
+    TASK_DEVICE_STATS_CRON: str = _get_config(
+        'task.device_stats.cron',
+        '0 1 * * *'  # 默认每天01:00执行
+    )
+    TASK_DEVICE_STATS_MAX_WORKERS: int = _get_config(
+        'task.device_stats.max_workers',
+        3,
+        int
+    )
+    
     # ==================== 数据库配置 ====================
     # 数据库连接配置
     DB_HOST: str = _get_config('db.host', '192.168.201.113')

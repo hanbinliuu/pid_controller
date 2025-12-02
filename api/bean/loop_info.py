@@ -47,7 +47,13 @@ class LoopInfo(SQLModel, table=True):
         max_length=200,
         sa_column_kwargs={"comment": "回路名称"}
     )
-    #
+    
+    loop_type: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        sa_column_kwargs={"comment": "回路类型"}
+    )
+    
     point_path: Optional[str] = Field(
         default=None,
         max_length=500,
@@ -132,6 +138,7 @@ class LoopInfo(SQLModel, table=True):
                 "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                 "loop_path": "/system/root,/pid_zd/root,/pid_zd/instance,/pid_zd/053f3c45413b48bbafacec609d142e57,/pid_zd/7a9a36aeca1a4998b0aa44f83ec9709d,/pid_zd/1f59615dc9d44b4388e29829f95a49c6,/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                 "loop_name": "FIC101A流量控制回路",
+                "loop_type": "流量控制",
                 "point_path":"/loop_state_parameters",
                 "pv_field": "FIC101A_PV",
                 "sv_field": "FIC101A_SV",

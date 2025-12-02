@@ -95,15 +95,15 @@ class LoopInfoDAO:
         return db.exec(statement).all()
     
     @staticmethod
-    def get_all_active(db: Session) -> List[LoopInfo]:
+    def get_active_loops(db: Session) -> List[LoopInfo]:
         """
-        查询所有激活的映射记录
+        查询所有激活的回路记录
         
         Args:
             db: 数据库会话
         
         Returns:
-            List[LoopInfo]: 激活的映射记录列表
+            List[LoopInfo]: 激活的回路记录列表
         """
         statement = select(LoopInfo).where(
             LoopInfo.is_active == True

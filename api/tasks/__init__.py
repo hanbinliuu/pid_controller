@@ -6,6 +6,7 @@ import logging
 
 from api.tasks.loop_perf_stats_task import calc_loop_performance
 from api.tasks.load_loop_info import load_loop_list_and_sync
+from api.tasks.calc_device_stats_task import calc_device_statistics
 from api.tasks.cron_tasks import task_manager
 from api.services.loop_monitoring_service import LoopMonitoringService
 
@@ -59,6 +60,24 @@ def init_cron_tasks():
                 logger.info("✓ 回路性能计算任务已启动")
             else:
                 logger.warning("回路性能计算任务注册失败")
+        
+        # 注册装置性能统计任务
+        if Config.TASK_DEVICE_STATS_ENABLE:
+            logger.info(f"注册装置性能统计任务, Cron: {Config.TASK_DEVICE_STATS_CRON}")
+            
+            success = task_manager.register_task(
+                task_id='calc_device_statistics',
+                cron_expression=Config.TASK_DEVICE_STATS_CRON,
+                task_func=calc_device_statistics,
+                task_args={}
+            )
+            
+            if success:
+                # 自动启动任务
+                task_manager.start_task('calc_device_statistics')
+                logger.info("✓ 装置性能统计任务已启动")
+            else:
+                logger.warning("装置性能统计任务注册失败")
         
         logger.info(f"定时任务初始化完成，共注册 {len(task_manager.tasks)} 个任务")
         
