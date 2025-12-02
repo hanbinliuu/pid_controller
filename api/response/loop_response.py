@@ -141,9 +141,21 @@ class LoopInfoResponse(BaseModel):
 
 class OptimizableLoop(BaseModel):
     """可优化回路模型"""
+    loop_uri: str = Field(None, description="回路uri")
     loop_name: str = Field(None, description="回路名称")
     loop_desc: str = Field(None, description="回路描述")
     loop_type: str = Field(None, description="回路类型")
     performance_score: float = Field(None, description="性能得分")
     current_pid: str = Field(None, description="当前PID参数")
+    pass
+
+
+class PerfReductionLoop(BaseModel):
+    """回路性能下降模型"""
+    loop_uri: str = Field(None, description="回路uri")
+    loop_name: str = Field(None, description="回路名称")
+    loop_desc: str = Field(None, description="回路描述")
+    loop_type: str = Field(None, description="回路类型")
+    performance_score: float = Field(None, description="性能得分")
+    reduction_rate: float = Field(None, description="性能下降率")
     pass

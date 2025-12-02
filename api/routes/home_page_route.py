@@ -35,7 +35,10 @@ async def get_device_stats(session: Session = Depends(get_db)):
 
 @home_page_router.get("/perf-reduction-top10-loops", summary="获取性能下降Top10的回路")
 async def get_perf_reduction_top10_loops(session: Session = Depends(get_db)):
-    pass
+    results = HomePageService.get_perf_reduction_top10_loops(session)
+    if not results or len(results) == 0:
+        return []
+    return results
 
 
 @home_page_router.get("/optimizable-loops", summary="获取可优化的回路")
