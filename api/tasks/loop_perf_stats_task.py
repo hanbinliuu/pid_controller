@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 
+from api.dao.excluded_loop_dao import ExcludedLoopDAO
 from api.services.loop_monitoring_service import LoopMonitoringService
 from core.database.database import get_db_session
 from api.dao.loop_info_dao import LoopInfoDAO
@@ -47,9 +48,10 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                 "loop_count": 0
             }
 
-        # todo: 条件剔除回路不参与计算
+        # 条件剔除回路不参与计算
+        excluded_loop_uris = ExcludedLoopDAO.get_all_uris(db)
 
-        logger.info(f"从数据库加载到 {len(loop_uris)} 个激活回路，开始计算性能状态...")
+        logger.info(f"从数据库加载到{len(loop_uris)}个回路, {len(excluded_loop_uris)}个剔除回路, 开始计算性能状态...")
 
         # 批量计算性能状态
         result = LoopMonitoringService.calculate_performance_status_batch(
@@ -67,6 +69,9 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                         continue
 
                     loop_uri = item.get('loop_uri')
+                    if isinstance(excluded_loop_uris, list) and loop_uri in excluded_loop_uris:
+                        status = '条件剔除'
+
                     # 获取回路名称
                     loop_name = loop_names.get(loop_uri)
 
