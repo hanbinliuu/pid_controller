@@ -15,7 +15,7 @@ class LoopStatus(BaseModel):
     PV: Optional[float] = Field(None, description="过程量")
     MV: Optional[float] = Field(None, description="阀位量")
     SV: Optional[float] = Field(None, description="目标量")
-    AUTO: Optional[str] = Field(None, description="自动控制状态")
+    AUTO: Optional[Any] = Field(None, description="自动控制状态")
 
 
 class LoopInstance(BaseModel):

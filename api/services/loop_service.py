@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List
 
 from core.client.bff_model_client import BFFModelClient
 from api.response.loop_response import LoopListResponse, LoopInstance, LoopStatus, Pagination, LoopInfoResponse
+from core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ class LoopService:
     """回路管理业务服务"""
 
     @staticmethod
-    def list_instances_under_tree(
+    def list_instances_by_node(
         model_identifier_list: List[str],
         start_identifier_list: List[str],
         page_no: int = 1,
@@ -25,7 +26,7 @@ class LoopService:
     ) -> LoopListResponse:
         """
         查询节点下指定模型类型的实例列表
-        
+
         Args:
             model_identifier_list: 模型标识符列表
             start_identifier_list: 起始标识符列表
@@ -68,7 +69,8 @@ class LoopService:
                     # 一次查询所有回路的PID参数最新值
                     try:
                         loop_values = client.query_multi_loop_current_values(
-                            loop_configs=loop_configs
+                            loop_configs=loop_configs,
+                            point_path=Config.BFF_MODEL_POINT_PATH
                         )
                         
                         # 将PID参数添加到每个回路实例中

@@ -14,6 +14,7 @@ import numpy as np
 
 from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
+from core.algorithm import tuning_segment_selector
 from core.algorithm.ls_pid_autotune_v5 import ModelType
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
@@ -107,7 +108,13 @@ class ExpertTuningService:
             series = pd.Series(df[column].values, index=ts_index)
 
             # 高波动窗口识别
-            high_windows = find_high_variability_periods(
+            # high_windows = find_high_variability_periods(
+            #     series,
+            #     window_size=window_size,
+            #     step_size=step_size,
+            #     variability_threshold=variability_threshold
+            # )
+            high_windows = tuning_segment_selector.find_high_variability_periods(
                 series,
                 window_size=window_size,
                 step_size=step_size,

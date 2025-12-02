@@ -321,7 +321,7 @@ class PIDOptimizationTool():
                 "sv": float(last_record.get('sv', 25.0))
             }
 
-            # 提取温度数据进行性能分析
+            # 进行性能分析
             temp_data = [float(record.get('pv', 25.0)) for record in data_list]
 
             # 计算性能指标

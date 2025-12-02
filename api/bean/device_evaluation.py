@@ -62,6 +62,11 @@ class DeviceEvaluation(SQLModel, table=True):
         sa_column_kwargs={"comment": "回路数"}
     )
     
+    open_loop_count: Optional[int] = Field(
+        default=None,
+        sa_column_kwargs={"comment": "开环回路数"}
+    )
+    
     auto_loop_count: Optional[int] = Field(
         default=None,
         sa_column_kwargs={"comment": "自动回路数"}
@@ -110,6 +115,7 @@ class DeviceEvaluation(SQLModel, table=True):
                 "device_name": "常减压装置",
                 "statistics_time": "2023-10-01",
                 "loop_count": 45,
+                "open_loop_count": 5,
                 "auto_loop_count": 38,
                 "auto_control_rate": 84.4,
                 "stable_loop_count": 40,

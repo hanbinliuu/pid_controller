@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from api.response.loop_response import LoopListResponse, LoopInfoResponse
 from api.services.loop_service import LoopService
+from core.config import Config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -22,16 +23,11 @@ logger = logging.getLogger(__name__)
     operation_id="查询对应节点下的回路列表",
     description="根据回路类型URI和起始节点URI查询节点下的回路列表，支持分页"
 )
-async def list_instances_under_tree(
-        model_identifier_list: List[str] = Query(
-            ...,
-            description="回路类型URI",
-            example=["/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"]
-        ),
-        start_identifier_list: List[str] = Query(
-            ...,
+async def list_instances_by_uri(
+        node_uri: List[str] = Query(
+            None,
             description="起始节点URI",
-            example=["/pid_zd/053f3c45413b48bbafacec609d142e57"]
+            example=[Config.BFF_MODEL_ROOT_URI]
         ),
         page_no: int = Query(
             1,
@@ -57,10 +53,12 @@ async def list_instances_under_tree(
     返回格式：参考 LoopListResponse 模型
     """
     try:
+        if node_uri is None:
+            node_uri = [Config.BFF_MODEL_ROOT_URI]
         # 调用Service层查询回路列表
-        result = LoopService.list_instances_under_tree(
-            model_identifier_list=model_identifier_list,
-            start_identifier_list=start_identifier_list,
+        result = LoopService.list_instances_by_node(
+            model_identifier_list=[Config.BFF_MODEL_LOOP_MODEL_URI],
+            start_identifier_list=node_uri,
             page_no=page_no,
             page_size=page_size
         )

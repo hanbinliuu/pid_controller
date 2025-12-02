@@ -118,6 +118,7 @@ async def list_device_evaluations(
                     "parent_device_uri": e.parent_device_uri,
                     "statistics_time": e.statistics_time.isoformat(),
                     "loop_count": e.loop_count,
+                    "open_loop_count": e.open_loop_count,
                     "auto_loop_count": e.auto_loop_count,
                     "auto_control_rate": e.auto_control_rate,
                     "stable_loop_count": e.stable_loop_count,

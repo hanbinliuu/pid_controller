@@ -157,6 +157,7 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                 total_loops = len(loops)
                 auto_control_loops = 0
                 stable_loops = 0
+                open_loops = 0
                 conditional_excluded_loops = 0
                 
                 # 统计各项指标
@@ -167,6 +168,10 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                     if not evaluation or evaluation.status == '条件剔除':
                         conditional_excluded_loops += 1
                         continue
+
+                    # 开环判断：status == '开环'
+                    if evaluation.status == '开环':
+                        open_loops += 1
 
                     # 自控率判断：auto_control_rate >= 80%
                     if evaluation.auto_control_rate and evaluation.auto_control_rate >= 0.8:
@@ -182,6 +187,7 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
 
                 device_stats[device_uri] = {
                     'total_loops': total_loops,
+                    'open_loops': open_loops,
                     'auto_control_loops': auto_control_loops,
                     'stable_loops': stable_loops,
                     'conditional_excluded_loops': conditional_excluded_loops,
@@ -213,6 +219,7 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                 'parent_device_uri': parent_device_uri,
                 'statistics_date': statistics_date,
                 'loop_count': stats['total_loops'],
+                'open_loop_count': stats['open_loops'],
                 'auto_loop_count': stats['auto_control_loops'],
                 'auto_control_rate': stats['auto_control_rate'],
                 'stable_loop_count': stats['stable_loops'],

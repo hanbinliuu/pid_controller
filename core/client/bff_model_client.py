@@ -857,10 +857,10 @@ class BFFModelClient:
 
         except requests.exceptions.Timeout:
             logger.error(f"请求超时（{self.timeout}秒）")
-            raise
+            raise HTTPException(status_code=504, detail=f"请求超时（{self.timeout}秒）")
         except requests.exceptions.RequestException as e:
             logger.error(f"BFF实例查询失败: {str(e)}")
-            raise
+            raise ValueError(f"BFF实例查询失败: {str(e)}")
 
     def __enter__(self):
         """上下文管理器入口"""
