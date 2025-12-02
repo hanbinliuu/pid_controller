@@ -28,7 +28,6 @@ class LoopEvaluation(SQLModel, table=True):
         index=True,
         sa_column_kwargs={"comment": "记录ID"}
     )
-
     # 回路信息
     loop_uri: Optional[str] = Field(
         default=None,
@@ -36,27 +35,23 @@ class LoopEvaluation(SQLModel, table=True):
         index=True,
         sa_column_kwargs={"comment": "回路URI"}
     )
-
     loop_name: Optional[str] = Field(
         default=None,
         max_length=200,
         index=True,
         sa_column_kwargs={"comment": "回路名称"}
     )
-
     status: Optional[str] = Field(
         default=None,
         max_length=50,
         index=True,
         sa_column_kwargs={"comment": "评估结果"}
     )
-
     assessment_time: Optional[datetime] = Field(
         default=None,
         index=True,
         sa_column_kwargs={"comment": "评估时间(按天)"}
     )
-
     # 性能评估指标
     performance_score: Optional[float] = Field(
         default=None,
@@ -98,10 +93,21 @@ class LoopEvaluation(SQLModel, table=True):
         default=None,
         sa_column_kwargs={"comment": "操纵变量和"}
     )
-
     mv_sum_squares: Optional[float] = Field(
         default=None,
         sa_column_kwargs={"comment": "操纵变量平方和"}
+    )
+    pb: Optional[float] = Field(
+        default=None,
+        sa_column_kwargs={"comment": "PB"}
+    )
+    ti: Optional[float] = Field(
+        default=None,
+        sa_column_kwargs={"comment": "TI"}
+    )
+    td: Optional[float] = Field(
+        default=None,
+        sa_column_kwargs={"comment": "TD"}
     )
     # 时间戳
     created_time: Optional[datetime] = Field(

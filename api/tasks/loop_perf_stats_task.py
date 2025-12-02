@@ -3,6 +3,7 @@ from datetime import datetime
 
 from api.dao.excluded_loop_dao import ExcludedLoopDAO
 from api.services.loop_monitoring_service import LoopMonitoringService
+from api.services.loop_service import LoopService
 from core.database.database import get_db_session
 from api.dao.loop_info_dao import LoopInfoDAO
 from api.dao.loop_evaluation_dao import LoopEvaluationDAO
@@ -88,6 +89,14 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                     except Exception:
                         total_seconds = None
 
+                    # 查询回路对应的PID参数
+                    pid = LoopService.query_loop_values(["PB", "TI", "TD"], loop_uri)
+                    pb = ti = td = None
+                    if pid:
+                        pb = pid.get("PB")
+                        ti = pid.get("TI")
+                        td = pid.get("TD")
+
                     metrics = item.get('performance_metrics') or {}
                     assessment_time = datetime.now().date()
                     evaluation_data = {
@@ -106,6 +115,9 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                         "pv_sum_squares": item.get("pv_sum_squares"),
                         "mv_sum_value": item.get("mv_sum_value"),
                         "mv_sum_squares": item.get("mv_sum_squares"),
+                        "pb": pb,
+                        "ti": ti,
+                        "td": td,
                     }
 
                     try:

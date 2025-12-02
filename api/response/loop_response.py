@@ -137,3 +137,13 @@ class LoopInfoResponse(BaseModel):
                 "mv_range_min": 0
             }
         }
+
+
+class OptimizableLoop(BaseModel):
+    """可优化回路模型"""
+    loop_name: str = Field(None, description="回路名称")
+    loop_desc: str = Field(None, description="回路描述")
+    loop_type: str = Field(None, description="回路类型")
+    performance_score: float = Field(None, description="性能得分")
+    current_pid: str = Field(None, description="当前PID参数")
+    pass
