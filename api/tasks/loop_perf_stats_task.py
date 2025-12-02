@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from api.dao.excluded_loop_dao import ExcludedLoopDAO
 from api.services.loop_monitoring_service import LoopMonitoringService
@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 # -------------------
 
 def calc_loop_performance(max_workers: int = 5) -> dict:
+    # 计算时间范围
+    end_time = datetime.now()
+    start_time = end_time - timedelta(hours=24)
+    return _calc_loop_performance(start_time, end_time, max_workers)
+
+
+def _calc_loop_performance(start_time: datetime, end_time: datetime, max_workers: int = 5) -> dict:
     """
     计算全部回路的性能状态
     从数据库loop_info表中加载激活的回路列表
@@ -55,8 +62,10 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
         logger.info(f"从数据库加载到{len(loop_uris)}个回路, {len(excluded_loop_uris)}个剔除回路, 开始计算性能状态...")
 
         # 批量计算性能状态
-        result = LoopMonitoringService.calculate_performance_status_batch(
+        result = LoopMonitoringService.calculate_performance_status_batch_by_time_range(
             loop_uris=loop_uris,
+            start_time=start_time,
+            end_time=end_time,
             max_workers=max_workers
         )
 
@@ -98,7 +107,7 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
                         td = pid.get("TD")
 
                     metrics = item.get('performance_metrics') or {}
-                    assessment_time = datetime.now().date()
+                    assessment_time = end_time.date()
                     evaluation_data = {
                         "loop_uri": loop_uri,
                         "loop_name": loop_name,
@@ -143,3 +152,12 @@ def calc_loop_performance(max_workers: int = 5) -> dict:
             "status": "异常",
             "error": str(e)
         }
+
+
+if __name__ == '__main__':
+    # calc_loop_performance()
+    # 计算时间范围
+    hours = 24
+    end_time = datetime.now() - timedelta(hours=hours)
+    start_time = end_time - timedelta(hours=24)
+    _calc_loop_performance(start_time, end_time)

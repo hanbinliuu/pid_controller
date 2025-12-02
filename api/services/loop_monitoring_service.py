@@ -272,22 +272,30 @@ class LoopMonitoringService:
             }
 
     @staticmethod
+    def calc_performance_status_by_time_range(
+            loop_uri: str,
+            start_time: datetime,
+            end_time: datetime) -> Dict[str, Any]:
+        return LoopMonitoringService._calculate_performance_status(loop_uri, start_time, end_time)
+
+    @staticmethod
     def calculate_performance_status(
             loop_uri: str,
             time_span: int = 24
     ) -> Dict[str, Any]:
         """
         根据过去历史数据计算回路的性能状态ÒÒ
-        
+
         计算四个维度的性能指标：
         1. 投入度维度：自控率
         2. 稳定性维度：平稳率
         3. 精确性维度：标准偏差
         4. 高效性维度：阀门活动度
-        
+
         Args:
             loop_uri: 回路URI
-            
+            time_span: 时间跨度
+
         Returns:
             包含性能指标的字典，包括：
             - auto_control_rate: 自控率
@@ -297,11 +305,20 @@ class LoopMonitoringService:
             - comprehensive_score: 综合评分
             - status: 性能等级（优秀/良好/一般/差）
         """
+        # 计算时间范围
+        end_time = datetime.now()
+        start_time = end_time - timedelta(hours=time_span)
+        return LoopMonitoringService._calculate_performance_status(loop_uri, start_time, end_time)
+
+
+    @staticmethod
+    def _calculate_performance_status(
+            loop_uri: str,
+            start_time: datetime,
+            end_time: datetime
+    ) -> Dict[str, Any]:
         try:
             # 计算时间范围
-            end_time = datetime.now()
-            start_time = end_time - timedelta(hours=time_span)
-            #
             end_time_ms = int(end_time.timestamp() * 1000)
             start_time_ms = int(start_time.timestamp() * 1000)
             # 查询历史数据
@@ -519,21 +536,39 @@ class LoopMonitoringService:
     def calculate_performance_status_batch(
             loop_uris: List[str],
             max_workers: int = 5,
-            data_span: int = 24
-    ) -> Dict[str, Any]:
+            data_span: int = 24) -> Dict[str, Any]:
         """
         批量计算多个回路性能状态（并行计算）
-        
+
         使用线程池并行计算多个回路的性能指标，提高计算效率。
-        
+
         Args:
             loop_uris: 回路URI列表
             max_workers: 线程池最大工作线程数，默认5个
             data_span: 时间跨度
-            
+
         Returns:
             包含所有回路性能状态的列表和统计汇总信息
         """
+        # 计算时间范围
+        end_time = datetime.now()
+        start_time = end_time - timedelta(hours=data_span)
+        return LoopMonitoringService._calculate_performance_status_batch(loop_uris, start_time, end_time, max_workers)
+
+    @staticmethod
+    def calculate_performance_status_batch_by_time_range(
+            loop_uris: List[str],
+            start_time: datetime,
+            end_time: datetime,
+            max_workers: int = 5) -> Dict[str, Any]:
+        return LoopMonitoringService._calculate_performance_status_batch(loop_uris, start_time, end_time, max_workers)
+
+    @staticmethod
+    def _calculate_performance_status_batch(
+            loop_uris: List[str],
+            start_time: datetime,
+            end_time: datetime,
+            max_workers: int = 5) -> Dict[str, Any]:
         if not loop_uris:
             return {
                 "status": "失败",
@@ -551,8 +586,8 @@ class LoopMonitoringService:
                 # 提交所有任务
                 future_to_uri = {
                     executor.submit(
-                        LoopMonitoringService.calculate_performance_status,
-                        loop_uri,data_span
+                        LoopMonitoringService.calc_performance_status_by_time_range,
+                        loop_uri, start_time, end_time
                     ): loop_uri for loop_uri in loop_uris
                 }
 
