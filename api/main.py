@@ -15,6 +15,7 @@ from api.routes.loop_info_router import router as loop_info_router
 from api.routes.device_evaluation_router import router as device_evaluation_router
 from api.routes.loop_evaluation_router import router as loop_evaluation_router
 from api.routes.cron_task_router import router as cron_task_router
+from api.routes.home_page_route import home_page_router
 
 # 导入中间件
 from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware
@@ -67,6 +68,7 @@ app.include_router(loop_info_router, tags=['回路信息'])
 app.include_router(device_evaluation_router, tags=['装置评估'])
 app.include_router(loop_evaluation_router, tags=['回路评估'])
 app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
+app.include_router(home_page_router, prefix='/api/home', tags=['首页'])
 
 
 @app.get('/health')
