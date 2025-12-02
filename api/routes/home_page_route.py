@@ -7,7 +7,7 @@ from fastapi import APIRouter
 from sqlmodel import Session
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from api.response.loop_response import OptimizableLoop
+from api.response.loop_response import OptimizableLoop, DeviceRealTimeStats, PerfReductionLoop
 from api.services.home_page_service import HomePageService
 from core.database.database import get_db
 
@@ -28,13 +28,15 @@ async def get_perf_stats(session: Session = Depends(get_db)) -> Dict[str, int]:
 
 
 @home_page_router.get("/device-stats", summary="获取装置实时统计结果")
-async def get_device_stats(session: Session = Depends(get_db)):
-    # todo: 将装置实时统计接口
-    pass
+async def get_device_stats(session: Session = Depends(get_db)) -> List[DeviceRealTimeStats]:
+    results = HomePageService.get_device_stats(session)
+    if not results or len(results) == 0:
+        return []
+    return results
 
 
 @home_page_router.get("/perf-reduction-top10-loops", summary="获取性能下降Top10的回路")
-async def get_perf_reduction_top10_loops(session: Session = Depends(get_db)):
+async def get_perf_reduction_top10_loops(session: Session = Depends(get_db)) -> List[PerfReductionLoop]:
     results = HomePageService.get_perf_reduction_top10_loops(session)
     if not results or len(results) == 0:
         return []

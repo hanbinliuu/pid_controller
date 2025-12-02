@@ -29,13 +29,6 @@ class HomePageDAO:
         return session.exec(stmt).all()
 
     @staticmethod
-    def get_device_stats(session: Session):
-        """
-        Get device statistics
-        """
-        pass
-
-    @staticmethod
     def get_perf_reduction_top10_loops(
             session: Session,
             query_date: date,

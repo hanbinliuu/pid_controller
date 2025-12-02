@@ -159,3 +159,14 @@ class PerfReductionLoop(BaseModel):
     performance_score: float = Field(None, description="性能得分")
     reduction_rate: float = Field(None, description="性能下降率")
     pass
+
+
+class DeviceRealTimeStats(BaseModel):
+    """装置实时统计模型"""
+    device_uri: str = Field(None, description="装置uri")
+    parent_device_uri: str = Field(None, description="装置父uri")
+    group_name: str = Field(None, description="装置名称")
+    loop_count: int = Field(None, description="回路数")
+    auto_control_rate: float = Field(None, description="自控率")
+    stability_rate: float = Field(None, description="平稳率")
+    pass
