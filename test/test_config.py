@@ -94,7 +94,7 @@ def test_environment_variable_override():
     from core.config import Config as ConfigReload
     
     print(f"\n环境变量 BFF_MODEL_LOOP_URI: {new_path}")
-    print(f"Config.BFF_MODEL_LOOP_URI: {ConfigReload.BFF_MODEL_LOOP_URI}")
+    print(f"Config.BFF_MODEL_LOOP_URI: {ConfigReload.BFF_MODEL_DEFULT_LOOP_URI}")
     
     # 恢复原始环境变量
     if original_project_path:

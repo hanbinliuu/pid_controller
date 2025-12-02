@@ -485,3 +485,69 @@ async def get_instance_tree(
             status_code=500,
             detail=f"查询实例树失败: {str(e)}"
         )
+
+
+@router.post(
+    "/model-tree",
+    summary="获取模型树",
+    operation_id="获取模型树",
+    description="查询从指定节点开始的实例树（树形结构）"
+)
+async def get_model_tree() -> Dict[str, Any]:
+    """
+    查询实例树（树形结构）
+
+    请求体示例：
+    {
+        "startUri": "/pid_zd/1f59615dc9d44b4388e29829f95a49c6",
+        "modelUriList": ["/system/401", "/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"],
+        "includeSubType": true
+    }
+
+    功能说明：
+    - 查询从指定节点开始的完整树结构
+    - 支持任意深度的嵌套节点
+    - 返回根节点和所有子节点信息
+    - 可选指定模型URI列表进行过滤
+
+    返回格式：
+    {
+        "result": {
+            "node": {
+                "uri": "/pid_zd/1f59615dc9d44b4388e29829f95a49c6",
+                "browseName": "instance",
+                "displayName": "PID参数整定_勿删",
+                "description": "创建根节点，用于组织模型结构",
+                "extendedAttr": {}
+            },
+            "children": [
+                {
+                    "uri": "/pid_zd/xxx",
+                    "browseName": "xxx",
+                    "displayName": "xxx",
+                    "description": "xxx",
+                    "extendedAttr": {},
+                    "children": [...]
+                }
+            ]
+        }
+    }
+    """
+    try:
+        # 调用Service层查询
+        result = BFFService.query_instance_tree(
+            start_uri=Config.BFF_MODEL_ROOT_URI,
+            model_uri_list=[Config.BFF_MODEL_DEVICE_MODEL_URI, Config.BFF_MODEL_LOOP_MODEL_URI],
+            include_sub_type=True
+        )
+
+        logger.info(f"BFF查询实例树成功，起始URI: {Config.BFF_MODEL_ROOT_URI}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"查询实例树失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询实例树失败: {str(e)}"
+        )

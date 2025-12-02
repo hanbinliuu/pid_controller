@@ -109,7 +109,7 @@ def test_loop_path_mapping():
         
         print("\n=== 测试分页查询 ===")
         # 分页查询
-        result = LoopPathMappingDAO.query_list(
+        result = LoopPathMappingDAO.query_page(
             db,
             page_no=1,
             page_size=10
@@ -132,7 +132,7 @@ def test_loop_path_mapping():
             print("✗ 删除失败")
         
         # 验证删除
-        result = LoopPathMappingDAO.query_list(db)
+        result = LoopPathMappingDAO.query_page(db)
         print(f"  - 删除后总数: {result['pagination']['total']}")
         
         print("\n=== 所有测试完成 ===")

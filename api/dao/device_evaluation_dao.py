@@ -3,7 +3,7 @@
 DAO层 - 装置评估数据访问对象 - 使用SQLModel
 """
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Sequence
 from datetime import datetime, date
 from sqlmodel import Session, select, func, desc
 
@@ -14,49 +14,7 @@ logger = logging.getLogger(__name__)
 
 class DeviceEvaluationDAO:
     """装置评估DAO"""
-    
-    @staticmethod
-    def create(db: Session, evaluation_data: Dict[str, Any]) -> DeviceEvaluation:
-        """
-        创建装置评估记录 - SQLModel方式
-        
-        Args:
-            db: 数据库会话
-            evaluation_data: 评估数据字典
-        
-        Returns:
-            DeviceEvaluation: 创建的评估对象
-        """
-        try:
-            # SQLModel自动进行数据验证
-            evaluation = DeviceEvaluation(**evaluation_data)
-            
-            db.add(evaluation)
-            db.commit()
-            db.refresh(evaluation)
-            
-            logger.info(f"创建装置评估记录成功: ID={evaluation.id}, device_uri={evaluation.device_uri}")
-            return evaluation
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"创建装置评估记录失败: {str(e)}")
-            raise
-    
-    @staticmethod
-    def get_by_id(db: Session, evaluation_id: int) -> Optional[DeviceEvaluation]:
-        """
-        根据ID查询评估记录 - SQLModel方式
-        
-        Args:
-            db: 数据库会话
-            evaluation_id: 评估记录ID
-        
-        Returns:
-            Optional[DeviceEvaluation]: 评估对象，不存在则返回None
-        """
-        statement = select(DeviceEvaluation).where(DeviceEvaluation.id == evaluation_id)
-        return db.exec(statement).first()
+
     
     @staticmethod
     def get_by_device_uri(db: Session, device_uri: str) -> Optional[DeviceEvaluation]:
@@ -70,9 +28,27 @@ class DeviceEvaluationDAO:
         Returns:
             Optional[DeviceEvaluation]: 评估对象，不存在则返回None
         """
-        statement = select(DeviceEvaluation).where(DeviceEvaluation.device_uri == device_uri)
+        statement = select(DeviceEvaluation).where(DeviceEvaluation.device_uri == device_uri,
+                                                   DeviceEvaluation.statistics_time==datetime.now().date()
+                                                   ).order_by(desc(DeviceEvaluation.created_time))
         return db.exec(statement).first()
-    
+
+    @staticmethod
+    def get_by_parent_device_uri(db: Session, device_uri: str) -> Sequence[DeviceEvaluation]:
+        """
+        根据父类device_uri查询评估记录
+
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI
+
+        Returns:
+            Optional[DeviceEvaluation]: 评估对象，不存在则返回None
+        """
+        statement = select(DeviceEvaluation).where(DeviceEvaluation.parent_device_uri == device_uri,
+                                                   DeviceEvaluation.statistics_time==datetime.now().date()
+                                                   ).order_by(desc(DeviceEvaluation.created_time))
+        return db.exec(statement).all()
     @staticmethod
     def get_by_device_uri_and_date(db: Session, device_uri: str, statistics_date: date) -> Optional[DeviceEvaluation]:
         """
@@ -96,6 +72,61 @@ class DeviceEvaluationDAO:
             DeviceEvaluation.statistics_time <= end_datetime
         )
         return db.exec(statement).first()
+    
+    @staticmethod
+    def get_by_device_uri_and_date_range(
+        db: Session,
+        device_uri: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None
+    ) -> List[DeviceEvaluation]:
+        """
+        根据装置URI和时间范围查询评估记录（不分页）
+        
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI（可选，为空则查询所有装置）
+            start_date: 开始日期（可选，包含该日期）
+            end_date: 结束日期（可选，包含该日期）
+        
+        Returns:
+            List[DeviceEvaluation]: 评估记录列表，按统计时间倒序排列
+        """
+        try:
+            # 构建查询语句
+            statement = select(DeviceEvaluation)
+            
+            # 装置URI筛选
+            if device_uri:
+                statement = statement.where(DeviceEvaluation.device_uri == device_uri)
+            
+            # 时间范围筛选
+            if start_date:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                statement = statement.where(DeviceEvaluation.statistics_time >= start_datetime)
+            
+            if end_date:
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                statement = statement.where(DeviceEvaluation.statistics_time <= end_datetime)
+            
+            # 按统计时间倒序排列
+            statement = statement.order_by(desc(DeviceEvaluation.statistics_time))
+            
+            results = db.exec(statement).all()
+            
+            logger.info(
+                f"查询装置评估记录成功 - device_uri: {device_uri or '全部'}, "
+                f"start_date: {start_date}, end_date: {end_date}, 结果数: {len(results)}"
+            )
+            
+            return list(results)
+            
+        except Exception as e:
+            logger.error(
+                f"查询装置评估记录失败 - device_uri: {device_uri}, "
+                f"start_date: {start_date}, end_date: {end_date}, 错误: {str(e)}"
+            )
+            raise
     
     @staticmethod
     def upsert_by_device_uri_and_date(
@@ -277,76 +308,4 @@ class DeviceEvaluationDAO:
             
         except Exception as e:
             logger.error(f"查询装置评估记录失败: {str(e)}")
-            raise
-    
-    @staticmethod
-    def update(db: Session, evaluation_id: int, update_data: Dict[str, Any]) -> Optional[DeviceEvaluation]:
-        """
-        更新评估记录 - SQLModel方式
-        
-        Args:
-            db: 数据库会话
-            evaluation_id: 评估记录ID
-            update_data: 更新数据字典
-        
-        Returns:
-            Optional[DeviceEvaluation]: 更新后的评估对象
-        """
-        try:
-            statement = select(DeviceEvaluation).where(DeviceEvaluation.id == evaluation_id)
-            evaluation = db.exec(statement).first()
-            
-            if not evaluation:
-                logger.warning(f"未找到ID为 {evaluation_id} 的评估记录")
-                return None
-            
-            # 更新字段
-            for key, value in update_data.items():
-                if hasattr(evaluation, key):
-                    setattr(evaluation, key, value)
-            
-            # 更新updated_time
-            evaluation.updated_time = datetime.now()
-            
-            db.add(evaluation)
-            db.commit()
-            db.refresh(evaluation)
-            
-            logger.info(f"更新装置评估记录成功: ID={evaluation_id}")
-            return evaluation
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"更新装置评估记录失败: {str(e)}")
-            raise
-    
-    @staticmethod
-    def delete(db: Session, evaluation_id: int) -> bool:
-        """
-        删除评估记录 - SQLModel方式
-        
-        Args:
-            db: 数据库会话
-            evaluation_id: 评估记录ID
-        
-        Returns:
-            bool: 是否删除成功
-        """
-        try:
-            statement = select(DeviceEvaluation).where(DeviceEvaluation.id == evaluation_id)
-            evaluation = db.exec(statement).first()
-            
-            if not evaluation:
-                logger.warning(f"未找到ID为 {evaluation_id} 的评估记录")
-                return False
-            
-            db.delete(evaluation)
-            db.commit()
-            
-            logger.info(f"删除装置评估记录成功: ID={evaluation_id}, device_uri={evaluation.device_uri}")
-            return True
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"删除装置评估记录失败: {str(e)}")
             raise

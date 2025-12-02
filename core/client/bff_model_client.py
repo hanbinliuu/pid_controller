@@ -163,7 +163,7 @@ class BFFModelClient:
     DEFAULT_QUERY_NODES_BY_URIS_PATH = "/bff/aggquery/v2/model/queryNodesByUris"
     DEFAULT_QUERY_INSTANCE_TREE_PATH = "/bff/v2/instance/searchByModels"
     DEFAULT_TIMEOUT = Config.BFF_MODEL_TIMEOUT
-    DEFAULT_LOOP_URI = Config.BFF_MODEL_LOOP_URI
+    DEFAULT_LOOP_URI = Config.BFF_MODEL_DEFULT_LOOP_URI
     DEFAULT_POINT_PATH = Config.BFF_MODEL_POINT_PATH
 
     # pid控制字段与模型browse_name名称映照关系（从配置文件加载）

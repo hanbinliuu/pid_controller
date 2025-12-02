@@ -125,7 +125,7 @@ class Config:
         'http://bff-model-product-infra-system.sit-cloud.ieccloud.hollicube.com'
     )
     BFF_MODEL_TIMEOUT: int = _get_config('bff.model.timeout', '30', int)
-    BFF_MODEL_LOOP_URI: str = _get_config(
+    BFF_MODEL_DEFULT_LOOP_URI: str = _get_config(
         'bff.model.loop_uri',
         '/pid_zd/0b521c82a96d4107a564e4c2678bdeca'
     )
@@ -135,7 +135,7 @@ class Config:
     )
     BFF_MODEL_ROOT_URI: str = _get_config(
         'bff.model.root_uri',
-        '/pid_zd/instance'
+        '/pid_zd/053f3c45413b48bbafacec609d142e57'
     )
     BFF_MODEL_LOOP_MODEL_URI: str = _get_config(
         'bff.model.loop_model_uri',
@@ -255,7 +255,7 @@ class Config:
         return {
             'base_url': cls.BFF_MODEL_BASE_URL,
             'timeout': cls.BFF_MODEL_TIMEOUT,
-            'loop_uri': cls.BFF_MODEL_LOOP_URI,
+            'loop_uri': cls.BFF_MODEL_DEFULT_LOOP_URI,
             'point_path': cls.BFF_MODEL_POINT_PATH
         }
     
@@ -301,7 +301,7 @@ class Config:
         print(f"USE_REAL_TSDB: {cls.USE_REAL_TSDB}")
         print(f"TSDB_BASE_URL: {cls.TSDB_BASE_URL}")
         print(f"BFF_MODEL_BASE_URL: {cls.BFF_MODEL_BASE_URL}")
-        print(f"BFF_MODEL_LOOP_URI: {cls.BFF_MODEL_LOOP_URI}")
+        print(f"BFF_MODEL_LOOP_URI: {cls.BFF_MODEL_DEFULT_LOOP_URI}")
         print(f"WORKFLOW_BASE_URL: {cls.WORKFLOW_BASE_URL}")
         print("=" * 60)
 

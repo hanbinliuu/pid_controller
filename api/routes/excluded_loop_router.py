@@ -4,14 +4,12 @@
 """
 import logging
 from typing import Optional, Dict, Any, List
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlmodel import Session
 from pydantic import BaseModel
 
 from core.database.database import get_db
 from api.services.excluded_loop_service import ExcludedLoopService
-from api.bean.excluded_loop import ExcludedLoop
 from api.middleware.exceptions import (
     BusinessException,
     ValidationException,
@@ -281,16 +279,12 @@ async def get_excluded_loop_by_id(
             )
         
         return {
-            "code": 0,
-            "message": "查询成功",
-            "data": {
                 "id": excluded.id,
                 "uri": excluded.uri,
                 "reason": excluded.reason,
                 "created_time": excluded.created_time.isoformat() if excluded.created_time else None,
                 "updated_time": excluded.updated_time.isoformat() if excluded.updated_time else None
             }
-        }
     except BusinessException:
         raise
     except HTTPException:
@@ -328,15 +322,11 @@ async def update_excluded_loop(
             )
         
         return {
-            "code": 0,
-            "message": "更新成功",
-            "data": {
                 "id": excluded.id,
                 "uri": excluded.uri,
                 "reason": excluded.reason,
                 "updated_time": excluded.updated_time.isoformat() if excluded.updated_time else None
             }
-        }
     except BusinessException:
         raise
     except HTTPException:
@@ -375,11 +365,7 @@ async def delete_excluded_loop(
                 data={"excluded_id": excluded_id}
             )
         
-        return {
-            "code": 0,
-            "message": "删除成功",
-            "data": {"excluded_id": excluded_id}
-        }
+        return {"excluded_id": excluded_id}
     except BusinessException:
         raise
     except HTTPException:
@@ -423,9 +409,7 @@ async def batch_add_excluded_loops(
         )
         
         return {
-            "code": 0,
-            "message": "批量添加完成",
-            "data": result
+            "uris": result
         }
     except BusinessException:
         raise
@@ -471,9 +455,7 @@ async def batch_remove_excluded_loops(
         result = ExcludedLoopService.batch_remove_excluded(db, uris)
         
         return {
-            "code": 0,
-            "message": "批量移除完成",
-            "data": result
+            "result": result
         }
     except BusinessException:
         raise
