@@ -114,7 +114,7 @@ async def list_device_evaluations(
                 {
                     "id": e.id,
                     "device_uri": e.device_uri,
-                    "device_name": e.group_name,
+                    "device_name": e.device_name,
                     "parent_device_uri": e.parent_device_uri,
                     "statistics_time": e.statistics_time.isoformat(),
                     "loop_count": e.loop_count,
