@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import List
+from typing import List, Dict
 
 
 class ModelType(Enum):
@@ -17,9 +17,14 @@ class ModelType(Enum):
     def from_string(cls, value: str) -> 'ModelType':
         """从字符串创建枚举"""
         try:
-            return cls(value.lower())
+            return cls(value)
         except ValueError:
             raise ValueError(f"不支持的模型类型: {value}，支持的类型: {[e.value for e in cls]}")
+
+    @classmethod
+    def get_model_type(cls) -> List[str]:
+        return [e.value for e in ModelType]
+
 
     @property
     def display_name(self) -> str:
