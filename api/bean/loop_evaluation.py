@@ -5,6 +5,7 @@
 """
 from datetime import datetime, date
 from typing import Optional, Dict, Any
+from uuid import UUID, uuid4
 
 from sqlalchemy import Text
 from sqlmodel import SQLModel, Field, Column, JSON
@@ -22,11 +23,11 @@ class LoopEvaluation(SQLModel, table=True):
     __table_args__ = {"comment": "回路评估明细表"}
 
     # 主键
-    id: Optional[int] = Field(
-        default=None,
+    id: Optional[UUID] = Field(
+        default_factory=uuid4,
         primary_key=True,
         index=True,
-        sa_column_kwargs={"comment": "记录ID"}
+        sa_column_kwargs={"comment": "记录ID(UUID)"}
     )
     # 回路信息
     loop_uri: Optional[str] = Field(

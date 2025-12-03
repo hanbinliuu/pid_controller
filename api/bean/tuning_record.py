@@ -6,6 +6,7 @@ SQLModel = SQLAlchemy + Pydantic
 """
 from datetime import datetime
 from typing import Optional, Dict, Any
+from uuid import UUID, uuid4
 from sqlmodel import SQLModel, Field, Column, JSON
 from sqlalchemy import Text
 
@@ -19,11 +20,11 @@ class TuningRecord(SQLModel, table=True):
     __table_args__ = {"comment": "整定记录表"}
 
     # 主键
-    id: Optional[int] = Field(
-        default=None,
+    id: Optional[UUID] = Field(
+        default_factory=uuid4,
         primary_key=True,
         index=True,
-        sa_column_kwargs={"comment": "记录ID"}
+        sa_column_kwargs={"comment": "记录ID(UUID)"}
     )
     
     # 回路信息

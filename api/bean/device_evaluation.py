@@ -5,6 +5,7 @@
 
 from datetime import datetime
 from typing import Optional
+from uuid import UUID, uuid4
 from sqlmodel import SQLModel, Field
 
 
@@ -20,11 +21,11 @@ class DeviceEvaluation(SQLModel, table=True):
     __table_args__ = {"comment": "装置评估表"}
 
     # 主键
-    id: Optional[int] = Field(
-        default=None,
+    id: Optional[UUID] = Field(
+        default_factory=uuid4,
         primary_key=True,
         index=True,
-        sa_column_kwargs={"comment": "记录ID"}
+        sa_column_kwargs={"comment": "记录ID(UUID)"}
     )
 
     # 装置信息
