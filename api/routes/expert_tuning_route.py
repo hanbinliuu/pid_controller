@@ -220,9 +220,9 @@ async def calculate_pid(
         )
 
 @router.post("/generate-all-curves",
-             summary="仿真曲线生成（拟合、闭环、阶跃响应）",
-             operation_id="统一生成拟合、闭环、阶跃响应三种曲线",
-             description="根据模型参数和PID参数，一次性生成拟合曲线、闭环仿真曲线和阶跃响应曲线")
+             summary="仿真曲线生成（闭环、阶跃响应）",
+             operation_id="统一生成闭环、阶跃响应三种曲线",
+             description="根据模型参数和PID参数，一次性生成闭环仿真曲线和阶跃响应曲线")
 async def generate_all_curves(
         # loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
         #                          examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
@@ -245,7 +245,7 @@ async def generate_all_curves(
         duration: float = Query(600.0, description="仿真时长(秒)", examples=[300.0, 600.0]),
         dt: float = Query(1.0, description="采样时间间隔(秒)", examples=[0.1, 1.0]),
         initial_output: float = Query(0.0, description="初始输出值", examples=[0.0]),
-        setpoint: Optional[float] = Query(None, description="PID设定值", examples=[100.0]),
+        setpoint: Optional[float] = Query(None, description="设定值", examples=[10.0]),
 ):
     """
     **三种仿真曲线统一生成接口**

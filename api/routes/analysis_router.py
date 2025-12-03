@@ -126,7 +126,7 @@ async def optimize_pid(
         is_lambda: bool = Query(False, description="是否增加lambda整定建议",
                                       examples=[False]),
         model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
-                                      examples=["FOPDT","FO","SOPDT","SO","FO_INTEGRATOR","SO_INTEGRATOR"])
+                                      examples=ModelType.get_model_type())
 ):
     """
     **PID参数智能优化 - PIDOptimizationTool**
@@ -175,7 +175,7 @@ class WorkflowRequest(BaseModel):
     end_time: str = Field(..., description="结束时间", example="2025-10-08 18:00:37")
     loop_type: str = Field(..., description="回路类型", example="流量")
     loop_uri: str = Field(None, description="回路URI", example="")
-    response_mode: str = Field("blocking", description="响应模式（流式/直连）", example="blocking")
+    response_mode: str = Field("blocking", description="响应模式（流式/直连）", example=["blocking", "streaming"])
     # user: str = Field("admin", description="用户名", example="admin")
     
     class Config:
