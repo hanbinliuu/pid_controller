@@ -10,18 +10,55 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, Query
 
 from api.response.loop_response import LoopListResponse, LoopInfoResponse
+from api.response.bff_response import SubmodelListResponse
 from api.services.loop_service import LoopService
 from core.config import Config
+from pydantic import BaseModel, Field
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class PointValuesRequest(BaseModel):
+    """测点值查询请求模型"""
+    point_names: List[str] = Field(..., description="测点名称列表")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "point_names": ["PB", "TI", "TD", "PV", "SV", "MV"]
+            }
+        }
+
+
+class LoopValuesResponse(BaseModel):
+    """回路测点值响应模型"""
+    PB: Optional[float] = Field(None, description="比例带")
+    TI: Optional[float] = Field(None, description="积分时间")
+    TD: Optional[float] = Field(None, description="微分时间")
+    PV: Optional[float] = Field(None, description="过程值")
+    SV: Optional[float] = Field(None, description="设定值")
+    MV: Optional[float] = Field(None, description="阀位值")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "PB": 71.43,
+                "TI": 3.11,
+                "TD": 2.0,
+                "PV": 10.0,
+                "SV": 10.0,
+                "MV": 15.979299
+            }
+        }
 
 
 @router.post(
     "/list-loop",
     summary="查询对应节点下的回路列表",
     operation_id="查询对应节点下的回路列表",
-    description="根据回路类型URI和起始节点URI查询节点下的回路列表，支持分页"
+    description="根据回路类型URI和起始节点URI查询节点下的回路列表，支持分页",
+    response_model=LoopListResponse
 )
 async def list_instances_by_uri(
         node_uri: List[str] = Query(
@@ -76,7 +113,8 @@ async def list_instances_by_uri(
     "/loop-info",
     summary="查询回路属性",
     operation_id="查询回路属性",
-    description="根据回路URI查询回路的详细属性信息，包括回路名称、类型、自控情况、正反作用等"
+    description="根据回路URI查询回路的详细属性信息，包括回路名称、类型、自控情况、正反作用等",
+    response_model=LoopInfoResponse
 )
 async def query_loop_info(
         loop_uri: Optional[str] = Query(
@@ -112,10 +150,11 @@ async def query_loop_info(
     "/loop-values",
     summary="查询回路测点当前最新值",
     operation_id="查询回路测点当前最新值",
-    description="根据回路 URI 和测点名称查询测点的当前最新值"
+    description="根据回路 URI 和测点名称查询测点的当前最新值",
+    response_model=Dict[str, Any]
 )
 async def query_loop_values(
-        point_names: List[str],
+        point_names: List[str] = Query(..., description="测点名称列表", example=["PB", "TI", "TD"]),
         loop_uri: Optional[str] = Query(
             None,
             description="回路 URI，默认从 BFF_MODEL_LOOP_URI 读取",
@@ -173,7 +212,8 @@ async def query_loop_values(
     "/next-loop-type",
     summary="获取回路类型",
     operation_id="获取回路类型",
-    description="根据模型标识符获取子回路列表"
+    description="根据模型标识符获取子回路列表",
+    response_model=SubmodelListResponse
 )
 async def get_next_loop_type(
         identifier: str = Query(

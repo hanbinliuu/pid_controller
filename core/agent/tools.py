@@ -14,12 +14,13 @@ from core.algorithm.detector import StabilityDetector
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import query_raw_data, query_read_interpolated
 from core.utils import pid_converter
+from core.utils.model_type import ModelType
 from core.utils.pid_converter import process_lists_optimized
 
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
 
-from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, ModelType, Config
+from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
 from core.algorithm.ktl_simulator import KTLSimulator
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -206,17 +207,17 @@ class PIDOptimizationTool():
                 "sv": float(last_record.get('sv', 25.0))
             }
 
-            # 提取温度数据进行性能分析
-            temp_data = [float(record.get('pv', 25.0)) for record in data_list]
+            # 提取数据进行性能分析
+            pv_data = [float(record.get('pv', 25.0)) for record in data_list]
 
             # 计算性能指标
-            temp_std = self._calculate_std(temp_data) #标准差
-            steady_state_value = sum(temp_data[-5:]) / min(5, len(temp_data)) #稳态值
+            temp_std = self._calculate_std(pv_data) #标准差
+            steady_state_value = sum(pv_data[-5:]) / min(5, len(pv_data)) #稳态值
             steady_error = float(current_params["sv"] - steady_state_value) #稳态误差
 
             # 评估系统性能
             #响应速度
-            response_speed = "fast" if len(temp_data) > 0 and temp_data[-1] >= current_params["sv"] * 0.9 else "slow"
+            response_speed = "fast" if len(pv_data) > 0 and pv_data[-1] >= current_params["sv"] * 0.9 else "slow"
             #稳定性
             stability = "stable" if temp_std < 0.5 else "unstable"
             #精度
@@ -259,7 +260,7 @@ class PIDOptimizationTool():
                     "steady_error": steady_error, #稳态误差
                     "stability": temp_std, #稳定性
                     "steady_state_value": steady_state_value, #稳态温度
-                    "data_points": len(temp_data) #测点数量
+                    "data_points": len(pv_data) #测点数量
                 },
                 "status": {
                     "response_speed": response_speed, #响应速度

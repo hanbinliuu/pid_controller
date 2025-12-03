@@ -12,6 +12,11 @@ from pydantic import BaseModel
 
 from core.client.bff_model_client import Config
 from api.services.bff_service import BFFService
+from api.response.bff_response import (
+    PointPathsResponse,
+    SubmodelListResponse,
+    InstanceTreeNode
+)
 
 
 class SearchByModelsRequest(BaseModel):
@@ -35,7 +40,8 @@ logger = logging.getLogger(__name__)
     "/point-paths",
     summary="查询项目路径下的测点路径",
     operation_id="查询BFF项目测点路径",
-    description="查询指定项目路径下的所有PID控制相关测点路径，返回IoT格式的字段映射"
+    description="查询指定项目路径下的所有PID控制相关测点路径，返回IoT格式的字段映射",
+    response_model=PointPathsResponse
 )
 async def get_point_paths(
     project_path: Optional[str] = Query(
@@ -232,7 +238,8 @@ async def get_bff_config() -> Dict[str, Any]:
     "/next-level-submodel",
     summary="获取下一级子模型",
     operation_id="获取下一级子模型",
-    description="根据模型标识符获取其下一级的子模型列表"
+    description="根据模型标识符获取其下一级的子模型列表",
+    response_model=SubmodelListResponse
 )
 async def get_next_level_submodel(
     identifier: str = Query(

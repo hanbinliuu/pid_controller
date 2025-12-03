@@ -15,48 +15,92 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, project_root)
 
 from api.services.conversion_service import ConversionService
+from api.response.conversion_response import (
+    PIDParametersModel,
+    ClassicalParametersModel,
+    ConversionResponseData,
+    FormatParametersData,
+    ParameterValidationResult
+)
 
 router = APIRouter()
 
-# 请求模型
-class PIDParameters(BaseModel):
-    """PID标准参数模型"""
-    kp: float = Field(..., ge=0, description="比例增益")
-    ki: float = Field(..., ge=0, description="积分增益")
-    kd: float = Field(..., ge=0, description="微分增益")
-
-class ClassicalParameters(BaseModel):
-    """经典控制参数模型"""
-    proportional_band: float = Field(..., gt=0, description="比例带百分比 (%)")
-    integral_time: Optional[float] = Field(None, gt=0, description="积分时间 (秒)")
-    derivative_time: Optional[float] = Field(None, ge=0, description="微分时间 (秒)")
+# 请求模型 - 使用response中定义的模型
+# PIDParameters和ClassicalParameters已在api.response.conversion_response中定义
 
 # 响应模型
-class PIDResponse(BaseModel):
-    """PID参数响应模型"""
-    kp: float
-    ki: float
-    kd: float
-
-class ClassicalResponse(BaseModel):
-    """经典控制参数响应模型"""
-    proportional_band: Optional[float]
-    integral_time: Optional[float] 
-    derivative_time: float
-
 class ConversionResponse(BaseModel):
     """转换结果响应模型"""
-    success: bool
-    message: str
-    data: Dict[str, Union[float, Dict[str, float]]]
+    success: bool = Field(True, description="是否成功")
+    message: str = Field("转换成功", description="响应消息")
+    data: ConversionResponseData = Field(..., description="转换结果数据")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "转换成功",
+                "data": {
+                    "original": {
+                        "kp": 1.5,
+                        "ki": 0.3,
+                        "kd": 0.1
+                    },
+                    "converted": {
+                        "proportional_band": 66.67,
+                        "integral_time": 5.0,
+                        "derivative_time": 0.067
+                    }
+                }
+            }
+        }
+
+
+class FormatResponse(BaseModel):
+    """格式化响应模型"""
+    success: bool = Field(True, description="是否成功")
+    message: str = Field("格式化成功", description="响应消息")
+    data: FormatParametersData = Field(..., description="格式化数据")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "message": "格式化成功",
+                "data": {
+                    "standard": {
+                        "kp": 1.5,
+                        "ki": 0.3,
+                        "kd": 0.1
+                    },
+                    "classical": {
+                        "proportional_band": 66.67,
+                        "integral_time": 5.0,
+                        "derivative_time": 0.067
+                    }
+                }
+            }
+        }
+
 
 class ValidationResponse(BaseModel):
     """参数验证响应模型"""
-    kp_valid: bool
-    ki_valid: bool
-    kd_valid: bool
-    stable: bool
-    message: str
+    kp_valid: bool = Field(..., description="Kp参数是否有效")
+    ki_valid: bool = Field(..., description="Ki参数是否有效")
+    kd_valid: bool = Field(..., description="Kd参数是否有效")
+    stable: bool = Field(..., description="系统是否稳定")
+    message: str = Field(..., description="验证结果说明")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "kp_valid": True,
+                "ki_valid": True,
+                "kd_valid": True,
+                "stable": True,
+                "message": "所有参数有效，系统稳定"
+            }
+        }
 
 
 @router.post("/pid-to-classical", 
@@ -64,7 +108,7 @@ class ValidationResponse(BaseModel):
              operation_id="PID标准参数转换为经典控制参数",
              summary="PID标准参数转换为经典控制参数",
              description="将PID控制器的标准参数(Kp, Ki, Kd)转换为经典控制理论中的参数形式(比例带PB%, 积分时间Ti, 微分时间Td)")
-async def convert_pid_to_classical(params: PIDParameters):
+async def convert_pid_to_classical(params: PIDParametersModel):
     """
     **PID标准参数转换为经典控制参数**
     
@@ -107,7 +151,7 @@ async def convert_pid_to_classical(params: PIDParameters):
              operation_id="经典控制参数转换为PID标准参数",
              summary="经典控制参数转换为PID标准参数",
              description="将传统工业控制中的经典参数(比例带PB%, 积分时间Ti, 微分时间Td)转换为现代PID控制器的标准参数格式")
-async def convert_classical_to_pid(params: ClassicalParameters):
+async def convert_classical_to_pid(params: ClassicalParametersModel):
     """
     **经典控制参数转换为PID标准参数**
     
@@ -148,11 +192,11 @@ async def convert_classical_to_pid(params: ClassicalParameters):
 
 
 @router.post("/format-parameters", 
-             response_model=ConversionResponse,
+             response_model=FormatResponse,
              summary="PID参数格式化与双重表示",
              operation_id="PID参数格式化与双重表示",
              description="将PID参数进行格式化处理，同时提供标准形式和经典控制形式的双重表示，便于不同应用场景使用")
-async def format_pid_parameters(params: PIDParameters):
+async def format_pid_parameters(params: PIDParametersModel):
     """
     **PID参数格式化与双重表示**
     
@@ -199,7 +243,7 @@ async def format_pid_parameters(params: PIDParameters):
              summary="PID参数有效性验证",
              operation_id="PID参数有效性验证",
              description="对PID控制器参数进行全面的有效性检查，包括数值范围、稳定性分析等，确保参数的可用性和安全性")
-async def validate_pid_parameters(params: PIDParameters):
+async def validate_pid_parameters(params: PIDParametersModel):
     """
     **PID参数有效性验证**
     

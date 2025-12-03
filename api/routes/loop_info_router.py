@@ -173,10 +173,7 @@ async def list_loop_info(
         mappings = result["mappings"]
         pagination = result["pagination"]
         
-        return {
-            "code": 0,
-            "message": "查询成功",
-            "data": {
+        return  {
                 "mappings": [
                     {
                         "id": m.id,
@@ -199,7 +196,6 @@ async def list_loop_info(
                 ],
                 "pagination": pagination
             }
-        }
     except Exception as e:
         logger.error(f"查询回路信息列表失败: {str(e)}")
         raise HTTPException(
@@ -252,16 +248,12 @@ async def update_loop_info(
             )
         
         return {
-            "code": 0,
-            "message": "更新成功",
-            "data": {
                 "id": mapping.id,
                 "loop_uri": mapping.loop_uri,
                 "loop_path": mapping.loop_path,
                 "loop_name": mapping.loop_name,
                 "updated_time": mapping.updated_time.isoformat()
             }
-        }
     except HTTPException:
         raise
     except Exception as e:
@@ -270,143 +262,3 @@ async def update_loop_info(
             status_code=500,
             detail=f"更新回路信息失败: {str(e)}"
         )
-
-#
-# @router.delete("/loop-info",
-#               summary="删除回路信息",
-#               operation_id="delete_loop_info",
-#               response_model=Dict[str, Any])
-# async def delete_loop_info(
-#     loop_uri: str = Query(..., description="回路URI"),
-#     db: Session = Depends(get_db)
-# ):
-#     """
-#     删除指定的回路信息记录
-#     """
-#     try:
-#         success = LoopInfoService.delete_mapping(db, loop_uri)
-#
-#         if not success:
-#             raise HTTPException(
-#                 status_code=404,
-#                 detail=f"未找到loop_uri为 {loop_uri} 的信息记录"
-#             )
-#
-#         return {
-#             "code": 0,
-#             "message": "删除成功",
-#             "data": {}
-#         }
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         logger.error(f"删除回路信息失败: {str(e)}")
-#         raise HTTPException(
-#             status_code=500,
-#             detail=f"删除回路信息失败: {str(e)}"
-#         )
-#
-#
-# @router.get("/loop-info/maps/uri-to-path",
-#            summary="获取URI到路径映射字典",
-#            operation_id="get_uri_to_path_map",
-#            response_model=Dict[str, Any])
-# async def get_uri_to_path_map(db: Session = Depends(get_db)):
-#     """
-#     获取所有回路的URI到路径映射字典，用于快速查询
-#     """
-#     try:
-#         uri_to_path = LoopInfoService.get_uri_to_path_map(db)
-#
-#         return {
-#             "code": 0,
-#             "message": "查询成功",
-#             "data": uri_to_path
-#         }
-#     except Exception as e:
-#         logger.error(f"获取URI到路径映射字典失败: {str(e)}")
-#         raise HTTPException(
-#             status_code=500,
-#             detail=f"获取URI到路径映射字典失败: {str(e)}"
-#         )
-#
-#
-# @router.get("/loop-info/maps/path-to-uri",
-#            summary="获取路径到URI映射字典",
-#            operation_id="get_path_to_uri_map",
-#            response_model=Dict[str, Any])
-# async def get_path_to_uri_map(db: Session = Depends(get_db)):
-#     """
-#     获取所有回路的路径到URI映射字典，用于快速查询
-#     """
-#     try:
-#         path_to_uri = LoopInfoService.get_path_to_uri_map(db)
-#
-#         return {
-#             "code": 0,
-#             "message": "查询成功",
-#             "data": path_to_uri
-#         }
-#     except Exception as e:
-#         logger.error(f"获取路径到URI映射字典失败: {str(e)}")
-#         raise HTTPException(
-#             status_code=500,
-#             detail=f"获取路径到URI映射字典失败: {str(e)}"
-#         )
-
-
-# @router.post("/loop-info/batch",
-#             summary="批量创建信息",
-#             operation_id="batch_create_loop_info",
-#             response_model=Dict[str, Any])
-# async def batch_create_loop_info(
-#     mapping_list: List[Dict[str, Any]],
-#     db: Session = Depends(get_db)
-# ):
-#     """
-#     批量创建回路信息记录
-#
-#     请求体示例：
-#     ```json
-#     [
-#       {
-#         "loop_uri": "/pid_zd/abc123",
-#         "loop_path": "/设备/反应器/温度",
-#         "loop_name": "温度控制",
-#         "pv_field": "TEMP_PV"
-#       }
-#     ]
-#     ```
-#     """
-#     try:
-#         if not mapping_list:
-#             raise HTTPException(
-#                 status_code=400,
-#                 detail="信息列表不能为空"
-#             )
-#
-#         mappings = LoopInfoService.batch_create_mappings(db, mapping_list)
-#
-#         return {
-#             "code": 0,
-#             "message": f"批量创建成功，共创建 {len(mappings)} 条记录",
-#             "data": {
-#                 "count": len(mappings),
-#                 "mappings": [
-#                     {
-#                         "id": m.id,
-#                         "loop_uri": m.loop_uri,
-#                         "loop_path": m.loop_path
-#                     }
-#                     for m in mappings
-#                 ]
-#             }
-#         }
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         logger.error(f"批量创建回路信息失败: {str(e)}")
-#         raise HTTPException(
-#             status_code=500,
-#             detail=f"批量创建回路信息失败: {str(e)}"
-#         )

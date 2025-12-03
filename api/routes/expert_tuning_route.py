@@ -1,25 +1,26 @@
+import numpy as np
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from typing import Dict, List, Optional, Union
 from datetime import datetime
 import json
 import logging
 
-from core.algorithm.ls_pid_autotune_v5 import ModelType
+from api.routes.time_util import parse_time_to_milliseconds
+from core.agent.tools import process_query_tsdb_data_interpolated, detect_and_visualize
+from core.algorithm.ktl_simulator import KTLSimulator
 from api.services.expert_tuning_service import ExpertTuningService
+from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
 from core.client.bff_model_client import BFFModelClient
+from core.client.real_tsdb_client import get_default_database, query_raw_data
+from core.utils.model_type import ModelType
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# 默认字段映射map
-DEFAULT_FIELD_MAPPING = {
-    "mv": "ns=100;s=FIC101A_MV.In_Channel0",
-    "pv": "ns=100;s=FIC101A_PV.In_Channel0",
-    "sv": "ns=100;s=FIC101A_SV.In_Channel0",
-    "pb": "ns=100;s=FIC101A_PB.In_Channel0",
-    "ti": "ns=100;s=FIC101A_TI.In_Channel0",
-    "td": "ns=100;s=FIC101A_TD.In_Channel0"
-}
+#获取整定模型类型接口
+
+model_type = ModelType.get_model_type()
 
 @router.post("/tuning-windows",
              summary="常规整定-自动筛选时间区间",
@@ -64,7 +65,7 @@ async def get_tuning_windows(
         raise HTTPException(status_code=500, detail=f"时间区间筛选失败: {str(e)}")
 
 @router.post("/auto-tuning",
-             summary="常规整定-智能PID参数整定",
+             summary="常规整定-自动筛选时间整定",
              operation_id="常规整定-自动筛选整定与手动时间范围整定",
              description="支持两种模式：1.自动筛选最佳时间窗口并整定 2.手动指定时间范围整定")
 async def auto_tuning(
@@ -77,7 +78,7 @@ async def auto_tuning(
         end_time: Union[int, str] = Query(None, required=False,
                                           description="结束时间（manual模式必填），支持毫秒时间戳或字符串格式"),
         model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
-                                      examples=["FOPDT", "FO", "SOPDT", "SO", "FO_INTEGRATOR", "SO_INTEGRATOR"]),
+                                      examples=ModelType.get_model_type()),
         lambda_val: Optional[float] = Query(None, description="Lambda参数值（可选），未指定时自动计算"),
         window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
         step_size: int = Query(10, description="滑动步长（分钟）", examples=[10, 30]),
@@ -168,7 +169,7 @@ async def calculate_pid(
         lambda_val: Optional[float] = Query(None, description="Lambda值（期望闭环时间常数），不指定时自动计算",
                                             examples=[10.0, 30.0]),
         model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
-                                      examples=["FOPDT", "FO", "SOPDT", "SO", "FO_INTEGRATOR", "SO_INTEGRATOR"])
+                                      examples=ModelType.get_model_type())
 ):
     """
     **直接PID参数计算接口**
@@ -223,8 +224,8 @@ async def calculate_pid(
              operation_id="统一生成拟合、闭环、阶跃响应三种曲线",
              description="根据模型参数和PID参数，一次性生成拟合曲线、闭环仿真曲线和阶跃响应曲线")
 async def generate_all_curves(
-        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
-                                 examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
+        # loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+        #                          examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
         start_time: Union[int, str] = Query(None, required=False, description="开始时间"),
         end_time: Union[int, str] = Query(None, required=False, description="结束时间"),
         # 模型参数
@@ -233,7 +234,7 @@ async def generate_all_curves(
         T2: Optional[float] = Query(None, description="二阶时间常数 T2 (秒)", examples=[10.0, 20.0]),
         L: Optional[float] = Query(0, description="滞后时间 L (秒)", examples=[0, 1.0, 5.0]),
         model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
-                                      examples=["FOPDT", "FO", "SOPDT", "SO"]),
+                                      examples=ModelType.get_model_type()),
         # PID参数
         Kp: Optional[float] = Query(..., description="PID比例系数", examples=[1.0]),
         Ki: Optional[float] = Query(..., description="PID积分系数", examples=[0.1]),
@@ -270,6 +271,8 @@ async def generate_all_curves(
 
         result = {
             "model_type": mt_str,
+            "start_time": start_time,
+            "end_time": end_time,
             "model_parameters": {
                 "K": K,
                 "T1": T1,
@@ -295,49 +298,49 @@ async def generate_all_curves(
         if start_time_ms >= end_time_ms:
             raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
         # 从数据库查询
-        db = get_default_database()
+        # db = get_default_database()
         # table = "PID_FEP_Gateway_Device_001default"
         # required_fields = DEFAULT_FIELD_MAPPING
-        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
+        # table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
 
-        data_list = process_query_tsdb_data_interpolated(
-            db=db,
-            table_name=table,
-            required_fields=required_fields,
-            start_time=start_time_ms,
-            end_time=end_time_ms,
-            window=1,
-            is_filter=False
-        )
+        # data_list = process_query_tsdb_data_interpolated(
+        #     db=db,
+        #     table_name=table,
+        #     required_fields=required_fields,
+        #     start_time=start_time_ms,
+        #     end_time=end_time_ms,
+        #     window=1,
+        #     is_filter=False
+        # )
         # 获取实际数据
 
-        if data_list:
-            t_list, pv_list, mv_list = [], [], []
-            for item in data_list:
-                if 'timestamp' in item and 'pv' in item:
-                    t_list.append(item['timestamp'])
-                    pv_list.append(float(item.get('pv', 0.0)))
-
-            if t_list and len(t_list) > 0:
-                t_fit = np.array(t_list, dtype=float) / 1000.0
-                # 确保数组不为空再进行减法操作
-                if len(t_fit) > 0:
-                    t_fit = t_fit - t_fit[0]
-                y_fit = np.array(pv_list, dtype=float)
-            else:
-                raise ValueError("数据中缺少timestamp或pv字段")
-        else:
-            raise ValueError("查询数据为空")
+        # if data_list:
+        #     t_list, pv_list, mv_list = [], [], []
+        #     for item in data_list:
+        #         if 'timestamp' in item and 'pv' in item:
+        #             t_list.append(item['timestamp'])
+        #             pv_list.append(float(item.get('pv', 0.0)))
+        #
+        #     if t_list and len(t_list) > 0:
+        #         t_fit = np.array(t_list, dtype=float) / 1000.0
+        #         # 确保数组不为空再进行减法操作
+        #         if len(t_fit) > 0:
+        #             t_fit = t_fit - t_fit[0]
+        #         y_fit = np.array(pv_list, dtype=float)
+        #     else:
+        #         raise ValueError("数据中缺少timestamp或pv字段")
+        # else:
+        #     raise ValueError("查询数据为空")
         # ==================== 1. 生成模拟拟合曲线 ====================
-        fitting_result = {}
-        try:
-            fitting_result = KTLSimulator.simulation_curve(
-                data_list=data_list,
-                model_params={'K': K, 'T1': T1, 'T2': T2, 'L': L},
-                model_type=ModelType.FOPDT.value
-            )
-        except Exception as e:
-            fitting_result = {"status": "error", "detail": f"拟合曲线生成失败: {str(e)}"}
+        # fitting_result = {}
+        # try:
+        #     fitting_result = KTLSimulator.simulation_curve(
+        #         data_list=data_list,
+        #         model_params={'K': K, 'T1': T1, 'T2': T2, 'L': L},
+        #         model_type=ModelType.FOPDT.value
+        #     )
+        # except Exception as e:
+        #     fitting_result = {"status": "error", "detail": f"拟合曲线生成失败: {str(e)}"}
 
         # ==================== 2. 生成闭环仿真曲线 ====================
         closed_loop_result = {}
@@ -379,7 +382,7 @@ async def generate_all_curves(
             step_response_result = {"status": "error", "detail": f"阶跃响应曲线生成失败: {str(e)}"}
 
         # 组合结果
-        result["fitting_curve"] = fitting_result
+        # result["fitting_curve"] = fitting_result
         result["closed_loop_curve"] = closed_loop_result
         result["step_response_curve"] = step_response_result
 
@@ -855,10 +858,8 @@ async def calculate_pid(
     - recommendations: 针对选定模型类型的应用建议
     """
     try:
-        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, ModelType as ST_ModelType
-
         # 转换ModelType为字符串
-        mt_str = model_type.value if isinstance(model_type, ST_ModelType) else str(model_type)
+        mt_str = model_type.value if isinstance(model_type, ModelType) else str(model_type)
 
         # 参数验证
         if K <= 0:
@@ -1194,7 +1195,7 @@ async def get_history_data(
 #             description="根据K(增益)、T(时间常数)、L(纯滞后)参数生成模型的阶跃响应曲线")
 async def generate_ktl_simulation(
         model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
-                                      examples=["FOPDT", "FO", "SOPDT", "SO", "FO_INTEGRATOR", "SO_INTEGRATOR"]),
+                                      examples=ModelType.get_model_type()),
         K: float = Query(..., description="增益系数 K", examples=[0.5, 1.0, 2.0]),
         T1: float = Query(..., description="时间常数 T1 (秒)", examples=[10.0, 30.0, 50.0]),
         T2: Optional[float] = Query(None, description="二阶时间常数 T2 (秒，仅二阶模型需要)", examples=[10.0, 20.0]),

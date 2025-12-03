@@ -11,20 +11,15 @@ from pydantic import Field, BaseModel
 
 # 更新导入语句，移除直接的工具类导入，改为导入AnalysisService
 from api.services.analysis_service import AnalysisService
-from core.algorithm.ls_pid_autotune_v5 import ModelType
+from core.utils.model_type import ModelType
+from api.response.analysis_response import (
+    TemperatureAnalysisResponse,
+    PIDOptimizationResponse,
+    WorkflowResponse
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# 默认字段映射map
-DEFAULT_FIELD_MAPPING = {
-    "mv": "ns=100;s=FIC101A_MV.In_Channel0",
-    "pv": "ns=100;s=FIC101A_PV.In_Channel0",
-    "sv": "ns=100;s=FIC101A_SV.In_Channel0",
-    "pb": "ns=100;s=FIC101A_PB.In_Channel0",
-    "ti": "ns=100;s=FIC101A_TI.In_Channel0",
-    "td": "ns=100;s=FIC101A_TD.In_Channel0"
-}
 
 """
 **获取设备历史数据 - HistoryDataTool**
@@ -54,7 +49,7 @@ DEFAULT_FIELD_MAPPING = {
 
 @router.get("/temperature-analysis",
             summary="大模型整定-曲线分析",
-            # operation_id="温度曲线分析",
+            operation_id="温度曲线分析",
             description="大模型整定-分析曲线的控制性能，包括上升时间、超调量、稳态误差等指标")
 async def analyze_temperature(
         start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
@@ -178,10 +173,21 @@ class WorkflowRequest(BaseModel):
     """工作流请求模型"""
     start_time: str = Field(..., description="开始时间", example="2025-10-08 17:30:37")
     end_time: str = Field(..., description="结束时间", example="2025-10-08 18:00:37")
-    loop_type: str =Field(..., description="回路类型", example="流量")
+    loop_type: str = Field(..., description="回路类型", example="流量")
     loop_uri: str = Field(None, description="回路URI", example="")
-    response_mode: str = Field("blocking", description="响应模式（流式/直连）", example=["blocking","streaming"])
+    response_mode: str = Field("blocking", description="响应模式（流式/直连）", example="blocking")
     # user: str = Field("admin", description="用户名", example="admin")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "start_time": "2025-10-08 17:30:37",
+                "end_time": "2025-10-08 18:00:37",
+                "loop_type": "流量",
+                "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
+                "response_mode": "blocking"
+            }
+        }
 
 class ProxyConfig:
     """代理配置"""

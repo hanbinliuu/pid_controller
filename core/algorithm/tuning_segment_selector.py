@@ -82,25 +82,11 @@ def find_high_variability_periods(
         
         # 如果没有有效窗口
         if not windows_data:
-            return {
-                "table": pd.DataFrame(),
-                "start_time": None,
-                "end_time": None,
-                "params": {
-                    "window_size": window_size,
-                    "step_size": step_size,
-                    "variability_threshold": variability_threshold,
-                    "analyst_column": analyst_column or "pv",
-                    "window_sec": window_sec,
-                    "is_filter": is_filter
-                },
-                "total_windows": 0,
-                "std_max_window": None
-            }
+            raise RuntimeError("未解析到有效设备数据，请扩大或更换时间区间识别。")
         
         # 创建统计表
         table = pd.DataFrame(windows_data)
-        
+
         # 设置阈值（使用分位数）
         threshold = np.quantile(variances, variability_threshold)
         
@@ -129,7 +115,6 @@ def find_high_variability_periods(
             end_time = data_resampled.index[-1] if len(data_resampled) > 0 else None
         
         return {
-            "table": table,
             "start_time": start_time,
             "end_time": end_time,
             "params": {

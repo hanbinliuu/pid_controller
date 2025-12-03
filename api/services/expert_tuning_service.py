@@ -15,7 +15,7 @@ import numpy as np
 from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.algorithm import tuning_segment_selector
-from core.algorithm.ls_pid_autotune_v5 import ModelType
+from core.utils.model_type import ModelType
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
 from core.database.database import get_db_session
@@ -45,7 +45,7 @@ class ExpertTuningService:
         is_filter: bool = False
     ) -> Dict[str, Any]:
         """
-        自动识别温度曲线中高波动时段，输出适合经典整定分析的时间窗口列表
+        自动识别曲线中高波动时段，输出适合经典整定分析的时间窗口列表
         
         Args:
             loop_uri: 回路URI
@@ -120,65 +120,8 @@ class ExpertTuningService:
                 step_size=step_size,
                 variability_threshold=variability_threshold
             )
+            return high_windows
 
-            # 生成窗口输出，附加group_key（取窗口内最后一条记录的参数值）
-            windows_out = []
-            for win in high_windows:
-                start_dt = win.get("start_time")
-                end_dt = win.get("end_time")
-                start_ms = int(start_dt.timestamp() * 1000) if start_dt is not None else None
-                end_ms = int(end_dt.timestamp() * 1000) if end_dt is not None else None
-
-                win_df = df[(df["timestamp"] >= start_ms) & (
-                            df["timestamp"] <= end_ms)] if start_ms is not None and end_ms is not None else df
-                if len(win_df) > 0:
-                    last = win_df.iloc[-1]
-                    pb = last.get("pb")
-                    ti = last.get("ti")
-                    td = last.get("td")
-                    sv = last.get("sv")
-                    group_key = f"{pb}_{ti}_{td}_{sv}"
-                    kp = last.get("kp")
-                    ki = last.get("ki")
-                    kd = last.get("kd")
-                else:
-                    group_key = None
-                    kp = ki = kd = None
-
-                var = float(win.get("variance", 0.0))
-                std_val = float(win.get("std", 0.0))
-                windows_out.append({
-                    "start_timestamp": start_ms,
-                    "end_timestamp": end_ms,
-                    "variance": var,
-                    "std": std_val,
-                    "group_key": group_key,
-                    "last_pid": {"kp": kp, "ki": ki, "kd": kd}
-                })
-
-            # 选取标准差最大的窗口
-            std_max_window = None
-            if windows_out:
-                try:
-                    std_max_window = max(windows_out, key=lambda w: w.get("std", 0.0))
-                except Exception:
-                    std_max_window = windows_out[0]
-
-            return {
-                "table": table,
-                "start_time": start_time,
-                "end_time": end_time,
-                "params": {
-                    "window_size": window_size,
-                    "step_size": step_size,
-                    "variability_threshold": variability_threshold,
-                    "analyst_column": analyst_column or "pv",
-                    "window_sec": window_sec,
-                    "is_filter": is_filter
-                },
-                "total_windows": len(windows_out),
-                "std_max_window": std_max_window
-            }
 
         except Exception as e:
             logger.error(f"时间区间筛选失败: {str(e)}")
@@ -272,6 +215,8 @@ class ExpertTuningService:
                 df = pd.DataFrame(history_data)
                 if "timestamp" not in df.columns or "pv" not in df.columns or "mv" not in df.columns:
                     raise ValueError("历史数据缺少必要字段")
+                #todo 判断窗口数据是否稳态
+                # TuningSegmentSelector.extract_tuning_segment()
 
                 # 滑动窗口检测阶跃响应
                 window_size_sec = window_size * 60

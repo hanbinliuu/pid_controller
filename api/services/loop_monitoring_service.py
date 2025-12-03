@@ -200,7 +200,7 @@ class LoopMonitoringService:
                     loop_uri=loop_uri,
                     start_time=start_time,
                     end_time=end_time,
-                    window=1000  # 限制数据点数量
+                    window=1
                 )
 
                 # 检查是否有数据
@@ -226,9 +226,9 @@ class LoopMonitoringService:
                 for point in data_points:
                     if isinstance(point, dict):
                         timestamp = point.get('timestamp')
-                        pv = point.get('PV')
-                        sv = point.get('SV')
-                        mv = point.get('MV')
+                        pv = point.get('pv')
+                        sv = point.get('sv')
+                        mv = point.get('mv')
 
                         # 只有当时间戳存在时才添加数据点
                         if timestamp is not None:

@@ -14,7 +14,7 @@ class BusinessException(Exception):
         data: 额外的错误数据
     """
     
-    def __init__(self, message: str = "业务错误", code: int = 400, data: any = None):
+    def __init__(self, message: str = "业务错误", code: int = -1, data: any = None):
         self.code = code
         self.message = message
         self.data = data
@@ -25,7 +25,7 @@ class ValidationException(BusinessException):
     """参数验证异常"""
     
     def __init__(self, message: str = "参数验证失败", data: any = None):
-        super().__init__(message=message, code=400, data=data)
+        super().__init__(message=message, code=-1, data=data)
 
 
 class NotFoundException(BusinessException):
