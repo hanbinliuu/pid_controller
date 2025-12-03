@@ -105,10 +105,25 @@ class HomePageDAO:
             session: Session,
             query_date: date,
             offset: int,
-            limit: int) -> List[OptimizableLoop]:
+            limit: int) -> (List[OptimizableLoop], int):
         """
         Get optimizable loops
         """
+        # 查询需要整定回路总数
+        stmt = select(func.count()).where(
+            LoopEvaluation.assessment_time == query_date,
+            LoopEvaluation.status != "开环",
+            LoopEvaluation.status != "条件剔除"
+        ).where(
+            or_(
+                LoopEvaluation.performance_score < 80,
+                LoopEvaluation.stability_rate < 90
+            )
+        )
+        total = session.exec(stmt).one()
+        if total <= 0:
+            return [], total
+
         # 查询需要整定的回路
         # todo: 80, 90 这两个阈值需要从配置文件中获取
         stmt = select(
@@ -131,7 +146,7 @@ class HomePageDAO:
 
         selected_loops = session.exec(stmt).all()
         if not isinstance(selected_loops, list) or len(selected_loops) == 0:
-            return []
+            return [], total
 
         # 查询回路信息
         optimizable_loops = {}
@@ -156,4 +171,4 @@ class HomePageDAO:
             optimizable_loop.loop_type = loop_info.loop_type
             optimizable_loop.loop_desc = loop_info.description
             results.append(optimizable_loop)
-        return results
+        return results, total
