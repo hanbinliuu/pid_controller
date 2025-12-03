@@ -5,7 +5,7 @@
 """
 from datetime import datetime
 from typing import Optional
-from uuid import UUID, uuid4
+from uuid import uuid4
 from sqlmodel import SQLModel, Field
 
 
@@ -21,7 +21,7 @@ class LoopInfo(SQLModel, table=True):
     __table_args__ = {"comment": "回路信息表"}
 
     # 主键
-    id: Optional[UUID] = Field(
+    id: Optional[str] = Field(
         default_factory=uuid4,
         primary_key=True,
         index=True,

@@ -49,17 +49,16 @@ async def get_point_paths(
         description="项目路径前缀，默认从BFF_MODEL_LOOP_URI读取",
         example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
     )
-) -> Dict[str, Any]:
+) -> PointPathsResponse:
     """
     查询BFF项目路径下的测点路径
     
     功能说明：
-    - 查询指定项目下的所有PID控制字段（MV, PV, SV, PB, TI, TD）
-    - 返回IoT格式的字段映射关系
+    - 查询指定回路下的所有PID控制字段（MV, PV, SV, PB, TI, TD）
+    - 返回绑定的测点字段映射关系
     
     返回格式：
     {
-        "status": "success",
         "project_path": "/pid_zd/xxx",
         "field_mapping": {
             "mv": "ns=100;s=FIC101A_MV.In_Channel0",
@@ -72,7 +71,7 @@ async def get_point_paths(
         # 调用Service层查询
         result = BFFService.get_point_paths(project_path)
         
-        return result
+        return PointPathsResponse(**result)
     
     except Exception as e:
         logger.error(f"查询BFF测点路径失败: {str(e)}")

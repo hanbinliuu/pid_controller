@@ -21,7 +21,7 @@ class DeviceEvaluation(SQLModel, table=True):
     __table_args__ = {"comment": "装置评估表"}
 
     # 主键
-    id: Optional[UUID] = Field(
+    id: Optional[str] = Field(
         default_factory=uuid4,
         primary_key=True,
         index=True,

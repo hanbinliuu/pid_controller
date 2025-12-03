@@ -151,7 +151,7 @@ async def check_excluded_loop(
 
 
 @router.get("/excluded-loop/list",
-           summary="分页查询剖除列表",
+           summary="分页查询剔除列表",
            operation_id="list_excluded_loops",
            response_model=Dict[str, Any])
 async def list_excluded_loops(
@@ -187,9 +187,6 @@ async def list_excluded_loops(
         pagination = result["pagination"]
         
         return {
-            "code": 0,
-            "message": "查询成功",
-            "data": {
                 "excluded_loops": [
                     {
                         "id": e["id"] if isinstance(e, dict) else e.id,
@@ -204,7 +201,7 @@ async def list_excluded_loops(
                 ],
                 "pagination": pagination
             }
-        }
+
     except Exception as e:
         logger.error(f"查询剔除回路列表失败: {str(e)}", exc_info=True)
         raise DataProcessException(
@@ -244,13 +241,9 @@ async def get_all_excluded_uris(
         )
         
         return {
-            "code": 0,
-            "message": "查询成功",
-            "data": {
                 "uris": uris,
                 "total": len(uris)
             }
-        }
     except Exception as e:
         logger.error(f"获取剔除URI列表失败: {str(e)}", exc_info=True)
         raise DataProcessException(

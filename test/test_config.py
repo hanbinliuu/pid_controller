@@ -43,14 +43,14 @@ def test_default_client():
     
     print(f"\n客户端配置:")
     print(f"  Base URL: {client.base_url}")
-    print(f"  Project Path: {client.device_uri}")
+    print(f"  Project Path: {client.deafult_device_uri}")
     print(f"  Timeout: {client.timeout}s")
     
     # 生成几个示例路径
     print(f"\n生成的路径示例:")
     for key in ['mv', 'pv', 'sv']:
         if key in client.DEFAULT_PID_POINT_MAP:
-            full_path = client.device_uri + client.DEFAULT_PID_POINT_MAP[key]
+            full_path = client.deafult_device_uri + client.DEFAULT_PID_POINT_MAP[key]
             print(f"  {key.upper()}: {full_path}")
 
 
@@ -68,12 +68,12 @@ def test_custom_client():
     
     print(f"\n客户端配置:")
     print(f"  Base URL: {client.base_url} (默认)")
-    print(f"  Project Path: {client.device_uri} (自定义)")
+    print(f"  Project Path: {client.deafult_device_uri} (自定义)")
     print(f"  Timeout: {client.timeout}s (自定义)")
     
     # 生成几个示例路径
     print(f"\n生成的路径示例:")
-    mv_path = client.device_uri + client.DEFAULT_PID_POINT_MAP['mv']
+    mv_path = client.deafult_device_uri + client.DEFAULT_PID_POINT_MAP['mv']
     print(f"  MV: {mv_path}")
 
 

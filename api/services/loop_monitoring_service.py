@@ -106,9 +106,9 @@ class LoopMonitoringService:
                         mv_range_min = range_values.get('MVL', 0)
 
                         # 格式化当前值显示
-                        pv_display = f"{current_pv:.1f} ({pv_range_min}-{pv_range_max})" if current_pv is not None else "--"
+                        pv_display = f"{current_pv:.1f}" if current_pv is not None else "--"
                         sv_display = f"{current_sv:.1f}" if current_sv is not None else "--"
-                        mv_display = f"{current_mv:.1f}%" if current_mv is not None else "--"
+                        mv_display = f"{current_mv:.1f}" if current_mv is not None else "--"
 
                         # 判断运行状态（简化实现，实际应根据数据质量等判断）
                         running_status = "运行" if current_pv is not None else "停止"

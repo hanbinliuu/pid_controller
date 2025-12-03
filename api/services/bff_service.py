@@ -25,18 +25,17 @@ class BFFService:
             project_path: 项目路径，None时使用默认配置
             
         Returns:
-            项目路径、测点路径、字段映射信息
+            项目路径、字段映射信息
         """
         try:
             with BFFModelClient(loop_uri=project_path) as client:
-                common_field_map = client.query_common_fields()
-                
-                logger.info(f"查询BFF测点路径成功，项目路径: {client.device_uri}")
+                table,field_mapping = client.query_table_and_points_by_loop_uri(loop_uri=project_path)
                 
                 return {
-                    "project_path": client.device_uri,
-                    "point_path": client.point_path,
-                    "model_point_map": common_field_map
+                    "project_path": client.deafult_device_uri,
+                    "point_path": client.deafult_point_path,
+                    "table":table,
+                    "field_mapping": field_mapping
                 }
         except Exception as e:
             logger.error(f"查询BFF测点路径失败: {str(e)}")
@@ -97,8 +96,8 @@ class BFFService:
                 if not table_name:
                     logger.warning("未能从路径中解析出table名称")
                     return {
-                        "project_path": client.device_uri,
-                        "point_path": client.point_path,
+                        "project_path": client.deafult_device_uri,
+                        "point_path": client.deafult_point_path,
                         "message": "未解析到table名称",
                         "points": points,
                         "total_points": len(points)
@@ -107,8 +106,8 @@ class BFFService:
                 logger.info(f"查询表名和测点列表成功，表名: {table_name}, 测点数: {len(points)}")
                 
                 return {
-                    "project_path": client.device_uri,
-                    "point_path": client.point_path,
+                    "project_path": client.deafult_device_uri,
+                    "point_path": client.deafult_point_path,
                     "table_name": table_name,
                     "points": points,
                     "total_points": len(points)

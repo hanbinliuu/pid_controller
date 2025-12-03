@@ -116,9 +116,8 @@ class ExceptionHandlerMiddleware(BaseHTTPMiddleware):
             # 通用异常处理 - 兜底处理所有未捕获的异常
             error_trace = traceback.format_exc()
             logger.error(
-                f"未捕获异常 - Path: {request.url.path}, Error: {str(exc)}\n{error_trace}"
+                f"通用异常 - Path: {request.url.path}, Error: {str(exc)}"
             )
-            
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content=error_response(
@@ -140,9 +139,27 @@ def register_exception_handlers(app: FastAPI):
         app: FastAPI应用实例
     """
     
+    # 注册HTTPException处理器 - 这是关键！
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        logger.warning(
+            f"HTTP异常 - Path: {request.url.path}, Status: {exc.status_code}, Detail: {exc.detail}"
+        )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=error_response(
+                code=exc.status_code,
+                message=str(exc.detail) if exc.detail else "请求处理失败",
+                data=None
+            )
+        )
+    
     # 注册异常处理器(用于处理框架级别的异常)
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        logger.warning(
+            f"异常捕获 - Path: {request.url.path}, Status: {exc.status_code}, Detail: {exc.detail}"
+        )
         error_details = []
         for error in exc.errors():
             field = '.'.join(str(loc) for loc in error['loc'][1:])
@@ -161,4 +178,4 @@ def register_exception_handlers(app: FastAPI):
             )
         )
     
-    # logger.info("全局异常处理器(handler)注册完成")
+    logger.info("全局异常处理器注册完成")

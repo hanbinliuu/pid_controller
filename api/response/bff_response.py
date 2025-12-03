@@ -5,6 +5,8 @@ BFF模型接口响应模型
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
+from core.config import Config
+
 
 class FieldMappingData(BaseModel):
     """字段映射数据"""
@@ -32,15 +34,17 @@ class FieldMappingData(BaseModel):
 
 class PointPathsResponse(BaseModel):
     """测点路径响应"""
-    status: str = Field(..., description="状态")
-    project_path: str = Field(..., description="项目路径")
+    project_path: str = Field(..., description="节点URI")
+    point_path: str = Field(..., description="测点相对路径")
     field_mapping: FieldMappingData = Field(..., description="字段映射")
-    
+    table: Optional[str] = Field(None, description="表名")
+
     class Config:
         json_schema_extra = {
             "example": {
-                "status": "success",
-                "project_path": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
+                "project_path": f"{Config.BFF_MODEL_DEFULT_LOOP_URI}",
+                "point_path": f"{Config.BFF_MODEL_POINT_PATH}",
+                "table": "/PID_FEP_Gateway_Device_001default",
                 "field_mapping": {
                     "mv": "ns=100;s=FIC101A_MV.In_Channel0",
                     "pv": "ns=100;s=FIC101A_PV.In_Channel0",

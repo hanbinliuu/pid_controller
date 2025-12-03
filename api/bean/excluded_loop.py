@@ -21,7 +21,7 @@ class ExcludedLoop(SQLModel, table=True):
     __table_args__ = {"comment": "条件剔除回路表"}
 
     # 主键
-    id: Optional[UUID] = Field(
+    id: Optional[str] = Field(
         default_factory=uuid4,
         primary_key=True,
         index=True,

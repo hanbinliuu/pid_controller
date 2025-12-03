@@ -180,8 +180,8 @@ class BFFModelClient:
             timeout: 请求超时时间（秒），默认从环境变量 BFF_MODEL_TIMEOUT 读取
         """
         self.base_url = self.DEFAULT_BASE_URL
-        self.device_uri = loop_uri if loop_uri is not None else self.DEFAULT_LOOP_URI
-        self.point_path = point_path if point_path is not None else self.DEFAULT_POINT_PATH
+        self.deafult_device_uri = loop_uri if loop_uri is not None else self.DEFAULT_LOOP_URI
+        self.deafult_point_path = point_path if point_path is not None else self.DEFAULT_POINT_PATH
         self.timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         self.session = requests.Session()
         self.point_map = pid_point_map if pid_point_map is not None else self.DEFAULT_PID_POINT_MAP
@@ -253,11 +253,11 @@ class BFFModelClient:
             }
         """
         # 确保 project_path 和 point_path 不为 None
-        project_path = self.device_uri if self.device_uri is not None else ""
-        point_path = self.point_path if self.point_path is not None else ""
+        project_path = self.deafult_device_uri if self.deafult_device_uri is not None else ""
+        point_path = self.deafult_point_path if self.deafult_point_path is not None else ""
         body_data = {
-            "project_uri": self.device_uri,
-            "point_path": self.point_path,
+            "project_uri": self.deafult_device_uri,
+            "point_path": self.deafult_point_path,
             "pid_point_map": {}
         }
         browse_paths = []
@@ -307,7 +307,7 @@ class BFFModelClient:
         for key in pid_keys:
             if key in self.DEFAULT_PID_POINT_MAP:
                 browse_paths.append(
-                    self.device_uri + self.point_path + '/' + self.DEFAULT_PID_POINT_MAP[key]
+                    self.deafult_device_uri + self.deafult_point_path + '/' + self.DEFAULT_PID_POINT_MAP[key]
                 )
             else:
                 logger.warning(f"未知字段键: {key}, 跳过")
@@ -327,7 +327,7 @@ class BFFModelClient:
         Returns:
             完整的浏览路径
         """
-        return self.device_uri + self.point_path + "/" + path_suffix
+        return self.deafult_device_uri + self.deafult_point_path + "/" + path_suffix
 
     def query_by_custom_suffixes(self, path_suffixes: List[str]) -> Dict[str, Any]:
         """
@@ -340,7 +340,7 @@ class BFFModelClient:
             查询结果字典
         """
         browse_paths = [
-            self.device_uri + self.point_path + "/" + suffix
+            self.deafult_device_uri + self.deafult_point_path + "/" + suffix
             for suffix in path_suffixes
         ]
 
@@ -1140,8 +1140,8 @@ class BFFModelClient:
         """
         查询测点当前原始值（最新值）
         """
-        loop_uri = loop_uri if loop_uri is not None else self.device_uri
-        point_path = point_path if point_path is not None else self.point_path
+        loop_uri = loop_uri if loop_uri is not None else self.deafult_device_uri
+        point_path = point_path if point_path is not None else self.deafult_point_path
         if point_path and not point_path.startswith('/'):
             point_path = f"/{point_path}"
         browse_paths = [
@@ -1202,7 +1202,7 @@ class BFFModelClient:
         """
         一次查询多个回路的测点实时值
         """
-        point_path = point_path if point_path is not None else self.point_path
+        point_path = point_path if point_path is not None else self.deafult_point_path
         if point_path and not point_path.startswith('/'):
             point_path = f"/{point_path}"
         all_browse_paths = []

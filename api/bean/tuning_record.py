@@ -20,7 +20,7 @@ class TuningRecord(SQLModel, table=True):
     __table_args__ = {"comment": "整定记录表"}
 
     # 主键
-    id: Optional[UUID] = Field(
+    id: Optional[str] = Field(
         default_factory=uuid4,
         primary_key=True,
         index=True,

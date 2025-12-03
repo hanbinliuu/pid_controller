@@ -581,7 +581,7 @@ class LoopEvaluationDAO:
                     pass
             
             evaluations = db.exec(statement).all()
-            
+
             logger.info(f"根据URI列表查询回路评估记录成功，共 {len(evaluations)} 条")
             return evaluations
             

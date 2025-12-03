@@ -83,29 +83,29 @@ def find_high_variability_periods(
         # 如果没有有效窗口
         if not windows_data:
             raise RuntimeError("未解析到有效设备数据，请扩大或更换时间区间识别。")
-        
+
         # 创建统计表
         table = pd.DataFrame(windows_data)
 
         # 设置阈值（使用分位数）
         threshold = np.quantile(variances, variability_threshold)
-        
+
         # 标记高波动窗口
         table["is_high_variability"] = table["variance"] >= threshold
-        
+
         # 如果需要过滤，只保留高波动窗口
         if is_filter:
             windows_out = table[table["is_high_variability"]].copy()
         else:
             windows_out = table.copy()
-        
+
         # 找到标准差最大的窗口
         if len(windows_out) > 0:
             std_max_idx = windows_out["std"].idxmax()
             std_max_window = windows_out.loc[std_max_idx].to_dict()
         else:
             std_max_window = None
-        
+
         # 确定整定段的起止时间
         if std_max_window is not None:
             start_time = std_max_window["start_time"]
@@ -126,12 +126,11 @@ def find_high_variability_periods(
                 "is_filter": is_filter
             },
             "total_windows": len(windows_out),
-            "std_max_window": std_max_window
+            "turning_window": windows_data
         }
     
     except Exception as e:
         return {
-            "table": pd.DataFrame(),
             "start_time": None,
             "end_time": None,
             "params": {

@@ -23,7 +23,7 @@ class LoopEvaluation(SQLModel, table=True):
     __table_args__ = {"comment": "回路评估明细表"}
 
     # 主键
-    id: Optional[UUID] = Field(
+    id: Optional[str] = Field(
         default_factory=uuid4,
         primary_key=True,
         index=True,

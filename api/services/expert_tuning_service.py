@@ -107,13 +107,6 @@ class ExpertTuningService:
             ts_index = pd.to_datetime(df["timestamp"], unit="ms")
             series = pd.Series(df[column].values, index=ts_index)
 
-            # 高波动窗口识别
-            # high_windows = find_high_variability_periods(
-            #     series,
-            #     window_size=window_size,
-            #     step_size=step_size,
-            #     variability_threshold=variability_threshold
-            # )
             high_windows = tuning_segment_selector.find_high_variability_periods(
                 series,
                 window_size=window_size,
@@ -133,6 +126,7 @@ class ExpertTuningService:
         loop_uri: str = None,
         start_time: Union[int, str] = None,
         end_time: Union[int, str] = None,
+        tuning_windows: Optional[List[Dict[str, Any]]] = None,
         model_type: ModelType = ModelType.FOPDT,
         lambda_val: Optional[float] = None,
         window_size: int = 120,

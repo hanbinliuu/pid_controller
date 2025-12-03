@@ -6,6 +6,8 @@ from datetime import datetime
 import json
 import logging
 
+from pydantic import BaseModel, Field
+
 from api.routes.time_util import parse_time_to_milliseconds
 from core.agent.tools import process_query_tsdb_data_interpolated, detect_and_visualize
 from core.algorithm.ktl_simulator import KTLSimulator
@@ -18,74 +20,139 @@ from core.utils.model_type import ModelType
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-#获取整定模型类型接口
 
-model_type = ModelType.get_model_type()
+class TuningWindow(BaseModel):
+    """整定时间窗口模型"""
+    start_time: Union[int, str] = Field(..., description="开始时间，支持毫秒时间戳或字符串格式")
+    end_time: Union[int, str] = Field(..., description="结束时间，支持毫秒时间戳或字符串格式")
 
-@router.post("/tuning-windows",
-             summary="常规整定-自动筛选时间区间",
-             operation_id="常规整定自动筛选时间区间",
-             description="自动识别温度曲线中高波动时段，输出适合经典整定分析的时间窗口列表")
-async def get_tuning_windows(
-        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
-                                          examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"] ),
-        start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
-        end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
-        window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
-        step_size: int = Query(10, description="滑动步长（分钟）", examples=[30, 60]),
-        variability_threshold: float = Query(0.8, description="波动性阈值分位数(0-1)", examples=[0.8]),
-        analyst_column: Optional[str] = Query("pv", description="用于波动判断的列名", examples=["pv", "mv", "sv"]),
-        window_sec: int = Query(60, description="插值采样间隔（分钟）", examples=[1, 60]),
-        is_filter: bool = Query(False, description="是否对历史数据进行优化过滤（按最新参数）", examples=[False])
-):
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "start_time": "2025-12-01 10:00:00",
+                "end_time": "2025-12-01 12:00:00"
+            }
+        }
+class TuningWindowRequest(BaseModel):
+    """整定窗口请求参数模型"""
+    mode: str = Field("auto", description="整定模式：auto(自动筛选) 或 manual(手动指定时间范围)")
+    loop_uri: str = Field('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', description="回路URI")
+    start_time: Optional[Union[int, str]] = Field(None,
+                                                  description="开始时间（manual模式必填），支持毫秒时间戳或字符串格式")
+    end_time: Optional[Union[int, str]] = Field(None, description="结束时间（manual模式必填），支持毫秒时间戳或字符串格式")
+    model_type: ModelType = Field(ModelType.FOPDT, description="模型类型")
+    lambda_val: Optional[float] = Field(None, description="Lambda参数值（可选），未指定时自动计算")
+    window_size: int = Field(120, description="窗口大小（分钟）", ge=1)
+    step_size: int = Field(10, description="滑动步长（分钟）", ge=1)
+    variability_threshold: float = Query(0.8, description="波动性阈值分位数(0-1)", examples=[0.8]),
+    analyst_column: Optional[str] = Query("pv", description="用于波动判断的列名", examples=["pv", "mv", "sv"]),
+    window_sec: int = Field(60, description="插值采样间隔（秒）", ge=1)
+    is_filter: bool = Field(False, description="是否对历史数据进行优化过滤")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "mode": "auto",
+                "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
+                "start_time": "2025-12-01 00:00:00",
+                "end_time": "2025-12-01 23:59:59",
+                "model_type": "FOPDT",
+                "lambda_val": 0.8,
+                "window_size": 120,
+                "step_size": 10,
+                "variability_threshold": 0.6,
+                "analyst_column":"pv",
+                "window_sec": 60,
+                "is_filter": False
+            }
+        }
+
+class AutoTuningRequest(BaseModel):
+    """自动整定请求参数模型"""
+    mode: str = Field("auto", description="整定模式：auto(自动筛选) 或 manual(手动指定时间范围)")
+    loop_uri: str = Field('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', description="回路URI")
+    start_time: Optional[Union[int, str]] = Field(None,
+                                                  description="开始时间（manual模式必填），支持毫秒时间戳或字符串格式")
+    end_time: Optional[Union[int, str]] = Field(None, description="结束时间（manual模式必填），支持毫秒时间戳或字符串格式")
+    tuning_windows: Optional[List[TuningWindow]] = Field(None, description="手动指定时间窗口列表，用于批量整定")
+    model_type: ModelType = Field(ModelType.FOPDT, description="模型类型")
+    controller_type: str = Field("PID", description="整定类型", examples=["PID", "PI"])
+    lambda_val: Optional[float] = Field(None, description="Lambda参数值（可选），未指定时自动计算")
+    window_size: int = Field(120, description="窗口大小（分钟）", ge=1)
+    step_size: int = Field(10, description="滑动步长（分钟）", ge=1)
+    confidence_threshold: float = Field(0.6, description="置信度阈值（仅auto模式有效，0-1）", ge=0, le=1)
+    window_sec: int = Field(60, description="插值采样间隔（秒）", ge=1)
+    is_filter: bool = Field(False, description="是否对历史数据进行优化过滤")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "mode": "auto",
+                "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
+                "start_time": "2025-12-01 00:00:00",
+                "end_time": "2025-12-01 23:59:59",
+                "tuning_windows": [
+                    {
+                        "start_time": "2025-12-01 10:00:00",
+                        "end_time": "2025-12-01 12:00:00"
+                    }
+                ],
+                "model_type": "FOPDT",
+                "controller_type": "PID",
+                "lambda_val": 0.8,
+                "window_size": 120,
+                "step_size": 10,
+                "confidence_threshold": 0.6,
+                "window_sec": 60,
+                "is_filter": False
+            }
+        }
+
+
+@router.get("/model-types",
+           summary="获取支持的模型类型列表",
+           operation_id="获取支持的模型类型列表",
+           description="返回系统支持的所有PID整定模型类型及其详细配置信息")
+async def get_model_types():
     """
-    根据历史数据自动筛选适合常规整定的分析时间区间：
-    - 计算温度(PV)在滑动窗口内的方差，识别高波动区间
-    - 每个窗口附带 group_key = "{pb}_{ti}_{td}_{sv}", 用于后续分组分析
+    获取所有支持的模型类型
+    
+    返回系统中支持的所有模型类型列表及其详细配置，包括：
+    - 模型类型代码
+    - 模型名称
+    - 模型描述
+    - 传递函数
+    - 参数列表
+    - 适用场景
+    
+    **返回格式：**
+    ```json
+    {
+      "model_types": ["FOPDT", "FO", "SOPDT", "SO", "FO_INTEGRATOR", "SO_INTEGRATOR"]
+    }
+    ```
     """
     try:
-        # 调用Service层获取整定时间窗口
-        result = ExpertTuningService.get_tuning_windows(
-            loop_uri=loop_uri,
-            start_time=start_time,
-            end_time=end_time,
-            window_size=window_size,
-            step_size=step_size,
-            variability_threshold=variability_threshold,
-            analyst_column=analyst_column,
-            window_sec=window_sec,
-            is_filter=is_filter
-        )
-
-        return result
-
-    except HTTPException:
-        raise
+        # 获取所有模型类型列表
+        model_types = ModelType.get_model_type()
+        
+        return {
+            "model_types": model_types
+        }
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"时间区间筛选失败: {str(e)}")
+        logger.error(f"获取模型类型失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取模型类型失败: {str(e)}")
+
+
+
+
 
 @router.post("/auto-tuning",
-             summary="常规整定-自动筛选时间整定",
+             summary="常规整定-pid整定",
              operation_id="常规整定-自动筛选整定与手动时间范围整定",
              description="支持两种模式：1.自动筛选最佳时间窗口并整定 2.手动指定时间范围整定")
-async def auto_tuning(
-        mode: str = Query("auto", description="整定模式：auto(自动筛选) 或 manual(手动指定时间范围)",
-                          examples=["auto", "manual"]),
-        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
-                                          examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"] ),
-        start_time: Union[int, str] = Query(None, required=False,
-                                            description="开始时间（manual模式必填），支持毫秒时间戳或字符串格式"),
-        end_time: Union[int, str] = Query(None, required=False,
-                                          description="结束时间（manual模式必填），支持毫秒时间戳或字符串格式"),
-        model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
-                                      examples=ModelType.get_model_type()),
-        lambda_val: Optional[float] = Query(None, description="Lambda参数值（可选），未指定时自动计算"),
-        window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
-        step_size: int = Query(10, description="滑动步长（分钟）", examples=[10, 30]),
-        confidence_threshold: float = Query(0.6, description="置信度阈值（仅auto模式有效，0-1）", examples=[0.6, 0.7]),
-        window_sec: int = Query(60, description="插值采样间隔（秒）", examples=[60, 120]),
-        is_filter: bool = Query(False, description="是否对历史数据进行优化过滤", examples=[False])
-):
+async def auto_tuning(request: AutoTuningRequest):
     """
     **智能PID参数整定接口**
 
@@ -110,17 +177,18 @@ async def auto_tuning(
     try:
         # 调用Service层执行自动整定
         result = ExpertTuningService.auto_tuning(
-            mode=mode,
-            loop_uri=loop_uri,
-            start_time=start_time,
-            end_time=end_time,
-            model_type=model_type,
-            lambda_val=lambda_val,
-            window_size=window_size,
-            step_size=step_size,
-            confidence_threshold=confidence_threshold,
-            window_sec=window_sec,
-            is_filter=is_filter
+            mode=request.mode,
+            loop_uri=request.loop_uri,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            tuning_windows=request.tuning_windows,
+            model_type=request.model_type,
+            lambda_val=request.lambda_val,
+            window_size=request.window_size,
+            step_size=request.step_size,
+            confidence_threshold=request.confidence_threshold,
+            window_sec=request.window_sec,
+            is_filter=request.is_filter
         )
 
         return result
@@ -564,7 +632,7 @@ async def get_step_response_windows(
         min_response_ratio: float = Query(0.1, description="最小响应比例（响应幅值/输入变化）", ge=0.05, le=1.0),
         confidence_min: float = Query(0.5, description="最小置信度要求（0-1）", ge=0, le=1),
         analyst_column: Optional[str] = Query("pv", description="用于分析的列名", examples=["pv", "mv", "sv"]),
-        window_sec: int = Query(60, description="插值采样间隔（分钟）", examples=[1, 60]),
+        window_sec: int = Query(30, description="插值采样间隔（分钟）", examples=[1, 60]),
         is_filter: bool = Query(False, description="是否对历史数据进行优化过滤", examples=[False])
 ):
     """
@@ -969,134 +1037,51 @@ async def calculate_pid(
             status_code=500,
             detail=f"PID参数计算失败: {str(e)}"
         )
-
-# @router.get("/auto-select-windows",
-#             summary="自动筛选参数辨识时间区间",
-#             operation_id="自动筛选时间窗口",
-#             description="智能识别含有阶跃响应的高质量时间窗口，适用于FOPDT参数辨识")
-async def auto_select_time_windows(
-        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
-                                 examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
-        start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
-        end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
-        window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
-        step_size: int = Query(10, description="滑动步长（分钟）", examples=[10, 30]),
-        min_confidence: float = Query(0.5, description="最小置信度要求（0-1）", ge=0, le=1),
-        step_threshold: float = Query(0.05, description="阶跃检测阈值（0-1）", ge=0, le=1),
-        min_response_ratio: float = Query(0.1, description="最小响应比例（0-1）", ge=0, le=1)
-):
+@router.post("/tuning-windows",
+             summary="常规整定-获取扰动时间窗口",
+             operation_id="常规整定自动筛选时间区间",
+             description="输出适合经典整定分析的时间窗口列表")
+async def get_tuning_windows(request: TuningWindowRequest):
     """
-    自动筛选适合参数辨识的时间区间
-
-    **功能说明:**
-    - 自动识别含有明显阶跃响应的时间窗口
-    - 综合评估输入信号、输出响应、响应特征
-    - 返回评分最高的最优窗口
-
-    **返回窗口信息:**
-    - start_time / end_time: 窗口时间范围（毫秒）
-    - step_detected: 是否检测到阶跃
-    - confidence: 置信度评分（0-1）
-    - response_magnitude: 响应幅值
-    - response_ratio: 响应比例
-    - rise_time: 上升时间（秒）
-    - settling_time: 稳定时间（秒）
-    - recommendation: 推荐等级（优秀/良好/可接受/不推荐）
+    根据历史数据自动筛选适合常规整定的分析时间区间：
+    - 计算温度(PV)在滑动窗口内的方差，识别高波动区间
+    - 每个窗口附带 group_key = "{pb}_{ti}_{td}_{sv}", 用于后续分组分析
     """
     try:
-        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
-
-        # 时间默认值：最近一天
-        if end_time is None:
-            end_time = int(datetime.now().timestamp() * 1000)
-        if start_time is None:
-            start_time = end_time - 24 * 60 * 60 * 1000  # 1天
-
-        # 时间转换与校验
-        start_time_ms = parse_time_to_milliseconds(start_time)
-        end_time_ms = parse_time_to_milliseconds(end_time)
-        if start_time_ms >= end_time_ms:
-            raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
-
-        # 固定设备与字段
-        # table = "PID_FEP_Gateway_Device_001default"
-        # required_fields = DEFAULT_FIELD_MAPPING
-        table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
-
-        # 查询历史数据
-        db = get_default_database()
-        history_data = process_query_tsdb_data_interpolated(
-            db=db,
-            table_name=table,
-            required_fields=required_fields,
-            start_time=start_time_ms,
-            end_time=end_time_ms,
-            is_filter=False,
-            window=1
-        )
-        if not history_data or len(history_data) < 10:
-            raise HTTPException(
-                status_code=404,
-                detail="数据不足，无法进行时间窗口筛选"
-            )
-
-        # 调用自动筛选方法
-        result = SystemIdentifier.auto_select_time_windows(
-            history_data=history_data,
-            window_size=window_size,
-            step_size=step_size,
-            min_response_ratio=min_response_ratio,
-            step_threshold=step_threshold,
-            confidence_min=min_confidence
+        # 调用Service层获取整定时间窗口
+        result = ExpertTuningService.get_tuning_windows(
+            loop_uri=request.loop_uri,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            window_size=request.window_size,
+            step_size=request.step_size,
+            variability_threshold=request.variability_threshold,
+            analyst_column=request.analyst_column,
+            window_sec=request.window_sec,
+            is_filter=request.is_filter
         )
 
-        # 提取筛选结果中的最优窗口
-        optimal_window = result.get("analysis_summary", {}).get("optimal_window") if result.get(
-            "status") == "success" else None
-
-        if not optimal_window:
-            raise HTTPException(
-                status_code=404,
-                detail="未找到符条件的时间窗口。请检查时间范围、上基门槛或参数配置是否合理。"
-            )
-
-        return {
-            "start_time": start_time,
-            "end_time": end_time,
-            "params": {
-                "window_size": window_size,
-                "step_size": step_size,
-                "step_threshold": step_threshold,
-                "min_response_ratio": min_response_ratio,
-                "min_confidence": min_confidence
-            },
-            "total_windows": result.get("total_windows", 0),
-            "qualified_windows_count": len(result.get("qualified_windows", [])),
-            "optimal_window": optimal_window,
-            "analysis_summary": result.get("analysis_summary", {})
-        }
+        return result
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"自动筛选时间窗口失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"自动筛选时间窗口失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"时间区间筛选失败: {str(e)}")
 
 
 
-
-# @router.get("/history-data",
-#             summary="历史数据查询",
-#             operation_id="IOTDA历史数据查询",
-#             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
+@router.get("/history-data",
+            summary="历史数据查询",
+            operation_id="回路历史数据查询",
+            description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data(
         loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
                                           examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"] ),
-        start_time: Union[int, str] = Query(..., description="开始时间，支持毫秒时间戳或字符串格式",
-                                            examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
+        start_time: Union[int, str] = Query(None, description="开始时间，支持毫秒时间戳或字符串格式",
+                                            examples=["2025-12-03 12:00:00", "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
-        end_time: Union[int, str] = Query(..., description="结束时间，支持毫秒时间戳或字符串格式",
-                                          examples=[1641081600000, "2022-01-02 12:00:00", "2022-01-02T12:00:00",
+        end_time: Union[int, str] = Query(None, description="结束时间，支持毫秒时间戳或字符串格式",
+                                          examples=["2025-12-03 23:59:59", "2022-01-02 12:00:00", "2022-01-02T12:00:00",
                                                     "2022-01-02"])
 ):
     """
@@ -1131,13 +1116,14 @@ async def get_history_data(
         if not table or not table.strip():
             raise HTTPException(
                 status_code=400,
-                detail="表名参数不能为空"
+                detail="未获取回路绑定设备信息"
             )
+        # 时间默认值：最近一天
         if end_time is None:
             end_time = int(datetime.now().timestamp() * 1000)
-
         if start_time is None:
-            start_time = end_time - 30000  # 1小时前（30秒 * 1000毫秒）
+            start_time = end_time - 24 * 60 * 60 * 1000  # 1天
+
         # 时间格式转换和验证
         try:
             start_time_ms = parse_time_to_milliseconds(start_time)
@@ -1182,6 +1168,8 @@ async def get_history_data(
 
         return response_data
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,

@@ -136,14 +136,14 @@ def test_build_browse_path():
     client = BFFModelClient()
     path1 = client.build_browse_path('ns_100_s_FIC101A_MV_In_Channel0')
     path2 = client.build_browse_path('ns_100_s_FIC101A_PV_In_Channel0')
-    print(f"\n默认项目路径: {client.device_uri}")
+    print(f"\n默认项目路径: {client.deafult_device_uri}")
     print(f"MV完整路径: {path1}")
     print(f"PV完整路径: {path2}")
     
     # 使用自定义项目路径
     custom_client = BFFModelClient(loop_uri="/pid_zd/custom_project_id")
     path3 = custom_client.build_browse_path('ns_100_s_FIC101A_SV_In_Channel0')
-    print(f"\n自定义项目路径: {custom_client.device_uri}")
+    print(f"\n自定义项目路径: {custom_client.deafult_device_uri}")
     print(f"SV完整路径: {path3}")
     
     # 测试query_by_custom_suffixes

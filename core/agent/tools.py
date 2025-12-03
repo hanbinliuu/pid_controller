@@ -1774,8 +1774,8 @@ def query_table_and_points(
             return {
                 "status": "success" if table_name else "warning",
                 "message": "查询成功" if table_name else "查询成功但未解析到table名称",
-                "project_path": client.device_uri,
-                "point_path": client.point_path,
+                "project_path": client.deafult_device_uri,
+                "point_path": client.deafult_point_path,
                 "table_name": table_name,
                 "points": points,
                 "total_points": len(points) if isinstance(points, dict) else 0
