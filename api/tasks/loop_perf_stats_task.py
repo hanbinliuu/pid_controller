@@ -157,7 +157,7 @@ def _calc_loop_performance(start_time: datetime, end_time: datetime, max_workers
 if __name__ == '__main__':
     # calc_loop_performance()
     # 计算时间范围
-    hours = 24
+    hours = 0
     end_time = datetime.now() - timedelta(hours=hours)
     start_time = end_time - timedelta(hours=24)
     _calc_loop_performance(start_time, end_time)

@@ -7,7 +7,8 @@ from fastapi import APIRouter
 from sqlmodel import Session
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from api.response.loop_response import OptimizableLoop, DeviceRealTimeStats, PerfReductionLoop
+from api.response.loop_response import OptimizableLoop, DeviceRealTimeStats, PerfReductionLoop, \
+    OptimizableLoopsWithPagination
 from api.services.home_page_service import HomePageService
 from core.database.database import get_db
 
@@ -46,8 +47,5 @@ async def get_perf_reduction_top10_loops(session: Session = Depends(get_db)) -> 
 @home_page_router.get("/optimizable-loops", summary="获取可优化的回路")
 async def get_optimizable_loops(page_no: int = Query(1, description="页码，从1开始"),
                                 page_size: int = Query(10, description="每页数量"),
-                                session: Session = Depends(get_db)) -> List[OptimizableLoop]:
-    results = HomePageService.get_optimizable_loops(session, page_no, page_size)
-    if not results or len(results) == 0:
-        return []
-    return results
+                                session: Session = Depends(get_db)) -> OptimizableLoopsWithPagination:
+    return HomePageService.get_optimizable_loops(session, page_no, page_size)

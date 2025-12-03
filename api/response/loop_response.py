@@ -150,6 +150,11 @@ class OptimizableLoop(BaseModel):
     pass
 
 
+class OptimizableLoopsWithPagination(BaseModel):
+    loops: List[OptimizableLoop] = Field(default_factory=list, description="可优化回路列表")
+    pagination: Pagination = Field(..., description="分页信息")
+
+
 class PerfReductionLoop(BaseModel):
     """回路性能下降模型"""
     loop_uri: str = Field(None, description="回路uri")
