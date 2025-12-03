@@ -4,7 +4,7 @@ from typing import List
 from sqlmodel import Session
 
 from api.dao.home_page_dao import HomePageDAO
-from api.response.loop_response import OptimizableLoop, PerfReductionLoop, DeviceRealTimeStats, \
+from api.response.loop_response import PerfReductionLoop, DeviceRealTimeStats, \
     OptimizableLoopsWithPagination, Pagination
 from api.services.device_evaluation_service import DeviceEvaluationService
 from core.config import Config

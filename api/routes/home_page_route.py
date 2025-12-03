@@ -3,15 +3,13 @@
 # --------------
 from typing import Dict, List
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session
-from fastapi import APIRouter, Depends, HTTPException, Query
 
-from api.response.loop_response import OptimizableLoop, DeviceRealTimeStats, PerfReductionLoop, \
+from api.response.loop_response import DeviceRealTimeStats, PerfReductionLoop, \
     OptimizableLoopsWithPagination
 from api.services.home_page_service import HomePageService
 from core.database.database import get_db
-
 
 home_page_router = APIRouter(tags=["首页"])
 
