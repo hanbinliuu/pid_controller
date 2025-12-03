@@ -181,6 +181,113 @@ class ModelTypeDetector:
             end_time=end_time
         ).to_dict()
     
+    def detect_by_r2(self, data: Union[List[Dict[str, Any]], HistoricalData]) -> Dict[str, Any]:
+        """仅基于 R² 拟合度检测模型类型
+        
+        只使用 R² 决定系数来评分，选择拟合度最高的模型。
+        
+        Args:
+            data: 历史数据，可以是JSON数组或HistoricalData对象
+            
+        Returns:
+            {
+                "model_type": "FOPDT",
+                "model_rating": 8.5,
+                "r2_scores": {"FOPDT": 0.85, "FO": 0.72, ...},
+                "start_time": 1764752400000,
+                "end_time": 1764752900000
+            }
+        """
+        # 转换数据格式
+        if isinstance(data, list):
+            hist_data = HistoricalData.from_json(data)
+        else:
+            hist_data = data
+        
+        # 提取数组
+        t = hist_data.to_time_array()
+        y = hist_data.pv
+        u = hist_data.mv
+        sv = hist_data.sv
+        timestamps = hist_data.timestamp
+        
+        # 数据验证
+        if len(y) < 20:
+            if self.verbose:
+                print(f"⚠️ 数据点过少({len(y)}), 默认使用FOPDT模型")
+            return {
+                'model_type': ModelType.FOPDT,
+                'model_rating': 0.0,
+                'r2_scores': {},
+                'start_time': int(timestamps[0]) if len(timestamps) > 0 else 0,
+                'end_time': int(timestamps[-1]) if len(timestamps) > 0 else 0
+            }
+        
+        # 检测整定段
+        start_idx, end_idx = self._detect_tuning_segment(t, y, sv, u)
+        start_time = int(timestamps[start_idx])
+        end_time = int(timestamps[end_idx])
+        
+        if self.verbose:
+            print(f"🔍 整定段: 索引[{start_idx}, {end_idx}], 时间[{start_time}, {end_time}]")
+        
+        # 提取整定段数据
+        t_seg = t[start_idx:end_idx+1] - t[start_idx]
+        y_seg = y[start_idx:end_idx+1]
+        u_seg = u[start_idx:end_idx+1]
+        y0 = y_seg[0]
+        
+        # 对所有候选模型进行拟合，仅计算 R²
+        r2_scores = {}
+        for model_type in self.CANDIDATE_MODELS:
+            try:
+                # 辨识模型参数
+                params = self._identify_model(t_seg, y_seg, u_seg, model_type)
+                
+                # 仿真预测
+                y_pred = self._simulate_model(params, t_seg, u_seg, y0, model_type)
+                
+                # 计算 R²
+                r2 = self._calculate_r2(y_seg, y_pred)
+                r2_scores[model_type] = r2
+                
+                if self.verbose:
+                    print(f"   {model_type}: R²={r2:.4f}")
+                
+            except Exception as e:
+                if self.verbose:
+                    print(f"⚠️ {model_type} 拟合失败: {e}")
+                r2_scores[model_type] = 0.0
+        
+        # 选择 R² 最高的模型
+        if not r2_scores:
+            return {
+                'model_type': ModelType.FOPDT,
+                'model_rating': 5.0,
+                'r2_scores': {},
+                'start_time': start_time,
+                'end_time': end_time
+            }
+        
+        best_model = max(r2_scores, key=r2_scores.get)
+        best_r2 = r2_scores[best_model]
+        best_rating = best_r2 * 10.0  # R² 转为 0-10 评分
+        
+        if self.verbose:
+            print(f"🔍 R² 评分:")
+            for model, r2 in r2_scores.items():
+                marker = "✅" if model == best_model else "  "
+                print(f"   {marker} {model}: R²={r2:.4f}")
+            print(f"🎯 最佳模型(纯R²): {best_model}, R²={best_r2:.4f}, 评分={best_rating:.2f}")
+        
+        return {
+            'model_type': best_model,
+            'model_rating': round(best_rating, 2),
+            'r2_scores': {k: round(v, 4) for k, v in r2_scores.items()},
+            'start_time': start_time,
+            'end_time': end_time
+        }
+    
     def _detect_tuning_segment(self, t: np.ndarray, y: np.ndarray, 
                                sv: np.ndarray, u: np.ndarray) -> Tuple[int, int]:
         """检测整定段（非稳态区间）
@@ -243,9 +350,11 @@ class ModelTypeDetector:
                            u: np.ndarray) -> Tuple[str, float, Dict[str, float]]:
         """拟合所有候选模型，返回最佳模型和评分
         
+        仅使用 R² 拟合优度来选择模型
+        
         Args:
             t: 时间数组（相对时间）
-            y: PV数组
+            y: PV数组（原始历史数据）
             u: MV数组
             
         Returns:
@@ -259,19 +368,17 @@ class ModelTypeDetector:
                 # 辨识模型参数
                 params = self._identify_model(t, y, u, model_type)
                 
-                # 计算拟合优度 (R²)
+                # 仿真预测
                 y_pred = self._simulate_model(params, t, u, y0, model_type)
+                
+                # 计算 R²
                 r2 = self._calculate_r2(y, y_pred)
-                
-                # 转换为0-10评分
-                # R² 范围通常在 0-1，转换为 0-10
-                rating = max(0.0, min(10.0, r2 * 10.0))
-                
-                # 根据模型复杂度进行惩罚（奥卡姆剃刀）
-                complexity_penalty = self._get_complexity_penalty(model_type)
-                rating = rating - complexity_penalty
+                rating = r2 * 10.0  # 转为 0-10 评分
                 
                 scores[model_type] = max(0.0, rating)
+                
+                if self.verbose:
+                    print(f"   {model_type}: R²={r2:.4f}, 评分={rating:.2f}")
                 
             except Exception as e:
                 if self.verbose:
@@ -329,20 +436,6 @@ class ModelTypeDetector:
         
         r2 = 1 - (ss_res / ss_tot)
         return max(0.0, min(1.0, r2))  # 限制在 [0, 1]
-    
-    def _get_complexity_penalty(self, model_type: str) -> float:
-        """获取模型复杂度惩罚（奥卡姆剃刀）
-        
-        参数越多的模型惩罚越大
-        """
-        penalties = {
-            ModelType.FO: 0.0,       # 2个参数 (K, T)
-            ModelType.FOPI: 0.1,     # 2个参数 (K, L)
-            ModelType.FOPDT: 0.2,    # 3个参数 (K, T, L)
-            ModelType.SO: 0.3,       # 3个参数 (K, T1, T2)
-            ModelType.SOPDT: 0.5,    # 4个参数 (K, T1, T2, L)
-        }
-        return penalties.get(model_type, 0.2)
     
     def detect_with_details(self, data: Union[List[Dict[str, Any]], HistoricalData]) -> Dict[str, Any]:
         """检测模型类型并返回详细信息（扩展版本）
@@ -403,82 +496,6 @@ class ModelTypeDetector:
             'tuning_segment_indices': (start_idx, end_idx)
         }
     
-    def _extract_features(self, t: np.ndarray, y: np.ndarray, u: np.ndarray) -> Dict[str, float]:
-        """提取数据特征
-        
-        Args:
-            t: 时间数组
-            y: 输出数据
-            u: 输入数据
-            
-        Returns:
-            特征字典
-        """
-        features = {}
-        
-        # 基本统计
-        features['n_points'] = len(y)
-        features['y_range'] = float(np.max(y) - np.min(y))
-        features['y_std'] = float(np.std(y))
-        features['u_range'] = float(np.max(u) - np.min(u))
-        features['u_std'] = float(np.std(u))
-        
-        # 采样间隔
-        dt = t[1] - t[0] if len(t) > 1 else 1.0
-        features['dt'] = float(dt)
-        
-        # 噪声分析
-        noise_level = np.std(np.diff(y))
-        signal_level = np.std(y)
-        features['noise_level'] = float(noise_level)
-        features['signal_level'] = float(signal_level)
-        features['snr'] = float(signal_level / noise_level) if noise_level > self._epsilon else 100.0
-        
-        # 响应速度
-        dy_dt = np.gradient(y, t)
-        features['max_response_speed'] = float(np.max(np.abs(dy_dt)))
-        features['avg_response_speed'] = float(np.mean(np.abs(dy_dt)))
-        
-        # 估计时间常数
-        max_speed = features['max_response_speed']
-        y_range = features['y_range']
-        features['estimated_T'] = float(y_range / max_speed) if max_speed > self._epsilon else 30.0
-        
-        # 估计滞后时间
-        features['estimated_L'] = float(self._estimate_lag(u, y, dt))
-        
-        # 积分相关性
-        features['integral_correlation'] = float(self._compute_integral_correlation(t, y, u))
-        
-        # 超调检测
-        y_max = np.max(y)
-        y_final = np.mean(y[-max(10, len(y)//10):])
-        features['has_overshoot'] = y_max > y_final * 1.05
-        features['overshoot_ratio'] = float((y_max - y_final) / y_final) if y_final > self._epsilon else 0.0
-        
-        # 二阶特性检测
-        features['is_second_order_candidate'] = self._check_second_order_candidate(y)
-        
-        # 热损失检测
-        features['has_heat_loss'] = self._check_heat_loss(y)
-        
-        return features
-    
-    def _estimate_lag(self, u: np.ndarray, y: np.ndarray, dt: float) -> float:
-        """使用互相关分析估计滞后时间
-        
-        复用 core.model.identifier.ModelIdentifier 的方法
-        
-        Args:
-            u: 输入数组
-            y: 输出数组
-            dt: 采样间隔
-            
-        Returns:
-            估计的滞后时间
-        """
-        return ModelIdentifier._estimate_lag_from_correlation(u, y, dt)
-    
     def _compute_integral_correlation(self, t: np.ndarray, y: np.ndarray, u: np.ndarray) -> float:
         """计算输出与输入积分的相关性（用于检测积分特性）
         
@@ -502,61 +519,6 @@ class ModelTypeDetector:
             return correlation
         except Exception:
             return 0.0
-    
-    def _check_second_order_candidate(self, y: np.ndarray) -> bool:
-        """检测是否适合二阶模型
-        
-        Args:
-            y: 输出数组
-            
-        Returns:
-            是否为二阶模型候选
-        """
-        if len(y) < 30:
-            return False
-        
-        try:
-            # 检测超调
-            y_max = np.max(y)
-            y_final = np.mean(y[-10:])
-            has_overshoot = y_max > y_final * 1.05
-            
-            # 检测振荡特性（二阶导数符号变化次数）
-            d2y = np.diff(np.diff(y))
-            if len(d2y) > 0:
-                sign_changes = np.sum(np.diff(np.sign(d2y)) != 0)
-                high_oscillation = sign_changes > len(d2y) * 0.1
-                
-                if has_overshoot or high_oscillation:
-                    return True
-            
-            return False
-        except Exception:
-            return False
-    
-    def _check_heat_loss(self, y: np.ndarray) -> bool:
-        """检测是否存在热损失（适用于温控场景）
-        
-        Args:
-            y: 输出数组
-            
-        Returns:
-            是否存在热损失
-        """
-        if len(y) < 200:
-            return False
-        
-        try:
-            # 检测稳态段的下降趋势
-            steady_segment = y[-100:]
-            if np.std(steady_segment) < 0.5:
-                x = np.arange(len(steady_segment))
-                coeffs = np.polyfit(x, steady_segment, 1)
-                if coeffs[0] < -0.01:  # 负斜率表示热损失
-                    return True
-            return False
-        except Exception:
-            return False
     
     def _detect_control_scenario(self, t: np.ndarray, y: np.ndarray, u: np.ndarray) -> str:
         """检测控制场景类型
@@ -598,146 +560,6 @@ class ModelTypeDetector:
             return 'level'
         else:
             return 'temperature'
-    
-    def _detect_model_type(self, t: np.ndarray, y: np.ndarray, u: np.ndarray, 
-                          scenario: str = None) -> str:
-        """检测模型类型
-        
-        Args:
-            t: 时间数组
-            y: 输出数据
-            u: 输入数据
-            scenario: 控制场景（可选）
-            
-        Returns:
-            模型类型字符串
-        """
-        if len(y) < 20:
-            return ModelType.FOPDT
-        
-        if scenario is None:
-            scenario = self._detect_control_scenario(t, y, u)
-        
-        # 估计滞后时间
-        dt = t[1] - t[0] if len(t) > 1 else 1.0
-        L_est = self._estimate_lag(u, y, dt)
-        
-        # 信噪比
-        noise_level = np.std(np.diff(y))
-        signal_level = np.std(y)
-        snr = signal_level / noise_level if noise_level > self._epsilon else 100
-        
-        # 响应速度和时间常数
-        dy_dt = np.gradient(y, t)
-        max_response_speed = np.max(np.abs(dy_dt))
-        y_range = np.max(y) - np.min(y)
-        estimated_T = y_range / max_response_speed if max_response_speed > self._epsilon else 30.0
-        
-        # 积分相关性
-        correlation_with_integral = self._compute_integral_correlation(t, y, u)
-        
-        # 热损失检测
-        has_heat_loss = self._check_heat_loss(y)
-        
-        # 二阶特性检测
-        is_second_order_candidate = self._check_second_order_candidate(y)
-        
-        # 根据场景和特征判断模型类型
-        if scenario == 'level':
-            if snr < 5 and L_est < 2:
-                return ModelType.FOPI  # 一阶积分
-            elif L_est > 1:
-                return ModelType.FOPDT
-            else:
-                return ModelType.FO
-        elif scenario == 'temperature':
-            if has_heat_loss:
-                return ModelType.FOPDT  # 热损失场景也用FOPDT
-            elif is_second_order_candidate and L_est < 0.5:
-                return ModelType.SO
-            elif L_est < 0.5 and estimated_T < 10:
-                return ModelType.FO
-            else:
-                return ModelType.FOPDT
-        else:
-            # 默认场景
-            if is_second_order_candidate and L_est < 0.5:
-                return ModelType.SO
-            elif L_est < 0.5:
-                return ModelType.FO
-            else:
-                return ModelType.FOPDT
-    
-    def _detect_model_type_with_confidence(self, t: np.ndarray, y: np.ndarray, 
-                                           u: np.ndarray, scenario: str,
-                                           features: Dict[str, float]) -> Tuple[str, float, str]:
-        """检测模型类型并返回置信度和原因
-        
-        Args:
-            t: 时间数组
-            y: 输出数据
-            u: 输入数据
-            scenario: 控制场景
-            features: 已提取的特征
-            
-        Returns:
-            (模型类型, 置信度, 原因)
-        """
-        L_est = features.get('estimated_L', 0.0)
-        snr = features.get('snr', 100.0)
-        estimated_T = features.get('estimated_T', 30.0)
-        integral_corr = features.get('integral_correlation', 0.0)
-        has_heat_loss = features.get('has_heat_loss', False)
-        is_second_order = features.get('is_second_order_candidate', False)
-        
-        confidence = 0.7  # 基础置信度
-        reason = ""
-        
-        if scenario == 'level':
-            if snr < 5 and L_est < 2:
-                confidence = 0.8 if integral_corr > 0.7 else 0.6
-                reason = f"液位场景，低信噪比(SNR={snr:.1f})，积分相关性高({integral_corr:.2f})"
-                return ModelType.FOPI, confidence, reason
-            elif L_est > 1:
-                confidence = 0.75
-                reason = f"液位场景，存在明显滞后(L={L_est:.1f}s)"
-                return ModelType.FOPDT, confidence, reason
-            else:
-                confidence = 0.7
-                reason = f"液位场景，快速响应，无明显滞后"
-                return ModelType.FO, confidence, reason
-                
-        elif scenario == 'temperature':
-            if has_heat_loss:
-                confidence = 0.85
-                reason = "温控场景，检测到稳态段热损失特征"
-                return ModelType.FOPDT, confidence, reason
-            elif is_second_order and L_est < 0.5:
-                confidence = 0.75
-                reason = f"温控场景，存在超调/振荡特性，滞后小(L={L_est:.1f}s)"
-                return ModelType.SO, confidence, reason
-            elif L_est < 0.5 and estimated_T < 10:
-                confidence = 0.7
-                reason = f"温控场景，快速响应(T={estimated_T:.1f}s)，无明显滞后"
-                return ModelType.FO, confidence, reason
-            else:
-                confidence = 0.8
-                reason = f"温控场景，标准一阶滞后特性(T={estimated_T:.1f}s, L={L_est:.1f}s)"
-                return ModelType.FOPDT, confidence, reason
-        else:
-            # 默认场景
-            if is_second_order and L_est < 0.5:
-                confidence = 0.65
-                reason = "存在二阶特性（超调/振荡）"
-                return ModelType.SO, confidence, reason
-            elif L_est < 0.5:
-                confidence = 0.6
-                reason = "无明显滞后，使用一阶模型"
-                return ModelType.FO, confidence, reason
-            else:
-                confidence = 0.7
-                reason = "存在滞后，使用标准FOPDT模型"
-                return ModelType.FOPDT, confidence, reason
 
 
 def detect_model_type(data: List[Dict[str, Any]], verbose: bool = False) -> Dict[str, Any]:

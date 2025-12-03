@@ -843,19 +843,28 @@ class StabilityDetector:
                     merged_segments.append((cur_start, cur_end, cur_sp))
             elif gap_length < 15 or (gap_length < 100 and sp_diff < 0.5) or (gap_length <= 50 and sp_diff < 3.0) or (gap_length < 30 and sp_diff < 5.0):
                 merged_segments[-1] = (last_start, cur_end, last_sp)
-            elif gap_length < min_segment_len * 10:
+            else:
+                # 对于任意长度的间隔，检查是否应该合并
                 gap_start = last_end
                 gap_end = cur_start
                 gap_sv = sv_array[gap_start:gap_end] if gap_start < len(sv_array) and gap_end <= len(sv_array) else None
-                is_gap_steady = self._check_gap_steady_state(pv_data, sv_array, gap_start, gap_end, gap_sv, last_sp)
-                has_non_steady_features = self._has_non_steady_features(pv_data[gap_start:gap_end]) if gap_end > gap_start else False
-                should_merge = (not is_gap_steady and has_non_steady_features and sp_diff < 15.0)
-                if should_merge:
+                
+                # 检查间隔区域的特征
+                has_non_steady_features = self._has_non_steady_features(pv_data[gap_start:gap_end], last_sp) if gap_end > gap_start else False
+                
+                # 如果间隔区域也有非稳态特征且设定值相同，则合并
+                if has_non_steady_features and sp_diff < 0.5:
                     merged_segments[-1] = (min(last_start, cur_start), max(last_end, cur_end), last_sp)
+                elif gap_length < min_segment_len * 10:
+                    # 较短间隔额外检查稳态
+                    is_gap_steady = self._check_gap_steady_state(pv_data, sv_array, gap_start, gap_end, gap_sv, last_sp)
+                    should_merge = (not is_gap_steady and has_non_steady_features and sp_diff < 15.0)
+                    if should_merge:
+                        merged_segments[-1] = (min(last_start, cur_start), max(last_end, cur_end), last_sp)
+                    else:
+                        merged_segments.append((cur_start, cur_end, cur_sp))
                 else:
                     merged_segments.append((cur_start, cur_end, cur_sp))
-            else:
-                merged_segments.append((cur_start, cur_end, cur_sp))
         
         return merged_segments
     
@@ -884,12 +893,30 @@ class StabilityDetector:
         gap_setpoint = np.median(gap_sv)
         return self._is_region_steady(pv_data, sv_array, gap_start, gap_end, gap_setpoint)
     
-    def _has_non_steady_features(self, gap_pv):
+    def _has_non_steady_features(self, gap_pv, setpoint=None):
         """检查区域是否有明显的非稳态特征"""
         if len(gap_pv) <= 10:
             return False
+        
+        # 检查首尾差值
         if abs(gap_pv[-1] - gap_pv[0]) > 3.0:
             return True
+        
+        # 检查PV范围和标准差（相对于设定值）
+        pv_range = np.max(gap_pv) - np.min(gap_pv)
+        pv_std = np.std(gap_pv)
+        
+        # 如果PV范围较大，认为有非稳态特征
+        if setpoint is not None and setpoint > 0:
+            # PV范围超过设定值的50%，或标准差超过20%
+            if pv_range > setpoint * 0.5 or pv_std > setpoint * 0.2:
+                return True
+        else:
+            # 绝对值判断
+            if pv_range > 2.5 or pv_std > 0.5:
+                return True
+        
+        # 检查趋势
         try:
             x = np.arange(len(gap_pv))
             coeffs = np.polyfit(x, gap_pv, 1)
@@ -897,6 +924,7 @@ class StabilityDetector:
                 return True
         except:
             pass
+        
         return False
     
     def _is_region_steady(self, pv_data, sv_array, start_idx, end_idx, setpoint):
@@ -929,10 +957,14 @@ class StabilityDetector:
         if pv_range == 0 and pv_mean < 0.1:
             return False
         
-        is_low_variation = (
-            (pv_std < current_sv * 0.15 and pv_range < current_sv * 0.3) if current_sv > 0
-            else (pv_std < 1.5 and pv_range < 3.0)
-        )
+        # 判断低变化：PV标准差和范围都要小
+        # 增加绝对值判断，避免设定值较小时阈值过低
+        if current_sv > 0:
+            std_threshold = max(current_sv * 0.12, 0.3)  # 至少0.3
+            range_threshold = max(current_sv * 0.25, 0.8)  # 至少0.8
+            is_low_variation = (pv_std < std_threshold and pv_range < range_threshold)
+        else:
+            is_low_variation = (pv_std < 0.5 and pv_range < 1.5)
         
         has_no_trend = True
         if len(region_pv) > 10:
@@ -1166,32 +1198,30 @@ def find_high_variability_periods(
                     "variance": seg_var
                 }
         
-        # 添加扰动起始点信息
-        disturbance_info = []
-        for dist_start, dist_setpoint in disturbance_starts:
-            dist_time = pv_processed.index[dist_start] if dist_start < len(pv_processed) else None
-            disturbance_info.append({
-                "start_idx": dist_start,
-                "start_time": dist_time,
-                "setpoint": dist_setpoint
+        # 构建 tuning_window：每个扰动段的开始和结束时间
+        tuning_window = []
+        for seg_start, seg_end, seg_setpoint in non_steady_segments:
+            seg_start_time = pv_processed.index[seg_start] if seg_start < len(pv_processed) else None
+            seg_end_time = pv_processed.index[min(seg_end - 1, len(pv_processed) - 1)] if seg_end > 0 else None
+            tuning_window.append({
+                "start_time": seg_start_time,
+                "end_time": seg_end_time
             })
         
         return {
-            "table": table,
+            "table": [],
             "start_time": start_time,
             "end_time": end_time,
             "params": {
-                "tol": tol,
-                "std_tol": std_tol,
-                "min_len": min_len,
-                "min_segment_len": min_segment_len,
+                "window_size": min_segment_len,
+                "step_size": min_len,
+                "variability_threshold": std_tol,
                 "analyst_column": analyst_column or "pv",
                 "window_sec": window_sec,
                 "is_filter": is_filter
             },
             "total_windows": len(non_steady_segments),
-            "std_max_window": std_max_window,
-            "disturbance_starts": disturbance_info
+            "tuning_window": tuning_window
         }
     
     except Exception as e:
@@ -1200,17 +1230,15 @@ def find_high_variability_periods(
             "start_time": None,
             "end_time": None,
             "params": {
-                "tol": tol,
-                "std_tol": std_tol,
-                "min_len": min_len,
-                "min_segment_len": min_segment_len,
+                "window_size": min_segment_len,
+                "step_size": min_len,
+                "variability_threshold": std_tol,
                 "analyst_column": analyst_column or "pv",
                 "window_sec": window_sec,
                 "is_filter": is_filter
             },
             "total_windows": 0,
-            "std_max_window": None,
-            "disturbance_starts": [],
+            "tuning_window": [],
             "error": str(e)
         }
 
