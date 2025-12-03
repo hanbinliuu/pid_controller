@@ -8,17 +8,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-project_root = "/Users/lhb/Documents/pycharmProject/hollicube/pid-agent-mvp"
-sys.path.insert(0, project_root)
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 tests_dir = os.path.dirname(current_dir)  # tests目录
 system_tuning_dir = os.path.dirname(tests_dir)  # system_tuning目录
 sys.path.insert(0, system_tuning_dir)
 
+project_root = "/Users/lhb/Documents/pycharmProject/hollicube/pid-agent-mvp"
+sys.path.insert(0, project_root)  # Must be at position 0 to take precedence over system_tuning/core/
 
-from api.routes.analysis_router import _query_tsdb_data_zhongkong
-from api.routes.util import parse_time_to_milliseconds
+
+from core.agent.tools import process_query_tsdb_data_interpolated
+from api.routes.time_util import parse_time_to_milliseconds
+from core.client.real_tsdb_client import get_default_database
 from core.algorithm.detector import StabilityDetector
 
 
@@ -269,18 +270,18 @@ def run(
 
         # 固定设备与字段
         table = "PID_FEP_Gateway_Device_001default"
-        required_fields = [
-            "ns=100;s=FIC101A_MV.In_Channel0",
-            "ns=100;s=FIC101A_PV.In_Channel0",
-            "ns=100;s=FIC101A_SV.In_Channel0",
-            "ns=100;s=FIC101A_PB.In_Channel0",
-            "ns=100;s=FIC101A_TI.In_Channel0",
-            "ns=100;s=FIC101A_TD.In_Channel0"
-        ]
+        required_fields = {
+            "mv": "ns=100;s=FIC101A_MV.In_Channel0",
+            "pv": "ns=100;s=FIC101A_PV.In_Channel0",
+            "sv": "ns=100;s=FIC101A_SV.In_Channel0",
+            "pb": "ns=100;s=FIC101A_PB.In_Channel0",
+            "ti": "ns=100;s=FIC101A_TI.In_Channel0",
+            "td": "ns=100;s=FIC101A_TD.In_Channel0"
+        }
 
         # 查询历史数据
-        db = 'platform'
-        history_data = _query_tsdb_data_zhongkong(
+        db = get_default_database()
+        history_data = process_query_tsdb_data_interpolated(
             db=db,
             table_name=table,
             required_fields=required_fields,
@@ -316,7 +317,7 @@ if __name__ == "__main__":
         {'start_time': '2025-11-04 18:36:22', 'end_time': '2025-11-04 19:35:58'},
     ]
     
-    TOL = 0.5      # 容差
+    TOL = 0.3       # 容差
     STD_TOL = 0.2  # 标准差阈值
     
     print("=" * 80)
