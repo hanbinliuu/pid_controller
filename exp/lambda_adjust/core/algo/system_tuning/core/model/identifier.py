@@ -62,8 +62,25 @@ class ModelIdentifier:
         return y
     
     @staticmethod
+    def first_order_model(params, t, u, y0):
+        """纯一阶惯性模型（无滞后）: G(s) = K/(Ts+1)
+        
+        适用场景：压力控制等快速响应系统（占比约10%）
+        """
+        K, T = params
+        T = max(T, Config.EPSILON)
+        y = np.ones_like(t) * y0
+        
+        dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
+        
+        for i in range(len(t)):
+            dt_step = dt_array[i] if i < len(dt_array) else dt_avg
+            y[i] = y[i - 1] + (K * u[i] - (y[i - 1] - y0)) / T * dt_step
+        return y
+    
+    @staticmethod
     def second_order_model(params, t, u, y0):
-        """二阶模型（两个一阶环节串联）"""
+        """二阶模型（两个一阶环节串联，无滞后）"""
         K, T1, T2 = params
         T1 = max(T1, Config.EPSILON)
         T2 = max(T2, Config.EPSILON)
@@ -79,6 +96,68 @@ class ModelIdentifier:
             x1 = x1 + dx1_dt * dt_step
             dy_dt = (x1 - y[i - 1]) / T2
             y[i] = y[i - 1] + dy_dt * dt_step
+        return y
+    
+    @staticmethod
+    def sopdt_model(params, t, u, y0):
+        """二阶滞后模型 (SOPDT): G(s) = K/((T1s+1)(T2s+1)) * e^(-Ls)
+        
+        适用场景：具有二阶惯性和滞后的系统（占比约15%）
+        整定建议：PID + 微分先行（抑制二阶惯性）
+        """
+        K, T1, T2, L = params
+        T1 = max(T1, Config.EPSILON)
+        T2 = max(T2, Config.EPSILON)
+        y = np.ones_like(t) * y0
+        x1 = y0
+        
+        dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
+        L_int = ModelIdentifier._lag_to_samples(L, dt_avg)
+        
+        for i in range(len(t)):
+            dt_step = dt_array[i] if i < len(dt_array) else dt_avg
+            u_delay = u[max(0, i - L_int)]
+            u_eff = K * u_delay
+            dx1_dt = (u_eff - x1) / T1
+            x1 = x1 + dx1_dt * dt_step
+            dy_dt = (x1 - y[i - 1]) / T2
+            y[i] = y[i - 1] + dy_dt * dt_step
+        return y
+    
+    @staticmethod
+    def so_dt_model(params, t, u, y0):
+        """二阶振荡+滞后模型 (SO+DT): G(s) = K/(T²s²+2ζTs+1) * e^(-Ls)
+        
+        适用场景：具有振荡特性的二阶系统（占比约15%）
+        整定建议：阻尼PID（增大Kd抑制振荡）
+        
+        参数: K, T, zeta(ζ阻尼比), L
+        - ζ < 1: 欠阻尼（振荡）
+        - ζ = 1: 临界阻尼
+        - ζ > 1: 过阻尼
+        """
+        K, T, zeta, L = params
+        T = max(T, Config.EPSILON)
+        zeta = max(zeta, 0.01)  # 防止除零
+        y = np.ones_like(t) * y0
+        dy = 0.0  # 导数状态
+        
+        dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
+        L_int = ModelIdentifier._lag_to_samples(L, dt_avg)
+        
+        # 二阶系统的状态空间表示
+        # T²*y'' + 2ζT*y' + y = K*u
+        # 转换为: y'' = (K*u - y - 2ζT*y') / T²
+        omega_n = 1.0 / T  # 自然频率
+        
+        for i in range(len(t)):
+            dt_step = dt_array[i] if i < len(dt_array) else dt_avg
+            u_delay = u[max(0, i - L_int)]
+            
+            # 二阶微分方程的数值积分
+            d2y = omega_n**2 * (K * u_delay - (y[i-1] - y0)) - 2 * zeta * omega_n * dy
+            dy = dy + d2y * dt_step
+            y[i] = y[i - 1] + dy * dt_step
         return y
     
     @staticmethod
@@ -99,8 +178,14 @@ class ModelIdentifier:
     @staticmethod
     def residuals(params, t, u, y_measured, y0, model_type='fopdt', **kwargs):
         """统一的残差函数，支持所有模型类型"""
-        if model_type == 'second_order':
+        if model_type == 'first_order':
+            y_predicted = ModelIdentifier.first_order_model(params, t, u, y0)
+        elif model_type == 'second_order':
             y_predicted = ModelIdentifier.second_order_model(params, t, u, y0)
+        elif model_type == 'sopdt':
+            y_predicted = ModelIdentifier.sopdt_model(params, t, u, y0)
+        elif model_type == 'so_dt':
+            y_predicted = ModelIdentifier.so_dt_model(params, t, u, y0)
         elif model_type == 'fopdt_with_heat_loss':
             ambient_temp = kwargs.get('ambient_temp', 0.0)
             y_predicted = ModelIdentifier.fopdt_with_heat_loss(params, t, u, y0, ambient_temp)
@@ -301,27 +386,31 @@ class ModelIdentifier:
         use_closed_loop = kwargs.get('use_closed_loop', True)
         
         # 获取初始猜测值（支持闭环辨识增强）
-        if model_type == 'fopdt_with_heat_loss':
-            initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(
-                t, y, u, y0, sv=sv, current_pid_params=current_pid_params, use_closed_loop=use_closed_loop
-            )
+        initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(
+            t, y, u, y0, sv=sv, current_pid_params=current_pid_params, use_closed_loop=use_closed_loop
+        )
+        
+        if model_type == 'first_order':
+            # 纯一阶惯性: K/(Ts+1)，无滞后
+            initial_guess = [initial_guess_dict['K'], initial_guess_dict['T']]
+        elif model_type == 'fopdt_with_heat_loss':
             initial_guess = [initial_guess_dict['K'], initial_guess_dict['T'], 
                            initial_guess_dict['L'], 0.01]  # alpha初始值
         elif model_type == 'second_order':
-            initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(
-                t, y, u, y0, sv=sv, current_pid_params=current_pid_params, use_closed_loop=use_closed_loop
-            )
             initial_guess = [initial_guess_dict['K'], initial_guess_dict['T'] / 2, 
                            initial_guess_dict['T'] / 2]
+        elif model_type == 'sopdt':
+            # 二阶滞后: K/((T1s+1)(T2s+1)) * e^(-Ls)
+            initial_guess = [initial_guess_dict['K'], initial_guess_dict['T'] / 2, 
+                           initial_guess_dict['T'] / 2, initial_guess_dict['L']]
+        elif model_type == 'so_dt':
+            # 二阶振荡+滞后: K/(T²s²+2ζTs+1) * e^(-Ls)
+            # 默认阻尼比 zeta=0.7（典型工业系统）
+            initial_guess = [initial_guess_dict['K'], initial_guess_dict['T'], 
+                           0.7, initial_guess_dict['L']]
         elif model_type == 'integral_delay':
-            initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(
-                t, y, u, y0, sv=sv, current_pid_params=current_pid_params, use_closed_loop=use_closed_loop
-            )
             initial_guess = [initial_guess_dict['K'], initial_guess_dict['L']]
         else:  # 'fopdt'
-            initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(
-                t, y, u, y0, sv=sv, current_pid_params=current_pid_params, use_closed_loop=use_closed_loop
-            )
             initial_guess = [initial_guess_dict['K'], initial_guess_dict['T'], initial_guess_dict['L']]
         
         # 获取边界
@@ -372,18 +461,42 @@ class ModelIdentifier:
     
     @staticmethod
     def identify_first_order(t, y, u):
-        """辨识一阶模型参数（使用 fopdt 且强制 L=0）"""
-        result = ModelIdentifier._identify_model_unified(t, y, u, 'fopdt')
-        K, T, L = result
-        return (K, T)
+        """辨识纯一阶惯性模型参数: G(s) = K/(Ts+1)
+        
+        适用场景：压力控制等快速响应系统
+        返回: (K, T)
+        """
+        return ModelIdentifier._identify_model_unified(t, y, u, 'first_order')
     
     @staticmethod
     def identify_second_order(t, y, u):
-        """辨识二阶模型参数"""
+        """辨识二阶模型参数（无滞后）"""
         return ModelIdentifier._identify_model_unified(t, y, u, 'second_order')
     
     @staticmethod
+    def identify_sopdt(t, y, u):
+        """辨识二阶滞后模型 (SOPDT): G(s) = K/((T1s+1)(T2s+1)) * e^(-Ls)
+        
+        适用场景：具有二阶惯性和滞后的系统
+        返回: (K, T1, T2, L)
+        """
+        return ModelIdentifier._identify_model_unified(t, y, u, 'sopdt')
+    
+    @staticmethod
+    def identify_so_dt(t, y, u):
+        """辨识二阶振荡+滞后模型 (SO+DT): G(s) = K/(T²s²+2ζTs+1) * e^(-Ls)
+        
+        适用场景：具有振荡特性的二阶系统
+        返回: (K, T, zeta, L)
+        """
+        return ModelIdentifier._identify_model_unified(t, y, u, 'so_dt')
+    
+    @staticmethod
     def identify_integral_delay(t, y, u):
-        """辨识积分-延迟模型参数"""
+        """辨识积分-延迟模型参数 (IDT): G(s) = K/s * e^(-Ls)
+        
+        适用场景：液位控制等积分过程
+        返回: (K, L)
+        """
         return ModelIdentifier._identify_model_unified(t, y, u, 'integral_delay')
 

@@ -159,10 +159,13 @@ class PIDTuner:
     
     @staticmethod
     def cohen_coon_tuning(K, T, L):
-        """Cohen-Coon 整定方法（适用于FOPDT模型）"""
+        """Cohen-Coon 整定方法（适用于FOPDT模型，占比40%）
+        
+        优先用于阶跃响应法辨识的系统
+        """
         if L <= 0 or T <= 0 or abs(K) < Config.EPSILON:
             print("⚠️ Cohen-Coon 要求 T > 0 且 L > 0 且 K != 0，返回默认参数")
-            return 1.0, 20.0, 1.0
+            return 100.0, 20.0, 1.0
 
         L_T_ratio = L / T if T > Config.EPSILON else 0.5
         Kc = (1 / K) * (T / L) * (4.0 / 3.0 + L_T_ratio / 4.0)
@@ -191,6 +194,160 @@ class PIDTuner:
         return pb, ti, td
     
     @staticmethod
+    def ziegler_nichols_tuning(K, T, L=0.0):
+        """Ziegler-Nichols 整定方法（适用于纯一阶惯性模型，占比10%）
+        
+        适合压力控制等快速响应系统，无滞后或滞后很小
+        传递函数: G(s) = K/(Ts+1)
+        """
+        if T <= 0 or abs(K) < Config.EPSILON:
+            print("⚠️ Ziegler-Nichols 要求 T > 0 且 K != 0，返回默认参数")
+            return 100.0, 20.0, 0.0
+        
+        # 对于纯一阶惯性系统，使用简化的Z-N公式
+        # 基于开环响应的经验公式
+        if L > 0:
+            # 有滞后时使用经典Z-N公式
+            Kc = 1.2 * T / (K * L)
+            Ti = 2.0 * L
+            Td = 0.5 * L
+        else:
+            # 无滞后时使用简化公式（纯一阶惯性）
+            Kc = 0.9 / K
+            Ti = 3.33 * T
+            Td = 0.0  # 纯一阶系统不需要微分
+        
+        pb = 100 / Kc if Kc != 0 else 100.0
+        ti = Ti
+        td = Td
+        
+        # 参数限幅
+        pb = np.clip(pb, 10.0, 500.0)
+        ti = np.clip(ti, 1.0, 200.0)
+        td = np.clip(td, 0.0, 50.0)
+        
+        return pb, ti, td
+    
+    @staticmethod
+    def improved_pi_tuning(K, L):
+        """改进型PI算法（适用于积分过程 IDT，占比15%）
+        
+        用于液位控制等积分过程，弱积分+比例控制
+        传递函数: G(s) = K/s * e^(-Ls)
+        """
+        if abs(K) < Config.EPSILON:
+            print("⚠️ 改进型PI 要求 K != 0，返回默认参数")
+            return 100.0, 60.0, 0.0
+        
+        L = max(L, 0.1)  # 确保滞后不为0
+        
+        # 积分过程的PI整定（Lambda方法变体）
+        # 对于积分过程，Kc需要较小以避免振荡
+        lambda_val = 3 * L  # 较大的lambda获得更平滑的响应
+        
+        Kc = 1 / (K * (lambda_val + L))
+        Ti = lambda_val + L  # 积分时间等于闭环时间常数
+        Td = 0.0  # 积分过程通常不用微分
+        
+        pb = 100 / Kc if Kc != 0 else 100.0
+        ti = Ti
+        td = Td
+        
+        # 参数限幅（积分过程需要更保守的参数）
+        pb = np.clip(pb, 50.0, 800.0)
+        ti = np.clip(ti, 5.0, 300.0)
+        td = np.clip(td, 0.0, 0.0)
+        
+        return pb, ti, td
+    
+    @staticmethod
+    def derivative_first_pid_tuning(K, T1, T2, L):
+        """PID + 微分先行算法（适用于 SOPDT 二阶滞后系统，占比15%）
+        
+        用于抑制二阶惯性，微分项作用于PV而非误差
+        传递函数: G(s) = K/((T1s+1)(T2s+1)) * e^(-Ls)
+        """
+        if T1 <= 0 or T2 <= 0 or abs(K) < Config.EPSILON:
+            print("⚠️ 微分先行PID 要求 T1, T2 > 0 且 K != 0，返回默认参数")
+            return 100.0, 30.0, 5.0
+        
+        L = max(L, 0.1)
+        T_eq = T1 + T2  # 等效时间常数
+        
+        # Lambda整定变体，考虑二阶特性
+        lambda_val = max(T_eq, 2 * L)  # 较保守的lambda
+        
+        Kc = T_eq / (K * (lambda_val + L / 2))
+        Ti = T_eq  # 积分时间等于等效时间常数
+        Td = (T1 * T2) / T_eq  # 微分时间基于两个时间常数
+        
+        # 微分先行补偿：增加Td以抑制二阶惯性
+        Td *= 1.2
+        
+        pb = 100 / Kc if Kc != 0 else 100.0
+        ti = Ti
+        td = Td
+        
+        # 参数限幅
+        pb = np.clip(pb, 20.0, 400.0)
+        ti = np.clip(ti, 5.0, 200.0)
+        td = np.clip(td, 1.0, 50.0)
+        
+        return pb, ti, td
+    
+    @staticmethod
+    def damping_pid_tuning(K, T, zeta, L):
+        """阻尼PID算法（适用于 SO+DT 二阶振荡系统，占比15%）
+        
+        增大Kd抑制振荡，补偿滞后+振荡
+        传递函数: G(s) = K/(T²s²+2ζTs+1) * e^(-Ls)
+        
+        Args:
+            K: 增益
+            T: 时间常数
+            zeta: 阻尼比 (ζ < 1 表示欠阻尼/振荡)
+            L: 滞后时间
+        """
+        if T <= 0 or abs(K) < Config.EPSILON:
+            print("⚠️ 阻尼PID 要求 T > 0 且 K != 0，返回默认参数")
+            return 100.0, 30.0, 10.0
+        
+        L = max(L, 0.1)
+        zeta = max(zeta, 0.1)  # 确保阻尼比有效
+        
+        # 根据阻尼比调整整定策略
+        if zeta < 0.5:
+            # 严重欠阻尼（强振荡）：非常保守的参数
+            lambda_val = 3 * T
+            td_factor = 2.0  # 大幅增加微分
+        elif zeta < 0.707:
+            # 欠阻尼：保守参数
+            lambda_val = 2 * T
+            td_factor = 1.5
+        else:
+            # 接近临界阻尼或过阻尼
+            lambda_val = T
+            td_factor = 1.0
+        
+        # 二阶系统的等效参数
+        omega_n = 1.0 / T  # 自然频率
+        
+        Kc = (2 * zeta * T) / (K * (lambda_val + L / 2))
+        Ti = 2 * zeta * T  # 积分时间与阻尼相关
+        Td = T / (2 * zeta) * td_factor  # 微分时间，增强以抑制振荡
+        
+        pb = 100 / Kc if Kc != 0 else 100.0
+        ti = Ti
+        td = Td
+        
+        # 参数限幅（振荡系统需要更大的微分）
+        pb = np.clip(pb, 30.0, 500.0)
+        ti = np.clip(ti, 5.0, 150.0)
+        td = np.clip(td, 2.0, 80.0)
+        
+        return pb, ti, td
+    
+    @staticmethod
     def tune_by_scenario(K, T, L, scenario, tuning_method, lambda_val=None, mode=Mode.STANDARD):
         """根据场景和整定方法统一调用整定函数"""
         if tuning_method == TuningMethod.COHEN_COON:
@@ -205,4 +362,70 @@ class PIDTuner:
             return PIDTuner.lambda_tuning_for_flow(K, T, L, mode)
         else:
             return PIDTuner.lambda_tuning(K, T, L, lambda_val, mode)
+    
+    @staticmethod
+    def tune_by_model_type(model_type, model_params, mode=Mode.STANDARD):
+        """根据模型类型自动选择最佳整定算法
+        
+        Args:
+            model_type: 模型类型 ('fopdt', 'first_order', 'sopdt', 'so_dt', 'integral_delay')
+            model_params: 模型参数（取决于模型类型）
+            mode: 控制模式
+            
+        Returns:
+            (pb, ti, td): PID参数
+            tuning_info: 整定信息字典
+        """
+        tuning_info = {
+            'model_type': model_type,
+            'tuning_method': None,
+            'model_params': model_params
+        }
+        
+        if model_type == 'fopdt':
+            # FOPDT: 优先使用 Cohen-Coon（占比40%）
+            K, T, L = model_params[:3]
+            if L > 0:
+                pb, ti, td = PIDTuner.cohen_coon_tuning(K, T, L)
+                tuning_info['tuning_method'] = 'Cohen-Coon'
+            else:
+                pb, ti, td = PIDTuner.lambda_tuning(K, T, L, mode=mode)
+                tuning_info['tuning_method'] = 'Lambda'
+                
+        elif model_type == 'first_order':
+            # 纯一阶惯性: 使用 Ziegler-Nichols（占比10%）
+            K, T = model_params[:2]
+            pb, ti, td = PIDTuner.ziegler_nichols_tuning(K, T, L=0.0)
+            tuning_info['tuning_method'] = 'Ziegler-Nichols'
+            
+        elif model_type == 'integral_delay':
+            # 积分-延迟: 使用改进型PI（占比15%）
+            K, L = model_params[:2]
+            pb, ti, td = PIDTuner.improved_pi_tuning(K, L)
+            tuning_info['tuning_method'] = 'Improved-PI'
+            
+        elif model_type == 'sopdt':
+            # SOPDT: 使用 PID+微分先行（占比15%）
+            K, T1, T2, L = model_params[:4]
+            pb, ti, td = PIDTuner.derivative_first_pid_tuning(K, T1, T2, L)
+            tuning_info['tuning_method'] = 'Derivative-First-PID'
+            
+        elif model_type == 'so_dt':
+            # SO+DT: 使用阻尼PID（占比15%）
+            K, T, zeta, L = model_params[:4]
+            pb, ti, td = PIDTuner.damping_pid_tuning(K, T, zeta, L)
+            tuning_info['tuning_method'] = 'Damping-PID'
+            
+        else:
+            # 默认使用Lambda方法
+            K = model_params[0] if len(model_params) > 0 else 0.5
+            T = model_params[1] if len(model_params) > 1 else 30.0
+            L = model_params[2] if len(model_params) > 2 else 5.0
+            pb, ti, td = PIDTuner.lambda_tuning(K, T, L, mode=mode)
+            tuning_info['tuning_method'] = 'Lambda'
+        
+        print(f"📊 模型类型: {model_type}, 整定算法: {tuning_info['tuning_method']}")
+        print(f"   参数: pb={pb:.2f}%, ti={ti:.2f}s, td={td:.2f}s")
+        
+        return pb, ti, td, tuning_info
 
