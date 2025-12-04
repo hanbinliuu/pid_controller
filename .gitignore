@@ -24,3 +24,20 @@ __pycache__/
 # Configuration files (keep example files only)
 config/application.properties
 !config/application.properties.example
+
+# Images
+*.png
+
+# Markdown
+*.md
+
+# macOS
+.DS_Store
+
+# Text files
+*.txt
+
+# Exception: include exp folder
+!exp/
+!exp/**/*.md
+!exp/**/*.py

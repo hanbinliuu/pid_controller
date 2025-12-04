@@ -10,6 +10,17 @@ except ImportError:
 class ModelIdentifier:
     """模型辨识器：负责各种系统模型的参数辨识"""
     
+    # 模型仿真方法映射
+    MODEL_SIMULATORS = {}
+    INITIAL_GUESS_FORMATS = {
+        'FO': lambda g: [g['K'], g['T']],
+        'SO': lambda g: [g['K'], g['T'] / 2, g['T'] / 2],
+        'SOPDT': lambda g: [g['K'], g['T'] / 2, g['T'] / 2, g['L']],
+        'FO_INTEGRATOR': lambda g: [g['K'], g['L']],
+        'SO_INTEGRATOR': lambda g: [g['K'], g['T'] / 2, g['T'] / 2],
+        'FOPDT': lambda g: [g['K'], g['T'], g['L']],
+    }
+    
     @staticmethod
     def _compute_sampling_info(t):
         """计算采样间隔信息"""
@@ -29,18 +40,39 @@ class ModelIdentifier:
     
     @staticmethod
     def fopdt_model(params, t, u, y0):
-        """一阶加纯滞后（FOPDT）模型"""
+        """
+        一阶加纯滞后（FOPDT）模型 - 直接拟合版本
+        
+        数学模型: T * dy/dt + y = K * u(t-L)
+        稳态特性: y_ss = K * u_ss (当以 u=0,y=0 为参考点时)
+        
+        对于实际数据，假设 u 是原始 MV，y0 是初始 PV 值
+        模型输出 y 会从 y0 开始响应 u 的变化
+        
+        注意：此模型假设 u 和 y 都是原始值（非增量）
+        增益 K 表示：稳态时 Δy/Δu 的比值
+        """
         K, T, L = params
         T = max(T, Config.EPSILON)
-        y = np.ones_like(t) * y0
+        n = len(t)
+        y = np.zeros(n)
+        y[0] = y0
         
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
         L_int = ModelIdentifier._lag_to_samples(L, dt_avg)
         
-        for i in range(len(t)):
+        # 计算 u 的基准值（滞后前的初始稳态）
+        u0 = u[0] if L_int == 0 else np.mean(u[:max(1, L_int)])
+        
+        for i in range(1, n):
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
             u_delay = u[max(0, i - L_int)]
-            y[i] = y[i - 1] + (K * u_delay - (y[i - 1] - y0)) / T * dt_step
+            # 使用增量形式: y 响应 (u - u0) 的变化
+            # 稳态时: y = y0 + K * (u - u0)
+            delta_u = u_delay - u0
+            y_target = y0 + K * delta_u
+            # 一阶动态响应
+            y[i] = y[i-1] + (y_target - y[i-1]) / T * dt_step
         return y
     
     @staticmethod
@@ -63,44 +95,62 @@ class ModelIdentifier:
     
     @staticmethod
     def first_order_model(params, t, u, y0):
-        """纯一阶惯性模型（无滞后）: G(s) = K/(Ts+1)
+        """
+        纯一阶惯性模型（无滞后）: G(s) = K/(Ts+1)
         
         适用场景：压力控制等快速响应系统（占比约10%）
         """
         K, T = params
         T = max(T, Config.EPSILON)
-        y = np.ones_like(t) * y0
+        n = len(t)
+        y = np.zeros(n)
+        y[0] = y0
         
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
+        u0 = u[0]  # 无滞后，直接用第一个点
         
-        for i in range(len(t)):
+        for i in range(1, n):
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
-            y[i] = y[i - 1] + (K * u[i] - (y[i - 1] - y0)) / T * dt_step
+            delta_u = u[i] - u0
+            y_target = y0 + K * delta_u
+            y[i] = y[i-1] + (y_target - y[i-1]) / T * dt_step
         return y
     
     @staticmethod
     def second_order_model(params, t, u, y0):
-        """二阶模型（两个一阶环节串联，无滞后）"""
+        """
+        二阶模型（两个一阶环节串联，无滞后）
+        G(s) = K / ((T1*s + 1) * (T2*s + 1))
+        """
         K, T1, T2 = params
         T1 = max(T1, Config.EPSILON)
         T2 = max(T2, Config.EPSILON)
-        y = np.ones_like(t) * y0
-        x1 = y0
+        n = len(t)
+        y = np.zeros(n)
+        y[0] = y0
         
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
+        u0 = u[0]
         
-        for i in range(len(t)):
+        # 中间状态变量
+        x1 = y0  # 第一个一阶环节的输出
+        
+        for i in range(1, n):
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
-            u_eff = K * u[i]
-            dx1_dt = (u_eff - x1) / T1
+            delta_u = u[i] - u0
+            # 第一个一阶环节: 输入是 K * delta_u，输出是 x1
+            x1_target = y0 + K * delta_u
+            dx1_dt = (x1_target - x1) / T1
             x1 = x1 + dx1_dt * dt_step
-            dy_dt = (x1 - y[i - 1]) / T2
-            y[i] = y[i - 1] + dy_dt * dt_step
+            # 第二个一阶环节: 输入是 x1，输出是 y
+            dy_dt = (x1 - y[i-1]) / T2
+            y[i] = y[i-1] + dy_dt * dt_step
         return y
     
     @staticmethod
     def sopdt_model(params, t, u, y0):
-        """二阶滞后模型 (SOPDT): G(s) = K/((T1s+1)(T2s+1)) * e^(-Ls)
+        """
+        二阶滞后模型 (SOPDT): G(s) = K/((T1s+1)(T2s+1)) * e^(-Ls)
         
         适用场景：具有二阶惯性和滞后的系统（占比约15%）
         整定建议：PID + 微分先行（抑制二阶惯性）
@@ -108,20 +158,27 @@ class ModelIdentifier:
         K, T1, T2, L = params
         T1 = max(T1, Config.EPSILON)
         T2 = max(T2, Config.EPSILON)
-        y = np.ones_like(t) * y0
-        x1 = y0
+        n = len(t)
+        y = np.zeros(n)
+        y[0] = y0
         
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
         L_int = ModelIdentifier._lag_to_samples(L, dt_avg)
         
-        for i in range(len(t)):
+        u0 = u[0] if L_int == 0 else np.mean(u[:max(1, L_int)])
+        x1 = y0  # 中间状态
+        
+        for i in range(1, n):
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
             u_delay = u[max(0, i - L_int)]
-            u_eff = K * u_delay
-            dx1_dt = (u_eff - x1) / T1
+            delta_u = u_delay - u0
+            # 第一阶段目标
+            x1_target = y0 + K * delta_u
+            dx1_dt = (x1_target - x1) / T1
             x1 = x1 + dx1_dt * dt_step
-            dy_dt = (x1 - y[i - 1]) / T2
-            y[i] = y[i - 1] + dy_dt * dt_step
+            # 第二阶段
+            dy_dt = (x1 - y[i-1]) / T2
+            y[i] = y[i-1] + dy_dt * dt_step
         return y
     
     @staticmethod
@@ -162,34 +219,36 @@ class ModelIdentifier:
     
     @staticmethod
     def integral_delay_model(params, t, u, y0):
-        """积分-延迟模型（适用于液位控制）"""
+        """
+        积分-延迟模型（适用于液位控制）
+        G(s) = K/s * e^(-Ls)
+        
+        对于积分过程：y = y0 + K * ∫(u - u0)dt
+        """
         K, L = params
-        y = np.ones_like(t) * y0
+        n = len(t)
+        y = np.zeros(n)
+        y[0] = y0
         
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
         L_int = ModelIdentifier._lag_to_samples(L, dt_avg)
         
-        for i in range(len(t)):
+        u0 = u[0] if L_int == 0 else np.mean(u[:max(1, L_int)])
+        
+        for i in range(1, n):
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
             u_delay = u[max(0, i - L_int)]
-            y[i] = y[i-1] + K * u_delay * dt_step
+            # 积分模型: dy/dt = K * (u - u0)
+            y[i] = y[i-1] + K * (u_delay - u0) * dt_step
         return y
     
     @staticmethod
     def residuals(params, t, u, y_measured, y0, model_type='FOPDT', **kwargs):
         """统一的残差函数，支持所有模型类型"""
-        if model_type == 'FO':
-            y_predicted = ModelIdentifier.first_order_model(params, t, u, y0)
-        elif model_type == 'SO':
-            y_predicted = ModelIdentifier.second_order_model(params, t, u, y0)
-        elif model_type == 'SOPDT':
-            y_predicted = ModelIdentifier.sopdt_model(params, t, u, y0)
-        elif model_type == 'FO_INTEGRATOR':
-            y_predicted = ModelIdentifier.integral_delay_model(params, t, u, y0)
-        elif model_type == 'SO_INTEGRATOR':
-            y_predicted = ModelIdentifier.second_order_model(params, t, u, y0)  # 简化处理
-        else:  # 'FOPDT'
-            y_predicted = ModelIdentifier.fopdt_model(params, t, u, y0)
+        simulator = ModelIdentifier.MODEL_SIMULATORS.get(
+            model_type, ModelIdentifier.fopdt_model
+        )
+        y_predicted = simulator(params, t, u, y0)
         return y_predicted - y_measured
     
     @staticmethod
@@ -231,29 +290,41 @@ class ModelIdentifier:
     
     @staticmethod
     def _estimate_gain_from_correlation(u, y, y0):
-        """使用输入输出变化的相关性估计增益"""
+        """
+        使用输入输出变化的相关性估计增益
+        
+        支持正向和反向作用系统（返回值可能为负）
+        """
+        # 方法1：基于相关系数和幅值比的简单估计
+        corr = np.corrcoef(u, y)[0, 1] if len(u) > 2 else 0
+        u_range = np.max(u) - np.min(u)
+        y_range = np.max(y) - np.min(y)
+        
+        if u_range < Config.EPSILON:
+            return 0.5 if corr >= 0 else -0.5
+        
+        # 基本增益估计：Δy/Δu，并根据相关性确定符号
+        K_magnitude = y_range / u_range if u_range > Config.EPSILON else 0.5
+        K_sign = 1.0 if corr >= 0 else -1.0
+        K_est = K_magnitude * K_sign
+        
+        # 方法2：基于差分的统计估计（作为验证）
         du = np.diff(u)
         dy = np.diff(y)
-        valid_mask = np.abs(du) > Config.EPSILON
-        if np.sum(valid_mask) < 5:
-            if np.std(u) > Config.EPSILON:
-                return (np.max(y) - np.min(y)) / (np.max(u) - np.min(u)) if (np.max(u) - np.min(u)) > Config.EPSILON else 0.5
-            return 0.5
+        valid_mask = np.abs(du) > Config.EPSILON * 10  # 提高阈值避免小变化
+        if np.sum(valid_mask) >= 5:
+            gains = dy[valid_mask] / du[valid_mask]
+            Q1, Q3 = np.percentile(gains, [25, 75])
+            IQR = Q3 - Q1
+            valid_gains = gains[(gains >= Q1 - 1.5*IQR) & (gains <= Q3 + 1.5*IQR)]
+            if len(valid_gains) > 0:
+                K_diff = np.median(valid_gains)
+                # 如果两种方法符号一致，使用平均值
+                if K_est * K_diff > 0:  # 同号
+                    K_est = (K_est + K_diff) / 2
         
-        gains = dy[valid_mask] / du[valid_mask]
-        Q1 = np.percentile(gains, 25)
-        Q3 = np.percentile(gains, 75)
-        IQR = Q3 - Q1
-        valid_gains = gains[(gains >= Q1 - 1.5*IQR) & (gains <= Q3 + 1.5*IQR)]
-        
-        if len(valid_gains) > 0:
-            K_est = np.median(valid_gains)
-        else:
-            if np.std(u) > Config.EPSILON:
-                K_est = (np.max(y) - np.min(y)) / (np.max(u) - np.min(u)) if (np.max(u) - np.min(u)) > Config.EPSILON else 0.5
-            else:
-                K_est = 0.5
-        return np.clip(K_est, 0.05, 1.5)
+        # 限制在合理范围内（允许负值）
+        return np.clip(K_est, -5.0, 5.0)
     
     @staticmethod
     def _estimate_time_constant_from_response_speed(t, y, u, L_est):
@@ -344,21 +415,10 @@ class ModelIdentifier:
             t, y, u, y0
         )
         
-        if model_type == 'FO':
-            initial_guess = [initial_guess_dict['K'], initial_guess_dict['T']]
-        elif model_type == 'SO':
-            initial_guess = [initial_guess_dict['K'], initial_guess_dict['T'] / 2, 
-                           initial_guess_dict['T'] / 2]
-        elif model_type == 'SOPDT':
-            initial_guess = [initial_guess_dict['K'], initial_guess_dict['T'] / 2, 
-                           initial_guess_dict['T'] / 2, initial_guess_dict['L']]
-        elif model_type == 'FO_INTEGRATOR':
-            initial_guess = [initial_guess_dict['K'], initial_guess_dict['L']]
-        elif model_type == 'SO_INTEGRATOR':
-            initial_guess = [initial_guess_dict['K'], initial_guess_dict['T'] / 2, 
-                           initial_guess_dict['T'] / 2]
-        else:  # 'FOPDT'
-            initial_guess = [initial_guess_dict['K'], initial_guess_dict['T'], initial_guess_dict['L']]
+        formatter = ModelIdentifier.INITIAL_GUESS_FORMATS.get(
+            model_type, ModelIdentifier.INITIAL_GUESS_FORMATS['FOPDT']
+        )
+        initial_guess = formatter(initial_guess_dict)
         
         # 获取边界
         model_config = Config.MODEL_BOUNDS.get(model_type, Config.MODEL_BOUNDS['FOPDT'])
@@ -408,3 +468,14 @@ class ModelIdentifier:
     def identify_integral_delay(t, y, u):
         """辨识FOPI模型参数 (一阶积分)"""
         return ModelIdentifier._identify_model_unified(t, y, u, 'FO_INTEGRATOR')
+
+
+# 初始化模型仿真方法映射
+ModelIdentifier.MODEL_SIMULATORS = {
+    'FOPDT': ModelIdentifier.fopdt_model,
+    'FO': ModelIdentifier.first_order_model,
+    'SO': ModelIdentifier.second_order_model,
+    'SOPDT': ModelIdentifier.sopdt_model,
+    'FO_INTEGRATOR': ModelIdentifier.integral_delay_model,
+    'SO_INTEGRATOR': ModelIdentifier.second_order_model,
+}
