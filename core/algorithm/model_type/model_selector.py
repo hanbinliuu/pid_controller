@@ -1235,6 +1235,195 @@ class ModelSelector:
             'Kd': round(float(Kd), 4)
         }
     
+    def _calculate_model_rating(self, fusion: FusionResult, 
+                                  total_data_points: int) -> Tuple[float, Dict[str, float]]:
+        """
+        计算综合模型评分 (0-10分)
+        
+        综合考虑以下维度：
+        1. 拟合质量 (R²)        - 40%
+        2. 参数一致性            - 25%
+        3. 参数物理合理性        - 20%
+        4. 数据覆盖度            - 15%
+        
+        Returns:
+            (model_rating, score_details)
+        """
+        score_details = {}
+        
+        # ============================================================
+        # 1. 拟合质量评分 (0-10) - 权重 40%
+        # ============================================================
+        r2 = fusion.global_r2
+        # 使用非线性映射，R²<0.5 快速下降，R²>0.8 缓慢上升
+        if r2 >= 0.95:
+            r2_score = 10.0
+        elif r2 >= 0.9:
+            r2_score = 9.0 + (r2 - 0.9) * 20  # 0.9->9, 0.95->10
+        elif r2 >= 0.8:
+            r2_score = 7.5 + (r2 - 0.8) * 15  # 0.8->7.5, 0.9->9
+        elif r2 >= 0.6:
+            r2_score = 5.0 + (r2 - 0.6) * 12.5  # 0.6->5, 0.8->7.5
+        elif r2 >= 0.4:
+            r2_score = 3.0 + (r2 - 0.4) * 10  # 0.4->3, 0.6->5
+        elif r2 >= 0.2:
+            r2_score = 1.0 + (r2 - 0.2) * 10  # 0.2->1, 0.4->3
+        else:
+            r2_score = r2 * 5  # 0->0, 0.2->1
+        score_details['r2_score'] = round(r2_score, 2)
+        
+        # ============================================================
+        # 2. 参数一致性评分 (0-10) - 权重 25%
+        # ============================================================
+        # 基于 K 和 T1 的变异系数 (CV = std/mean)
+        consistency_score = 10.0
+        
+        if fusion.n_segments_used > 1:
+            # K 的变异系数
+            k_mean = abs(fusion.K) + self._epsilon
+            k_cv = fusion.K_std / k_mean
+            
+            # T1 的变异系数  
+            t1_mean = abs(fusion.T1) + self._epsilon
+            t1_cv = fusion.T1_std / t1_mean
+            
+            # CV < 0.1 优秀, CV > 0.5 较差
+            k_consistency = max(0, 10 - k_cv * 15)
+            t1_consistency = max(0, 10 - t1_cv * 15)
+            
+            # 取平均，K 权重略高
+            consistency_score = 0.6 * k_consistency + 0.4 * t1_consistency
+            
+            # 额外奖励：如果 fusion 使用了 confidence 评分
+            if fusion.consistency_score > 0:
+                consistency_score = 0.7 * consistency_score + 0.3 * (fusion.consistency_score * 10)
+        else:
+            # 单段情况，使用 fusion 的 consistency_score
+            if fusion.consistency_score > 0:
+                consistency_score = fusion.consistency_score * 10
+            else:
+                consistency_score = 6.0  # 单段默认中等分数
+        
+        consistency_score = min(10.0, max(0.0, consistency_score))
+        score_details['consistency_score'] = round(consistency_score, 2)
+        
+        # ============================================================
+        # 3. 参数物理合理性评分 (0-10) - 权重 20%
+        # ============================================================
+        validity_score = 10.0
+        penalties = []
+        
+        # K 检查: 应该非零，且绝对值不应过大或过小
+        K = fusion.K
+        if abs(K) < 0.001:
+            penalties.append(('K接近零', 4.0))
+        elif abs(K) > 50:
+            penalties.append(('K过大', 2.0))
+        elif abs(K) < 0.01:
+            penalties.append(('K过小', 1.0))
+        
+        # T1 检查: 时间常数应为正，且在合理范围
+        T1 = fusion.T1
+        if T1 <= 0:
+            penalties.append(('T1非正', 5.0))
+        elif T1 < 0.1:
+            penalties.append(('T1过小', 2.0))
+        elif T1 > 500:
+            penalties.append(('T1过大', 1.5))
+        
+        # L 检查: 滞后时间应非负
+        L = fusion.L
+        if L < 0:
+            penalties.append(('L为负', 3.0))
+        elif L > T1 * 2 and T1 > 0:
+            penalties.append(('L过大', 1.0))  # L > 2*T1 可能不合理
+        
+        # T2 检查 (如果有)
+        T2 = fusion.T2
+        if T2 < 0:
+            penalties.append(('T2为负', 2.0))
+        
+        # 应用惩罚
+        for reason, penalty in penalties:
+            validity_score -= penalty
+            self.log(f"   参数检查: {reason}, 扣{penalty}分")
+        
+        validity_score = max(0.0, validity_score)
+        score_details['validity_score'] = round(validity_score, 2)
+        
+        # ============================================================
+        # 4. 数据覆盖度评分 (0-10) - 权重 15%
+        # ============================================================
+        # 基于有效段数和数据点数
+        n_segments = fusion.n_segments_used
+        
+        # 段数评分: 1段=5分, 2段=7分, 3段=8.5分, 4+段=9-10分
+        if n_segments >= 4:
+            segment_score = 9.0 + min(1.0, (n_segments - 4) * 0.25)
+        elif n_segments == 3:
+            segment_score = 8.5
+        elif n_segments == 2:
+            segment_score = 7.0
+        elif n_segments == 1:
+            segment_score = 5.0
+        else:
+            segment_score = 0.0
+        
+        # 数据点数评分: 根据总数据点数调整
+        # 100点以下较少, 100-500中等, 500+充足
+        if total_data_points >= 500:
+            data_score = 10.0
+        elif total_data_points >= 200:
+            data_score = 7.0 + (total_data_points - 200) / 100
+        elif total_data_points >= 100:
+            data_score = 5.0 + (total_data_points - 100) / 50
+        elif total_data_points >= 50:
+            data_score = 3.0 + (total_data_points - 50) / 25
+        else:
+            data_score = total_data_points / 50 * 3
+        
+        coverage_score = 0.6 * segment_score + 0.4 * data_score
+        coverage_score = min(10.0, coverage_score)
+        score_details['coverage_score'] = round(coverage_score, 2)
+        score_details['n_segments'] = n_segments
+        score_details['total_data_points'] = total_data_points
+        
+        # ============================================================
+        # 综合评分
+        # ============================================================
+        weights = {
+            'r2': 0.40,
+            'consistency': 0.25,
+            'validity': 0.20,
+            'coverage': 0.15
+        }
+        
+        final_score = (
+            weights['r2'] * r2_score +
+            weights['consistency'] * consistency_score +
+            weights['validity'] * validity_score +
+            weights['coverage'] * coverage_score
+        )
+        
+        # 应用总体调整
+        # 如果 R² 太低，整体评分也应受限
+        if r2 < 0.3:
+            final_score = min(final_score, 3.0)
+        elif r2 < 0.5:
+            final_score = min(final_score, 5.0)
+        
+        final_score = round(min(10.0, max(0.0, final_score)), 2)
+        score_details['weights'] = weights
+        
+        self.log(f"\n   📊 评分详情:")
+        self.log(f"      拟合质量 (R²={r2:.3f}): {r2_score:.1f}/10 × {weights['r2']:.0%}")
+        self.log(f"      参数一致性: {consistency_score:.1f}/10 × {weights['consistency']:.0%}")
+        self.log(f"      参数合理性: {validity_score:.1f}/10 × {weights['validity']:.0%}")
+        self.log(f"      数据覆盖度 ({n_segments}段/{total_data_points}点): {coverage_score:.1f}/10 × {weights['coverage']:.0%}")
+        self.log(f"      → 综合评分: {final_score}/10")
+        
+        return final_score, score_details
+    
     def _build_output(self, fusion: FusionResult, hist_data: HistoricalData,
                       time_range: Dict, lambda_factor: float) -> Dict[str, Any]:
         """构建最终输出"""
@@ -1258,9 +1447,13 @@ class ModelSelector:
         # 分段仿真
         pv_model = self._simulate_segmented(params, fusion.model_type, y, u)
         
+        # 计算综合评分
+        total_data_points = int(np.sum(valid_mask))
+        model_rating, score_details = self._calculate_model_rating(fusion, total_data_points)
+        
         return {
             'model_type': fusion.model_type,
-            'model_rating': round(fusion.global_r2 * 10, 2),
+            'model_rating': model_rating,
             'start_time': time_range.get('start_time'),
             'end_time': time_range.get('end_time'),
             'model_parameters': {
@@ -1286,7 +1479,9 @@ class ModelSelector:
                 'consistency_score': round(fusion.consistency_score, 4),
                 'K_std': round(fusion.K_std, 4),
                 'T1_std': round(fusion.T1_std, 4)
-            }
+            },
+            # 评分详情
+            'rating_details': score_details
         }
     
     def _simulate_segmented(self, params: tuple, model_type: str,
@@ -1324,5 +1519,13 @@ class ModelSelector:
                 'method': 'none',
                 'n_segments': 0,
                 'consistency_score': 0.0
+            },
+            'rating_details': {
+                'r2_score': 0.0,
+                'consistency_score': 0.0,
+                'validity_score': 0.0,
+                'coverage_score': 0.0,
+                'n_segments': 0,
+                'total_data_points': 0
             }
         }

@@ -245,6 +245,14 @@ def test_model_selector(data: List[Dict], tuning_input: Dict, verbose: bool = Tr
     print(f"      K_std = {fusion_info.get('K_std')}")
     print(f"      T1_std = {fusion_info.get('T1_std')}")
     
+    # 新增: rating_details (综合评分详情)
+    rating_details = result.get('rating_details', {})
+    print(f"\n   rating_details (综合评分):")
+    print(f"      r2_score = {rating_details.get('r2_score')} (权重40%)")
+    print(f"      consistency_score = {rating_details.get('consistency_score')} (权重25%)")
+    print(f"      validity_score = {rating_details.get('validity_score')} (权重20%)")
+    print(f"      coverage_score = {rating_details.get('coverage_score')} (权重15%)")
+    
     # 拟合质量评估
     if r2 >= 0.9:
         quality = "优秀 ✅"
@@ -496,12 +504,12 @@ if __name__ == "__main__":
     # 测试场景
     test_scenarios = [
         {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
-        {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
-        {'start_time': '2025-11-20 11:05:58', 'end_time': '2025-11-20 20:38:58'},
-        {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
-        {'start_time': '2025-11-04 18:36:22', 'end_time': '2025-11-04 19:35:58'},
-        {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'},
-        {'start_time': '2025-12-03 8:00:58', 'end_time': '2025-12-04 12:42:58'}
+        # {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
+        # {'start_time': '2025-11-20 11:05:58', 'end_time': '2025-11-20 20:38:58'},
+        # {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
+        # {'start_time': '2025-11-04 18:36:22', 'end_time': '2025-11-04 19:35:58'},
+        # {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'},
+        # {'start_time': '2025-12-03 8:00:58', 'end_time': '2025-12-04 12:42:58'}
     ]
     
     for idx, scenario in enumerate(test_scenarios, 1):
