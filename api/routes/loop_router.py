@@ -172,7 +172,7 @@ async def query_loop_info(
     response_model=Dict[str, Any]
 )
 async def query_loop_values(
-    point_names: List[str] = Field(..., description="测点名称列表"),
+    point_names: List[str] = Query(..., description="测点名称列表", example=["PB", "TI", "TD", "PV", "SV", "MV"]),
     loop_uri: Optional[str] = Query(
         None,
         description="回路 URI，默认从 BFF_MODEL_LOOP_URI 读取",
