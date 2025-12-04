@@ -67,50 +67,31 @@ def detect_tuning_windows(data: List[Dict]) -> Dict:
     """
     检测扰动段，返回 tuning_input 格式
     """
-    pv_array, sv_array, mv_array, timestamps = convert_to_arrays(data)
+    # 调用 StabilityDetector 获取整定窗口（新格式：直接传入 history_data）
+    result = find_high_variability_periods({"history_data": data})
     
-    # 构建 pandas Series（使用原始时间戳作为索引）
-    time_index = pd.to_datetime(timestamps, unit='ms', utc=True).tz_convert('Asia/Shanghai').tz_localize(None)
-    pv_series = pd.Series(pv_array, index=time_index)
-    sv_series = pd.Series(sv_array, index=time_index)
-    
-    # 调用 StabilityDetector 获取整定窗口
-    result = find_high_variability_periods(
-        pv_series=pv_series,
-        sv_series=sv_series,
-        std_tol=0.2,
-        min_len=10,
-        min_segment_len=20
-    )
-    
-    # 转换 tuning_window 时间为毫秒时间戳
-    if result.get('tuning_window'):
+    # 转换为旧格式兼容（qualified_windows -> tuning_window）
+    if result.get('qualified_windows'):
         converted_windows = []
-        for w in result['tuning_window']:
-            start_dt = w['start_time']
-            end_dt = w['end_time']
+        for w in result['qualified_windows']:
+            start_ms = w['start_time']
+            end_ms = w['end_time']
             
-            start_ms = _find_closest_timestamp(timestamps, time_index, start_dt)
-            end_ms = _find_closest_timestamp(timestamps, time_index, end_dt)
+            # 转换时间戳为可读字符串
+            start_str = datetime.fromtimestamp(start_ms / 1000).strftime('%Y-%m-%d %H:%M:%S')
+            end_str = datetime.fromtimestamp(end_ms / 1000).strftime('%Y-%m-%d %H:%M:%S')
             
             converted_windows.append({
                 'start_time': start_ms,
                 'end_time': end_ms,
-                'start_time_str': str(start_dt),
-                'end_time_str': str(end_dt)
+                'start_time_str': start_str,
+                'end_time_str': end_str
             })
         result['tuning_window'] = converted_windows
+    else:
+        result['tuning_window'] = []
     
     return result
-
-
-def _find_closest_timestamp(timestamps: np.ndarray, time_index: pd.DatetimeIndex, 
-                             target_dt: pd.Timestamp) -> int:
-    """找到最接近目标时间的原始时间戳"""
-    idx = time_index.get_indexer([target_dt], method='nearest')[0]
-    if 0 <= idx < len(timestamps):
-        return int(timestamps[idx])
-    return int(timestamps[0])
 
 
 # ============================================================
@@ -425,12 +406,12 @@ if __name__ == "__main__":
     
     # 测试场景
     test_scenarios = [
-        {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
+        # {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
         # {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
         # {'start_time': '2025-12-03 11:05:58', 'end_time': '2025-12-03 20:38:58'},
         # {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'}
         # {'start_time': '2025-11-04 18:36:22', 'end_time': '2025-11-04 19:35:58'}
-        # {'start_time': '2025-12-03 14:12:58', 'end_time': '2025-12-04 10:42:58'}
+        {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'}
     ]
     
     for idx, scenario in enumerate(test_scenarios, 1):
@@ -453,7 +434,7 @@ if __name__ == "__main__":
         # Step 2: 检测扰动段（获取 tuning_input）
         tuning_input = detect_tuning_windows(data)
         
-        if tuning_input.get('total_windows', 0) == 0:
+        if len(tuning_input.get('qualified_windows', [])) == 0:
             print("⚠️ 未检测到扰动段，跳过")
             continue
         

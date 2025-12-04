@@ -85,7 +85,7 @@ class ModelIdentifier:
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
         L_int = ModelIdentifier._lag_to_samples(L, dt_avg)
         
-        for i in range(len(t)):
+        for i in range(1, len(t)):  # 修复：从1开始，避免访问y[-1]
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
             u_delay = u[max(0, i - L_int)]
             y[i] = y[i-1] + (K * u_delay - (y[i-1] - y0)) / T * dt_step
@@ -207,7 +207,7 @@ class ModelIdentifier:
         # 转换为: y'' = (K*u - y - 2ζT*y') / T²
         omega_n = 1.0 / T  # 自然频率
         
-        for i in range(len(t)):
+        for i in range(1, len(t)):  # 修复：从1开始，避免访问y[-1]
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
             u_delay = u[max(0, i - L_int)]
             
@@ -390,8 +390,9 @@ class ModelIdentifier:
         K_est = ModelIdentifier._estimate_gain_from_correlation(u, y, y0)
         T_est = ModelIdentifier._estimate_time_constant_from_response_speed(t, y, u, L_est)
         
+        # K值范围与config.py中MODEL_BOUNDS保持一致，允许负值（反向作用系统）
         return {
-            'K': np.clip(K_est, 0.05, 1.5),
+            'K': np.clip(K_est, -5.0, 5.0),  # 允许负值，范围更宽
             'T': np.clip(T_est, 5.0, 300.0),
             'L': np.clip(L_est, 0.0, 30.0)
         }

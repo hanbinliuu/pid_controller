@@ -58,6 +58,7 @@ class PIDFusionStrategy:
     CV_THRESHOLD_ACCEPTABLE = 0.5   # K 变异系数 <50% 认为可接受
     MIN_R2_THRESHOLD = 0.5          # R² 阈值
     K_OUTLIER_FACTOR = 3.0          # K 异常值倍数
+    EPSILON = 1e-8                  # 防止除零
     
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
@@ -65,6 +66,28 @@ class PIDFusionStrategy:
     def log(self, msg: str):
         if self.verbose:
             print(msg)
+    
+    def _safe_cv(self, values: List[float]) -> float:
+        """安全计算变异系数（支持负值）"""
+        arr = np.array(values)
+        mean_abs = np.abs(np.mean(arr))
+        if mean_abs < self.EPSILON:
+            return 0.0
+        return float(np.std(arr) / mean_abs)
+    
+    def _weighted_average_params(self, windows: List[WindowResult], 
+                                   weights: List[float]) -> Tuple[float, float, float, float]:
+        """加权平均计算参数"""
+        total_weight = sum(weights)
+        if total_weight < self.EPSILON:
+            total_weight = 1.0
+        
+        K = sum(w.K * wt for w, wt in zip(windows, weights)) / total_weight
+        T1 = sum(w.T1 * wt for w, wt in zip(windows, weights)) / total_weight
+        T2 = sum(w.T2 * wt for w, wt in zip(windows, weights)) / total_weight
+        L = sum(w.L * wt for w, wt in zip(windows, weights)) / total_weight
+        
+        return K, T1, T2, L
     
     def fuse(self, window_results: List[WindowResult], 
              force_strategy: Optional[FusionStrategy] = None) -> FusionResult:
@@ -129,23 +152,27 @@ class PIDFusionStrategy:
         过滤异常窗口
         
         过滤条件：
-        1. K 值偏离中位数超过 3 倍
+        1. K 值偏离中位数超过 3 倍（支持负值）
         2. R² < 0.5
         """
         if len(windows) <= 1:
             return windows
         
-        # Step 1: K 值异常过滤
+        # Step 1: K 值异常过滤（使用绝对值处理反向作用系统）
         K_values = [w.K for w in windows]
         K_median = np.median(K_values)
+        K_median_abs = abs(K_median)
         
         valid = []
         for w in windows:
-            # K 异常检查
-            if K_median > 0:
-                k_ratio = w.K / K_median
-                if k_ratio < 1/self.K_OUTLIER_FACTOR or k_ratio > self.K_OUTLIER_FACTOR:
-                    self.log(f"   ⚠️ 剔除窗口{w.window_idx}: K={w.K:.4f} 偏离中位数 {K_median:.4f}")
+            # K 异常检查（使用绝对值比较，支持负 K）
+            if K_median_abs > self.EPSILON:
+                k_ratio = abs(w.K) / K_median_abs
+                # 同时检查符号一致性（同一过程 K 应同号）
+                sign_mismatch = np.sign(w.K) != np.sign(K_median) and abs(w.K) > self.EPSILON
+                if k_ratio < 1/self.K_OUTLIER_FACTOR or k_ratio > self.K_OUTLIER_FACTOR or sign_mismatch:
+                    reason = "符号不一致" if sign_mismatch else f"偏离中位数 {K_median:.4f}"
+                    self.log(f"   ⚠️ 剔除窗口{w.window_idx}: K={w.K:.4f} {reason}")
                     continue
             
             # R² 检查
@@ -172,9 +199,7 @@ class PIDFusionStrategy:
            - conservative (保守选择)
         """
         K_values = [w.K for w in windows]
-        K_mean = np.mean(K_values)
-        K_std = np.std(K_values)
-        K_cv = K_std / K_mean if K_mean > 0 else 0  # 变异系数
+        K_cv = self._safe_cv(K_values)  # 使用安全的变异系数计算
         
         r2_values = [w.r2 for w in windows]
         r2_mean = np.mean(r2_values)
@@ -184,7 +209,7 @@ class PIDFusionStrategy:
         data_points = [w.data_points for w in windows]
         data_cv = np.std(data_points) / np.mean(data_points) if np.mean(data_points) > 0 else 0
         
-        self.log(f"📊 K 统计: mean={K_mean:.4f}, std={K_std:.4f}, CV={K_cv:.2%}")
+        self.log(f"📊 K 统计: mean={np.mean(K_values):.4f}, std={np.std(K_values):.4f}, CV={K_cv:.2%}")
         self.log(f"📊 R² 统计: mean={r2_mean:.4f}, min={r2_min:.4f}")
         self.log(f"📊 数据量: {data_points}, CV={data_cv:.1%}")
         
@@ -217,16 +242,11 @@ class PIDFusionStrategy:
         """
         # 使用 R² 作为权重
         weights = [max(w.r2, 0.01) for w in windows]
-        total_weight = sum(weights)
-        
-        K = sum(w.K * wt for w, wt in zip(windows, weights)) / total_weight
-        T1 = sum(w.T1 * wt for w, wt in zip(windows, weights)) / total_weight
-        T2 = sum(w.T2 * wt for w, wt in zip(windows, weights)) / total_weight
-        L = sum(w.L * wt for w, wt in zip(windows, weights)) / total_weight
+        K, T1, T2, L = self._weighted_average_params(windows, weights)
         
         # 置信度：基于 R² 均值和一致性
         r2_mean = np.mean([w.r2 for w in windows])
-        K_cv = np.std([w.K for w in windows]) / np.mean([w.K for w in windows])
+        K_cv = self._safe_cv([w.K for w in windows])
         confidence = r2_mean * (1 - min(K_cv, 0.5))  # 一致性越高，置信度越高
         
         self.log(f"✅ R²加权融合: K={K:.4f}, T1={T1:.4f}, T2={T2:.4f}, L={L:.4f}")
@@ -300,23 +320,17 @@ class PIDFusionStrategy:
         
         # 结合 R² 权重
         weights = [tw * max(w.r2, 0.01) for tw, w in zip(time_weights, sorted_windows)]
-        total_weight = sum(weights)
-        
-        K = sum(w.K * wt for w, wt in zip(sorted_windows, weights)) / total_weight
-        T1 = sum(w.T1 * wt for w, wt in zip(sorted_windows, weights)) / total_weight
-        T2 = sum(w.T2 * wt for w, wt in zip(sorted_windows, weights)) / total_weight
-        L = sum(w.L * wt for w, wt in zip(sorted_windows, weights)) / total_weight
+        K, T1, T2, L = self._weighted_average_params(sorted_windows, weights)
         
         # 置信度
         r2_mean = np.mean([w.r2 for w in sorted_windows])
-        confidence = r2_mean
         
         self.log(f"✅ 时效加权: K={K:.4f}, T1={T1:.4f}, T2={T2:.4f}, L={L:.4f}")
         
         return FusionResult(
             K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.RECENCY_WEIGHTED,
-            confidence=min(confidence, 1.0),
+            confidence=min(r2_mean, 1.0),
             windows_used=[w.window_idx for w in sorted_windows],
             reasoning=reasoning
         )
@@ -345,9 +359,11 @@ class PIDFusionStrategy:
             for j, w_j in enumerate(windows):
                 if i == j:
                     continue
-                # 参数相似度：K 和 T1 越接近，相似度越高
-                k_sim = 1 - min(abs(w_i.K - w_j.K) / max(w_i.K, w_j.K, 0.01), 1)
-                t1_sim = 1 - min(abs(w_i.T1 - w_j.T1) / max(w_i.T1, w_j.T1, 0.01), 1)
+                # 参数相似度：使用绝对值处理负 K
+                k_max = max(abs(w_i.K), abs(w_j.K), self.EPSILON)
+                k_sim = 1 - min(abs(w_i.K - w_j.K) / k_max, 1)
+                t1_max = max(w_i.T1, w_j.T1, self.EPSILON)
+                t1_sim = 1 - min(abs(w_i.T1 - w_j.T1) / t1_max, 1)
                 # 考虑对方窗口的 R²（对方 R² 高，参考价值大）
                 sim = (k_sim * 0.6 + t1_sim * 0.4) * w_j.r2
                 similarities.append(sim)
@@ -384,16 +400,18 @@ class PIDFusionStrategy:
         if len(windows) < 2:
             return self._best_window(windows, reasoning)
         
-        # 计算中位数作为参考
+        # 计算中位数作为参考（使用绝对值处理负 K）
         K_median = np.median([w.K for w in windows])
+        K_median_abs = max(abs(K_median), self.EPSILON)
         T1_median = np.median([w.T1 for w in windows])
+        T1_median_safe = max(T1_median, self.EPSILON)
         
         # 计算每个窗口的鲁棒权重
         robust_weights = []
         for w in windows:
-            # 一致性得分（与中位数的接近程度）
-            k_consistency = 1 - min(abs(w.K - K_median) / max(K_median, 0.01), 1)
-            t1_consistency = 1 - min(abs(w.T1 - T1_median) / max(T1_median, 0.01), 1)
+            # 一致性得分（与中位数的接近程度，支持负 K）
+            k_consistency = 1 - min(abs(w.K - K_median) / K_median_abs, 1)
+            t1_consistency = 1 - min(abs(w.T1 - T1_median) / T1_median_safe, 1)
             consistency = k_consistency * 0.7 + t1_consistency * 0.3
             
             # 数据量因子
@@ -407,13 +425,10 @@ class PIDFusionStrategy:
                      f"数据={w.data_points}点, 权重={weight:.3f}")
         
         # 加权平均
-        total_weight = sum(robust_weights)
-        K = sum(w.K * wt for w, wt in zip(windows, robust_weights)) / total_weight
-        T1 = sum(w.T1 * wt for w, wt in zip(windows, robust_weights)) / total_weight
-        T2 = sum(w.T2 * wt for w, wt in zip(windows, robust_weights)) / total_weight
-        L = sum(w.L * wt for w, wt in zip(windows, robust_weights)) / total_weight
+        K, T1, T2, L = self._weighted_average_params(windows, robust_weights)
         
         # 置信度
+        total_weight = sum(robust_weights) if sum(robust_weights) > self.EPSILON else 1.0
         r2_weighted = sum(w.r2 * wt for w, wt in zip(windows, robust_weights)) / total_weight
         
         self.log(f"✅ 鲁棒融合: K={K:.4f}, T1={T1:.4f}, 置信度={r2_weighted:.3f}")
@@ -425,97 +440,3 @@ class PIDFusionStrategy:
             windows_used=[w.window_idx for w in windows],
             reasoning=reasoning
         )
-
-
-# ============================================================
-# 测试代码
-# ============================================================
-
-def test_fusion_strategies():
-    """测试不同场景下的融合策略"""
-    
-    fusion = PIDFusionStrategy(verbose=True)
-    
-    print("=" * 60)
-    print("场景 1: K 一致性好 (应选择 R²加权融合)")
-    print("=" * 60)
-    windows_consistent = [
-        WindowResult(1, K=0.25, T1=2.0, T2=0.0, L=0.5, r2=0.85, data_points=100),
-        WindowResult(2, K=0.27, T1=2.2, T2=0.0, L=0.4, r2=0.90, data_points=120),
-        WindowResult(3, K=0.26, T1=2.1, T2=0.0, L=0.6, r2=0.88, data_points=80),
-    ]
-    result1 = fusion.fuse(windows_consistent)
-    print(f"结果: {result1.strategy_used.value}, K={result1.K:.4f}, 置信度={result1.confidence:.2f}")
-    print(f"原因: {result1.reasoning}")
-    
-    print("\n" + "=" * 60)
-    print("场景 2: K 有差异 (应选择最佳窗口)")
-    print("=" * 60)
-    windows_varied = [
-        WindowResult(1, K=0.20, T1=2.0, T2=0.0, L=0.5, r2=0.75, data_points=100),
-        WindowResult(2, K=0.35, T1=2.5, T2=0.0, L=0.4, r2=0.92, data_points=120),
-        WindowResult(3, K=0.28, T1=2.2, T2=0.0, L=0.6, r2=0.80, data_points=80),
-    ]
-    result2 = fusion.fuse(windows_varied)
-    print(f"结果: {result2.strategy_used.value}, K={result2.K:.4f}, 置信度={result2.confidence:.2f}")
-    print(f"原因: {result2.reasoning}")
-    
-    print("\n" + "=" * 60)
-    print("场景 3: K 差异大 (应选择保守策略)")
-    print("=" * 60)
-    windows_diverse = [
-        WindowResult(1, K=0.10, T1=1.5, T2=0.0, L=0.3, r2=0.70, data_points=100),
-        WindowResult(2, K=0.50, T1=3.0, T2=0.0, L=0.8, r2=0.85, data_points=120),
-        WindowResult(3, K=0.25, T1=2.0, T2=0.0, L=0.5, r2=0.88, data_points=80),
-    ]
-    result3 = fusion.fuse(windows_diverse)
-    print(f"结果: {result3.strategy_used.value}, K={result3.K:.4f}, 置信度={result3.confidence:.2f}")
-    print(f"原因: {result3.reasoning}")
-    
-    print("\n" + "=" * 60)
-    print("场景 4: 包含异常窗口 (应剔除后融合)")
-    print("=" * 60)
-    windows_with_outlier = [
-        WindowResult(1, K=0.25, T1=2.0, T2=0.0, L=0.5, r2=0.85, data_points=100),
-        WindowResult(2, K=10.0, T1=50.0, T2=0.0, L=1.0, r2=0.30, data_points=50),  # 异常
-        WindowResult(3, K=0.27, T1=2.1, T2=0.0, L=0.6, r2=0.90, data_points=80),
-    ]
-    result4 = fusion.fuse(windows_with_outlier)
-    print(f"结果: {result4.strategy_used.value}, K={result4.K:.4f}, 置信度={result4.confidence:.2f}")
-    print(f"使用窗口: {result4.windows_used}")
-    print(f"原因: {result4.reasoning}")
-    
-    print("\n" + "=" * 60)
-    print("场景 5: 强制使用时效加权")
-    print("=" * 60)
-    result5 = fusion.fuse(windows_consistent, force_strategy=FusionStrategy.RECENCY_WEIGHTED)
-    print(f"结果: {result5.strategy_used.value}, K={result5.K:.4f}, 置信度={result5.confidence:.2f}")
-    print(f"原因: {result5.reasoning}")
-    
-    print("\n" + "=" * 60)
-    print("场景 6: 交叉验证策略 (选泛化最好的)")
-    print("=" * 60)
-    windows_for_cv = [
-        WindowResult(1, K=0.25, T1=2.0, T2=0.0, L=0.5, r2=0.85, data_points=100),
-        WindowResult(2, K=0.26, T1=2.1, T2=0.0, L=0.4, r2=0.75, data_points=120),  # 参数相似但R²低
-        WindowResult(3, K=0.40, T1=3.5, T2=0.0, L=0.6, r2=0.95, data_points=80),   # R²高但参数异常
-    ]
-    result6 = fusion.fuse(windows_for_cv, force_strategy=FusionStrategy.CROSS_VALIDATION)
-    print(f"结果: {result6.strategy_used.value}, K={result6.K:.4f}, 置信度={result6.confidence:.2f}")
-    print(f"原因: {result6.reasoning}")
-    
-    print("\n" + "=" * 60)
-    print("场景 7: 鲁棒融合策略 (综合R²+一致性+数据量)")
-    print("=" * 60)
-    windows_for_robust = [
-        WindowResult(1, K=0.25, T1=2.0, T2=0.0, L=0.5, r2=0.80, data_points=50),   # 数据少
-        WindowResult(2, K=0.26, T1=2.1, T2=0.0, L=0.4, r2=0.85, data_points=200),  # 数据多
-        WindowResult(3, K=0.27, T1=2.2, T2=0.0, L=0.6, r2=0.90, data_points=100),
-    ]
-    result7 = fusion.fuse(windows_for_robust, force_strategy=FusionStrategy.ROBUST_FUSION)
-    print(f"结果: {result7.strategy_used.value}, K={result7.K:.4f}, 置信度={result7.confidence:.2f}")
-    print(f"原因: {result7.reasoning}")
-
-
-if __name__ == "__main__":
-    test_fusion_strategies()

@@ -662,6 +662,46 @@ class ModelSelector:
                 all_params.append((K, T1, T2, L, r2, result.data_points, result.segment_idx))
         
         if not all_params:
+            # 再次降低阈值到0.15重试
+            self.log(f"   ⚠️ 无R²≥0.3的段，降低阈值到0.15重试")
+            R2_THRESHOLD = 0.15
+            for result in segment_results:
+                if not result.is_valid:
+                    continue
+                fit_result = result.model_results.get(model_type)
+                if fit_result is None or fit_result.get('r2', 0) < R2_THRESHOLD:
+                    continue
+                K = fit_result.get('K', 0)
+                T1 = fit_result.get('T1', 0)
+                T2 = fit_result.get('T2', 0)
+                L = fit_result.get('L', 0)
+                r2 = fit_result.get('r2', 0)
+                all_params.append((K, T1, T2, L, r2, result.data_points, result.segment_idx))
+        
+        if not all_params:
+            # 最后尝试：使用最佳可用结果（任何R² > 0）
+            self.log("   ⚠️ 尝试使用最佳可用结果")
+            best_r2 = 0
+            best_params = None
+            for result in segment_results:
+                if not result.is_valid:
+                    continue
+                fit_result = result.model_results.get(model_type)
+                if fit_result is None:
+                    continue
+                r2 = fit_result.get('r2', 0)
+                if r2 > best_r2:
+                    best_r2 = r2
+                    K = fit_result.get('K', 0)
+                    T1 = fit_result.get('T1', 0)
+                    T2 = fit_result.get('T2', 0)
+                    L = fit_result.get('L', 0)
+                    best_params = (K, T1, T2, L, r2, result.data_points, result.segment_idx)
+            if best_params and best_r2 > 0:
+                all_params.append(best_params)
+                self.log(f"   使用最佳段 R²={best_r2:.3f}")
+        
+        if not all_params:
             self.log("   ⚠️ 无有效参数，使用默认值")
             return fusion
         
