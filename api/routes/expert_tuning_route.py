@@ -1,18 +1,20 @@
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query
-from typing import Dict, List, Optional, Union
+from fastapi import APIRouter, HTTPException, Query, Body
+from typing import Dict, List, Optional, Union, Any
 from datetime import datetime
 import json
 import logging
 
 from pydantic import BaseModel, Field
 
+from api.bean.generate_curves_request import GenerateCurvesRequest
 from api.routes.time_util import parse_time_to_milliseconds
 from core.agent.tools import process_query_tsdb_data_interpolated, detect_and_visualize
 from core.algorithm.ktl_simulator import KTLSimulator
 from api.services.expert_tuning_service import ExpertTuningService
 from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
+from core.algorithm.model_identifier.test_identifier.test_model_fitter import detect_tuning_windows
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database, query_raw_data
 from core.utils.model_type import ModelType
@@ -72,9 +74,11 @@ class AutoTuningRequest(BaseModel):
     mode: str = Field("auto", description="整定模式：auto(自动筛选) 或 manual(手动指定时间范围)")
     loop_uri: str = Field('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', description="回路URI")
     start_time: Optional[Union[int, str]] = Field(None,
-                                                  description="开始时间（manual模式必填），支持毫秒时间戳或字符串格式")
-    end_time: Optional[Union[int, str]] = Field(None, description="结束时间（manual模式必填），支持毫秒时间戳或字符串格式")
-    tuning_windows: Optional[List[TuningWindow]] = Field(None, description="手动指定时间窗口列表，用于批量整定")
+                                                          description="开始时间（manual模式必填），支持毫秒时间戳或字符串格式")
+    end_time: Optional[Union[int, str]] = Field(None,
+                                                        description="结束时间（manual模式必填），支持毫秒时间戳或字符串格式")
+    tuning_windows: Optional[List[Dict[str, Any]]] = Field(None,
+                                                                   description="手动指定时间窗口列表，用于批量整定")
     model_type: ModelType = Field(ModelType.FOPDT, description="模型类型")
     controller_type: str = Field("PID", description="整定类型", examples=["PID", "PI"])
     lambda_val: Optional[float] = Field(None, description="Lambda参数值（可选），未指定时自动计算")
@@ -86,27 +90,29 @@ class AutoTuningRequest(BaseModel):
 
     class Config:
         json_schema_extra = {
-            "example": {
-                "mode": "auto",
-                "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
-                "start_time": "2025-12-01 00:00:00",
-                "end_time": "2025-12-01 23:59:59",
-                "tuning_windows": [
-                    {
-                        "start_time": "2025-12-01 10:00:00",
-                        "end_time": "2025-12-01 12:00:00"
-                    }
-                ],
-                "model_type": "FOPDT",
-                "controller_type": "PID",
-                "lambda_val": 0.8,
-                "window_size": 120,
-                "step_size": 10,
-                "confidence_threshold": 0.6,
-                "window_sec": 60,
-                "is_filter": False
+                    "example": {
+                        "mode": "auto",
+                        "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
+                        "start_time": "2025-12-01 00:00:00",
+                        "end_time": "2025-12-01 23:59:59",
+                        "tuning_windows": [
+                            {
+                                "start_time": "2025-12-01 10:00:00",
+                                "end_time": "2025-12-01 12:00:00"
+                            }
+                        ],
+                        "model_type": "FOPDT",
+                        "controller_type": "PID",
+                        "lambda_val": 0.8,
+                        "window_size": 120,
+                        "step_size": 10,
+                        "confidence_threshold": 0.6,
+                        "window_sec": 60,
+                        "is_filter": False
             }
         }
+
+
 
 
 @router.get("/model-types",
@@ -176,13 +182,14 @@ async def auto_tuning(request: AutoTuningRequest):
     """
     try:
         # 调用Service层执行自动整定
-        result = ExpertTuningService.auto_tuning(
+        result = ExpertTuningService.liu_pid_tuning(
             mode=request.mode,
             loop_uri=request.loop_uri,
             start_time=request.start_time,
             end_time=request.end_time,
             tuning_windows=request.tuning_windows,
             model_type=request.model_type,
+            turning_type=request.controller_type,
             lambda_val=request.lambda_val,
             window_size=request.window_size,
             step_size=request.step_size,
@@ -291,30 +298,7 @@ async def calculate_pid(
              summary="仿真曲线生成（闭环、阶跃响应）",
              operation_id="统一生成闭环、阶跃响应三种曲线",
              description="根据模型参数和PID参数，一次性生成闭环仿真曲线和阶跃响应曲线")
-async def generate_all_curves(
-        # loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
-        #                          examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
-        start_time: Union[int, str] = Query(None, required=False, description="开始时间"),
-        end_time: Union[int, str] = Query(None, required=False, description="结束时间"),
-        # 模型参数
-        K: float = Query(..., description="系统增益 K", examples=[0.5, 1.0, 2.0]),
-        T1: float = Query(..., description="时间常数 T (秒)", examples=[10.0, 30.0, 50.0]),
-        T2: Optional[float] = Query(None, description="二阶时间常数 T2 (秒)", examples=[10.0, 20.0]),
-        L: Optional[float] = Query(0, description="滞后时间 L (秒)", examples=[0, 1.0, 5.0]),
-        model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
-                                      examples=ModelType.get_model_type()),
-        # PID参数
-        Kp: Optional[float] = Query(..., description="PID比例系数", examples=[1.0]),
-        Ki: Optional[float] = Query(..., description="PID积分系数", examples=[0.1]),
-        Kd: Optional[float] = Query(..., description="PID微分系数", examples=[0]),
-        # 数据源参数 - 用于拟合和初始值
-
-        step_value: float = Query(1.0, description="阶跃输入幅值", examples=[1.0, 10.0]),
-        duration: float = Query(600.0, description="仿真时长(秒)", examples=[300.0, 600.0]),
-        dt: float = Query(1.0, description="采样时间间隔(秒)", examples=[0.1, 1.0]),
-        initial_output: float = Query(0.0, description="初始输出值", examples=[0.0]),
-        setpoint: Optional[float] = Query(None, description="设定值", examples=[10.0]),
-):
+async def generate_all_curves(request: GenerateCurvesRequest = Body(..., description="曲线生成请求参数")):
     """
     **三种仿真曲线统一生成接口**
 
@@ -328,6 +312,19 @@ async def generate_all_curves(
     """
     try:
         from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, PIDController
+        K=request.K
+        T1=request.T1
+        T2=request.T2
+        L=request.L
+        Kp, Ki, Kd = request.Kp, request.Ki, request.Kd
+        step_value=request.step_value
+        setpoint = request.setpoint
+        duration=request.duration
+        dt=request.dt
+        initial_output=request.initial_output
+        model_type = request.model_type
+        start_time, end_time = request.start_time, request.end_time
+
 
         # 参数验证
         if K <= 0 or T1 <= 0:
@@ -615,6 +612,57 @@ async def generate_all_curves(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"曲线生成失败: {str(e)}")
+
+
+@router.get("/get_response_windows",
+            summary="常规整定-非稳态时间窗口获取",
+            # operation_id="获取含有阶跃响应的时间窗口",
+            description="常规整定-非稳态时间窗口获取")
+async def get_response_windows(
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+                                 examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
+        start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
+        end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式"),
+        # window_size: int = Query(120, description="窗口大小（分钟）", examples=[120, 240]),
+        # step_size: int = Query(10, description="滑动步长（分钟）", examples=[10, 30]),
+        # step_threshold: float = Query(0.05, description="阶跃检测阈值（占输入范围的百分比）", ge=0.01, le=0.5),
+        # min_response_ratio: float = Query(0.1, description="最小响应比例（响应幅值/输入变化）", ge=0.05, le=1.0),
+        # confidence_min: float = Query(0.5, description="最小置信度要求（0-1）", ge=0, le=1),
+        # analyst_column: Optional[str] = Query("pv", description="用于分析的列名", examples=["pv", "mv", "sv"]),
+        window_sec: int = Query(30, description="插值采样间隔（秒）", examples=[1, 60]),
+        is_filter: bool = Query(False, description="是否对历史数据进行优化过滤", examples=[False])
+):
+    # 时间默认值：最近一天
+    if end_time is None:
+        end_time = int(datetime.now().timestamp() * 1000)
+    if start_time is None:
+        start_time = end_time - 24 * 60 * 60 * 1000  # 1天
+
+    # 时间转换与校验
+    start_time_ms = parse_time_to_milliseconds(start_time)
+    end_time_ms = parse_time_to_milliseconds(end_time)
+    if start_time_ms >= end_time_ms:
+        raise HTTPException(status_code=400, detail="开始时间必须小于结束时间")
+
+    # 固定设备与字段
+    # table = "PID_FEP_Gateway_Device_001default"
+    # required_fields = DEFAULT_FIELD_MAPPING
+    table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
+
+    # 查询历史数据
+    db = get_default_database()
+    history_data = process_query_tsdb_data_interpolated(
+        db=db,
+        table_name=table,
+        required_fields=required_fields,
+        start_time=start_time_ms,
+        end_time=end_time_ms,
+        is_filter=is_filter,
+        window=window_sec
+    )
+    from core.algorithm.tuning_segment.stability_detector import find_high_variability_periods
+    result = find_high_variability_periods({"history_data": history_data})
+    return result
 
 
 @router.get("/step-response-windows",
@@ -1075,14 +1123,17 @@ async def get_tuning_windows(request: TuningWindowRequest):
             operation_id="回路历史数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data(
-        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca',required=False,description="回路URI",
+        loop_uri: str = Query(...,required=False,description="回路URI",
                                           examples=["/pid_zd/935cf045bd254867bdfeb113c31467da"] ),
         start_time: Union[int, str] = Query(None, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=["2025-12-03 12:00:00", "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),
         end_time: Union[int, str] = Query(None, description="结束时间，支持毫秒时间戳或字符串格式",
                                           examples=["2025-12-03 23:59:59", "2022-01-02 12:00:00", "2022-01-02T12:00:00",
-                                                    "2022-01-02"])
+                                                    "2022-01-02"]),
+        window_sec: int = Query(1, description="插值采样间隔（秒）", examples=[1, 60]),
+        is_filter: bool = Query(False, description="是否对历史数据进行优化过滤（按最新参数）", examples=[False])
+
 ):
     """
     **获取设备历史数据 - HistoryDataTool**
@@ -1149,12 +1200,14 @@ async def get_history_data(
         # required_fields = {f"field_{i}": field for i, field in enumerate(field_list)}
 
         # 使用新的查询方法
-        history_data = query_raw_data(
+        history_data = process_query_tsdb_data_interpolated(
             db=db,
-            table=table,
-            fields=list(required_fields.values()),
+            table_name=table,
+            required_fields=required_fields,
             start_time=start_time_ms,
             end_time=end_time_ms,
+            is_filter=is_filter,
+            window=window_sec
         )
 
         # 格式化响应数据
@@ -1208,7 +1261,7 @@ async def generate_ktl_simulation(
     - 自动计算性能指标（上升时间、调节时间、超调量等）
 
     **FOPDT模型:**
-    传递函数: G(s) = K * exp(-L*s) / (T*s + 1)
+    传递函数: G(s) = K * exp2(-L*s) / (T*s + 1)
     - K: 系统增益（输出变化/输入变化）
     - T: 时间常数（系统响应速度）
     - L: 纯滞后时间（输入到输出的延迟）

@@ -66,6 +66,15 @@ async def list_instances_by_uri(
             description="起始节点URI",
             example=[Config.BFF_MODEL_ROOT_URI]
         ),
+        type_uri: List[str] = Query(
+            None,
+            description="类型uri",
+        ),
+        name: str = Query(
+            None,
+            description="名称"
+        )
+        ,
         page_no: int = Query(
             1,
             description="页码",
@@ -92,10 +101,14 @@ async def list_instances_by_uri(
     try:
         if node_uri is None:
             node_uri = [Config.BFF_MODEL_ROOT_URI]
+        if type_uri is None:
+            type_uri = [Config.BFF_MODEL_LOOP_MODEL_URI]
+
         # 调用Service层查询回路列表
         result = LoopService.list_instances_by_node(
-            model_identifier_list=[Config.BFF_MODEL_LOOP_MODEL_URI],
+            model_identifier_list=type_uri,
             start_identifier_list=node_uri,
+            # name=name,
             page_no=page_no,
             page_size=page_size
         )

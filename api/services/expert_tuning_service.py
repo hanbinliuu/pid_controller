@@ -12,9 +12,11 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 
+from api.middleware.exceptions import RuntimeException
 from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.algorithm import tuning_segment_selector
+from core.algorithm.model_type import ModelSelector
 from core.utils.model_type import ModelType
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
@@ -121,6 +123,92 @@ class ExpertTuningService:
             raise
 
     @staticmethod
+    def liu_pid_tuning(
+        mode: str = "auto",
+        loop_uri: str = None,
+        start_time: Union[int, str] = None,
+        end_time: Union[int, str] = None,
+        tuning_windows: Optional[List[Dict[str, Any]]] = None,
+        model_type: ModelType = ModelType.FOPDT,
+        turning_type: str = "PID",
+        lambda_val: Optional[float] = None,
+        window_size: int = 120,
+        step_size: int = 10,
+        confidence_threshold: float = 0.6,
+        window_sec: int = 60,
+        is_filter: bool = False
+    ) -> Dict[str, Any]:
+
+
+        try:
+            # 参数验证
+            if mode not in ["auto", "manual"]:
+                mode = 'auto'
+
+            # 时间范围处理
+            if end_time is None:
+                end_time = int(datetime.now().timestamp() * 1000)
+            if start_time is None:
+                start_time = end_time - 24 * 60 * 60 * 1000  # 默认1天
+            logger.info(f"将在时间范围 {start_time} - {end_time} 内筛选最佳整定区间")
+
+            # 时间格式转换
+            start_time_ms = parse_time_to_milliseconds(start_time)
+            end_time_ms = parse_time_to_milliseconds(end_time)
+
+            if start_time_ms >= end_time_ms:
+                raise ValueError("开始时间必须小于结束时间")
+
+            # 固定设备与字段配置
+            table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
+
+            db = get_default_database()
+
+            # 初始化变量
+            qualified_windows = []
+            best_window = None
+            window_data = []
+
+            # 根据模式执行不同逻辑
+            if mode == "auto":
+                # 自动筛选模式
+                logger.info(f"执行自动整定，时间范围：{start_time} - {end_time}")
+
+                # 获取历史数据
+                history_data = process_query_tsdb_data_interpolated(
+                    db=db,
+                    table_name=table,
+                    required_fields=required_fields,
+                    start_time=start_time_ms,
+                    end_time=end_time_ms,
+                    is_filter=is_filter,
+                    window=window_sec
+                )
+
+                # if not history_data or len(history_data) == 0:
+                #     logger.error("指定时间范围内无数据")
+                #     return {
+                #         "error": "未获取到历史数据"
+                #     }
+            model_select = ModelSelector()
+            request = {
+                "history_data": history_data,
+                "params": {
+                    "model_type": model_type,  # 可选，强制使用指定模型
+                    "turning_type": turning_type,  # 可选，整定类型
+                    "analyst_column": "pv",
+                },
+                "qualified_windows": tuning_windows
+            }
+            model_selector = model_select.run(request)
+            return model_selector
+        except Exception as e:
+            logger.error(f"识别失败: {str(e)}")
+            raise
+
+
+
+    @staticmethod
     def auto_tuning(
         mode: str = "auto",
         loop_uri: str = None,
@@ -128,6 +216,7 @@ class ExpertTuningService:
         end_time: Union[int, str] = None,
         tuning_windows: Optional[List[Dict[str, Any]]] = None,
         model_type: ModelType = ModelType.FOPDT,
+        turning_type: str = "PID",
         lambda_val: Optional[float] = None,
         window_size: int = 120,
         step_size: int = 10,
@@ -209,8 +298,7 @@ class ExpertTuningService:
                 df = pd.DataFrame(history_data)
                 if "timestamp" not in df.columns or "pv" not in df.columns or "mv" not in df.columns:
                     raise ValueError("历史数据缺少必要字段")
-                #todo 判断窗口数据是否稳态
-                # TuningSegmentSelector.extract_tuning_segment()
+
 
                 # 滑动窗口检测阶跃响应
                 window_size_sec = window_size * 60
@@ -323,7 +411,6 @@ class ExpertTuningService:
 
             # 执行PID参数整定
             optimization_tool = PIDOptimizationTool()
-
             # 执行整定
             optimization_result = optimization_tool._run(
                 history_data=window_data,
@@ -331,6 +418,17 @@ class ExpertTuningService:
                 model_type=model_type
             )
 
+            # model_select =ModelSelector()
+            # request={
+            #         "history_data": history_data,
+            #         "params": {
+            #             "model_type": model_type,        # 可选，强制使用指定模型
+            #             "turning_type": turning_type,      # 可选，整定类型
+            #             "analyst_column": "pv",
+            #         },
+            #         "qualified_windows": tuning_windows
+            #     }
+            # model_selector = model_select.run(request)
             # 解析结果
             try:
                 result_data = json.loads(optimization_result)
@@ -346,14 +444,14 @@ class ExpertTuningService:
                     },
                     "model_type": model_type.value,
                     "lambda_tuning_enabled": True,
-                    "optimization_result": result_data
+                    "optimization_result": optimization_result
                 }
 
                 # 写入整定成功记录到数据库
                 try:
                     _save_tuning_record(
                         loop_uri=loop_uri,
-                        result_data=result_data,
+                        result_data=optimization_result,
                         mode=mode,
                         model_type=model_type.value,
                         status="成功"

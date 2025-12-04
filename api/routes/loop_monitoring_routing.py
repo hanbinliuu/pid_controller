@@ -4,7 +4,7 @@
 回路监控的API接口
 """
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
@@ -80,7 +80,7 @@ async def get_loop_realtime_status(
     "/trend-data",
     summary="查询回路趋势数据",
     operation_id="查询回路趋势数据",
-    description="根据回路URI查询近1小时/4小时/12小时的趋势数据"
+    description="根据回路URI查询最近的趋势数据"
 )
 async def get_loop_trend_data(
         loop_uri: str = Query(
@@ -89,11 +89,18 @@ async def get_loop_trend_data(
             example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
         ),
         time_range: int = Query(
-            1,
+            None,
             description="时间范围（小时），支持1/4/12/24",
             ge=1,
-            le=24
-        )
+            le=48
+        ),
+        start_time: Union[int, str] = Query(None, description="开始时间，支持毫秒时间戳或字符串格式",
+                                            examples=["2025-12-03 12:00:00", "2022-01-01 12:00:00", "2022-01-01T12:00:00",
+                                                      "2022-01-01"]),
+        end_time: Union[int, str] = Query(None, description="结束时间，支持毫秒时间戳或字符串格式",
+                                          examples=["2025-12-03 23:59:59", "2022-01-02 12:00:00", "2022-01-02T12:00:00",
+                                                    "2022-01-02"]),
+        window_sec: int = Query(1, description="插值采样间隔（秒）", examples=[1, 60])
 ) -> Dict[str, Any]:
     """
     查询回路趋势数据
@@ -104,14 +111,21 @@ async def get_loop_trend_data(
     - 返回PV/SV/MV的历史数据用于绘制趋势图
     """
     try:
-        # 计算时间范围
-        end_time = int(datetime.now().timestamp() * 1000)
-        start_time = end_time - time_range * 60 * 60 * 1000
-        
+        if time_range is not None:
+            # 计算时间范围
+            end_time = int(datetime.now().timestamp() * 1000)
+            start_time = end_time - time_range * 60 * 60 * 1000
+        # 时间默认值：最近一天
+        if end_time is None:
+            end_time = int(datetime.now().timestamp() * 1000)
+        if start_time is None:
+            start_time = end_time - 24 * 60 * 60 * 1000  # 1天
+
         trend_data = LoopMonitoringService.get_loop_trend_data(
             loop_uri=loop_uri,
             start_time=start_time,
-            end_time=end_time
+            end_time=end_time,
+            window=window_sec
         )
         
         return trend_data

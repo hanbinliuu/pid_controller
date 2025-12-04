@@ -181,7 +181,8 @@ class LoopMonitoringService:
     def get_loop_trend_data(
             loop_uri: str,
             start_time: int,
-            end_time: int
+            end_time: int,
+            window: int = 1
     ) -> Dict[str, Any]:
         """
         获取回路趋势数据
@@ -200,7 +201,8 @@ class LoopMonitoringService:
                     loop_uri=loop_uri,
                     start_time=start_time,
                     end_time=end_time,
-                    window=1
+                    window=window,
+                    is_filter=False
                 )
 
                 # 检查是否有数据

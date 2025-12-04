@@ -56,6 +56,12 @@ class DataProcessException(BusinessException):
         super().__init__(message=message, code=500, data=data)
 
 
+class RuntimeException(BusinessException):
+    """程序执行异常"""
+
+    def __init__(self, message: str = "程序执行异常", data: any = None):
+        super().__init__(message=message, code=-1, data=data)
+
 class ExternalServiceException(BusinessException):
     """外部服务调用异常"""
     

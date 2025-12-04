@@ -543,7 +543,7 @@ async def get_model_tree() -> Dict[str, Any]:
         # 调用Service层查询
         result = BFFService.query_instance_tree(
             start_uri=Config.BFF_MODEL_ROOT_URI,
-            model_uri_list=[Config.BFF_MODEL_DEVICE_MODEL_URI, Config.BFF_MODEL_LOOP_MODEL_URI],
+            model_uri_list=[Config.BFF_MODEL_DEVICE_MODEL_URI],
             include_sub_type=True
         )
 

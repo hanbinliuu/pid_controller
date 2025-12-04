@@ -548,7 +548,7 @@ class KTLSimulator:
 
         此方法保留用于向后兼容，建议使用 generate_response() 统一接口
 
-        模型传递函数: G(s) = K * exp(-L*s) / (T*s + 1)
+        模型传递函数: G(s) = K * exp2(-L*s) / (T*s + 1)
 
         参数:
             K: 系统增益 (过程增益)
