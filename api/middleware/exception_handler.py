@@ -158,7 +158,7 @@ def register_exception_handlers(app: FastAPI):
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         logger.warning(
-            f"异常捕获 - Path: {request.url.path}, Status: {exc.status_code}, Detail: {exc.detail}"
+            f"参数验证失败 - Path: {request.url.path}, Errors: {exc.errors()}"
         )
         error_details = []
         for error in exc.errors():

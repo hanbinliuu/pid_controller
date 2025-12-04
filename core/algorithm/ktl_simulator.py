@@ -145,8 +145,8 @@ class KTLSimulator:
             
             # 提取公共参数
             K = parameters.get('K')
-            if K is None or K <= 0:
-                raise ValueError(f"增益K必须大于0，当前值: {K}")
+            # if K is None or K <= 0:
+            #     raise ValueError(f"增益K必须大于0，当前值: {K}")
             
             # 生成时间序列
             t = np.arange(0, duration + dt, dt)
@@ -360,8 +360,8 @@ class KTLSimulator:
             
             # 提取公共参数
             K = parameters.get('K')
-            if K is None or K <= 0:
-                raise ValueError(f"增益K必须大于0，当前值: {K}")
+            # if K is None or K <= 0:
+            #     raise ValueError(f"增益K必须大于0，当前值: {K}")
             
             # 生成时间序列
             t = np.arange(0, duration + dt, dt)

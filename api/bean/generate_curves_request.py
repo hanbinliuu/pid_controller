@@ -19,7 +19,7 @@ class GenerateCurvesRequest(BaseModel):
     # 模型参数
     K: float = Field(..., description="系统增益", examples=[1.0, 1.5, 2.0])
     T1: float = Field(..., description="时间常数(秒)", gt=0, examples=[30.0, 45.0, 60.0])
-    T2: Optional[float] = Field(None, description="二阶时间常数(秒)", gt=0, examples=[20.0, 30.0])
+    T2: Optional[float] = Field(None, description="二阶时间常数(秒)",  examples=[20.0, 30.0])
     L: float = Field(0.0, description="滞后时间(秒)", ge=0, examples=[0.0, 1.0, 2.0])
     model_type: ModelType = Field(ModelType.FOPDT, description="模型类型")
     

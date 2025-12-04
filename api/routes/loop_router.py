@@ -22,11 +22,16 @@ logger = logging.getLogger(__name__)
 class PointValuesRequest(BaseModel):
     """测点值查询请求模型"""
     point_names: List[str] = Field(..., description="测点名称列表")
-    
+    loop_uri: Optional[str] = Query(
+        None,
+        description="回路 URI，默认从 BFF_MODEL_LOOP_URI 读取",
+        example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
+    )
     class Config:
         json_schema_extra = {
             "example": {
-                "point_names": ["PB", "TI", "TD", "PV", "SV", "MV"]
+                "point_names": ["PB", "TI", "TD", "PV", "SV", "MV"],
+                "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
             }
         }
 
@@ -167,12 +172,11 @@ async def query_loop_info(
     response_model=Dict[str, Any]
 )
 async def query_loop_values(
-        point_names: List[str] = Query(..., description="测点名称列表", example=["PB", "TI", "TD"]),
-        loop_uri: Optional[str] = Query(
-            None,
-            description="回路 URI，默认从 BFF_MODEL_LOOP_URI 读取",
-            example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
-        )
+    point_names: List[str] = Field(..., description="测点名称列表"),
+    loop_uri: Optional[str] = Query(
+        None,
+        description="回路 URI，默认从 BFF_MODEL_LOOP_URI 读取",
+        example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca")
 ) -> Dict[str, Any]:
     """
     查询测点当前原始值
@@ -208,6 +212,62 @@ async def query_loop_values(
         result = LoopService.query_loop_values(
             point_names=point_names,
             loop_uri=loop_uri
+        )
+
+        logger.info(f"查询成功，测点数量: {len(result)}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"查询测点当前值失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询测点当前值失败: {str(e)}"
+        )
+@router.post(
+    "/loop-values-new",
+    summary="查询回路测点当前最新值",
+    operation_id="查询回路测点当前最新值",
+    description="根据回路 URI 和测点名称查询测点的当前最新值",
+    response_model=Dict[str, Any]
+)
+async def query_loop_values_new(
+        request: PointValuesRequest,
+) -> Dict[str, Any]:
+    """
+    查询测点当前原始值
+
+    功能说明：
+    - 提供公共的 loop_uri 和 point_path，只需传入测点名称列表
+    - 自动拼接完整的浏览路径
+    - 返回测点名称到值的映射
+    - 只返回v值（数值）
+
+    请求体示例：
+    [
+        "PB",
+        "TI",
+        "TD",
+        "PV",
+        "SV",
+        "MV"
+    ]
+
+    返回格式：
+    {
+        "PB": 71.43,
+        "TI": 3.11,
+        "TD": 2,
+        "PV": 10,
+        "SV": 10,
+        "MV": 15.979299
+    }
+    """
+    try:
+        # 调用Service层查询回路测点值
+        result = LoopService.query_loop_values(
+            point_names=request.point_names,
+            loop_uri=request.loop_uri
         )
 
         logger.info(f"查询成功，测点数量: {len(result)}")

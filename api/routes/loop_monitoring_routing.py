@@ -29,7 +29,7 @@ async def get_loop_realtime_status(
         loop_name: Optional[str] = Query(
             None,
             description="回路名称模糊查询",
-            example="TIC"
+            example="流量"
         ),
         status: Optional[str] = Query(
             None,

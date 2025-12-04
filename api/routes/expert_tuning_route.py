@@ -140,7 +140,7 @@ async def get_model_types():
     """
     try:
         # 获取所有模型类型列表
-        model_types = ModelType.get_model_type()
+        model_types = ModelType.get_model_map()
         
         return {
             "model_types": model_types
@@ -327,10 +327,10 @@ async def generate_all_curves(request: GenerateCurvesRequest = Body(..., descrip
 
 
         # 参数验证
-        if K <= 0 or T1 <= 0:
-            raise HTTPException(status_code=400, detail="K和T1必须大于0")
-        if (L and L < 0) or (Ki and Ki <= 0) or (Kd and Kd < 0):
-            raise HTTPException(status_code=400, detail="参数值无效")
+        # if T1 <= 0:
+        #     raise HTTPException(status_code=400, detail="T1必须大于0")
+        # if (L and L < 0) or (Ki and Ki <= 0) or (Kd and Kd < 0):
+        #     raise HTTPException(status_code=400, detail="参数值无效")
 
         mt_str = model_type.value if isinstance(model_type, ModelType) else str(model_type)
 

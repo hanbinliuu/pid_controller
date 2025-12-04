@@ -24,7 +24,9 @@ class ModelType(Enum):
     @classmethod
     def get_model_type(cls) -> List[str]:
         return [e.value for e in ModelType]
-
+    @classmethod
+    def get_model_map(cls) -> Dict[str, str]:
+        return {e.value: e.display_name for e in ModelType}
 
     @property
     def display_name(self) -> str:
