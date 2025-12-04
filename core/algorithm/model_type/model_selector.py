@@ -1,19 +1,14 @@
+"""模型选择器模块 - 多模型拟合与参数融合"""
+
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple, Union
-from scipy.optimize import least_squares, minimize
+from datetime import datetime
+from scipy.optimize import minimize
 
-# 导入依赖
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-try:
-    from model_identifier.config import Config, ModelType
-    from model_identifier.identifier import ModelIdentifier
-except ImportError:
-    from core.algorithm.model_identifier.config import Config, ModelType
-    from core.algorithm.model_identifier.identifier import ModelIdentifier
+from .config import Config, ModelType
+from .identifier import ModelIdentifier
+from .fusion_strategy import PIDFusionStrategy, WindowResult as FusionWindowResult
 
 
 # ============================================================
@@ -80,12 +75,11 @@ class TuningInput:
     
     @classmethod
     def from_dict(cls, data: Dict) -> 'TuningInput':
-        tuning_window = None
-        if 'tuning_window' in data and data['tuning_window']:
-            tuning_window = [
-                TuningWindow(start_time=w.get('start_time'), end_time=w.get('end_time'))
-                for w in data['tuning_window']
-            ]
+        windows = data.get('tuning_window', [])
+        tuning_window = [
+            TuningWindow(start_time=w.get('start_time'), end_time=w.get('end_time'))
+            for w in windows
+        ] if windows else None
         return cls(
             start_time=data.get('start_time'),
             end_time=data.get('end_time'),
@@ -176,16 +170,178 @@ class ModelSelector:
         ModelType.FOPI: ModelIdentifier.integral_delay_model,
     }
     
+    # 评分等级阈值
+    RATING_THRESHOLDS = {
+        'excellent': (8.0, '优秀'),
+        'good': (6.0, '良好'),
+        'acceptable': (4.0, '可接受'),
+        'poor': (2.0, '较差'),
+        'unavailable': (0.0, '不可用')
+    }
+    
+    # 验证阈值常量
+    MIN_DATA_POINTS = 20          # 最小数据点数
+    MIN_PV_RANGE = 0.5            # 最小PV变化范围
+    MIN_MV_RANGE = 0.1            # 最小MV变化范围
+    MIN_R2_FOR_VOTE = 0.3         # 投票所需最小R²
+    MIN_R2_FOR_QUALITY = 0.4      # 高质量段最小R²
+    R2_THRESHOLDS = [0.5, 0.3, 0.15, 0.0]  # 参数融合阈值序列
+    
     def __init__(self, verbose: bool = False):
-        self.verbose = verbose
+        self._verbose = verbose
         self._epsilon = Config.EPSILON
     
+    @property
+    def verbose(self) -> bool:
+        return self._verbose
+    
     def log(self, msg: str):
-        if self.verbose:
+        if self._verbose:
             print(msg)
     
     # ============================================================
-    # 主入口
+    # 主入口（新格式）
+    # ============================================================
+    
+    def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        模型整定主入口（新格式）
+        
+        Args:
+            input_data: 输入数据字典，格式为:
+                {
+                    "history_data": [
+                        {"timestamp": 1764752401000, "sv": 3, "pv": 1.9, "mv": 8.742, ...},
+                        ...
+                    ],
+                    "params": {
+                        "model_type": None,        # 可选，强制使用指定模型
+                        "turning_type": None,      # 可选，整定类型
+                        "analyst_column": "pv"     # 可选，分析列
+                    },
+                    "qualified_windows": [
+                        {"start_time": 1764766845007, "end_time": 1764774045007},
+                        ...
+                    ]
+                }
+        
+        Returns:
+            整定结果字典
+        """
+        # 解析输入
+        history_data = input_data.get('history_data', [])
+        params = input_data.get('params', {})
+        qualified_windows = input_data.get('qualified_windows', [])
+        
+        if not history_data:
+            return self._empty_result_new(params)
+        
+        if not qualified_windows:
+            return self._empty_result_new(params)
+        
+        # 转换为内部格式
+        tuning_input = {
+            'start_time': history_data[0].get('timestamp') if history_data else None,
+            'end_time': history_data[-1].get('timestamp') if history_data else None,
+            'tuning_window': [
+                {'start_time': w.get('start_time'), 'end_time': w.get('end_time')}
+                for w in qualified_windows
+            ]
+        }
+        
+        # 调用原有的 fit 方法
+        result = self.fit(tuning_input, history_data, lambda_factor=0.8)
+        
+        # 转换为新输出格式
+        return self._convert_output_format(result, params)
+    
+    def _convert_output_format(self, result: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
+        """转换为新输出格式"""
+        # 计算评分等级
+        r_squared = result.get('fitting_result', {}).get('r_squared', 0)
+        model_rating = result.get('model_rating', 0)
+        recommendation = self._get_recommendation(model_rating)
+        
+        # 获取 PID 参数并转换格式
+        pid_params = result.get('pid_parameters', {})
+        Kp = pid_params.get('Kp', 1.0)
+        Ki = pid_params.get('Ki', 0.0)
+        Kd = pid_params.get('Kd', 0.0)
+        
+        # 计算 pb, ti, td
+        Ti = Kp / Ki if Ki > self._epsilon else 0.0
+        Td = Kd / Kp if Kp > self._epsilon else 0.0
+        Pb = 100.0 / Kp if Kp > self._epsilon else 100.0
+        
+        # 确定整定类型
+        turning_type = params.get('turning_type') or self._determine_turning_type(Kp, Ti, Td)
+        
+        # 构建新格式输出
+        fitting_result = result.get('fitting_result', {})
+        fitting_result['recommendation'] = recommendation
+        
+        return {
+            'model_type': result.get('model_type', 'FOPDT'),
+            'turning_type': turning_type,
+            'model_rating': model_rating,
+            'start_time': result.get('start_time'),
+            'end_time': result.get('end_time'),
+            'model_parameters': result.get('model_parameters', {}),
+            'pid_parameters': {
+                'pb': round(float(Pb), 4),
+                'ti': round(float(Ti), 4),
+                'td': round(float(Td), 4),
+                'kp': round(float(Kp), 4),
+                'ki': round(float(Ki), 4),
+                'kd': round(float(Kd), 4)
+            },
+            'fitting_result': fitting_result
+        }
+    
+    def _get_recommendation(self, model_rating: float) -> str:
+        """根据评分获取推荐等级"""
+        if model_rating >= 8.0:
+            return '优秀'
+        elif model_rating >= 6.0:
+            return '良好'
+        elif model_rating >= 4.0:
+            return '可接受'
+        elif model_rating >= 2.0:
+            return '较差'
+        else:
+            return '不可用'
+    
+    def _determine_turning_type(self, Kp: float, Ti: float, Td: float) -> str:
+        """根据 PID 参数确定整定类型"""
+        if Td > self._epsilon:
+            return 'PID'
+        elif Ti > self._epsilon:
+            return 'PI'
+        else:
+            return 'P'
+    
+    def _empty_result_new(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """新格式空结果"""
+        return {
+            'model_type': params.get('model_type') or 'FOPDT',
+            'turning_type': params.get('turning_type') or 'PID',
+            'model_rating': 0.0,
+            'start_time': None,
+            'end_time': None,
+            'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
+            'pid_parameters': {
+                'pb': 100.0, 'ti': 0.0, 'td': 0.0,
+                'kp': 1.0, 'ki': 0.0, 'kd': 0.0
+            },
+            'fitting_result': {
+                'timestamp': [], 'sv': [], 'pv': [], 'mv': [],
+                'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0,
+                'recommendation': '不可用'
+            }
+        }
+    
+    # ============================================================
+    # 原有入口（保持兼容）
     # ============================================================
     
     def fit(self, tuning_input: Union[Dict, TuningInput],
@@ -312,46 +468,29 @@ class ModelSelector:
             )
             
             # 检查1: 数据点数
-            if len(seg) < 20:
-                result.is_valid = False
-                result.invalid_reason = f"数据点不足({len(seg)}<20)"
-                self.log(f"   段{i+1}: ✗ {result.invalid_reason}")
-                segment_results.append(result)
+            if len(seg) < self.MIN_DATA_POINTS:
+                self._mark_invalid(result, f"数据点不足({len(seg)}<{self.MIN_DATA_POINTS})", i, segment_results)
                 continue
             
             # 过滤PV=0的点
             valid_mask = seg.pv != 0
             valid_count = np.sum(valid_mask)
             
-            if valid_count < 20:
-                result.is_valid = False
-                result.invalid_reason = f"有效点不足({valid_count}<20)"
-                self.log(f"   段{i+1}: ✗ {result.invalid_reason}")
-                segment_results.append(result)
+            if valid_count < self.MIN_DATA_POINTS:
+                self._mark_invalid(result, f"有效点不足({valid_count}<{self.MIN_DATA_POINTS})", i, segment_results)
                 continue
             
-            y = seg.pv[valid_mask]
-            u = seg.mv[valid_mask]
+            y, u = seg.pv[valid_mask], seg.mv[valid_mask]
+            pv_range, mv_range = np.ptp(y), np.ptp(u)  # ptp = max - min
             
             # 检查2: PV变化
-            pv_range = np.max(y) - np.min(y)
-            pv_std = np.std(y)
-            
-            if pv_range < 0.5 and pv_std < 0.1:
-                result.is_valid = False
-                result.invalid_reason = f"PV无变化(range={pv_range:.2f})"
-                self.log(f"   段{i+1}: ✗ {result.invalid_reason}")
-                segment_results.append(result)
+            if pv_range < self.MIN_PV_RANGE and np.std(y) < 0.1:
+                self._mark_invalid(result, f"PV无变化(range={pv_range:.2f})", i, segment_results)
                 continue
             
             # 检查3: MV变化
-            mv_range = np.max(u) - np.min(u)
-            
-            if mv_range < 0.1:
-                result.is_valid = False
-                result.invalid_reason = f"MV无变化(range={mv_range:.2f})"
-                self.log(f"   段{i+1}: ✗ {result.invalid_reason}")
-                segment_results.append(result)
+            if mv_range < self.MIN_MV_RANGE:
+                self._mark_invalid(result, f"MV无变化(range={mv_range:.2f})", i, segment_results)
                 continue
             
             # 检查4: 阶跃响应形状特征
@@ -525,8 +664,6 @@ class ModelSelector:
         self.log("📊 Step 3: 模型结构选择")
         self.log('='*60)
         
-        MIN_R2_FOR_VOTE = 0.3  # 只有R²>=0.5的段才参与投票
-        
         # 统计各模型的得分
         model_r2_scores = {m: [] for m in self.CANDIDATE_MODELS}
         model_votes = {m: 0 for m in self.CANDIDATE_MODELS}
@@ -544,15 +681,15 @@ class ModelSelector:
             # 收集R²
             for model_type, fit_result in result.model_results.items():
                 r2 = fit_result.get('r2', 0)
-                if r2 >= MIN_R2_FOR_VOTE:
+                if r2 >= self.MIN_R2_FOR_VOTE:
                     model_r2_scores[model_type].append(r2)
             
             # 只有高质量段才投票
-            if result.best_r2 >= MIN_R2_FOR_VOTE and result.best_model:
+            if result.best_r2 >= self.MIN_R2_FOR_VOTE and result.best_model:
                 model_votes[result.best_model] += 1
                 high_quality_count += 1
         
-        self.log(f"\n   高质量段(R²≥{MIN_R2_FOR_VOTE}): {high_quality_count}/{len(valid_results)}")
+        self.log(f"\n   高质量段(R²≥{self.MIN_R2_FOR_VOTE}): {high_quality_count}/{len(valid_results)}")
         
         # 计算各模型的平均R²
         self.log("\n   模型评估汇总:")
@@ -608,10 +745,12 @@ class ModelSelector:
         """
         融合各段参数，得到唯一的K, T, L
         
-        策略：
-        1. 提高R²阈值到0.5
-        2. 使用IQR方法过滤K值异常段
-        3. 稳健中位数融合
+        使用 PIDFusionStrategy 进行智能融合，策略包括：
+        - weighted_fusion: R²加权融合（K一致性好时）
+        - best_window: 最佳窗口（K有差异时）
+        - conservative: 保守选择（K差异大时）
+        - robust_fusion: 鲁棒融合（数据量差异大时）
+        - cross_validation: 交叉验证（多窗口时）
         """
         self.log(f"\n{'='*60}")
         self.log("📊 Step 4: 参数融合")
@@ -619,180 +758,89 @@ class ModelSelector:
         
         fusion = FusionResult(model_type=model_type)
         
-        # 收集各段的参数
-        all_params = []  # [(K, T1, T2, L, r2, data_points, seg_idx)]
+        # Step 1: 收集所有有效段的参数（降低阈值逐级尝试）
+        window_results = []
+        added_indices = set()
         
-        R2_THRESHOLD = 0.5  # 提高阈值
-        
-        for result in segment_results:
-            if not result.is_valid:
-                continue
-            
-            fit_result = result.model_results.get(model_type)
-            if fit_result is None:
-                continue
-            
-            r2 = fit_result.get('r2', 0)
-            if r2 < R2_THRESHOLD:
-                self.log(f"   段{result.segment_idx+1}: R²={r2:.3f} < {R2_THRESHOLD}, 跳过")
-                continue
-            
-            K = fit_result.get('K', 0)
-            T1 = fit_result.get('T1', 0)
-            T2 = fit_result.get('T2', 0)
-            L = fit_result.get('L', 0)
-            
-            all_params.append((K, T1, T2, L, r2, result.data_points, result.segment_idx))
-        
-        if not all_params:
-            # 降低阈值重试
-            self.log(f"   ⚠️ 无R²≥{R2_THRESHOLD}的段，降低阈值到0.3重试")
-            R2_THRESHOLD = 0.3
+        for threshold in self.R2_THRESHOLDS:
             for result in segment_results:
-                if not result.is_valid:
+                if not result.is_valid or result.segment_idx in added_indices:
                     continue
-                fit_result = result.model_results.get(model_type)
-                if fit_result is None or fit_result.get('r2', 0) < R2_THRESHOLD:
-                    continue
-                K = fit_result.get('K', 0)
-                T1 = fit_result.get('T1', 0)
-                T2 = fit_result.get('T2', 0)
-                L = fit_result.get('L', 0)
-                r2 = fit_result.get('r2', 0)
-                all_params.append((K, T1, T2, L, r2, result.data_points, result.segment_idx))
-        
-        if not all_params:
-            # 再次降低阈值到0.15重试
-            self.log(f"   ⚠️ 无R²≥0.3的段，降低阈值到0.15重试")
-            R2_THRESHOLD = 0.15
-            for result in segment_results:
-                if not result.is_valid:
-                    continue
-                fit_result = result.model_results.get(model_type)
-                if fit_result is None or fit_result.get('r2', 0) < R2_THRESHOLD:
-                    continue
-                K = fit_result.get('K', 0)
-                T1 = fit_result.get('T1', 0)
-                T2 = fit_result.get('T2', 0)
-                L = fit_result.get('L', 0)
-                r2 = fit_result.get('r2', 0)
-                all_params.append((K, T1, T2, L, r2, result.data_points, result.segment_idx))
-        
-        if not all_params:
-            # 最后尝试：使用最佳可用结果（任何R² > 0）
-            self.log("   ⚠️ 尝试使用最佳可用结果")
-            best_r2 = 0
-            best_params = None
-            for result in segment_results:
-                if not result.is_valid:
-                    continue
+                
                 fit_result = result.model_results.get(model_type)
                 if fit_result is None:
                     continue
+                
                 r2 = fit_result.get('r2', 0)
-                if r2 > best_r2:
-                    best_r2 = r2
-                    K = fit_result.get('K', 0)
-                    T1 = fit_result.get('T1', 0)
-                    T2 = fit_result.get('T2', 0)
-                    L = fit_result.get('L', 0)
-                    best_params = (K, T1, T2, L, r2, result.data_points, result.segment_idx)
-            if best_params and best_r2 > 0:
-                all_params.append(best_params)
-                self.log(f"   使用最佳段 R²={best_r2:.3f}")
+                if r2 < threshold:
+                    continue
+                
+                K, T1 = fit_result.get('K', 0), fit_result.get('T1', 0)
+                if K == 0 and T1 == 0:  # 跳过无效参数
+                    continue
+                
+                window_results.append(FusionWindowResult(
+                    window_idx=result.segment_idx,
+                    K=K, T1=T1, 
+                    T2=fit_result.get('T2', 0), 
+                    L=fit_result.get('L', 0),
+                    r2=r2,
+                    data_points=result.data_points
+                ))
+                added_indices.add(result.segment_idx)
+            
+            if window_results:
+                if threshold < self.R2_THRESHOLDS[0]:
+                    self.log(f"   ⚠️ 使用阈值 R²≥{threshold} 收集到 {len(window_results)} 个有效段")
+                break
         
-        if not all_params:
+        if not window_results:
             self.log("   ⚠️ 无有效参数，使用默认值")
             return fusion
         
-        # 提取参数数组
-        K_values = np.array([p[0] for p in all_params])
-        T1_values = np.array([p[1] for p in all_params])
-        T2_values = np.array([p[2] for p in all_params])
-        L_values = np.array([p[3] for p in all_params])
-        r2_values = np.array([p[4] for p in all_params])
-        data_points = np.array([p[5] for p in all_params])
+        self.log(f"   收集到 {len(window_results)} 个有效段:")
+        for w in window_results:
+            self.log(f"      段{w.window_idx+1}: K={w.K:.4f}, T1={w.T1:.2f}, R²={w.r2:.3f}, 数据点={w.data_points}")
         
-        self.log(f"   初始有效段: {len(K_values)}")
-        
-        # K符号一致性检查
-        K_sign_majority = np.sign(np.median(K_values))
-        sign_mask = np.sign(K_values) == K_sign_majority
-        
-        if not np.all(sign_mask):
-            n_removed = np.sum(~sign_mask)
-            self.log(f"   ⚠️ K符号不一致，过滤{n_removed}段")
-            K_values = K_values[sign_mask]
-            T1_values = T1_values[sign_mask]
-            T2_values = T2_values[sign_mask]
-            L_values = L_values[sign_mask]
-            r2_values = r2_values[sign_mask]
-            data_points = data_points[sign_mask]
-        
-        if len(K_values) == 0:
-            self.log("   ⚠️ 过滤后无有效参数")
-            return fusion
-        
-        # IQR方法过滤K值异常（如果段数>=3）
-        if len(K_values) >= 3:
-            K_abs = np.abs(K_values)
-            q1, q3 = np.percentile(K_abs, [25, 75])
-            iqr = q3 - q1
-            lower_bound = max(0, q1 - 1.5 * iqr)
-            upper_bound = q3 + 1.5 * iqr
+        # Step 2: 使用 PIDFusionStrategy 进行智能融合
+        try:
+            fusion_strategy = PIDFusionStrategy(verbose=self._verbose)
+            fusion_result = fusion_strategy.fuse(window_results)
             
-            iqr_mask = (K_abs >= lower_bound) & (K_abs <= upper_bound)
+            # 转换结果
+            fusion.K = fusion_result.K
+            fusion.T1 = fusion_result.T1
+            fusion.T2 = fusion_result.T2
+            fusion.L = fusion_result.L
+            fusion.fusion_method = fusion_result.strategy_used.value
+            fusion.consistency_score = fusion_result.confidence
+            fusion.n_segments_used = len(fusion_result.windows_used)
             
-            if not np.all(iqr_mask) and np.sum(iqr_mask) >= 1:
-                n_removed = np.sum(~iqr_mask)
-                self.log(f"   ⚠️ IQR过滤K值异常: 移除{n_removed}段 (K范围: [{lower_bound:.4f}, {upper_bound:.4f}])")
-                K_values = K_values[iqr_mask]
-                T1_values = T1_values[iqr_mask]
-                T2_values = T2_values[iqr_mask]
-                L_values = L_values[iqr_mask]
-                r2_values = r2_values[iqr_mask]
-                data_points = data_points[iqr_mask]
-        
-        if len(K_values) == 0:
-            self.log("   ⚠️ IQR过滤后无有效参数")
-            return fusion
-        
-        # 计算权重 = R² × sqrt(数据点数)
-        weights = r2_values * np.sqrt(data_points)
-        weights = weights / np.sum(weights)
-        
-        # 融合方法选择
-        if len(K_values) == 1:
-            fusion.K = float(K_values[0])
-            fusion.T1 = float(T1_values[0])
-            fusion.T2 = float(T2_values[0])
-            fusion.L = float(L_values[0])
-            fusion.fusion_method = "单段直接值"
-        elif len(K_values) == 2:
-            # 两段：加权平均
-            fusion.K = float(np.sum(K_values * weights))
-            fusion.T1 = float(np.sum(T1_values * weights))
-            fusion.T2 = float(np.sum(T2_values * weights))
-            fusion.L = float(np.sum(L_values * weights))
-            fusion.fusion_method = "加权平均"
-        else:
-            # 多段：稳健中位数
-            fusion.K = float(np.median(K_values))
-            fusion.T1 = float(np.median(T1_values))
-            fusion.T2 = float(np.median(T2_values))
-            fusion.L = float(np.median(L_values))
-            fusion.fusion_method = "稳健中位数"
-        
-        # 统计信息
-        fusion.n_segments_used = len(K_values)
-        fusion.segment_weights = weights.tolist()
-        fusion.K_std = float(np.std(K_values)) if len(K_values) > 1 else 0.0
-        fusion.T1_std = float(np.std(T1_values)) if len(T1_values) > 1 else 0.0
-        
-        # 一致性评分 (基于变异系数)
-        cv_K = fusion.K_std / abs(fusion.K) if abs(fusion.K) > self._epsilon else 0
-        cv_T1 = fusion.T1_std / fusion.T1 if fusion.T1 > self._epsilon else 0
-        fusion.consistency_score = float(np.clip(1 - (cv_K + cv_T1) / 2, 0, 1))
+            # 计算标准差
+            if len(window_results) > 1:
+                fusion.K_std = float(np.std([w.K for w in window_results]))
+                fusion.T1_std = float(np.std([w.T1 for w in window_results]))
+            else:
+                fusion.K_std = 0.0
+                fusion.T1_std = 0.0
+            
+            self.log(f"\n   融合策略: {fusion.fusion_method}")
+            self.log(f"   决策原因: {fusion_result.reasoning}")
+            self.log(f"   使用窗口: {[i+1 for i in fusion_result.windows_used]}")
+            
+        except Exception as e:
+            self.log(f"   ⚠️ PIDFusionStrategy 失败: {e}，使用备用逻辑")
+            # 备用逻辑：简单取最佳R²的段
+            best_window = max(window_results, key=lambda w: w.r2)
+            fusion.K = best_window.K
+            fusion.T1 = best_window.T1
+            fusion.T2 = best_window.T2
+            fusion.L = best_window.L
+            fusion.fusion_method = "best_window_fallback"
+            fusion.consistency_score = best_window.r2
+            fusion.n_segments_used = 1
+            fusion.K_std = 0.0
+            fusion.T1_std = 0.0
         
         self.log(f"\n   融合结果 ({fusion.fusion_method}, {fusion.n_segments_used}段):")
         self.log(f"   K  = {fusion.K:.4f} ± {fusion.K_std:.4f}")
@@ -959,7 +1007,16 @@ class ModelSelector:
     # 辅助方法
     # ============================================================
     
+    def _mark_invalid(self, result: SegmentResult, reason: str, idx: int, 
+                      results_list: List[SegmentResult]) -> None:
+        """标记段为无效并添加到结果列表"""
+        result.is_valid = False
+        result.invalid_reason = reason
+        self.log(f"   段{idx+1}: ✗ {reason}")
+        results_list.append(result)
+    
     def _parse_input(self, tuning_input: Union[Dict, TuningInput]) -> Optional[TuningInput]:
+        """解析整定输入"""
         if tuning_input is None:
             return None
         if isinstance(tuning_input, TuningInput):
@@ -967,21 +1024,19 @@ class ModelSelector:
         return TuningInput.from_dict(tuning_input)
     
     def _parse_timestamp(self, ts: Any) -> Optional[float]:
+        """解析时间戳为毫秒"""
         if ts is None:
             return None
         if isinstance(ts, (int, float)):
             return float(ts)
         if isinstance(ts, str):
-            from datetime import datetime
-            try:
-                dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                return dt.timestamp() * 1000
-            except:
+            for fmt in ['%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S']:
                 try:
-                    dt = datetime.strptime(ts, '%Y-%m-%d %H:%M:%S')
+                    dt = datetime.strptime(ts.replace('Z', '').split('+')[0], fmt)
                     return dt.timestamp() * 1000
-                except:
-                    return None
+                except ValueError:
+                    continue
+            return None
         if hasattr(ts, 'timestamp'):
             return ts.timestamp() * 1000
         return None

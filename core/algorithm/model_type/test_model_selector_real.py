@@ -261,6 +261,92 @@ def test_model_selector(data: List[Dict], tuning_input: Dict, verbose: bool = Tr
     return result
 
 
+def test_model_selector_new_format(data: List[Dict], qualified_windows: List[Dict], verbose: bool = True) -> Dict:
+    """
+    测试 ModelSelector 新接口（run 方法）
+    
+    Args:
+        data: 原始历史数据
+        qualified_windows: 扰动窗口列表
+        verbose: 是否输出详细日志
+        
+    Returns:
+        整定结果（新格式）
+    """
+    print("\n" + "=" * 60)
+    print("ModelSelector 整定测试（新格式）")
+    print("=" * 60)
+    
+    # 数据质量分析
+    if verbose:
+        print("\n📊 数据质量分析:")
+        quality_report = analyze_data_quality(data)
+        print(f"   质量评级: {quality_report['quality']}")
+        
+        if quality_report['stats']:
+            print("   统计信息:")
+            for k, v in quality_report['stats'].items():
+                print(f"      {k}: {v}")
+    
+    # 构造新格式输入
+    input_data = {
+        'history_data': data,
+        'params': {
+            'model_type': None,
+            'turning_type': None,
+            'analyst_column': 'pv'
+        },
+        'qualified_windows': qualified_windows
+    }
+    
+    print(f"\n📥 输入参数:")
+    print(f"   history_data: {len(data)} 条")
+    print(f"   qualified_windows: {len(qualified_windows)} 个扰动段")
+    for i, w in enumerate(qualified_windows):
+        start_ts = w.get('start_time')
+        end_ts = w.get('end_time')
+        start_str = datetime.fromtimestamp(start_ts / 1000).strftime('%Y-%m-%d %H:%M:%S') if start_ts else 'N/A'
+        end_str = datetime.fromtimestamp(end_ts / 1000).strftime('%Y-%m-%d %H:%M:%S') if end_ts else 'N/A'
+        print(f"      [{i+1}] {start_str} ~ {end_str}")
+    
+    # 调用新的 run 方法
+    selector = ModelSelector(verbose=verbose)
+    result = selector.run(input_data)
+    
+    # 打印输出结果（新格式）
+    print(f"\n📤 输出结果（新格式）:")
+    print(f"   model_type: {result.get('model_type')}")
+    print(f"   turning_type: {result.get('turning_type')}")
+    print(f"   model_rating: {result.get('model_rating')}")
+    print(f"   start_time: {result.get('start_time')}")
+    print(f"   end_time: {result.get('end_time')}")
+    
+    model_params = result.get('model_parameters', {})
+    print(f"\n   model_parameters:")
+    print(f"      K  = {model_params.get('K')}")
+    print(f"      T1 = {model_params.get('T1')}")
+    print(f"      T2 = {model_params.get('T2')}")
+    print(f"      L  = {model_params.get('L')}")
+    
+    pid_params = result.get('pid_parameters', {})
+    print(f"\n   pid_parameters:")
+    print(f"      pb = {pid_params.get('pb')}")
+    print(f"      ti = {pid_params.get('ti')}")
+    print(f"      td = {pid_params.get('td')}")
+    print(f"      kp = {pid_params.get('kp')}")
+    print(f"      ki = {pid_params.get('ki')}")
+    print(f"      kd = {pid_params.get('kd')}")
+    
+    fitting = result.get('fitting_result', {})
+    print(f"\n   fitting_result:")
+    print(f"      r_squared = {fitting.get('r_squared')}")
+    print(f"      rmse = {fitting.get('rmse')}")
+    print(f"      数据点数 = {len(fitting.get('pv', []))}")
+    print(f"      recommendation = {fitting.get('recommendation')}")
+    
+    return result
+
+
 # ============================================================
 # 可视化
 # ============================================================
@@ -377,19 +463,22 @@ def print_result_json(result: Dict):
     """打印完整的结果 JSON 格式"""
     import json
     
+    fitting_result = result.get('fitting_result', {})
+    
     output = {
         'model_type': result.get('model_type'),
+        'turning_type': result.get('turning_type'),
         'model_rating': result.get('model_rating'),
         'start_time': str(result.get('start_time')),
         'end_time': str(result.get('end_time')),
         'model_parameters': result.get('model_parameters'),
         'pid_parameters': result.get('pid_parameters'),
         'fitting_result': {
-            'r_squared': result.get('fitting_result', {}).get('r_squared'),
-            'rmse': result.get('fitting_result', {}).get('rmse'),
-            'data_points': len(result.get('fitting_result', {}).get('pv', []))
-        },
-        'fusion_info': result.get('fusion_info')
+            'r_squared': fitting_result.get('r_squared'),
+            'rmse': fitting_result.get('rmse'),
+            'data_points': len(fitting_result.get('pv', [])),
+            'recommendation': fitting_result.get('recommendation')
+        }
     }
     
     print("\n" + "=" * 60)
@@ -408,10 +497,11 @@ if __name__ == "__main__":
     test_scenarios = [
         # {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
         # {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
-        # {'start_time': '2025-12-03 11:05:58', 'end_time': '2025-12-03 20:38:58'},
+        # {'start_time': '2025-11-20 11:05:58', 'end_time': '2025-11-20 20:38:58'},
         # {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'}
-        # {'start_time': '2025-11-04 18:36:22', 'end_time': '2025-11-04 19:35:58'}
-        {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'}
+        {'start_time': '2025-11-04 18:36:22', 'end_time': '2025-11-04 19:35:58'}
+        # {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'}
+        # {'start_time': '2025-12-03 8:00:58', 'end_time': '2025-12-04 12:42:58'}
     ]
     
     for idx, scenario in enumerate(test_scenarios, 1):
@@ -434,12 +524,13 @@ if __name__ == "__main__":
         # Step 2: 检测扰动段（获取 tuning_input）
         tuning_input = detect_tuning_windows(data)
         
-        if len(tuning_input.get('qualified_windows', [])) == 0:
+        qualified_windows = tuning_input.get('qualified_windows', [])
+        if len(qualified_windows) == 0:
             print("⚠️ 未检测到扰动段，跳过")
             continue
         
-        # Step 3: 执行模型拟合
-        result = test_model_selector(data, tuning_input, verbose=True)
+        # Step 3: 执行模型拟合（使用新格式 run 方法）
+        result = test_model_selector_new_format(data, qualified_windows, verbose=True)
         
         # Step 4: 打印 JSON 格式验证
         print_result_json(result)
