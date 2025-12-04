@@ -48,22 +48,8 @@ def convert_to_arrays(data: List[Dict]) -> tuple:
 
 def test_stability_detector(data: List[Dict]):
     """测试 StabilityDetector，返回标准格式"""
-    # 转换数据
-    pv_array, sv_array, mv_array, timestamps = convert_to_arrays(data)
-    
-    # 构建 pandas Series（使用本地时间）
-    time_index = pd.to_datetime(timestamps, unit='ms', utc=True).tz_convert('Asia/Shanghai').tz_localize(None)
-    pv_series = pd.Series(pv_array, index=time_index)
-    sv_series = pd.Series(sv_array, index=time_index)
-    
-    # 调用函数获取标准返回格式
-    result = find_high_variability_periods(
-        pv_series=pv_series,
-        sv_series=sv_series,
-        std_tol=0.2,
-        min_len=10,
-        min_segment_len=20
-    )
+    # 调用函数获取标准返回格式（新格式：直接传入 history_data）
+    result = find_high_variability_periods({"history_data": data})
     
     # 打印标准返回格式
     print("\n" + "=" * 60)
@@ -71,13 +57,12 @@ def test_stability_detector(data: List[Dict]):
     print("=" * 60)
     print(f"start_time: {result['start_time']}")
     print(f"end_time: {result['end_time']}")
-    print(f"params: {result['params']}")
-    print(f"total_windows: {result['total_windows']}")
-    print(f"tuning_window: {result['tuning_window']}")
+    print(f"qualified_windows: {result['qualified_windows']}")
     
     # 返回用于可视化的数据
-    detector = StabilityDetector(tol=0.5, std_tol=0.2, min_len=10)
-    non_steady_segments = detector.detect_non_steady_segments(pv_array, sv_array, min_segment_len=20)
+    pv_array, sv_array, mv_array, timestamps = convert_to_arrays(data)
+    detector = StabilityDetector()
+    non_steady_segments = detector.detect_non_steady_segments(pv_array, sv_array)
     disturbance_starts = detector.detect_all_disturbances(pv_array, sv_array, non_steady_segments)
     sv_segments = detector.detect_setpoint_segments(sv_array, min_change=0.5, min_stable_points=20)
     sv_change_intervals = detector.detect_sv_change_intervals(sv_array, pv_data=pv_array)
@@ -206,8 +191,8 @@ if __name__ == "__main__":
         # {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
         # {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
         # {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
-        {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
-        # {'start_time': '2025-11-04 18:36:22', 'end_time': '2025-11-04 19:35:58'},
+        # {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
+        {'start_time': '2025-11-04 18:36:22', 'end_time': '2025-11-04 19:35:58'},
     ]
 
     for idx, scenario in enumerate(test_scenarios, 1):

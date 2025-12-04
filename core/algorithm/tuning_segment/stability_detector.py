@@ -1061,185 +1061,83 @@ class StabilityDetector:
         return disturbance_starts
 
 
-def find_high_variability_periods(
-    pv_series: pd.Series,
-    sv_series: Optional[pd.Series] = None,
-    tol: float = 0.5,
-    std_tol: float = 0.2,
-    min_len: int = 10,
-    min_segment_len: int = 20,
-    analyst_column: Optional[str] = None,
-    window_sec: Optional[int] = None,
-    is_filter: bool = False
-) -> Dict[str, Any]:
-    """
-    使用StabilityDetector检测高波动时间段
-    
-    参数:
-    - pv_series: 过程值时间序列, Pandas Series with datetime index
-    - sv_series: 设定值时间序列, Pandas Series with datetime index (可选)
-    - tol: 容差（PV与设定值的允许偏差）
-    - std_tol: 标准差阈值
-    - min_len: 最小数据长度
-    - min_segment_len: 最小非稳态段长度
-    - analyst_column: 分析的列名（用于记录）
-    - window_sec: 窗口秒数（用于时间转换）
-    - is_filter: 是否进行滤波处理
-
-    返回:
-    - dict: 包含以下字段的字典:
-        - table: 高波动时间段表格数据
-        - start_time: 数据起始时间
-        - end_time: 数据结束时间
-        - params: 参数字典
-        - total_windows: 总窗口数（这里表示检测到的非稳态段数）
-        - std_max_window: 最大标准差的窗口
-    """
+def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        # 确保pv_series是Pandas Series
-        if not isinstance(pv_series, pd.Series):
-            raise ValueError("pv_series必须是Pandas Series类型")
+        # 解析输入数据
+        data_list = history_data.get("history_data", [])
+        if not data_list:
+            return {
+                "start_time": None,
+                "end_time": None,
+                "qualified_windows": []
+            }
         
-        # 确保有datetime index
-        if not isinstance(pv_series.index, pd.DatetimeIndex):
-            try:
-                pv_series.index = pd.to_datetime(pv_series.index)
-            except Exception:
-                raise ValueError("pv_series的index必须是datetime类型或可转换为datetime")
+        # 提取timestamp, pv, sv数据
+        timestamps = []
+        pv_values = []
+        sv_values = []
         
-        # 数据预处理
-        pv_processed = pv_series.copy()
-        if is_filter:
-            pv_processed = pv_processed.rolling(window=5, min_periods=1, center=True).mean()
+        for item in data_list:
+            ts = item.get("timestamp")
+            pv = item.get("pv")
+            sv = item.get("sv")
+            
+            if ts is not None and pv is not None:
+                timestamps.append(ts)
+                pv_values.append(float(pv))
+                sv_values.append(float(sv) if sv is not None else None)
         
-        # 获取起止时间
-        start_time = pv_processed.index[0]
-        end_time = pv_processed.index[-1]
+        if len(timestamps) < 10:
+            return {
+                "start_time": timestamps[0] if timestamps else None,
+                "end_time": timestamps[-1] if timestamps else None,
+                "qualified_windows": []
+            }
         
         # 转换为numpy数组
-        pv_data = pv_processed.values.astype(float)
+        pv_data = np.array(pv_values, dtype=float)
         
-        # 处理sv_series
-        if sv_series is not None:
-            if not isinstance(sv_series, pd.Series):
-                raise ValueError("sv_series必须是Pandas Series类型")
-            if not isinstance(sv_series.index, pd.DatetimeIndex):
-                try:
-                    sv_series.index = pd.to_datetime(sv_series.index)
-                except Exception:
-                    raise ValueError("sv_series的index必须是datetime类型或可转换为datetime")
-            sv_data = sv_series.values.astype(float)
+        # 处理sv数据
+        if all(sv is not None for sv in sv_values):
+            sv_data = np.array(sv_values, dtype=float)
         else:
-            # 如果没有提供sv_series，使用pv的均值作为设定值
+            # 如果sv有缺失，使用pv的均值作为设定值
             sv_data = np.full(len(pv_data), np.mean(pv_data))
         
-        # 确保pv和sv长度一致
-        min_len_data = min(len(pv_data), len(sv_data))
-        pv_data = pv_data[:min_len_data]
-        sv_data = sv_data[:min_len_data]
+        # 获取起止时间（毫秒时间戳）
+        start_time = int(timestamps[0])
+        end_time = int(timestamps[-1])
         
         # 创建检测器并执行检测
-        detector = StabilityDetector(tol=tol, std_tol=std_tol, min_len=min_len)
+        detector = StabilityDetector()
         
         # 检测非稳态段
-        non_steady_segments = detector.detect_non_steady_segments(pv_data, sv_data, min_segment_len=min_segment_len)
+        non_steady_segments = detector.detect_non_steady_segments(pv_data, sv_data)
         
-        # 检测扰动起始点
-        disturbance_starts = detector.detect_all_disturbances(pv_data, sv_data, non_steady_segments)
-        
-        # 构建输出表格
-        table = []
-        std_max_window = None
-        max_std = 0.0
-        
+        # 构建 qualified_windows：每个扰动段的开始和结束时间
+        qualified_windows = []
         for seg_start, seg_end, seg_setpoint in non_steady_segments:
-            seg_pv = pv_data[seg_start:seg_end]
-            
-            # 计算统计量
-            seg_std = float(np.std(seg_pv))
-            seg_var = float(np.var(seg_pv))
-            seg_mean = float(np.mean(seg_pv))
-            seg_min = float(np.min(seg_pv))
-            seg_max = float(np.max(seg_pv))
-            seg_range = seg_max - seg_min
-            
-            # 计算步长变化度
-            diffs = np.diff(seg_pv) if len(seg_pv) > 1 else np.array([], dtype=float)
-            step_degree = float(np.std(diffs)) if len(diffs) > 1 else 0.0
-            
-            # 获取时间
-            seg_start_time = pv_processed.index[seg_start] if seg_start < len(pv_processed) else None
-            seg_end_time = pv_processed.index[min(seg_end - 1, len(pv_processed) - 1)] if seg_end > 0 else None
-            
-            table.append({
-                "start_time": seg_start_time,
-                "end_time": seg_end_time,
-                "start_idx": seg_start,
-                "end_idx": seg_end,
-                "setpoint": seg_setpoint,
-                "variance": seg_var,
-                "std": seg_std,
-                "mean": seg_mean,
-                "min": seg_min,
-                "max": seg_max,
-                "range": seg_range,
-                "step_degree": step_degree
-            })
-            
-            # 记录最大标准差的窗口
-            if seg_std > max_std:
-                max_std = seg_std
-                std_max_window = {
+            # 边界检查
+            if seg_start < len(timestamps) and seg_end > 0:
+                seg_start_time = int(timestamps[seg_start])
+                seg_end_idx = min(seg_end - 1, len(timestamps) - 1)
+                seg_end_time = int(timestamps[seg_end_idx])
+                qualified_windows.append({
                     "start_time": seg_start_time,
-                    "end_time": seg_end_time,
-                    "start_idx": seg_start,
-                    "end_idx": seg_end,
-                    "std": seg_std,
-                    "variance": seg_var
-                }
-        
-        # 构建 tuning_window：每个扰动段的开始和结束时间
-        tuning_window = []
-        for seg_start, seg_end, seg_setpoint in non_steady_segments:
-            seg_start_time = pv_processed.index[seg_start] if seg_start < len(pv_processed) else None
-            seg_end_time = pv_processed.index[min(seg_end - 1, len(pv_processed) - 1)] if seg_end > 0 else None
-            tuning_window.append({
-                "start_time": seg_start_time,
-                "end_time": seg_end_time
-            })
+                    "end_time": seg_end_time
+                })
         
         return {
-            "table": [],
             "start_time": start_time,
             "end_time": end_time,
-            "params": {
-                "window_size": min_segment_len,
-                "step_size": min_len,
-                "variability_threshold": std_tol,
-                "analyst_column": analyst_column or "pv",
-                "window_sec": window_sec,
-                "is_filter": is_filter
-            },
-            "total_windows": len(non_steady_segments),
-            "tuning_window": tuning_window
+            "qualified_windows": qualified_windows
         }
     
     except Exception as e:
         return {
-            "table": [],
             "start_time": None,
             "end_time": None,
-            "params": {
-                "window_size": min_segment_len,
-                "step_size": min_len,
-                "variability_threshold": std_tol,
-                "analyst_column": analyst_column or "pv",
-                "window_sec": window_sec,
-                "is_filter": is_filter
-            },
-            "total_windows": 0,
-            "tuning_window": [],
-            "error": str(e)
+            "qualified_windows": []
         }
 
 
