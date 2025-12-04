@@ -4,11 +4,13 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime
-from scipy.optimize import minimize
+from scipy.optimize import minimize, least_squares
+from scipy.ndimage import uniform_filter1d
 
 from .config import Config, ModelType
 from .identifier import ModelIdentifier
 from .fusion_strategy import PIDFusionStrategy, WindowResult as FusionWindowResult
+from .data_preprocessor import DataPreprocessor, DataQuality
 
 
 # ============================================================
@@ -190,6 +192,7 @@ class ModelSelector:
     def __init__(self, verbose: bool = False):
         self._verbose = verbose
         self._epsilon = Config.EPSILON
+        self._preprocessor = DataPreprocessor(verbose=verbose)
     
     @property
     def verbose(self) -> bool:
@@ -581,12 +584,19 @@ class ModelSelector:
             
             self.log(f"\n📊 段{i+1}: {len(y)}点")
             
+            # 分析数据质量（使用 DataPreprocessor）
+            quality = self._preprocessor.analyze_quality(y, u)
+            use_multi_start = quality.is_noisy or not quality.is_correlated
+            
             # 尝试所有候选模型
             for model_type in self.CANDIDATE_MODELS:
                 try:
-                    # 辨识
-                    method = self.IDENTIFY_METHODS.get(model_type)
-                    params_raw = method(t, y, u)
+                    # 根据数据质量选择拟合策略
+                    if use_multi_start:
+                        params_raw, _ = self._multi_start_fit(t, y, u, model_type)
+                    else:
+                        method = self.IDENTIFY_METHODS.get(model_type)
+                        params_raw = method(t, y, u)
                     
                     # 格式化参数
                     params_dict = self.PARAM_FORMATS[model_type](params_raw)
@@ -1006,6 +1016,69 @@ class ModelSelector:
     # ============================================================
     # 辅助方法
     # ============================================================
+    
+    def _multi_start_fit(self, t: np.ndarray, y: np.ndarray, u: np.ndarray,
+                         model_type: str, n_starts: int = 3) -> Tuple[tuple, float]:
+        """
+        多起点优化拟合，避免局部最优
+        
+        Returns:
+            (best_params, best_r2)
+        """
+        y0 = y[0]
+        method = self.IDENTIFY_METHODS.get(model_type)
+        sim_method = self.SIMULATE_METHODS.get(model_type)
+        bounds = self._get_bounds(model_type)
+        
+        best_params = None
+        best_r2 = -1
+        
+        # 起点1: 标准方法
+        try:
+            params = method(t, y, u)
+            y_pred = sim_method(params, t, u, y0)
+            r2 = self._calculate_r2(y, y_pred)
+            if r2 > best_r2:
+                best_r2 = r2
+                best_params = params
+        except:
+            pass
+        
+        # 起点2: 使用滤波后的数据
+        try:
+            y_f, u_f = self._preprocessor.preprocess(y, u)
+            params = method(t, y_f, u_f)
+            y_pred = sim_method(params, t, u, y0)  # 用原始数据验证
+            r2 = self._calculate_r2(y, y_pred)
+            if r2 > best_r2:
+                best_r2 = r2
+                best_params = params
+        except:
+            pass
+        
+        # 起点3: 扰动初始值
+        if best_params is not None and n_starts > 2:
+            try:
+                perturbed = tuple(p * (1 + 0.2 * np.random.randn()) for p in best_params)
+                # 限幅
+                perturbed = tuple(
+                    np.clip(p, bounds[0][i], bounds[1][i]) 
+                    for i, p in enumerate(perturbed)
+                )
+                result = least_squares(
+                    lambda params: sim_method(params, t, u, y0) - y,
+                    perturbed, bounds=bounds, method='trf', max_nfev=200
+                )
+                if result.success:
+                    y_pred = sim_method(tuple(result.x), t, u, y0)
+                    r2 = self._calculate_r2(y, y_pred)
+                    if r2 > best_r2:
+                        best_r2 = r2
+                        best_params = tuple(result.x)
+            except:
+                pass
+        
+        return best_params if best_params else method(t, y, u), max(best_r2, 0)
     
     def _mark_invalid(self, result: SegmentResult, reason: str, idx: int, 
                       results_list: List[SegmentResult]) -> None:
