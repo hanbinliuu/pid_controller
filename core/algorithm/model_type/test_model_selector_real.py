@@ -100,6 +100,8 @@ def detect_tuning_windows(data: List[Dict]) -> Dict:
 
 def analyze_data_quality(data: List[Dict]) -> Dict:
     """分析数据质量，给出预处理建议"""
+    from core.algorithm.model_type.data_preprocessor import DataPreprocessor
+    
     pv_array, sv_array, mv_array, timestamps = convert_to_arrays(data)
     
     # 过滤 PV=0
@@ -114,7 +116,8 @@ def analyze_data_quality(data: List[Dict]) -> Dict:
         'quality': 'unknown',
         'warnings': [],
         'recommendations': [],
-        'stats': {}
+        'stats': {},
+        'nonlinearity': None
     }
     
     # 噪声分析
@@ -148,6 +151,25 @@ def analyze_data_quality(data: List[Dict]) -> Dict:
     
     if len(mv_unique) <= 3:
         report['warnings'].append(f'MV离散值过少 ({len(mv_unique)}个)，可能为ON-OFF控制')
+    
+    # 非线性分析
+    preprocessor = DataPreprocessor(verbose=False)
+    nonlinearity = preprocessor.analyze_nonlinearity(pv, mv)
+    report['nonlinearity'] = {
+        'is_nonlinear': nonlinearity.is_nonlinear,
+        'score': round(nonlinearity.nonlinearity_score, 4),
+        'gain_variation': round(nonlinearity.gain_variation, 4),
+        'saturation': nonlinearity.saturation_detected,
+        'deadzone': nonlinearity.deadzone_detected,
+        'hysteresis': round(nonlinearity.hysteresis_score, 4),
+        'description': nonlinearity.description,
+        'recommended_model': nonlinearity.recommended_model,
+        'segment_count': nonlinearity.segment_count
+    }
+    
+    if nonlinearity.is_nonlinear:
+        report['warnings'].append(f'检测到非线性: {nonlinearity.description}')
+        report['recommendations'].append(f'建议使用{nonlinearity.recommended_model}模型，分{nonlinearity.segment_count}段拟合')
     
     return report
 
@@ -183,10 +205,30 @@ def test_model_selector(data: List[Dict], tuning_input: Dict, verbose: bool = Tr
             for k, v in quality_report['stats'].items():
                 print(f"      {k}: {v}")
         
+        # 非线性分析结果
+        if quality_report.get('nonlinearity'):
+            nl = quality_report['nonlinearity']
+            print("\n   🔬 非线性分析:")
+            print(f"      是否非线性: {'是' if nl['is_nonlinear'] else '否'}")
+            print(f"      非线性评分: {nl['score']}")
+            print(f"      增益变化: {nl['gain_variation']}")
+            print(f"      饱和检测: {'是' if nl['saturation'] else '否'}")
+            print(f"      死区检测: {'是' if nl['deadzone'] else '否'}")
+            print(f"      迟滞程度: {nl['hysteresis']}")
+            print(f"      描述: {nl['description']}")
+            if nl['is_nonlinear']:
+                print(f"      推荐模型: {nl['recommended_model']}")
+                print(f"      建议分段数: {nl['segment_count']}")
+        
         if quality_report['warnings']:
-            print("   ⚠️  警告:")
+            print("\n   ⚠️  警告:")
             for w in quality_report['warnings']:
                 print(f"      - {w}")
+        
+        if quality_report.get('recommendations'):
+            print("\n   💡 建议:")
+            for r in quality_report['recommendations']:
+                print(f"      - {r}")
     
     # 打印输入信息
     print(f"\n📥 输入参数:")
@@ -503,8 +545,8 @@ if __name__ == "__main__":
     
     # 测试场景
     test_scenarios = [
-        # {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
-        {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
+        {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
+        # {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
         # {'start_time': '2025-11-20 11:05:58', 'end_time': '2025-11-20 20:38:58'},
         # {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
         # {'start_time': '2025-11-04 18:36:22', 'end_time': '2025-11-04 19:35:58'},
