@@ -64,7 +64,7 @@ class HomePageService:
         Get top 10 performance reduction loops
         """
         now = datetime.now().date()
-        return HomePageDAO.get_perf_reduction_top10_loops(session, now, 10)
+        return HomePageDAO.get_perf_reduction_top10_loops(session, now, 1)
 
     @staticmethod
     def get_optimizable_loops(

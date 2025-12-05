@@ -51,7 +51,7 @@ class LoopEvaluation(SQLModel, table=True):
     assessment_time: Optional[datetime] = Field(
         default=None,
         index=True,
-        sa_column_kwargs={"comment": "评估时间(按天)"}
+        sa_column_kwargs={"comment": "评估时间"}
     )
     # 性能评估指标
     performance_score: Optional[float] = Field(

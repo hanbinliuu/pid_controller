@@ -75,7 +75,7 @@ def _calc_loop_performance(start_time: datetime, end_time: datetime, max_workers
             with get_db_session() as db:
                 for item in result.get('results', []):
                     status = item.get('status')
-                    if status not in ['优秀', '良好', '一般', '差', '开环', '条件剔除']:
+                    if status not in ['优', '良', '中', '差', '开环', '条件剔除']:
                         continue
 
                     loop_uri = item.get('loop_uri')

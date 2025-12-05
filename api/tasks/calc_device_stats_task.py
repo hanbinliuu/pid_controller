@@ -182,8 +182,8 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                         stable_loops += 1
 
                 # 计算比率
-                auto_control_rate = (auto_control_loops / total_loops * 100) if total_loops > 0 else 0.0
-                stability_rate = (stable_loops / total_loops * 100) if total_loops > 0 else 0.0
+                auto_control_rate = (auto_control_loops / total_loops)*100 if total_loops > 0 else 0.0
+                stability_rate = (stable_loops / total_loops)*100 if total_loops > 0 else 0.0
 
                 device_stats[device_uri] = {
                     'total_loops': total_loops,

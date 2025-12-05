@@ -114,7 +114,32 @@ class DeviceEvaluationService:
             start_date=start_date,
             end_date=end_date
         )
-    
+
+    @staticmethod
+    def get_this_child_evaluations_by_date_range(
+            db: Session,
+            device_uri: Optional[str] = None,
+            start_date: Optional[date] = None,
+            end_date: Optional[date] = None
+    ) -> List[DeviceEvaluation]:
+        """
+        根据父类装置URI和时间范围查询评估记录（不分页）
+
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI（可选，为空则查询所有装置）
+            start_date: 开始日期（可选，包含该日期）
+            end_date: 结束日期（可选，包含该日期）
+
+        Returns:
+            List[DeviceEvaluation]: 评估记录列表，按统计时间倒序排列
+        """
+        return DeviceEvaluationDAO.get_this_and_child_by_device_uri_and_date_range(
+            db,
+            device_uri=device_uri,
+            start_date=start_date,
+            end_date=end_date
+        )
     @staticmethod
     def get_device_loops(
         db: Session,

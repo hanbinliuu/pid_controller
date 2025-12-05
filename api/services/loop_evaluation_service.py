@@ -23,7 +23,6 @@ class LoopEvaluationService:
         tuning_date: date,
         loop_name: Optional[str] = None,
         description: Optional[str] = None,
-        tuning_method: Optional[str] = None,
         operator: Optional[str] = None,
         before_params: Optional[str] = None,
         after_params: Optional[str] = None,
@@ -52,7 +51,6 @@ class LoopEvaluationService:
             tuning_date: 整定日期(只包含年月日)
             loop_name: 回路名称
             description: 描述
-            tuning_method: 整定方法
             operator: 操作人员
             before_params: 整定前参数
             after_params: 整定后参数
@@ -81,8 +79,6 @@ class LoopEvaluationService:
                 evaluation_data["loop_name"] = loop_name
             if description is not None:
                 evaluation_data["description"] = description
-            if tuning_method is not None:
-                evaluation_data["tuning_method"] = tuning_method
             if operator is not None:
                 evaluation_data["operator"] = operator
             if before_params is not None:
@@ -164,7 +160,7 @@ class LoopEvaluationService:
         db: Session,
         loop_name: Optional[str] = None,
         loop_uri: Optional[str] = None,
-        tuning_method: Optional[str] = None,
+        status: Optional[str] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         min_performance_score: Optional[float] = None,
@@ -178,7 +174,7 @@ class LoopEvaluationService:
             db: 数据库会话
             loop_name: 回路名称
             loop_uri: 回路URI
-            tuning_method: 整定方法
+            status: 状态
             start_time: 开始时间
             end_time: 结束时间
             min_performance_score: 最小性能评分
@@ -192,7 +188,7 @@ class LoopEvaluationService:
             db,
             loop_name=loop_name,
             loop_uri=loop_uri,
-            tuning_method=tuning_method,
+            status=status,
             start_time=start_time,
             end_time=end_time,
             min_performance_score=min_performance_score,

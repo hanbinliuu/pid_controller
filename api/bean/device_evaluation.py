@@ -118,9 +118,9 @@ class DeviceEvaluation(SQLModel, table=True):
                 "loop_count": 45,
                 "open_loop_count": 5,
                 "auto_loop_count": 38,
-                "auto_control_rate": 84.4,
+                "auto_control_rate": 0.844,
                 "stable_loop_count": 40,
-                "stability_rate": 88.9,
+                "stability_rate": 0.889,
                 "conditional_excluded_loop_count": 2
             },
             "description": "装置评估记录,按天和装置URI唯一索引,自动更新已存在记录"

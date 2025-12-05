@@ -81,7 +81,7 @@ class DeviceEvaluationDAO:
         end_date: Optional[date] = None
     ) -> List[DeviceEvaluation]:
         """
-        根据装置URI和时间范围查询评估记录（不分页）
+        根据装置URI及下级URI和时间范围查询评估记录（不分页）
         
         Args:
             db: 数据库会话
@@ -98,7 +98,7 @@ class DeviceEvaluationDAO:
             
             # 装置URI筛选
             if device_uri:
-                statement = statement.where(DeviceEvaluation.device_uri == device_uri)
+                statement = statement.where((DeviceEvaluation.device_uri == device_uri))
             
             # 时间范围筛选
             if start_date:
@@ -127,7 +127,61 @@ class DeviceEvaluationDAO:
                 f"start_date: {start_date}, end_date: {end_date}, 错误: {str(e)}"
             )
             raise
-    
+
+    @staticmethod
+    def get_this_and_child_by_device_uri_and_date_range(
+            db: Session,
+            device_uri: Optional[str] = None,
+            start_date: Optional[date] = None,
+            end_date: Optional[date] = None
+    ) -> List[DeviceEvaluation]:
+        """
+        根据装置URI和时间范围查询评估记录（不分页）
+
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI（可选，为空则查询所有装置）
+            start_date: 开始日期（可选，包含该日期）
+            end_date: 结束日期（可选，包含该日期）
+
+        Returns:
+            List[DeviceEvaluation]: 评估记录列表，按统计时间倒序排列
+        """
+        try:
+            # 构建查询语句
+            statement = select(DeviceEvaluation)
+
+            # 装置URI筛选
+            if device_uri:
+                statement = statement.where((DeviceEvaluation.device_uri == device_uri)|(DeviceEvaluation.parent_device_uri == device_uri))
+
+            # 时间范围筛选
+            if start_date:
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                statement = statement.where(DeviceEvaluation.statistics_time >= start_datetime)
+
+            if end_date:
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                statement = statement.where(DeviceEvaluation.statistics_time <= end_datetime)
+
+            # 按统计时间倒序排列
+            statement = statement.order_by(desc(DeviceEvaluation.statistics_time))
+
+            results = db.exec(statement).all()
+
+            logger.info(
+                f"查询装置评估记录成功 - device_uri: {device_uri or '全部'}, "
+                f"start_date: {start_date}, end_date: {end_date}, 结果数: {len(results)}"
+            )
+
+            return list(results)
+
+        except Exception as e:
+            logger.error(
+                f"查询装置评估记录失败 - device_uri: {device_uri}, "
+                f"start_date: {start_date}, end_date: {end_date}, 错误: {str(e)}"
+            )
+            raise
     @staticmethod
     def upsert_by_device_uri_and_date(
         db: Session,

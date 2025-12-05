@@ -54,8 +54,8 @@ async def get_evaluation_by_device_uri(
             detail=f"查询装置评估失败: {str(e)}"
         )
 @router.get("/device-evaluation/history-data",
-            summary="装置实时统计",
-            operation_id="get_evaluation_by_device_uri",
+            summary="装置历史统计",
+            operation_id="get_history_evaluation_by_device_uri",
             response_model=Dict[str, Any])
 async def get_history_evaluation_by_device_uri(
         device_uri: Optional[str] = Query(None, description="装置URI"),
@@ -68,11 +68,9 @@ async def get_history_evaluation_by_device_uri(
         if device_uri is None:
             device_uri = Config.BFF_MODEL_ROOT_URI
 
-        parient_result = DeviceEvaluationService.get_evaluation_by_device_uri_now(db, device_uri)
-        child_result = DeviceEvaluationService.get_evaluation_by_parent_device_uri_now(db, device_uri)
+        evaluations_result = DeviceEvaluationService.get_evaluations_by_date_range(db, device_uri, start_time, end_time)
         return {
-            "device_evaluation": parient_result,
-            "child_device_evaluation": child_result
+            "evaluations": evaluations_result,
         }
     except HTTPException:
         raise
@@ -139,8 +137,8 @@ async def list_device_evaluations(
         )
 
 
-@router.get("/device-evaluation/list",
-            summary="根据时间范围查询装置评估记录（不分页）",
+@router.get("/device-evaluation/history-data",
+            summary="装置历史统计",
             operation_id="get_device_evaluations_by_date_range",
             response_model=Dict[str, Any])
 async def get_device_evaluations_by_date_range(

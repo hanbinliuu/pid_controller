@@ -32,7 +32,7 @@ class HomePageDAO:
     def get_perf_reduction_top10_loops(
             session: Session,
             query_date: date,
-            days_limit: int = 10) -> List[PerfReductionLoop]:
+            days_limit: int = 1) -> List[PerfReductionLoop]:
         """
         Get top 10 performance reduction loops
         """

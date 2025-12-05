@@ -30,23 +30,23 @@ class LoopEvaluationDAO:
         data = evaluation_data.copy()
         
         # 处理整定时间：确保为datetime类型，并规范化为当天00:00:00
-        if 'tuning_time' in data and data['tuning_time']:
-            tuning_time = data['tuning_time']
-            if isinstance(tuning_time, str):
+        if 'assessment_time' in data and data['assessment_time']:
+            assessment_time = data['assessment_time']
+            if isinstance(assessment_time, str):
                 # 字符串转datetime
                 try:
-                    tuning_time = datetime.strptime(tuning_time.split()[0], "%Y-%m-%d")
+                    assessment_time = datetime.strptime(assessment_time.split()[0], "%Y-%m-%d")
                 except ValueError:
-                    logger.warning(f"整定时间格式错误: {tuning_time}，使用当前日期")
-                    tuning_time = datetime.now()
-            elif isinstance(tuning_time, date) and not isinstance(tuning_time, datetime):
+                    logger.warning(f"整定时间格式错误: {assessment_time}，使用当前日期")
+                    assessment_time = datetime.now()
+            elif isinstance(assessment_time, date) and not isinstance(assessment_time, datetime):
                 # date转datetime
-                tuning_time = datetime.combine(tuning_time, datetime.min.time())
-            elif isinstance(tuning_time, datetime):
+                assessment_time = datetime.combine(assessment_time, datetime.min.time())
+            elif isinstance(assessment_time, datetime):
                 # datetime规范化为当天00:00:00
-                tuning_time = datetime.combine(tuning_time.date(), datetime.min.time())
+                assessment_time = datetime.combine(assessment_time.date(), datetime.min.time())
             
-            data['tuning_time'] = tuning_time
+            data['assessment_time'] = assessment_time
         
         # 设置时间戳
         now = datetime.now()
@@ -110,7 +110,7 @@ class LoopEvaluationDAO:
         db: Session,
         loop_name: Optional[str] = None,
         loop_uri: Optional[str] = None,
-        tuning_method: Optional[str] = None,
+        status: Optional[str] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         min_performance_score: Optional[float] = None,
@@ -124,7 +124,7 @@ class LoopEvaluationDAO:
             db: 数据库会话
             loop_name: 回路名称筛选
             loop_uri: 节点uri
-            tuning_method: 整定方法筛选
+            status: 状态筛选
             start_time: 开始时间
             end_time: 结束时间
             min_performance_score: 最小性能评分
@@ -145,14 +145,14 @@ class LoopEvaluationDAO:
             if loop_uri:
                 statement = statement.where(LoopEvaluation.loop_uri.like(f"%{loop_uri}%"))
             # 整定方法筛选（精确匹配）
-            if tuning_method and tuning_method != "全部方法":
-                statement = statement.where(LoopEvaluation.tuning_method == tuning_method)
+            if status and status != "全部方法":
+                statement = statement.where(LoopEvaluation.status == status)
             
             # 时间范围筛选
             if start_time:
                 try:
                     start_dt = datetime.strptime(start_time, "%Y-%m-%d")
-                    statement = statement.where(LoopEvaluation.tuning_time >= start_dt)
+                    statement = statement.where(LoopEvaluation.assessment_time >= start_dt)
                 except ValueError:
                     logger.warning(f"开始时间格式错误: {start_time}")
             
@@ -160,7 +160,7 @@ class LoopEvaluationDAO:
                 try:
                     # 结束时间包含当天的23:59:59
                     end_dt = datetime.strptime(end_time + " 23:59:59", "%Y-%m-%d %H:%M:%S")
-                    statement = statement.where(LoopEvaluation.tuning_time <= end_dt)
+                    statement = statement.where(LoopEvaluation.assessment_time <= end_dt)
                 except ValueError:
                     logger.warning(f"结束时间格式错误: {end_time}")
             
@@ -169,25 +169,25 @@ class LoopEvaluationDAO:
                 statement = statement.where(LoopEvaluation.performance_score >= min_performance_score)
             
             # 按整定时间倒序排列
-            statement = statement.order_by(desc(LoopEvaluation.tuning_time))
+            statement = statement.order_by(desc(LoopEvaluation.assessment_time))
             
             # 获取总数
             count_statement = select(func.count()).select_from(LoopEvaluation)
             # 应用相同的筛选条件到计数查询
             if loop_name:
                 count_statement = count_statement.where(LoopEvaluation.loop_name.like(f"%{loop_name}%"))
-            if tuning_method and tuning_method != "全部方法":
-                count_statement = count_statement.where(LoopEvaluation.tuning_method == tuning_method)
+            if status and status != "全部方法":
+                count_statement = count_statement.where(LoopEvaluation.status == status)
             if start_time:
                 try:
                     start_dt = datetime.strptime(start_time, "%Y-%m-%d")
-                    count_statement = count_statement.where(LoopEvaluation.tuning_time >= start_dt)
+                    count_statement = count_statement.where(LoopEvaluation.assessment_time >= start_dt)
                 except ValueError:
                     pass
             if end_time:
                 try:
                     end_dt = datetime.strptime(end_time + " 23:59:59", "%Y-%m-%d %H:%M:%S")
-                    count_statement = count_statement.where(LoopEvaluation.tuning_time <= end_dt)
+                    count_statement = count_statement.where(LoopEvaluation.assessment_time <= end_dt)
                 except ValueError:
                     pass
             if min_performance_score is not None:
@@ -311,7 +311,7 @@ class LoopEvaluationDAO:
         statement = select(LoopEvaluation).where(
             LoopEvaluation.loop_uri == loop_uri
         ).order_by(
-            desc(LoopEvaluation.tuning_time)
+            desc(LoopEvaluation.assessment_time)
         ).limit(limit)
         
         return db.exec(statement).all()
@@ -463,7 +463,7 @@ class LoopEvaluationDAO:
             results = []
             for upsert_data in upsert_data_list:
                 loop_uri = upsert_data.get('loop_uri')
-                tuning_date = upsert_data.get('tuning_date') or upsert_data.get('tuning_time')
+                tuning_date = upsert_data.get('tuning_date') or upsert_data.get('assessment_time')
                 
                 if not loop_uri or not tuning_date:
                     logger.warning(f"批量upsert数据缺少必要字段: {upsert_data}")
@@ -503,13 +503,6 @@ class LoopEvaluationDAO:
             # 总记录数
             total_count = db.exec(select(func.count()).select_from(LoopEvaluation)).one()
             
-            # 按整定方法统计
-            method_statement = select(
-                LoopEvaluation.tuning_method,
-                func.count(LoopEvaluation.id).label('count')
-            ).group_by(LoopEvaluation.tuning_method)
-            method_stats = db.exec(method_statement).all()
-            
             # 按状态统计
             status_statement = select(
                 LoopEvaluation.status,
@@ -524,7 +517,6 @@ class LoopEvaluationDAO:
             
             return {
                 "total_count": total_count,
-                "method_statistics": {item[0]: item[1] for item in method_stats},
                 "status_statistics": {item[0]: item[1] for item in status_stats},
                 "avg_performance_score": float(avg_performance_score)
             }
@@ -563,20 +555,20 @@ class LoopEvaluationDAO:
                 )
             
             # 按整定时间倒序排列
-            statement = statement.order_by(desc(LoopEvaluation.tuning_time))
+            statement = statement.order_by(desc(LoopEvaluation.assessment_time))
             
             # 时间范围筛选
             if start_time:
                 try:
                     start_dt = datetime.strptime(start_time, "%Y-%m-%d")
-                    statement = statement.where(LoopEvaluation.tuning_time >= start_dt)
+                    statement = statement.where(LoopEvaluation.assessment_time >= start_dt)
                 except ValueError:
                     pass
             
             if end_time:
                 try:
                     end_dt = datetime.strptime(end_time + " 23:59:59", "%Y-%m-%d %H:%M:%S")
-                    statement = statement.where(LoopEvaluation.tuning_time <= end_dt)
+                    statement = statement.where(LoopEvaluation.assessment_time <= end_dt)
                 except ValueError:
                     pass
             
