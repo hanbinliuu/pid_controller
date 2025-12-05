@@ -1,3 +1,4 @@
+import asyncio
 import os
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Header
@@ -285,12 +286,13 @@ async def run_workflow(
                                 yield f"data: {{\"error\": \"工作流执行失败: {error_text.decode()}\", \"status_code\": {response.status_code}}}\n\n"
                                 return
                             
-                            # 逐行读取流式响应
-                            async for line in response.aiter_lines():
-                                if line:
-                                    # 转发SSE格式的数据
-                                    yield f"{line}\n"
-                                    logger.debug(f"流式数据: {line}")
+                            # 逐块读取流式响应（使用原始字节流确保真正的流式传输）
+                            async for chunk in response.aiter_raw():
+                                if chunk:
+                                    # 直接转发原始字节数据块，确保立即传输
+                                    # decoded_chunk = chunk.decode('utf-8')
+                                    yield chunk
+                                    logger.debug(f"流式数据块大小: {len(chunk)} bytes")
                             
                             logger.info("工作流流式执行完成")
                             
