@@ -159,7 +159,7 @@ async def get_performance_status(
     - 计算标准偏差（精确性维度）
     - 计算阀门活动度（高效性维度）
     - 上述指标的综合评分
-    - 性能等级：优秀/良好/一般/差
+    - 性能等级：优秀/良好/中/差
     """
     try:
         result = LoopMonitoringService.calculate_performance_status(

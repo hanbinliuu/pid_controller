@@ -305,14 +305,14 @@ class LoopMonitoringService:
             - precision_std: 标准偏差
             - valve_activity: 阀门活动度
             - comprehensive_score: 综合评分
-            - status: 性能等级（优秀/良好/一般/差）
+            - status: 性能等级（优/良/中/差）
         """
         # 计算时间范围
         end_time = datetime.now()
         start_time = end_time - timedelta(hours=time_span)
         return LoopMonitoringService._calculate_performance_status(loop_uri, start_time, end_time)
 
-
+    # 计算回路性能
     @staticmethod
     def _calculate_performance_status(
             loop_uri: str,
@@ -473,11 +473,11 @@ class LoopMonitoringService:
 
             # 判断性能等级
             if comprehensive_score >= 85:
-                status = "优秀"
+                status = "优"
             elif comprehensive_score >= 70:
-                status = "良好"
+                status = "良"
             elif comprehensive_score >= 50:
-                status = "一般"
+                status = "中"
             else:
                 status = "差"
 
@@ -619,7 +619,7 @@ class LoopMonitoringService:
                         })
 
             # 计算汇总统计
-            successful_results = [r for r in results if r.get('status') in ['优秀', '良好', '一般', '差']]
+            successful_results = [r for r in results if r.get('status') in ['优', '良', '中', '差']]
 
             summary = {
                 "total_loops": len(loop_uris),
@@ -628,9 +628,9 @@ class LoopMonitoringService:
                 "success_rate": round(len(successful_results) / len(loop_uris) * 100, 2) if loop_uris else 0,
                 "average_comprehensive_score": None,
                 "status_distribution": {
-                    "优秀": 0,
-                    "良好": 0,
-                    "一般": 0,
+                    "优": 0,
+                    "良": 0,
+                    "中": 0,
                     "差": 0
                 }
             }
