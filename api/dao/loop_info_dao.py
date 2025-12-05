@@ -116,6 +116,7 @@ class LoopInfoDAO:
         loop_name: Optional[str] = None,
         loop_uri: Optional[str] = None,
         loop_path: Optional[str] = None,
+        loop_type: Optional[str] = None,
         is_active: Optional[bool] = True,
         page_no: int = 1,
         page_size: int = 10
@@ -145,11 +146,13 @@ class LoopInfoDAO:
             
             # 回路URI筛选（模糊匹配）
             if loop_uri:
-                statement = statement.where(LoopInfo.loop_uri.like(f"%{loop_uri}%"))
+                statement = statement.where(LoopInfo.loop_uri==loop_uri)
             
             # 回路路径筛选（模糊匹配）
             if loop_path:
                 statement = statement.where(LoopInfo.loop_path.like(f"%{loop_path}%"))
+            if loop_type:
+                statement = statement.where(LoopInfo.loop_type == loop_type)
             
             # 激活状态筛选
             if is_active is not None:
@@ -164,9 +167,11 @@ class LoopInfoDAO:
             if loop_name:
                 count_statement = count_statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
             if loop_uri:
-                count_statement = count_statement.where(LoopInfo.loop_uri.like(f"%{loop_uri}%"))
+                count_statement = count_statement.where(LoopInfo.loop_uri==loop_uri)
             if loop_path:
                 count_statement = count_statement.where(LoopInfo.loop_path.like(f"%{loop_path}%"))
+            if loop_type:
+                count_statement = count_statement.where(LoopInfo.loop_type == loop_type)
             if is_active is not None:
                 count_statement = count_statement.where(LoopInfo.is_active == is_active)
             

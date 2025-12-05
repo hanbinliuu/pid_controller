@@ -178,6 +178,12 @@ class LoopService:
                 # 根据图片显示的字段，查询相关测点
                 point_names = [
                     'AUTO',  # 自控情况
+                    'PB',          # 比例参数
+                    'TI',          # 积分参数
+                    'TD',          #  Differential参数
+                    'PV',          # 测点值
+                    'SV',          # 目标值
+                    'MV',          # 阀位值
                     'action_type',          # 正反作用
                     'SVH',         # 目标值量程上限
                     'SVL',         # 目标值量程下限
@@ -187,6 +193,8 @@ class LoopService:
                 
                 # 查询测点当前值
                 point_values = client.query_current_raw_values(point_names)
+                auto_control_status =1 if point_values.get('AUTO') in ["auto",1,255,"true","自动"] else 0
+                action_type = "未知" if point_values.get('action_type') is None else point_values.get('action_type')
                 
                 # 转换为响应模型
                 return LoopInfoResponse(
@@ -196,8 +204,14 @@ class LoopService:
                     description=loop_info.get('description'),
                     uriPath=loop_info.get('uriPath'),
                     extendedAttr=loop_info.get('extendedAttr', {}),
-                    auto_control_status=point_values.get('AUTO'),
-                    action_type=point_values.get('action_type'),
+                    auto_control_status=auto_control_status,
+                    action_type=action_type,
+                    pv=point_values.get('PV'),
+                    sv=point_values.get('SV'),
+                    mv=point_values.get('MV'),
+                    pb=point_values.get('PB'),
+                    ti=point_values.get('TI'),
+                    td=point_values.get('TD'),
                     sv_range_max=point_values.get('SVH'),
                     sv_range_min=point_values.get('SVL'),
                     mv_range_max=point_values.get('MVH'),

@@ -89,8 +89,8 @@ class LoopMonitoringService:
                         loop_type = extended_attr.get('loop_type', '未知')
 
                         # 获取自控情况
-                        auto_status = point_values.get('AUTO', 0)  # 1表示自动，0表示手动
-                        control_status = "自动" if auto_status == 1 else "手动"
+                        auto_status = point_values.get('AUTO', 0)  # 255表示自动，0表示手动
+                        control_status = "自动" if auto_status == 255 else "手动"
 
                         # 获取当前值
                         current_pv = point_values.get('PV')

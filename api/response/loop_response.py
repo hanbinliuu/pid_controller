@@ -115,6 +115,12 @@ class LoopInfoResponse(BaseModel):
     extendedAttr: Dict[str, Any] = Field(default_factory=dict, description="回路扩展属性")
     auto_control_status: Optional[Any] = Field(None, description="自控情况")
     action_type: Optional[Any] = Field(None, description="正反作用")
+    pb: Optional[float] = Field(None, description="比例带 (%)")
+    ti: Optional[float] = Field(None, description="积分时间 (秒)")
+    td: Optional[float] = Field(None, description="微分时间 (秒)")
+    pv: Optional[float] = Field(None, description="过程量")
+    mv: Optional[float] = Field(None, description="阀位量")
+    sv: Optional[float] = Field(None, description="目标量")
     sv_range_max: Optional[float] = Field(None, description="目标值量程上限")
     sv_range_min: Optional[float] = Field(None, description="目标值量程下限")
     mv_range_max: Optional[float] = Field(None, description="阀位值量程上限")
@@ -131,6 +137,12 @@ class LoopInfoResponse(BaseModel):
                 "extendedAttr": {"loop_type": "流量"},
                 "auto_control_status": "自动",
                 "action_type": "未知",
+                "pb": 71.43,
+                "ti": 3.11,
+                "td": 2.0,
+                "pv": 0.0,
+                "mv": 0.0,
+                "sv": 0.0,
                 "sv_range_max": 100,
                 "sv_range_min": 0,
                 "mv_range_max": 100,

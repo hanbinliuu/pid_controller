@@ -7,13 +7,17 @@
 
 import logging
 from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
+from sqlmodel import Session
 
 from api.response.loop_response import LoopListResponse, LoopInfoResponse
 from api.response.bff_response import SubmodelListResponse
+from api.services.loop_info_service import LoopInfoService
 from api.services.loop_service import LoopService
 from core.config import Config
 from pydantic import BaseModel, Field
+
+from core.database import get_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -60,18 +64,19 @@ class LoopValuesResponse(BaseModel):
 
 @router.post(
     "/list-loop",
-    summary="查询对应节点下的回路列表",
+    summary="查询对应节点下的回路列表-bff",
     operation_id="查询对应节点下的回路列表",
     description="根据回路类型URI和起始节点URI查询节点下的回路列表，支持分页",
     response_model=LoopListResponse
 )
 async def list_instances_by_uri(
-        node_uri: List[str] = Query(
+        db: Session = Depends(get_db),
+        node_uri: str = Query(
             None,
             description="起始节点URI",
             example=[Config.BFF_MODEL_ROOT_URI]
         ),
-        type_uri: List[str] = Query(
+        type_uri: str = Query(
             None,
             description="类型uri",
         ),
@@ -106,8 +111,12 @@ async def list_instances_by_uri(
     try:
         if node_uri is None:
             node_uri = [Config.BFF_MODEL_ROOT_URI]
+        else:
+            node_uri = [node_uri]
         if type_uri is None:
             type_uri = [Config.BFF_MODEL_LOOP_MODEL_URI]
+        else:
+            type_uri = [type_uri]
 
         # 调用Service层查询回路列表
         result = LoopService.list_instances_by_node(
@@ -117,6 +126,8 @@ async def list_instances_by_uri(
             page_no=page_no,
             page_size=page_size
         )
+
+
 
         return result
 
@@ -136,7 +147,7 @@ async def list_instances_by_uri(
 )
 async def query_loop_info(
         loop_uri: Optional[str] = Query(
-            None,
+            ...,
             description="回路 URI，默认从 BFF_MODEL_LOOP_URI 读取",
             example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
         )
