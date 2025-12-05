@@ -14,6 +14,8 @@ class FusionStrategy(Enum):
     RECENCY_WEIGHTED = "recency_weighted"    # 时效加权
     CROSS_VALIDATION = "cross_validation"    # 交叉验证
     ROBUST_FUSION = "robust_fusion"          # 鲁棒融合
+    MEDIAN_FUSION = "median_fusion"          # 中位数融合
+    QUALITY_WEIGHTED = "quality_weighted"    # 质量加权融合
 
 
 @dataclass
@@ -122,33 +124,64 @@ class PIDFusionStrategy:
             FusionStrategy.RECENCY_WEIGHTED: self._recency_weighted,
             FusionStrategy.CROSS_VALIDATION: self._cross_validation,
             FusionStrategy.ROBUST_FUSION: self._robust_fusion,
+            FusionStrategy.MEDIAN_FUSION: self._median_fusion,
+            FusionStrategy.QUALITY_WEIGHTED: self._quality_weighted_fusion,
         }
         
         method = strategy_methods.get(strategy, self._weighted_fusion)
         return method(valid_windows, reasoning)
     
     def _filter_windows(self, windows: List[WindowResult]) -> List[WindowResult]:
-        """过滤异常窗口"""
+        """
+        过滤异常窗口
+        
+        使用更严格的异常值检测：
+        1. 基于四分位距(IQR)检测K值异常
+        2. 过滤R²过低的窗口
+        3. 过滤K值符号不一致的窗口
+        """
         if len(windows) <= 1:
             return windows
         
-        K_values = [w.K for w in windows]
+        K_values = np.array([w.K for w in windows])
+        
+        # 使用IQR方法检测K值异常
         K_median = np.median(K_values)
-        K_median_abs = abs(K_median)
+        K_q1, K_q3 = np.percentile(K_values, [25, 75])
+        K_iqr = K_q3 - K_q1
+        
+        # IQR边界（更严格：1.5倍IQR）
+        if K_iqr > self.EPSILON:
+            K_lower = K_q1 - 1.5 * K_iqr
+            K_upper = K_q3 + 1.5 * K_iqr
+        else:
+            # IQR太小，使用中位数的2倍范围
+            K_median_abs = abs(K_median) + self.EPSILON
+            K_lower = K_median - 2 * K_median_abs
+            K_upper = K_median + 2 * K_median_abs
+        
+        self.log(f"   K值过滤: 中位数={K_median:.4f}, IQR范围=[{K_lower:.4f}, {K_upper:.4f}]")
         
         valid = []
         for w in windows:
-            if K_median_abs > self.EPSILON:
-                k_ratio = abs(w.K) / K_median_abs
-                sign_mismatch = np.sign(w.K) != np.sign(K_median) and abs(w.K) > self.EPSILON
-                if k_ratio < 1/self.K_OUTLIER_FACTOR or k_ratio > self.K_OUTLIER_FACTOR or sign_mismatch:
-                    continue
+            # 检查K值是否在IQR范围内
+            if w.K < K_lower or w.K > K_upper:
+                self.log(f"   窗口{w.window_idx+1}: K={w.K:.4f} 超出IQR范围，过滤")
+                continue
             
+            # 检查K值符号一致性
+            if np.sign(w.K) != np.sign(K_median) and abs(w.K) > self.EPSILON and abs(K_median) > self.EPSILON:
+                self.log(f"   窗口{w.window_idx+1}: K符号不一致，过滤")
+                continue
+            
+            # R²阈值检查
             if w.r2 < self.MIN_R2_THRESHOLD:
+                self.log(f"   窗口{w.window_idx+1}: R²={w.r2:.3f} < {self.MIN_R2_THRESHOLD}，过滤")
                 continue
             
             valid.append(w)
         
+        self.log(f"   过滤后保留 {len(valid)}/{len(windows)} 个窗口")
         return valid
     
     def _determine_strategy(self, windows: List[WindowResult]) -> Tuple[FusionStrategy, str]:
@@ -156,21 +189,33 @@ class PIDFusionStrategy:
         K_values = [w.K for w in windows]
         K_cv = self._safe_cv(K_values)
         
+        r2_values = [w.r2 for w in windows]
+        r2_mean = np.mean(r2_values)
+        r2_std = np.std(r2_values)
+        
         data_points = [w.data_points for w in windows]
         data_cv = np.std(data_points) / np.mean(data_points) if np.mean(data_points) > 0 else 0
         
+        # 如果R²方差大，说明各段拟合质量差异大，使用质量加权
+        if r2_std > 0.2 and r2_mean < 0.7:
+            return FusionStrategy.QUALITY_WEIGHTED, f"R²方差大({r2_std:.2f})，质量加权融合"
+        
         if K_cv < self.CV_THRESHOLD_CONSISTENT:
+            # K一致性好
             if data_cv > 0.5 and len(windows) >= 2:
                 return FusionStrategy.ROBUST_FUSION, f"K一致(CV={K_cv:.1%})，鲁棒融合"
-            else:
+            elif r2_mean >= 0.7:
                 return FusionStrategy.WEIGHTED_FUSION, f"K一致(CV={K_cv:.1%})，R²加权融合"
+            else:
+                return FusionStrategy.MEDIAN_FUSION, f"K一致(CV={K_cv:.1%})，中位数融合"
         elif K_cv < self.CV_THRESHOLD_ACCEPTABLE:
             if len(windows) >= 3:
                 return FusionStrategy.CROSS_VALIDATION, f"K有差异(CV={K_cv:.1%})，交叉验证"
             else:
-                return FusionStrategy.BEST_WINDOW, f"K有差异(CV={K_cv:.1%})，最佳窗口"
+                return FusionStrategy.MEDIAN_FUSION, f"K有差异(CV={K_cv:.1%})，中位数融合"
         else:
-            return FusionStrategy.CONSERVATIVE, f"K差异大(CV={K_cv:.1%})，保守选择"
+            # K差异大，使用中位数更稳健
+            return FusionStrategy.MEDIAN_FUSION, f"K差异大(CV={K_cv:.1%})，中位数融合"
     
     def _weighted_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
         """R² 加权融合"""
@@ -240,10 +285,15 @@ class PIDFusionStrategy:
         )
     
     def _cross_validation(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
-        """交叉验证策略"""
+        """
+        交叉验证策略
+        
+        改进：使用得分加权平均，而非只选最佳窗口
+        """
         if len(windows) < 2:
             return self._best_window(windows, reasoning)
         
+        # 计算每个窗口的交叉验证得分
         scores = []
         for i, w_i in enumerate(windows):
             self_r2 = w_i.r2
@@ -261,15 +311,31 @@ class PIDFusionStrategy:
             
             avg_sim = np.mean(similarities) if similarities else 0
             score = self_r2 * 0.6 + avg_sim * 0.4
-            scores.append((w_i, score))
+            scores.append(score)
         
-        best_window, best_score = max(scores, key=lambda x: x[1])
+        # 使用得分作为权重进行加权平均
+        total_score = sum(scores)
+        if total_score < self.EPSILON:
+            return self._best_window(windows, reasoning)
+        
+        # 归一化权重
+        weights = [s / total_score for s in scores]
+        
+        K, T1, T2, L = self._weighted_average_params(windows, weights)
+        
+        # 计算置信度
+        confidence = sum(w.r2 * wt for w, wt in zip(windows, weights))
+        
+        # 记录主要贡献的窗口（权重>15%）
+        windows_used = [w.window_idx for w, wt in zip(windows, weights) if wt > 0.15]
+        if not windows_used:
+            windows_used = [max(zip(windows, weights), key=lambda x: x[1])[0].window_idx]
         
         return FusionResult(
-            K=best_window.K, T1=best_window.T1, T2=best_window.T2, L=best_window.L,
+            K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.CROSS_VALIDATION,
-            confidence=min(best_score, 1.0),
-            windows_used=[best_window.window_idx],
+            confidence=min(confidence, 1.0),
+            windows_used=windows_used,
             reasoning=reasoning
         )
     
@@ -303,5 +369,70 @@ class PIDFusionStrategy:
             strategy_used=FusionStrategy.ROBUST_FUSION,
             confidence=min(r2_weighted, 1.0),
             windows_used=[w.window_idx for w in windows],
+            reasoning=reasoning
+        )
+    
+    def _median_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+        """
+        中位数融合策略
+        
+        使用中位数而非均值，对异常值更鲁棒
+        """
+        if len(windows) < 2:
+            return self._best_window(windows, reasoning)
+        
+        K = float(np.median([w.K for w in windows]))
+        T1 = float(np.median([w.T1 for w in windows]))
+        T2 = float(np.median([w.T2 for w in windows]))
+        L = float(np.median([w.L for w in windows]))
+        
+        r2_median = float(np.median([w.r2 for w in windows]))
+        K_cv = self._safe_cv([w.K for w in windows])
+        confidence = r2_median * (1 - min(K_cv, 0.5))
+        
+        return FusionResult(
+            K=K, T1=T1, T2=T2, L=L,
+            strategy_used=FusionStrategy.MEDIAN_FUSION,
+            confidence=min(confidence, 1.0),
+            windows_used=[w.window_idx for w in windows],
+            reasoning=reasoning
+        )
+    
+    def _quality_weighted_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+        """
+        质量加权融合策略
+        
+        根据拟合质量(R²)进行更激进的加权，高质量段权重更大
+        """
+        if len(windows) < 2:
+            return self._best_window(windows, reasoning)
+        
+        # 使用R²的平方作为权重，让高质量段占主导
+        weights = [(w.r2 ** 2) * w.data_points for w in windows]
+        total_weight = sum(weights)
+        
+        if total_weight < self.EPSILON:
+            # 所有权重都很小，回退到中位数
+            return self._median_fusion(windows, reasoning)
+        
+        K = sum(w.K * wt for w, wt in zip(windows, weights)) / total_weight
+        T1 = sum(w.T1 * wt for w, wt in zip(windows, weights)) / total_weight
+        T2 = sum(w.T2 * wt for w, wt in zip(windows, weights)) / total_weight
+        L = sum(w.L * wt for w, wt in zip(windows, weights)) / total_weight
+        
+        # 计算置信度
+        r2_weighted = sum(w.r2 * wt for w, wt in zip(windows, weights)) / total_weight
+        
+        # 找出主要贡献的窗口（权重占比>10%）
+        windows_used = [w.window_idx for w, wt in zip(windows, weights) 
+                       if wt / total_weight > 0.1]
+        if not windows_used:
+            windows_used = [max(zip(windows, weights), key=lambda x: x[1])[0].window_idx]
+        
+        return FusionResult(
+            K=K, T1=T1, T2=T2, L=L,
+            strategy_used=FusionStrategy.QUALITY_WEIGHTED,
+            confidence=min(r2_weighted, 1.0),
+            windows_used=windows_used,
             reasoning=reasoning
         )

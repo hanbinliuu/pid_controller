@@ -87,17 +87,11 @@ class HistoricalData:
         if not data:
             raise ValueError("输入数据为空")
         
-        n = len(data)
-        timestamps = np.empty(n, dtype=np.float64)
-        pvs = np.empty(n, dtype=np.float64)
-        svs = np.empty(n, dtype=np.float64)
-        mvs = np.empty(n, dtype=np.float64)
-        
-        for i, item in enumerate(data):
-            timestamps[i] = item.get('timestamp', 0)
-            pvs[i] = item.get('pv', 0.0)
-            svs[i] = item.get('sv', 0.0)
-            mvs[i] = item.get('mv', 0.0)
+        # 向量化解析，避免逐行循环
+        timestamps = np.array([item.get('timestamp', 0) for item in data], dtype=np.float64)
+        pvs = np.array([item.get('pv', 0.0) for item in data], dtype=np.float64)
+        svs = np.array([item.get('sv', 0.0) for item in data], dtype=np.float64)
+        mvs = np.array([item.get('mv', 0.0) for item in data], dtype=np.float64)
         
         return cls(timestamp=timestamps, pv=pvs, sv=svs, mv=mvs)
     
@@ -200,14 +194,21 @@ class ModelBase:
             return formatter(params)
         return {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0}
     
-    def calculate_r2(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        """计算 R²"""
+    def calculate_r2(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                      clip: bool = True) -> float:
+        """计算 R²
+        
+        Args:
+            y_true: 真实值
+            y_pred: 预测值
+            clip: 是否截断到 [0, 1]，默认 True。设为 False 可获取原始值用于诊断
+        """
         ss_res = np.sum((y_true - y_pred) ** 2)
         ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
         if ss_tot < self._epsilon:
             return 0.0
         r2 = 1 - (ss_res / ss_tot)
-        return np.clip(r2, 0.0, 1.0)
+        return float(np.clip(r2, 0.0, 1.0)) if clip else float(r2)
     
     def calculate_rmse(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """计算 RMSE"""
@@ -335,6 +336,22 @@ class ModelBase:
         """日志输出"""
         if self.verbose:
             print(msg)
+    
+    @staticmethod
+    def _ensure_odd_window(window: int, min_val: int = 3) -> int:
+        """确保窗口大小为奇数且不小于 min_val"""
+        window = max(min_val, window)
+        return window + 1 if window % 2 == 0 else window
+    
+    @staticmethod
+    def _moving_average(data: np.ndarray, window: int) -> np.ndarray:
+        """移动平均滤波（边缘保留原始值）"""
+        kernel = np.ones(window) / window
+        smoothed = np.convolve(data, kernel, mode='same')
+        half_w = window // 2
+        smoothed[:half_w] = data[:half_w]
+        smoothed[-half_w:] = data[-half_w:]
+        return smoothed
     
     def _estimate_u0_baseline(self, u: np.ndarray) -> float:
         """
@@ -827,12 +844,30 @@ class ModelFitter(ModelBase):
         return None
     
     def _extract_all_segments(self, hist_data: HistoricalData, 
-                               tuning_windows: List[TuningWindow]
+                               tuning_windows: List[TuningWindow],
+                               pre_steady_seconds: float = 60.0
                                ) -> List[HistoricalData]:
-        """提取所有扰动段数据"""
+        """
+        提取所有扰动段数据，包含阶跃前的稳态数据
+        
+        **关键改进**：在每个扰动窗口前加入一段稳态数据（默认60秒）
+        这样辨识算法能看到完整的阶跃响应：稳态→阶跃→响应
+        
+        Args:
+            hist_data: 完整历史数据
+            tuning_windows: 扰动窗口列表
+            pre_steady_seconds: 窗口前加入的稳态数据时长（秒）
+        
+        Returns:
+            包含稳态+扰动的数据段列表
+        """
         segments = []
         for w in tuning_windows:
-            window_dict = {'start_time': w.start_time, 'end_time': w.end_time}
+            window_dict = {
+                'start_time': w.start_time, 
+                'end_time': w.end_time,
+                'pre_steady_seconds': pre_steady_seconds  # 传递稳态时长参数
+            }
             seg = self._extract_segment(hist_data, window_dict)
             if seg is not None and len(seg) >= 20:
                 segments.append(seg)
@@ -840,9 +875,18 @@ class ModelFitter(ModelBase):
     
     def _extract_segment(self, hist_data: HistoricalData, 
                          window: Dict) -> Optional[HistoricalData]:
-        """提取时间窗口数据"""
+        """
+        提取时间窗口数据，包含阶跃前的稳态数据
+        
+        **改进**：在扰动窗口前加入一段稳态数据，让辨识算法能看到：
+        - 阶跃前的稳态PV和MV基准值
+        - 完整的阶跃响应过程（稳态→阶跃→响应）
+        
+        窗口结构：[稳态 pre_steady_seconds] + [扰动段 start_time~end_time]
+        """
         start_time = window.get('start_time')
         end_time = window.get('end_time')
+        pre_steady_seconds = window.get('pre_steady_seconds', 60.0)  # 默认60秒稳态
         
         if start_time is None or end_time is None:
             return None
@@ -852,10 +896,27 @@ class ModelFitter(ModelBase):
             start_ts = self._to_timestamp_ms(start_time)
             end_ts = self._to_timestamp_ms(end_time)
             
-            mask = (hist_data.timestamp >= start_ts) & (hist_data.timestamp <= end_ts)
+            # ============================================================
+            # 关键改进：将起始时间前移，包含稳态数据
+            # ============================================================
+            pre_steady_ms = pre_steady_seconds * 1000  # 转换为毫秒
+            extended_start_ts = start_ts - pre_steady_ms
+            
+            # 确保不超出数据范围
+            if len(hist_data.timestamp) > 0:
+                data_start_ts = hist_data.timestamp[0]
+                extended_start_ts = max(extended_start_ts, data_start_ts)
+            
+            # 提取扩展后的数据段
+            mask = (hist_data.timestamp >= extended_start_ts) & (hist_data.timestamp <= end_ts)
             indices = np.where(mask)[0]
             
-            self.log(f"📍 窗口提取: [{start_ts} ~ {end_ts}] -> {len(indices)} 点")
+            # 计算实际包含的稳态时长
+            actual_pre_steady = 0
+            if len(indices) > 0 and hist_data.timestamp[indices[0]] < start_ts:
+                actual_pre_steady = (start_ts - hist_data.timestamp[indices[0]]) / 1000
+            
+            self.log(f"📍 窗口提取: 扰动[{start_ts}~{end_ts}] + 稳态前{actual_pre_steady:.0f}s -> {len(indices)} 点")
             
             if len(indices) < 20:
                 return None
@@ -936,18 +997,24 @@ class ModelFitter(ModelBase):
                     params = self.identify_model(t, y, u, model_type)
                     params_dict = self.normalize_params(params, model_type)
                     
-                    # 计算窗口内 R²
+                    # 计算窗口内 R²（同时计算真实值用于诊断）
                     y_pred = self.simulate_model(params, t, u, y0, model_type)
-                    r2 = self.calculate_r2(y, y_pred)
+                    
+                    # 使用统一的 R² 计算方法
+                    r2_raw = self.calculate_r2(y, y_pred, clip=False)  # 原始值用于诊断
+                    r2 = max(0.0, min(1.0, r2_raw))  # 截断后的R²
                     
                     model_window_results[model_type].append({
                         'params': params_dict,
                         'r2': r2,
+                        'r2_raw': r2_raw,  # 保留真实R²用于诊断
                         'window_idx': seg_idx + 1,
-                        'data_points': len(y)  # 记录数据点数
+                        'data_points': len(y)
                     })
                     
-                    self.log(f"   {model_type} 窗口{seg_idx+1}: R²={r2:.4f}, K={params_dict['K']:.4f}")
+                    # 显示真实R²（负值说明参数方向错误或基准值问题）
+                    r2_info = f"R²={r2:.4f}" if r2_raw >= 0 else f"R²={r2:.4f}(真实:{r2_raw:.2f})"
+                    self.log(f"   {model_type} 窗口{seg_idx+1}: {r2_info}, K={params_dict['K']:.4f}")
                     
                 except Exception as e:
                     self.log(f"⚠️ {model_type} 窗口 {seg_idx+1} 计算失败: {e}")
@@ -1131,13 +1198,8 @@ class ModelFitter(ModelBase):
             avg_window = min(7, len(y) // 30)
         
         # 确保窗口大小为奇数且至少为3
-        median_window = max(3, median_window)
-        if median_window % 2 == 0:
-            median_window += 1
-        
-        avg_window = max(3, avg_window)
-        if avg_window % 2 == 0:
-            avg_window += 1
+        median_window = self._ensure_odd_window(median_window)
+        avg_window = self._ensure_odd_window(avg_window)
         
         # Step 1: 中值滤波去除脉冲噪声
         try:
@@ -1148,16 +1210,8 @@ class ModelFitter(ModelBase):
             u_median = u.copy()
         
         # Step 2: 移动平均滤波平滑数据
-        def moving_average(data, w):
-            kernel = np.ones(w) / w
-            smoothed = np.convolve(data, kernel, mode='same')
-            half_w = w // 2
-            smoothed[:half_w] = data[:half_w]
-            smoothed[-half_w:] = data[-half_w:]
-            return smoothed
-        
-        y_smooth = moving_average(y_median, avg_window)
-        u_smooth = moving_average(u_median, avg_window) if is_on_off else u_median
+        y_smooth = self._moving_average(y_median, avg_window)
+        u_smooth = self._moving_average(u_median, avg_window) if is_on_off else u_median
         
         return y_smooth, u_smooth
     
@@ -1175,16 +1229,20 @@ class ModelFitter(ModelBase):
         
         n = len(y)
         
+        # 数据点太少，无法有效提取趋势，直接返回原始数据
+        if n < 20:
+            self.log(f"   ⚠️ 数据点不足({n}点)，跳过趋势提取")
+            return y.copy(), u.copy()
+        
         # ============================================================
         # Step 1: PV趋势提取 - 使用超大窗口Savitzky-Golay滤波
         # ============================================================
-        # 窗口大小：数据长度的5%，但至少51点
-        sg_window = max(51, n // 20)
+        # 窗口大小：数据长度的5%，但需限制在有效范围内
+        sg_window = max(5, n // 20)
+        sg_window = min(sg_window, n - 2 if n > 4 else max(3, n - 1))  # 不超过数据长度
         if sg_window % 2 == 0:
             sg_window += 1
-        sg_window = min(sg_window, n - 2)  # 不超过数据长度
-        if sg_window % 2 == 0:
-            sg_window -= 1
+        sg_window = max(5, min(sg_window, n if n % 2 == 1 else n - 1))  # SG滤波至少需要5点
         
         try:
             # 多次滤波以获得更平滑的趋势
@@ -1203,10 +1261,12 @@ class ModelFitter(ModelBase):
                     
         except Exception as e:
             self.log(f"   ⚠️ SG滤波失败: {e}, 使用移动平均")
-            # 回退到超大窗口移动平均
-            window = max(101, n // 10)
+            # 回退到移动平均（窗口不超过数据长度）
+            window = max(5, n // 10)
+            window = min(window, n - 2 if n > 2 else n)
             if window % 2 == 0:
                 window += 1
+            window = max(3, window)  # 至少3点
             kernel = np.ones(window) / window
             y_trend = np.convolve(y, kernel, mode='same')
         
@@ -1217,14 +1277,20 @@ class ModelFitter(ModelBase):
         mv_window = max(51, n // 20)
         if mv_window % 2 == 0:
             mv_window += 1
+        # 修复：确保窗口不超过数据长度
+        mv_window = min(mv_window, n - 2 if n > 2 else n)
+        if mv_window % 2 == 0:
+            mv_window -= 1
+        mv_window = max(3, mv_window)  # 至少3点
         
         kernel = np.ones(mv_window) / mv_window
         u_trend = np.convolve(u, kernel, mode='same')
         
-        # 边缘处理
-        half_w = mv_window // 2
-        u_trend[:half_w] = np.mean(u[:mv_window])
-        u_trend[-half_w:] = np.mean(u[-mv_window:])
+        # 边缘处理（确保索引不越界）
+        half_w = min(mv_window // 2, n // 2)
+        if half_w > 0:
+            u_trend[:half_w] = np.mean(u[:min(mv_window, n)])
+            u_trend[-half_w:] = np.mean(u[-min(mv_window, n):])
         
         self.log(f"   🔧 趋势提取: SG窗口={sg_window}, MV窗口={mv_window}")
         self.log(f"      PV趋势范围: [{np.min(y_trend):.2f}, {np.max(y_trend):.2f}]")
@@ -1235,74 +1301,112 @@ class ModelFitter(ModelBase):
     def _select_best_window_params(self, model_window_results: Dict[str, List[Dict]]
                                     ) -> Dict[str, Dict[str, float]]:
         """
-        使用分级融合策略选择最佳参数
+        多扰动段参数融合策略（稳健中位数方法）
         
-        分级策略：
-        1. K 一致性好 (CV < 20%) → R² 加权融合
-        2. K 有差异 (20% ≤ CV < 50%) → 只用最佳窗口
-        3. K 差异大 (CV ≥ 50%) → 保守选择
+        ============================================================
+        核心逻辑：
+        ============================================================
+        1. 过滤异常窗口：R² < 0.3 或 K值符号与多数不一致
+        2. 对有效窗口：计算 K, T1, T2, L 的中位数
+        3. 如果无有效窗口：回退到 R² 最高的窗口
+        
+        **为什么用中位数**：
+        - 中位数对异常值不敏感
+        - 多个扰动段的参数应该相近（同一过程）
+        - 中位数能自动过滤极端值
+        ============================================================
         """
-        # 初始化融合策略
-        fusion_strategy = PIDFusionStrategy(verbose=self.verbose)
+        R2_THRESHOLD = 0.3  # 最低 R² 阈值
         
         result = {}
+        
+        self.log(f"\n{'='*60}")
+        self.log("📊 多窗口参数融合（稳健中位数方法）")
+        self.log('='*60)
+        
         for model_type in self.CANDIDATE_MODELS:
             window_results = model_window_results[model_type]
             if not window_results:
                 continue
             
-            # 转换为 WindowResult 格式
-            window_objs = []
-            for w in window_results:
-                window_objs.append(WindowResult(
-                    window_idx=w['window_idx'],
-                    K=w['params']['K'],
-                    T1=w['params']['T1'],
-                    T2=w['params']['T2'],
-                    L=w['params']['L'],
-                    r2=w['r2'],
-                    data_points=w.get('data_points', 50)
-                ))
+            n_windows = len(window_results)
             
-            # 使用分级策略融合
-            try:
-                fusion_result = fusion_strategy.fuse(window_objs)
+            # 提取各窗口的参数
+            K_values = np.array([r['params']['K'] for r in window_results])
+            T1_values = np.array([r['params']['T1'] for r in window_results])
+            T2_values = np.array([r['params']['T2'] for r in window_results])
+            L_values = np.array([r['params']['L'] for r in window_results])
+            r2_values = np.array([r['r2'] for r in window_results])
+            window_indices = [r['window_idx'] for r in window_results]
+            
+            # ============================================================
+            # Step 1: 过滤异常窗口
+            # ============================================================
+            # 条件1: R² >= 阈值
+            r2_mask = r2_values >= R2_THRESHOLD
+            
+            # 条件2: K值符号与多数一致（正/负一致性）
+            K_sign_majority = np.sign(np.median(K_values))  # 多数K的符号
+            sign_mask = np.sign(K_values) == K_sign_majority
+            
+            # 组合条件
+            valid_mask = r2_mask & sign_mask
+            valid_count = np.sum(valid_mask)
+            
+            self.log(f"\n📊 {model_type}: {n_windows} 个窗口")
+            
+            # 显示过滤情况
+            for i, (r2, K, idx) in enumerate(zip(r2_values, K_values, window_indices)):
+                status = "✓" if valid_mask[i] else "✗"
+                reason = ""
+                if not r2_mask[i]:
+                    reason = f"R²<{R2_THRESHOLD}"
+                elif not sign_mask[i]:
+                    reason = f"K符号异常"
+                self.log(f"   窗口{idx}: K={K:.4f}, R²={r2:.4f} {status} {reason}")
+            
+            # ============================================================
+            # Step 2: 计算参数
+            # ============================================================
+            if valid_count >= 1:
+                # 使用有效窗口计算中位数
+                K_final = float(np.median(K_values[valid_mask]))
+                T1_final = float(np.median(T1_values[valid_mask]))
+                T2_final = float(np.median(T2_values[valid_mask]))
+                L_final = float(np.median(L_values[valid_mask]))
+                best_r2 = float(np.max(r2_values[valid_mask]))
+                valid_indices = [window_indices[i] for i in range(n_windows) if valid_mask[i]]
+                method = f'中位数({valid_count}/{n_windows}窗口)'
                 
-                result[model_type] = {
-                    'K': fusion_result.K,
-                    'T1': fusion_result.T1,
-                    'T2': fusion_result.T2,
-                    'L': fusion_result.L,
-                    'window_count': len(fusion_result.windows_used),
-                    'best_window': fusion_result.windows_used[0] if fusion_result.windows_used else 1,
-                    'best_r2': fusion_result.confidence,
-                    'valid_window_indices': fusion_result.windows_used,
-                    'fusion_strategy': fusion_result.strategy_used.value,
-                    'fusion_reasoning': fusion_result.reasoning
-                }
+                self.log(f"   → 使用 {valid_count} 个有效窗口计算中位数")
+            else:
+                # 回退：选择 R² 最高的窗口
+                best_idx = np.argmax(r2_values)
+                K_final = float(K_values[best_idx])
+                T1_final = float(T1_values[best_idx])
+                T2_final = float(T2_values[best_idx])
+                L_final = float(L_values[best_idx])
+                best_r2 = float(r2_values[best_idx])
+                valid_indices = [window_indices[best_idx]]
+                method = f'回退到窗口{window_indices[best_idx]}(无有效窗口)'
                 
-                p = result[model_type]
-                self.log(f"📊 {model_type}: {fusion_result.strategy_used.value} "
-                         f"(窗口{fusion_result.windows_used}), "
-                         f"K={p['K']:.4f}, T1={p['T1']:.4f}, L={p['L']:.4f}")
-                
-            except Exception as e:
-                self.log(f"⚠️ {model_type} 融合失败: {e}")
-                # 回退到简单的最佳窗口选择
-                if window_results:
-                    best = max(window_results, key=lambda x: x['r2'])
-                    result[model_type] = {
-                        'K': best['params']['K'],
-                        'T1': best['params']['T1'],
-                        'T2': best['params']['T2'],
-                        'L': best['params']['L'],
-                        'window_count': 1,
-                        'best_window': best['window_idx'],
-                        'best_r2': best['r2'],
-                        'valid_window_indices': [best['window_idx']],
-                        'fusion_strategy': 'fallback',
-                        'fusion_reasoning': f'融合失败，回退到最佳窗口: {e}'
-                    }
+                self.log(f"   → 无有效窗口，回退到R²最高的窗口{window_indices[best_idx]}")
+            
+            self.log(f"   → 最终KTL: K={K_final:.4f}, T1={T1_final:.2f}, "
+                     f"T2={T2_final:.2f}, L={L_final:.2f}")
+            
+            result[model_type] = {
+                'K': K_final,
+                'T1': T1_final,
+                'T2': T2_final,
+                'L': L_final,
+                'window_count': valid_count if valid_count >= 1 else 1,
+                'best_window': valid_indices[0] if valid_indices else 1,
+                'best_r2': best_r2,
+                'valid_window_indices': valid_indices,
+                'fusion_strategy': method,
+                'fusion_reasoning': f'{method}'
+            }
         
         return result
     
@@ -1367,43 +1471,50 @@ class ModelFitter(ModelBase):
     
     def _calculate_pid(self, K: float, T1: float, T2: float, L: float,
                        model_type: str, lambda_factor: float) -> Dict[str, float]:
-        """计算 PID 参数（Lambda 方法）"""
-        K = max(abs(K), self._epsilon)
+        """计算 PID 参数（Lambda 方法）
+        
+        注意：保留 K 的符号，反向作用系统（K<0）会导致 Kp 为负
+        """
+        # 保留 K 的符号，用于反向作用系统
+        K_sign = np.sign(K) if K != 0 else 1.0
+        K_abs = max(abs(K), self._epsilon)
         T1 = max(T1, self._epsilon)
         L = max(L, 0.0)
         T_eq = T1 + T2 if T2 > 0 else T1
         lambda_val = T_eq * lambda_factor
         
-        # 一阶/二阶模型
+        # 一阶/二阶模型（使用 K_abs 计算幅值，K_sign 确定方向）
         if model_type in [ModelType.FOPDT, ModelType.FO]:
-            denom = K * (lambda_val + L / 2)
+            denom = K_abs * (lambda_val + L / 2)
             if denom < self._epsilon:
                 Kp, Ti, Td = 1.0, 20.0, 0.0
             else:
-                Kp = (T1 + L / 2) / denom
+                Kp = K_sign * (T1 + L / 2) / denom  # 保留符号
                 Ti = T1 + L / 2
                 Td = (T1 * L) / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
         
         elif model_type in [ModelType.SO, ModelType.SOPDT]:
-            denom = K * (lambda_val + L / 2) if L > 0 else K * lambda_val
+            denom = K_abs * (lambda_val + L / 2) if L > 0 else K_abs * lambda_val
             if denom < self._epsilon:
                 Kp, Ti, Td = 1.0, 20.0, 0.0
             else:
-                Kp = T_eq / denom
+                Kp = K_sign * T_eq / denom  # 保留符号
                 Ti = T_eq
                 Td = (T1 * T2) / T_eq if T_eq > self._epsilon else 0.0
         
         elif model_type == ModelType.FOPI:
-            if K < self._epsilon:
+            if K_abs < self._epsilon:
                 Kp, Ti, Td = 1.0, 20.0, 0.0
             else:
                 lv = max(T1 * 0.8, 0.2) if T1 > 0 else 0.2
-                Kp = T1 / (K * lv) if T1 > 0 else 1.0 / (K * lv)
+                Kp = K_sign * (T1 / (K_abs * lv) if T1 > 0 else 1.0 / (K_abs * lv))  # 保留符号
                 Ti, Td = max(T1, 1.0), 0.0
         else:
             Kp, Ti, Td = 1.0, 20.0, 0.0
         
-        Kp, Ti, Td = max(0.01, Kp), max(0.1, Ti), max(0.0, Td)
+        # 限幅时保留符号（反向作用系统 Kp 可为负）
+        Kp = np.sign(Kp) * max(0.01, abs(Kp)) if Kp != 0 else 0.01
+        Ti, Td = max(0.1, Ti), max(0.0, Td)
         Ki = Kp / Ti if Ti > self._epsilon else 0.0
         Kd = Kp * Td
         

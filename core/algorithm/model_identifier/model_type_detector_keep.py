@@ -20,13 +20,38 @@ except ImportError:
 
 class ModelFitterSimple(ModelBase):
     """
-
-    算法流程：
-    1. 逐窗口、逐模型辨识 KTL（每个模型类型在每个窗口独立计算参数）
-    2. 每种模型取 KTL 中位数（对所有窗口的参数取中位数）
-    3. 用中位数 KTL 在全部数据上进行模型拟合，计算 R² 评分
-    4. 选 R² 最高的模型作为最终模型，输出其参数
+    简化版模型拟合器
     
+    ============================================================
+    算法流程（严格按照需求）：
+    ============================================================
+    
+    Step 1: 逐模型、逐窗口计算 KTL
+    --------------------------------------------------------
+        for model_type in [FOPDT, FO, SO, SOPDT, FOPI]:
+            for window in tuning_windows:
+                计算该窗口的 K, T, L 参数
+    
+    Step 2: 每种模型取 KTL 中位数
+    --------------------------------------------------------
+        for model_type in all_models:
+            K_median = median([K1, K2, ..., Kn])  # 各窗口K的中位数
+            T1_median = median([T1_1, T1_2, ..., T1_n])
+            T2_median = median([T2_1, T2_2, ..., T2_n])
+            L_median = median([L1, L2, ..., Ln])
+    
+    Step 3: 全部数据评估
+    --------------------------------------------------------
+        for model_type in all_models:
+            用该模型的中位数 KTL 在全部扰动段数据上拟合
+            计算 R² 评分
+    
+    Step 4: 选择最佳模型
+    --------------------------------------------------------
+        选择 R² 最高的模型作为最终模型
+        输出该模型的 KTL 参数、PID 参数、拟合结果
+    
+    ============================================================
     使用示例:
         >>> fitter = ModelFitterSimple(verbose=True)
         >>> result = fitter.fit(tuning_input, raw_data)
@@ -81,24 +106,27 @@ class ModelFitterSimple(ModelBase):
         self.log(f"📊 提取 {len(segments)} 个有效扰动段")
         
         # ============================================================
-        # 3. 逐窗口、逐模型计算 KTL
+        # Step 1: 逐模型、逐窗口计算 KTL
         # ============================================================
+        self.log(f"\n{'='*60}")
+        self.log("📊 Step 1: 逐模型、逐窗口计算 KTL")
+        self.log('='*60)
         model_window_results = self._compute_ktl_per_window(segments)
         
         # ============================================================
-        # 4. 每种模型取 KTL 中位数
+        # Step 2: 每种模型取 KTL 中位数
         # ============================================================
         model_median_params = self._compute_median_ktl(model_window_results)
         
         # ============================================================
-        # 5. 用中位数 KTL 在全部数据上评估（分段仿真）
+        # Step 3 & 4: 全部数据评估 + 选择最佳模型
         # ============================================================
         best_result = self._evaluate_on_full_data(hist_data, model_median_params, segments)
         if best_result is None:
             return self._empty_result(time_range)
         
         # ============================================================
-        # 6. 构建最终输出
+        # 构建最终输出
         # ============================================================
         return self._build_final_result(best_result, time_range, lambda_factor)
     
@@ -167,7 +195,12 @@ class ModelFitterSimple(ModelBase):
     def _compute_ktl_per_window(self, segments: List[HistoricalData]
                                  ) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Step 3: 逐窗口、逐模型计算 KTL
+        逐模型、逐窗口计算 KTL
+        
+        逻辑：
+            for model_type in [FOPDT, FO, SO, SOPDT, FOPI]:
+                for window in segments:
+                    计算该窗口的 K, T1, T2, L 参数
         
         Returns:
             {model_type: [{K, T1, T2, L, r2, window_idx}, ...]}
@@ -274,20 +307,16 @@ class ModelFitterSimple(ModelBase):
         """
         Step 2: 每种模型取 KTL 中位数
         
-        策略：
-        1. 过滤异常窗口（R² < 0.3 或 K值符号与多数不一致）
-        2. 对过滤后的窗口，计算 K, T1, T2, L 的中位数
-        3. 如果过滤后无有效窗口，回退到 R² 最高的窗口
+        逻辑（严格按照需求）：
+            对每个模型类型，直接对所有窗口的 K, T1, T2, L 取中位数
         
         Returns:
-            {model_type: {K, T1, T2, L, window_count, method}}
+            {model_type: {K, T1, T2, L, window_count}}
         """
-        R2_THRESHOLD = 0.3  # 最低 R² 阈值
-        
         median_params = {}
         
         self.log(f"\n{'='*60}")
-        self.log("📊 各模型 KTL 中位数计算")
+        self.log("📊 Step 2: 各模型 KTL 中位数计算")
         self.log('='*60)
         
         for model_type, window_results in model_window_results.items():
@@ -304,56 +333,22 @@ class ModelFitterSimple(ModelBase):
             r2_values = np.array([r['r2'] for r in window_results])
             window_indices = [r['window_idx'] for r in window_results]
             
-            # ============================================================
-            # 过滤异常窗口
-            # ============================================================
-            # 条件1: R² >= 阈值
-            r2_mask = r2_values >= R2_THRESHOLD
-            
-            # 条件2: K值符号与多数一致（正/负一致性）
-            K_sign_majority = np.sign(np.median(K_values))  # 多数K的符号
-            sign_mask = np.sign(K_values) == K_sign_majority
-            
-            # 组合条件
-            valid_mask = r2_mask & sign_mask
-            valid_count = np.sum(valid_mask)
-            
             self.log(f"\n📊 {model_type}: {n_windows} 个窗口")
             
-            # 显示过滤情况
-            for i, (r2, K, idx) in enumerate(zip(r2_values, K_values, window_indices)):
-                status = "✓" if valid_mask[i] else "✗"
-                reason = ""
-                if not r2_mask[i]:
-                    reason = f"R²<{R2_THRESHOLD}"
-                elif not sign_mask[i]:
-                    reason = f"K符号异常"
-                self.log(f"   窗口{idx}: K={K:.4f}, R²={r2:.4f} {status} {reason}")
+            # 显示各窗口参数
+            for i, (r2, K, T1, T2, L, idx) in enumerate(zip(
+                    r2_values, K_values, T1_values, T2_values, L_values, window_indices)):
+                self.log(f"   窗口{idx}: K={K:.4f}, T1={T1:.2f}, T2={T2:.2f}, L={L:.2f}, R²={r2:.4f}")
             
             # ============================================================
-            # 计算中位数
+            # 直接取中位数（不做过滤，严格按需求）
             # ============================================================
-            if valid_count >= 1:
-                # 在有效窗口中计算中位数
-                K_median = float(np.median(K_values[valid_mask]))
-                T1_median = float(np.median(T1_values[valid_mask]))
-                T2_median = float(np.median(T2_values[valid_mask]))
-                L_median = float(np.median(L_values[valid_mask]))
-                method = f'中位数({valid_count}/{n_windows}窗口)'
-                
-                self.log(f"   → 使用 {valid_count} 个有效窗口计算中位数")
-            else:
-                # 回退：选择 R² 最高的窗口
-                best_idx = np.argmax(r2_values)
-                K_median = float(K_values[best_idx])
-                T1_median = float(T1_values[best_idx])
-                T2_median = float(T2_values[best_idx])
-                L_median = float(L_values[best_idx])
-                method = f'回退到窗口{window_indices[best_idx]}(无有效窗口)'
-                
-                self.log(f"   → 无有效窗口，回退到R²最高的窗口{window_indices[best_idx]}")
+            K_median = float(np.median(K_values))
+            T1_median = float(np.median(T1_values))
+            T2_median = float(np.median(T2_values))
+            L_median = float(np.median(L_values))
             
-            self.log(f"   → 最终KTL: K={K_median:.4f}, T1={T1_median:.2f}, "
+            self.log(f"   → 中位数 KTL: K={K_median:.4f}, T1={T1_median:.2f}, "
                      f"T2={T2_median:.2f}, L={L_median:.2f}")
             
             median_params[model_type] = {
@@ -361,8 +356,7 @@ class ModelFitterSimple(ModelBase):
                 'T1': T1_median,
                 'T2': T2_median,
                 'L': L_median,
-                'window_count': valid_count if valid_count >= 1 else 1,
-                'method': method
+                'window_count': n_windows
             }
         
         return median_params
@@ -372,31 +366,52 @@ class ModelFitterSimple(ModelBase):
                                  segments: List[HistoricalData] = None
                                  ) -> Optional[Dict[str, Any]]:
         """
-        Step 5: 用中位数 KTL 在全部数据上评估，选择 R² 最高的模型
+        Step 3: 用中位数 KTL 在全部数据上拟合，计算 R² 评分
         
-        逻辑：
-        1. 对每个模型类型，用其中位数 KTL 在全部扰动段数据上分段仿真
-        2. 合并所有段计算总体 R² 评分
-        3. 选择 R² 最高的模型作为最终模型
-        
-        注意：
-        - 分段仿真避免长时间序列的漂移问题
-        - 每段使用各自的 y0/u0 基准值
+        逻辑（严格按照需求）：
+            1. 合并所有扰动段数据为"全部数据"
+            2. 对每个模型类型，用其中位数 KTL 在全部数据上拟合
+            3. 计算每个模型的 R² 评分
+            4. 选择 R² 最高的模型作为最终模型
         
         Returns:
             最佳模型的结果字典
         """
         self.log(f"\n{'='*60}")
-        self.log("📊 全部数据评估（分段仿真）")
+        self.log("📊 Step 3: 全部数据评估")
         self.log('='*60)
         
-        # 如果没有提供 segments，则从 hist_data 整体评估（不推荐）
         if segments is None or len(segments) == 0:
             self.log("⚠️ 无扰动段数据")
             return None
         
-        self.log(f"📊 共 {len(segments)} 个扰动段")
+        # ============================================================
+        # 合并所有扰动段数据为"全部数据"
+        # ============================================================
+        all_y, all_u, all_ts, all_sv = [], [], [], []
+        for seg in segments:
+            valid_mask = seg.pv != 0
+            if np.sum(valid_mask) >= 10:
+                all_y.append(seg.pv[valid_mask])
+                all_u.append(seg.mv[valid_mask])
+                all_ts.append(seg.timestamp[valid_mask])
+                all_sv.append(seg.sv[valid_mask])
         
+        if not all_y:
+            self.log("⚠️ 无有效数据")
+            return None
+        
+        # 合并后的全部数据
+        y_full = np.concatenate(all_y)
+        u_full = np.concatenate(all_u)
+        ts_full = np.concatenate(all_ts)
+        sv_full = np.concatenate(all_sv)
+        
+        self.log(f"📊 全部数据: {len(y_full)} 点 (来自 {len(segments)} 个扰动段)")
+        
+        # ============================================================
+        # 对每个模型类型，用中位数 KTL 拟合全部数据，计算 R²
+        # ============================================================
         best_result = None
         best_r2 = -np.inf
         all_scores = {}
@@ -405,53 +420,28 @@ class ModelFitterSimple(ModelBase):
             try:
                 raw_params = self._params_dict_to_tuple(params, model_type)
                 
-                # 分段仿真，收集所有段的真实值和预测值
-                all_y_true = []
-                all_y_pred = []
-                all_timestamps = []
-                all_sv = []
-                all_mv = []
-                
-                for seg_idx, seg in enumerate(segments):
-                    # 过滤无效数据
-                    valid_mask = seg.pv != 0
-                    if np.sum(valid_mask) < 10:
-                        continue
+                # 分段仿真（避免长时间漂移），每个原始段单独仿真
+                y_pred_list = []
+                for y_seg, u_seg in zip(all_y, all_u):
+                    y0 = y_seg[0]  # 使用该段第一个点作为初始值
+                    u0 = np.median(u_seg)
+                    u_delta = u_seg - u0
+                    t = np.arange(len(y_seg), dtype=float)
                     
-                    y = seg.pv[valid_mask]
-                    u = seg.mv[valid_mask]
-                    
-                    # 每段使用各自的基准值
-                    n_init = max(1, min(5, len(y) // 10))
-                    y0 = np.mean(y[:n_init])
-                    u0 = np.median(u)
-                    u_delta = u - u0
-                    t = np.arange(len(y), dtype=float)
-                    
-                    # 仿真该段
-                    y_pred = self.simulate_model(raw_params, t, u_delta, y0, model_type)
-                    
-                    all_y_true.append(y)
-                    all_y_pred.append(y_pred)
-                    all_timestamps.append(seg.timestamp[valid_mask])
-                    all_sv.append(seg.sv[valid_mask])
-                    all_mv.append(u)
+                    y_pred_seg = self.simulate_model(raw_params, t, u_delta, y0, model_type)
+                    y_pred_list.append(y_pred_seg)
                 
-                if not all_y_true:
-                    continue
+                y_pred_full = np.concatenate(y_pred_list)
                 
-                # 合并所有段计算总体 R²
-                y_merged = np.concatenate(all_y_true)
-                y_pred_merged = np.concatenate(all_y_pred)
-                
-                r2 = self.calculate_r2(y_merged, y_pred_merged)
-                rmse = self.calculate_rmse(y_merged, y_pred_merged)
+                # 计算 R² 评分
+                r2 = self.calculate_r2(y_full, y_pred_full)
+                rmse = self.calculate_rmse(y_full, y_pred_full)
                 
                 all_scores[model_type] = r2
                 rating = "优秀" if r2 >= 0.9 else "良好" if r2 >= 0.7 else "一般" if r2 >= 0.5 else "较差"
                 
                 self.log(f"🎯 {model_type}: R²={r2:.4f} ({rating}), RMSE={rmse:.4f}")
-                self.log(f"   KTL: K={params['K']:.4f}, T1={params['T1']:.2f}, "
+                self.log(f"   中位数 KTL: K={params['K']:.4f}, T1={params['T1']:.2f}, "
                          f"T2={params['T2']:.2f}, L={params['L']:.2f}")
                 
                 if r2 > best_r2:
@@ -461,12 +451,12 @@ class ModelFitterSimple(ModelBase):
                         'params': params,
                         'r2': r2,
                         'rmse': rmse,
-                        'y_pred': y_pred_merged,
+                        'y_pred': y_pred_full,
                         'hist_data': HistoricalData(
-                            timestamp=np.concatenate(all_timestamps),
-                            pv=y_merged,
-                            sv=np.concatenate(all_sv),
-                            mv=np.concatenate(all_mv)
+                            timestamp=ts_full,
+                            pv=y_full,
+                            sv=sv_full,
+                            mv=u_full
                         )
                     }
                     
@@ -474,11 +464,14 @@ class ModelFitterSimple(ModelBase):
                 self.log(f"⚠️ {model_type} 评估失败: {e}")
                 all_scores[model_type] = 0.0
         
+        # ============================================================
+        # Step 4: 选择 R² 最高的模型作为最终模型
+        # ============================================================
         if best_result:
             p = best_result['params']
             rating = "优秀" if best_r2 >= 0.9 else "良好" if best_r2 >= 0.7 else "一般" if best_r2 >= 0.5 else "较差"
-            self.log(f"\n✅ 最佳模型: {best_result['model_type']}, R²={best_r2:.4f} ({rating})")
-            self.log(f"   KTL: K={p['K']:.4f}, T1={p['T1']:.4f}, T2={p['T2']:.4f}, L={p['L']:.4f}")
+            self.log(f"\n✅ Step 4: 最佳模型: {best_result['model_type']}, R²={best_r2:.4f} ({rating})")
+            self.log(f"   最终 KTL: K={p['K']:.4f}, T1={p['T1']:.4f}, T2={p['T2']:.4f}, L={p['L']:.4f}")
             best_result['all_scores'] = all_scores
         
         return best_result
@@ -847,8 +840,7 @@ if __name__ == "__main__":
     # ============================================================
     
     test_scenario = {
-        'start_time': '2025-12-04 08:55:58', 
-        'end_time': '2025-12-04 10:30:58'
+      'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'
     }
     
     print("="*60)
