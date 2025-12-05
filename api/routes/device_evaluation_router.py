@@ -432,7 +432,7 @@ async def batch_query_devices(
             operation_id="get_device_loops",
             response_model=Dict[str, Any])
 async def get_device_loops(
-        device_uri: Optional[str] = Query(None, description="装置URI（模糊匹配）"),
+        device_uri: Optional[str] = Query(..., description="装置URI（模糊匹配）"),
         db: Session = Depends(get_db)
 ):
     """

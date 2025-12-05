@@ -146,17 +146,18 @@ async def get_info_by_path(
 
 
 @router.get("/loop-info/list",
-           summary="分页查询信息列表",
+           summary="分页查询回路列表",
            operation_id="list_loop_info",
            response_model=Dict[str, Any])
 async def list_loop_info(
+    db: Session = Depends(get_db),
     loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
     loop_uri: Optional[str] = Query(None, description="回路URI（模糊匹配）"),
     loop_path: Optional[str] = Query(None, description="回路路径（模糊匹配）"),
+    loop_type: Optional[str] = Query(None, description="回路类型"),
     page_no: int = Query(1, description="页码，从1开始"),
-    page_size: int = Query(10, description="每页数量"),
-    db: Session = Depends(get_db)
-):
+    page_size: int = Query(10, description="每页数量")
+)-> Dict[str, Any]:
     """
     分页查询所有回路信息记录
     """
@@ -166,6 +167,7 @@ async def list_loop_info(
             loop_name=loop_name,
             loop_uri=loop_uri,
             loop_path=loop_path,
+            loop_type=loop_type,
             page_no=page_no,
             page_size=page_size
         )
@@ -173,29 +175,7 @@ async def list_loop_info(
         mappings = result["mappings"]
         pagination = result["pagination"]
         
-        return  {
-                "mappings": [
-                    {
-                        "id": m.id,
-                        "loop_uri": m.loop_uri,
-                        "loop_path": m.loop_path,
-                        "loop_name": m.loop_name,
-                        "pv_field": m.pv_field,
-                        "sv_field": m.sv_field,
-                        "mv_field": m.mv_field,
-                        "auto_status_field": m.auto_status_field,
-                        "pb_field": m.pb_field,
-                        "ti_field": m.ti_field,
-                        "td_field": m.td_field,
-                        "description": m.description,
-                        "created_time": m.created_time.isoformat(),
-                        "updated_time": m.updated_time.isoformat(),
-                        "is_active": m.is_active
-                    }
-                    for m in mappings
-                ],
-                "pagination": pagination
-            }
+        return  result
     except Exception as e:
         logger.error(f"查询回路信息列表失败: {str(e)}")
         raise HTTPException(

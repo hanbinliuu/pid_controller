@@ -590,8 +590,8 @@ class ExpertTuningService:
             mt_str = model_type.value if isinstance(model_type, ModelType) else str(model_type)
 
             # 参数验证
-            if K <= 0:
-                raise ValueError("K值必须大于0")
+            # if K <= 0:
+            #     raise ValueError("K值必须大于0")
             if T1 <= 0:
                 raise ValueError("T值必须大于0")
             if L is not None and L < 0:
