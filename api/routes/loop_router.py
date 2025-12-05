@@ -178,7 +178,6 @@ async def query_loop_info(
 @router.post(
     "/loop-values",
     summary="查询回路测点当前最新值",
-    operation_id="查询回路测点当前最新值",
     description="根据回路 URI 和测点名称查询测点的当前最新值",
     response_model=Dict[str, Any]
 )
@@ -237,8 +236,7 @@ async def query_loop_values(
         )
 @router.post(
     "/loop-values-new",
-    summary="查询回路测点当前最新值",
-    operation_id="查询回路测点当前最新值",
+    summary="查询回路测点当前最新值-new",
     description="根据回路 URI 和测点名称查询测点的当前最新值",
     response_model=Dict[str, Any]
 )
@@ -253,26 +251,6 @@ async def query_loop_values_new(
     - 自动拼接完整的浏览路径
     - 返回测点名称到值的映射
     - 只返回v值（数值）
-
-    请求体示例：
-    [
-        "PB",
-        "TI",
-        "TD",
-        "PV",
-        "SV",
-        "MV"
-    ]
-
-    返回格式：
-    {
-        "PB": 71.43,
-        "TI": 3.11,
-        "TD": 2,
-        "PV": 10,
-        "SV": 10,
-        "MV": 15.979299
-    }
     """
     try:
         # 调用Service层查询回路测点值
