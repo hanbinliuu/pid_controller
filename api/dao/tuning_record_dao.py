@@ -44,7 +44,7 @@ class TuningRecordDAO:
             raise
     
     @staticmethod
-    def get_by_id(db: Session, record_id: int) -> Optional[TuningRecord]:
+    def get_by_id(db: Session, record_id: str) -> Optional[TuningRecord]:
         """
         根据ID查询记录 - SQLModel方式
         
@@ -148,7 +148,7 @@ class TuningRecordDAO:
             raise
     
     @staticmethod
-    def update(db: Session, record_id: int, update_data: Dict[str, Any]) -> Optional[TuningRecord]:
+    def update(db: Session, record_id: str, update_data: Dict[str, Any]) -> Optional[TuningRecord]:
         """
         更新整定记录 - SQLModel方式
         
@@ -189,7 +189,7 @@ class TuningRecordDAO:
             raise
     
     @staticmethod
-    def delete(db: Session, record_id: int) -> bool:
+    def delete(db: Session, record_id: str) -> bool:
         """
         删除整定记录 - SQLModel方式
         

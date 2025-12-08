@@ -235,7 +235,7 @@ class RealTSDBDataSource(TSDBDataSource):
                     page_data = self._parse_response(result, table)
                     # 如果当前页无数据，退出循环
                     if not page_data.values:
-                        logger.warning(f"第{page_count}页无数据返回，查询结束")
+                        # logger.warning(f"第{page_count}页无数据返回，查询结束")
                         break
                     # 保存列信息和标签信息（第一页）
                     if all_columns is None:
@@ -251,15 +251,15 @@ class RealTSDBDataSource(TSDBDataSource):
                     logger.error(f"TSDB查询失败，状态码: {response.status_code}, 响应: {response.text}")
                     break
             
-            if page_count >= max_pages:
-                logger.warning(f"达到最大分页数限制({max_pages})，停止查询")
+            # if page_count >= max_pages:
+                # logger.warning(f"达到最大分页数限制({max_pages})，停止查询")
             
-            logger.info(f"========== 循环查询完成 ==========" )
-            # logger.info(f"数据: {all_values}")
-            logger.info(f"总查询页数: {page_count}")
-            logger.info(f"总数据条数: {len(all_values)}")
+            # logger.info(f"========== 循环查询完成 ==========" )
+            # # logger.info(f"数据: {all_values}")
+            # logger.info(f"总查询页数: {page_count}")
+            # logger.info(f"总数据条数: {len(all_values)}")
             over_time = datetime.now().timestamp()
-            logger.info(f"时序查询总耗时: {(over_time)-(begin_time)}")
+            logger.info(f"表: {table},时序查询总耗时: {(over_time)-(begin_time)}")
 
             # 返回合并后的所有数据
             return DataPoint(

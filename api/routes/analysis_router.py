@@ -290,9 +290,9 @@ async def run_workflow(
                             async for chunk in response.aiter_raw():
                                 if chunk:
                                     # 直接转发原始字节数据块，确保立即传输
-                                    # decoded_chunk = chunk.decode('utf-8')
-                                    yield chunk
-                                    logger.debug(f"流式数据块大小: {len(chunk)} bytes")
+                                    decoded_chunk = chunk.decode('utf-8')
+                                    yield decoded_chunk
+                                    logger.debug(f"流式数据块大小: {len(decoded_chunk)} bytes")
                             
                             logger.info("工作流流式执行完成")
                             

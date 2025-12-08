@@ -49,13 +49,13 @@ class ExcludedLoopDAO:
             raise
     
     @staticmethod
-    def get_by_id(db: Session, excluded_id: int) -> Optional[ExcludedLoop]:
+    def get_by_id(db: Session, excluded_id: str) -> Optional[ExcludedLoop]:
         """
         根据ID查询剔除记录 - SQLModel方式
         
         Args:
             db: 数据库会话
-            excluded_id: 剔除记录ID
+            excluded_id: 剔除记录ID (UUID字符串)
         
         Returns:
             Optional[ExcludedLoop]: 剔除对象，不存在则返回None
@@ -259,13 +259,13 @@ class ExcludedLoopDAO:
             raise
     
     @staticmethod
-    def update(db: Session, excluded_id: int, update_data: Dict[str, Any]) -> Optional[ExcludedLoop]:
+    def update(db: Session, excluded_id: str, update_data: Dict[str, Any]) -> Optional[ExcludedLoop]:
         """
         更新剔除记录 - SQLModel方式
         
         Args:
             db: 数据库会话
-            excluded_id: 剔除记录ID
+            excluded_id: 剔除记录ID (UUID字符串)
             update_data: 更新数据字典
         
         Returns:
@@ -341,13 +341,13 @@ class ExcludedLoopDAO:
             raise
     
     @staticmethod
-    def delete(db: Session, excluded_id: int) -> bool:
+    def delete(db: Session, excluded_id: str) -> bool:
         """
         删除剔除记录 - SQLModel方式
         
         Args:
             db: 数据库会话
-            excluded_id: 剔除记录ID
+            excluded_id: 剔除记录ID (UUID字符串)
         
         Returns:
             bool: 是否删除成功

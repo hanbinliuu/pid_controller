@@ -25,12 +25,13 @@ class HomePageService:
         return HomePageDAO.get_perf_stats(session, now)
 
     @staticmethod
-    def get_device_stats(session: Session) -> List[DeviceRealTimeStats]:
+    def get_device_stats(session: Session,device_uri: str=None) -> List[DeviceRealTimeStats]:
         """
         Get device statistics
         """
         results = []
-        device_uri = Config.BFF_MODEL_ROOT_URI
+        if device_uri is None:
+            device_uri = Config.BFF_MODEL_ROOT_URI
         root_result = DeviceEvaluationService.get_evaluation_by_device_uri_now(session, device_uri)
         if root_result is not None:
             results.append(

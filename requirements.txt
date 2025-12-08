@@ -19,5 +19,7 @@ alembic==1.13.1
 sqlalchemy==2.0.23
 greenlet==3.0.3
 
+python-jose==3.3.0
+
 # 定时任务调度
 croniter==2.0.5

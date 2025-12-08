@@ -115,13 +115,13 @@ class ExcludedLoopService:
             raise
     
     @staticmethod
-    def get_excluded_by_id(db: Session, excluded_id: int) -> Optional[ExcludedLoop]:
+    def get_excluded_by_id(db: Session, excluded_id: str) -> Optional[ExcludedLoop]:
         """
         根据ID获取剔除记录
         
         Args:
             db: 数据库会话
-            excluded_id: 剔除记录ID
+            excluded_id: 剔除记录ID (UUID字符串)
         
         Returns:
             Optional[ExcludedLoop]: 剔除对象
@@ -218,7 +218,7 @@ class ExcludedLoopService:
     @staticmethod
     def update_excluded(
         db: Session,
-        excluded_id: int,
+        excluded_id: str,
         uri: Optional[str] = None,
         reason: Optional[str] = None
     ) -> Optional[ExcludedLoop]:
@@ -227,7 +227,7 @@ class ExcludedLoopService:
         
         Args:
             db: 数据库会话
-            excluded_id: 剔除记录ID
+            excluded_id: 剔除记录ID (UUID字符串)
             uri: 新的URI
             reason: 新的剔除原因
         
@@ -249,13 +249,13 @@ class ExcludedLoopService:
             raise
     
     @staticmethod
-    def delete_excluded(db: Session, excluded_id: int) -> bool:
+    def delete_excluded(db: Session, excluded_id: str) -> bool:
         """
         删除剔除记录
         
         Args:
             db: 数据库会话
-            excluded_id: 剔除记录ID
+            excluded_id: 剔除记录ID (UUID字符串)
         
         Returns:
             bool: 是否删除成功

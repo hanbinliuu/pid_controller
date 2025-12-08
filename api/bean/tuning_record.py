@@ -63,6 +63,12 @@ class TuningRecord(SQLModel, table=True):
         max_length=100,
         sa_column_kwargs={"comment": "操作人员"}
     )
+    operator_id: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        index=True,
+        sa_column_kwargs={"comment": "操作人ID"}
+    )
     
     # 参数信息
     before_params: Optional[str] = Field(
@@ -115,6 +121,7 @@ class TuningRecord(SQLModel, table=True):
                 "description": "Flow Control Loop",
                 "tuning_method": "KTL",
                 "operator": "admin",
+                "operator_id": "user_001",
                 "before_params": "PB:100, TI:50, TD:12.5",
                 "after_params": "PB:71.43, TI:3.11, TD:2",
                 "status": "成功",

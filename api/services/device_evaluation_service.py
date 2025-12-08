@@ -19,13 +19,13 @@ class DeviceEvaluationService:
     """装置评估业务逻辑服务"""
     
     @staticmethod
-    def get_evaluation_by_id(db: Session, evaluation_id: int) -> Optional[DeviceEvaluation]:
+    def get_evaluation_by_id(db: Session, evaluation_id: str) -> Optional[DeviceEvaluation]:
         """
         根据ID获取评估记录
         
         Args:
             db: 数据库会话
-            evaluation_id: 评估记录ID
+            evaluation_id: 评估记录ID (UUID字符串)
         
         Returns:
             Optional[DeviceEvaluation]: 评估对象
@@ -116,6 +116,40 @@ class DeviceEvaluationService:
         )
 
     @staticmethod
+    def get_evaluations_by_date_range_page(
+            db: Session,
+            device_name: Optional[str] = None,
+            device_uri: Optional[str] = None,
+            start_date: Optional[date] = None,
+            end_date: Optional[date] = None,
+            is_child: bool = False,
+            page_no: int = 1,
+            page_size: int = 10
+    ) -> Dict[str, Any]:
+        """
+        根据装置URI和时间范围查询评估记录（不分页）
+
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI（可选，为空则查询所有装置）
+            start_date: 开始日期（可选，包含该日期）
+            end_date: 结束日期（可选，包含该日期）
+
+        Returns:
+            List[DeviceEvaluation]: 评估记录列表，按统计时间倒序排列
+        """
+        return DeviceEvaluationDAO.query_by_device_uri_and_date_range_page(
+            db,
+            device_name=device_name,
+            device_uri=device_uri,
+            start_date=start_date,
+            end_date=end_date,
+            is_child=is_child,
+            page_no=page_no,
+            page_size=page_size
+        )
+
+    @staticmethod
     def get_this_child_evaluations_by_date_range(
             db: Session,
             device_uri: Optional[str] = None,
@@ -179,3 +213,18 @@ class DeviceEvaluationService:
         except Exception as e:
             logger.error(f"获取装置回路列表失败: {str(e)}")
             raise
+
+    @classmethod
+    def get_this_child_by_device_uri_and_date_now(cls, db, device_uri):
+        """
+        获取装置及下级装置当天的评估列表
+
+        通过回路loop_uri模糊匹配装置URI来查找装置下的所有回路
+
+        Args:
+            db: 数据库会话
+            device_uri: 装置URI
+        Returns:
+            Dict: 包含回路列表和统计信息
+        """
+        return DeviceEvaluationDAO.get_this_child_by_device_uri_and_date_now(db, device_uri)

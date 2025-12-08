@@ -1,12 +1,13 @@
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from typing import Dict, List, Optional, Union, Any
 from datetime import datetime
 import json
 import logging
 
 from pydantic import BaseModel, Field
+from sqlmodel import Session
 
 from api.bean.generate_curves_request import GenerateCurvesRequest
 from api.routes.time_util import parse_time_to_milliseconds
@@ -17,6 +18,8 @@ from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
 from core.algorithm.model_identifier.test_identifier.test_model_fitter import detect_tuning_windows
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database, query_raw_data
+from core.database import get_db
+from core.utils.idass import UserInfo, get_current_user
 from core.utils.model_type import ModelType
 
 router = APIRouter()
@@ -158,7 +161,11 @@ async def get_model_types():
              summary="常规整定-pid整定",
              operation_id="常规整定-自动筛选整定与手动时间范围整定",
              description="支持两种模式：1.自动筛选最佳时间窗口并整定 2.手动指定时间范围整定")
-async def auto_tuning(request: AutoTuningRequest):
+async def auto_tuning(
+        # db: Session = Depends(get_db),
+        request: AutoTuningRequest ,
+        user: UserInfo = Depends(get_current_user)
+    ):
     """
     **智能PID参数整定接口**
 
@@ -180,6 +187,7 @@ async def auto_tuning(request: AutoTuningRequest):
     - lambda_val: 期望闭环时间常数，影响响应速度与稳健性
     - 未指定时自动根据模型类型计算最优值
     """
+    # user: UserInfo = get_current_user()
     try:
         # 调用Service层执行自动整定
         result = ExpertTuningService.liu_pid_tuning(
@@ -195,7 +203,9 @@ async def auto_tuning(request: AutoTuningRequest):
             step_size=request.step_size,
             confidence_threshold=request.confidence_threshold,
             window_sec=request.window_sec,
-            is_filter=request.is_filter
+            is_filter=request.is_filter,
+            operator_id=user.user_id if user else None,
+            operator_name=user.user_name if user else None
         )
 
         return result
