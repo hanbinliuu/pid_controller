@@ -1,6 +1,5 @@
 import sys
 import os
-# model_type -> algorithm -> core -> pid-agent-mvp
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 import numpy as np

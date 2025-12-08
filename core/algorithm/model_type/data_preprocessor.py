@@ -16,16 +16,26 @@ class DataQuality:
     is_noisy: bool              # 是否有噪声
     is_correlated: bool         # 是否有相关性
     is_valid: bool              # 是否有效（可用于辨识）
+    # 新增：非线性和扰动质量指标
+    nonlinearity_score: float = 0.0     # 非线性程度 (0-1)，越高越非线性
+    step_response_score: float = 1.0    # 阶跃响应特征评分 (0-1)
+    oscillation_ratio: float = 0.0      # 振荡比例
+    is_nonlinear: bool = False          # 是否为非线性扰动
+    is_step_response: bool = True       # 是否具有阶跃响应特征
     
     @property
     def quality_score(self) -> float:
         """综合质量评分 (0-1)"""
         score = 0.0
         if self.is_correlated:
-            score += 0.4 * min(self.correlation, 1.0)
+            score += 0.25 * min(abs(self.correlation), 1.0)
         if not self.is_noisy:
-            score += 0.3 * (1 - min(self.noise_ratio, 1.0))
-        score += 0.3 * self.trend_consistency
+            score += 0.2 * (1 - min(self.noise_ratio, 1.0))
+        score += 0.2 * self.trend_consistency
+        # 非线性惩罚
+        score += 0.2 * (1 - self.nonlinearity_score)
+        # 阶跃响应奖励
+        score += 0.15 * self.step_response_score
         return score
     
     @property
@@ -199,12 +209,23 @@ class DataPreprocessor:
         # 4. 计算趋势一致性
         trend_consistency = self._calculate_trend_consistency(y, u)
         
-        # 5. 判断质量标志
+        # 5. 计算非线性程度
+        nonlinearity_score = self._calculate_nonlinearity(y, u)
+        
+        # 6. 计算阶跃响应特征评分
+        step_response_score = self._calculate_step_response_score(y, u)
+        
+        # 7. 计算振荡比例
+        oscillation_ratio = self._calculate_oscillation_ratio(y)
+        
+        # 8. 判断质量标志
         is_noisy = noise_ratio > self.noise_threshold
         is_correlated = abs(correlation) > self.min_correlation
+        is_nonlinear = nonlinearity_score > 0.5  # 非线性程度>50%认为是非线性
+        is_step_response = step_response_score > 0.4
         
         # 综合判断是否有效
-        is_valid = is_correlated or self._check_integral_response(y, u)
+        is_valid = (is_correlated or self._check_integral_response(y, u)) and not is_nonlinear
         
         quality = DataQuality(
             noise_ratio=noise_ratio,
@@ -213,11 +234,17 @@ class DataPreprocessor:
             trend_consistency=trend_consistency,
             is_noisy=is_noisy,
             is_correlated=is_correlated,
-            is_valid=is_valid
+            is_valid=is_valid,
+            nonlinearity_score=nonlinearity_score,
+            step_response_score=step_response_score,
+            oscillation_ratio=oscillation_ratio,
+            is_nonlinear=is_nonlinear,
+            is_step_response=is_step_response
         )
         
         self.log(f"📊 数据质量: {quality.quality_level} (score={quality.quality_score:.2f})")
         self.log(f"   噪声比={noise_ratio:.3f}, 相关性={correlation:.3f}, 延迟={lag_estimate}")
+        self.log(f"   非线性={nonlinearity_score:.3f}, 阶跃特征={step_response_score:.3f}, 振荡={oscillation_ratio:.3f}")
         
         return quality
     
@@ -302,6 +329,184 @@ class DataPreprocessor:
             return abs(corr_cumsum) > 0.3
         except:
             return False
+    
+    def _calculate_nonlinearity(self, y: np.ndarray, u: np.ndarray) -> float:
+        """
+        计算非线性程度 (0-1)
+        
+        检测方法：
+        1. 分段线性度检测 - 将数据分成多段，比较各段增益的一致性
+        2. 残差分布检测 - 检查线性拟合残差是否具有系统性偏差
+        3. 突变检测 - 检测是否存在突然的线性关系变化
+        
+        Returns:
+            非线性度 (0-1)，0表示完全线性，1表示高度非线性
+        """
+        if len(y) < 30:
+            return 0.0
+        
+        try:
+            n = len(y)
+            scores = []
+            
+            # 方法1：分段增益一致性检测
+            n_segments = min(4, n // 20)
+            if n_segments >= 2:
+                segment_size = n // n_segments
+                segment_gains = []
+                
+                for i in range(n_segments):
+                    start = i * segment_size
+                    end = start + segment_size if i < n_segments - 1 else n
+                    y_seg = y[start:end]
+                    u_seg = u[start:end]
+                    
+                    # 计算该段的增益 (delta_y / delta_u)
+                    dy = y_seg[-1] - y_seg[0]
+                    du = u_seg[-1] - u_seg[0]
+                    
+                    if abs(du) > self._epsilon:
+                        gain = dy / du
+                        segment_gains.append(gain)
+                
+                if len(segment_gains) >= 2:
+                    # 计算增益的变异系数
+                    gains_mean = np.mean(segment_gains)
+                    gains_std = np.std(segment_gains)
+                    if abs(gains_mean) > self._epsilon:
+                        gain_cv = abs(gains_std / gains_mean)
+                        # CV > 0.5 认为是非线性
+                        scores.append(min(gain_cv, 1.0))
+            
+            # 方法2：线性拟合残差的系统性检测
+            try:
+                # 简单线性拟合
+                A = np.vstack([u, np.ones(len(u))]).T
+                coeffs, residuals, _, _ = np.linalg.lstsq(A, y, rcond=None)
+                y_linear = u * coeffs[0] + coeffs[1]
+                residual = y - y_linear
+                
+                # 检查残差是否具有系统性偏差（非随机性）
+                # 如果残差与 u 仍有相关性，说明存在非线性
+                if len(residual) > 5:
+                    residual_u_corr = np.corrcoef(residual, u)[0, 1]
+                    if not np.isnan(residual_u_corr):
+                        scores.append(min(abs(residual_u_corr), 1.0))
+            except:
+                pass
+            
+            # 方法3：突变检测 - 检测 PV 的突然变化
+            pv_diff = np.abs(np.diff(y))
+            pv_range = np.ptp(y)
+            if pv_range > self._epsilon:
+                # 计算突变的比例
+                threshold = pv_range * 0.2  # 20% 的范围作为突变阈值
+                sudden_changes = np.sum(pv_diff > threshold)
+                sudden_ratio = sudden_changes / (len(y) - 1)
+                # 突变比例 > 5% 认为有非线性特征
+                if sudden_ratio > 0.05:
+                    scores.append(min(sudden_ratio * 5, 1.0))
+            
+            if scores:
+                return float(np.mean(scores))
+            return 0.0
+            
+        except Exception as e:
+            self.log(f"   非线性检测失败: {e}")
+            return 0.0
+    
+    def _calculate_step_response_score(self, y: np.ndarray, u: np.ndarray) -> float:
+        """
+        计算阶跃响应特征评分 (0-1)
+        
+        阶跃响应应具有以下特征：
+        1. MV 有明显的阶跃变化
+        2. PV 对 MV 变化有延迟响应
+        3. PV 向新稳态值收敛
+        
+        Returns:
+            阶跃响应特征评分 (0-1)
+        """
+        if len(y) < 20:
+            return 0.5  # 数据太短，返回中等分数
+        
+        try:
+            n = len(y)
+            scores = []
+            
+            # 特征1：MV 变化程度
+            mv_range = np.ptp(u)
+            mv_std = np.std(u)
+            if mv_range > 0.1:
+                # MV 应该有明显变化但不过于频繁
+                mv_changes = np.sum(np.abs(np.diff(u)) > mv_range * 0.1)
+                # 理想情况：1-3次显著变化
+                if 1 <= mv_changes <= 5:
+                    scores.append(1.0)
+                elif mv_changes < 1:
+                    scores.append(0.3)  # MV 基本不变
+                else:
+                    scores.append(max(0.3, 1 - mv_changes * 0.05))  # 变化太频繁
+            
+            # 特征2：响应延迟检测
+            lag = self._estimate_lag(y, u)
+            if 0 <= lag <= n // 3:  # 延迟在合理范围内
+                scores.append(1.0)
+            elif lag < 0:  # 负延迟（PV领先于MV，不符合因果关系）
+                scores.append(0.3)
+            else:
+                scores.append(0.5)
+            
+            # 特征3：收敛特征 - 后1/3数据应该更稳定
+            last_third = y[int(n * 2/3):]
+            first_half = y[:int(n * 0.5)]
+            
+            if len(last_third) > 5 and len(first_half) > 5:
+                std_last = np.std(last_third)
+                std_first = np.std(first_half)
+                
+                if std_first > self._epsilon:
+                    # 后期波动应该小于前期
+                    settling_ratio = std_last / std_first
+                    if settling_ratio < 0.5:
+                        scores.append(1.0)  # 明显收敛
+                    elif settling_ratio < 1.0:
+                        scores.append(0.7)  # 较好收敛
+                    else:
+                        scores.append(0.3)  # 未收敛或振荡加剧
+            
+            # 特征4：单调性检测（理想的阶跃响应应基本单调）
+            pv_diff = np.diff(y)
+            sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
+            sign_change_ratio = sign_changes / (len(y) - 2) if len(y) > 2 else 0
+            # 符号变化比例 < 0.2 认为是单调的
+            if sign_change_ratio < 0.2:
+                scores.append(1.0)
+            elif sign_change_ratio < 0.4:
+                scores.append(0.7)
+            else:
+                scores.append(0.3)  # 振荡太多
+            
+            if scores:
+                return float(np.mean(scores))
+            return 0.5
+            
+        except Exception as e:
+            self.log(f"   阶跃响应检测失败: {e}")
+            return 0.5
+    
+    def _calculate_oscillation_ratio(self, y: np.ndarray) -> float:
+        """计算振荡比例"""
+        if len(y) < 5:
+            return 0.0
+        
+        try:
+            pv_diff = np.diff(y)
+            sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
+            oscillation_ratio = sign_changes / (len(y) - 2) if len(y) > 2 else 0
+            return min(oscillation_ratio, 1.0)
+        except:
+            return 0.0
     
     # ============================================================
     # 数据变换
@@ -399,3 +604,52 @@ class DataPreprocessor:
             segments.append((y[start:], u[start:], start, len(y)))
         
         return segments
+    
+    # ============================================================
+    # 高级质量分析
+    # ============================================================
+    
+    def analyze_segment_quality(self, y: np.ndarray, u: np.ndarray) -> Dict[str, Any]:
+        """
+        详细分析扰动段的质量，用于决策是否用于整定
+        
+        Args:
+            y: PV数据
+            u: MV数据
+        
+        Returns:
+            详细质量报告
+        """
+        quality = self.analyze_quality(y, u)
+        
+        report = {
+            'quality_score': quality.quality_score,
+            'quality_level': quality.quality_level,
+            'is_valid_for_tuning': quality.is_valid and quality.is_step_response and not quality.is_nonlinear,
+            'metrics': {
+                'noise_ratio': quality.noise_ratio,
+                'correlation': quality.correlation,
+                'nonlinearity': quality.nonlinearity_score,
+                'step_response': quality.step_response_score,
+                'oscillation': quality.oscillation_ratio
+            },
+            'flags': {
+                'is_noisy': quality.is_noisy,
+                'is_correlated': quality.is_correlated,
+                'is_nonlinear': quality.is_nonlinear,
+                'is_step_response': quality.is_step_response
+            },
+            'recommendations': []
+        }
+        
+        # 生成建议
+        if quality.is_nonlinear:
+            report['recommendations'].append('数据显示非线性特征，建议排除该段或使用分段线性化处理')
+        if not quality.is_step_response:
+            report['recommendations'].append('数据不符合阶跃响应特征，建议检查数据来源')
+        if quality.is_noisy:
+            report['recommendations'].append('数据噪声较大，建议使用滤波预处理')
+        if quality.oscillation_ratio > 0.4:
+            report['recommendations'].append('数据振荡严重，可能控制回路不稳定')
+        
+        return report

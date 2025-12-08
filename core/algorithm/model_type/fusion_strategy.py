@@ -36,6 +36,9 @@ class WindowResult:
     oscillation_ratio: float = 0.0    # 振荡比例
     settling_quality: float = 1.0     # 收敛质量
     is_steady: bool = True            # 是否为稳态段
+    # 新增：数据质量指标
+    nonlinearity_score: float = 0.0   # 非线性程度 (0-1)
+    quality_score: float = 1.0        # 综合质量评分 (0-1)
     
     @property
     def params_dict(self) -> Dict[str, float]:
@@ -43,8 +46,10 @@ class WindowResult:
     
     @property
     def effective_weight(self) -> float:
-        """计算有效权重，综合考虑R²和稳态特征"""
-        return self.r2 * self.stability_score * self.settling_quality
+        """计算有效权重，综合考虑R²、稳态特征和数据质量"""
+        # 非线性惩罚
+        nonlinear_factor = 1.0 - self.nonlinearity_score * 0.5
+        return self.r2 * self.stability_score * self.settling_quality * nonlinear_factor * self.quality_score
 
 
 @dataclass
@@ -199,7 +204,7 @@ class PIDFusionStrategy:
         return valid
     
     def _determine_strategy(self, windows: List[WindowResult]) -> Tuple[FusionStrategy, str]:
-        """确定最优融合策略"""
+        """确定最优融合策略（增强版 - 考虑非线性和数据质量）"""
         K_values = [w.K for w in windows]
         K_cv = self._safe_cv(K_values)
         
@@ -215,19 +220,38 @@ class PIDFusionStrategy:
         avg_stability = np.mean([w.stability_score for w in windows])
         avg_oscillation = np.mean([w.oscillation_ratio for w in windows])
         
-        # 1. 如果存在非稳态段，优先使用稳态加权融合
+        # 新增: 检查非线性情况
+        avg_nonlinearity = np.mean([getattr(w, 'nonlinearity_score', 0) for w in windows])
+        has_high_nonlinearity = any(getattr(w, 'nonlinearity_score', 0) > 0.5 for w in windows)
+        
+        # 新增: 检查数据质量
+        avg_quality = np.mean([getattr(w, 'quality_score', 1.0) for w in windows])
+        has_low_quality = any(getattr(w, 'quality_score', 1.0) < 0.4 for w in windows)
+        
+        # 策略选择优先级（从高到低）：
+        
+        # 0. 如果存在高非线性段，优先使用自适应融合（会过滤掉非线性段）
+        if has_high_nonlinearity:
+            return FusionStrategy.ADAPTIVE_FUSION, f"存在高非线性段(平均={avg_nonlinearity:.2f})，自适应融合"
+        
+        # 1. 如果存在低质量段且质量差异大，使用质量加权
+        if has_low_quality and avg_quality < 0.6:
+            return FusionStrategy.QUALITY_WEIGHTED, f"存在低质量段(平均质量={avg_quality:.2f})，质量加权融合"
+        
+        # 2. 如果存在非稳态段，优先使用稳态加权融合
         if has_unsteady or avg_oscillation > 0.3:
             return FusionStrategy.STABILITY_WEIGHTED, f"存在非稳态段(稳态={avg_stability:.2f})，稳态加权融合"
         
-        # 2. 如果稳态评分差异大，使用自适应融合
+        # 3. 如果稳态评分差异大，使用自适应融合
         stability_std = np.std([w.stability_score for w in windows])
         if stability_std > 0.2:
             return FusionStrategy.ADAPTIVE_FUSION, f"稳态差异大(std={stability_std:.2f})，自适应融合"
         
-        # 3. 如果R²方差大，说明各段拟合质量差异大，使用质量加权
+        # 4. 如果R²方差大，说明各段拟合质量差异大，使用质量加权
         if r2_std > 0.2 and r2_mean < 0.7:
             return FusionStrategy.QUALITY_WEIGHTED, f"R²方差大({r2_std:.2f})，质量加权融合"
         
+        # 5. 根据 K 的一致性选择策略
         if K_cv < self.CV_THRESHOLD_CONSISTENT:
             # K一致性好
             if data_cv > 0.5 and len(windows) >= 2:
@@ -528,19 +552,34 @@ class PIDFusionStrategy:
     
     def _adaptive_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
         """
-        自适应融合策略
+        自适应融合策略（增强版 - 处理非线性和低质量段）
         
         综合考虑多个因素自动选择最优融合方式：
         1. 分离稳态段和非稳态段
-        2. 优先使用稳态段的参数
-        3. 非稳态段用于验证和微调
+        2. 过滤掉高非线性段
+        3. 优先使用高质量稳态段的参数
+        4. 非稳态段用于验证和微调
         """
         if len(windows) < 2:
             return self._best_window(windows, reasoning)
         
-        # 分离稳态段和非稳态段
-        steady_windows = [w for w in windows if w.is_steady and w.stability_score >= 0.7]
-        unsteady_windows = [w for w in windows if not w.is_steady or w.stability_score < 0.7]
+        # 首先过滤掉高非线性段
+        linear_windows = [w for w in windows if getattr(w, 'nonlinearity_score', 0) < 0.6]
+        if not linear_windows:
+            # 如果所有段都是非线性的，使用原始数据但记录警告
+            self.log("   ⚠️ 所有段都具有高非线性，使用鲁棒融合")
+            linear_windows = windows
+        elif len(linear_windows) < len(windows):
+            filtered_count = len(windows) - len(linear_windows)
+            self.log(f"   过滤掉 {filtered_count} 个高非线性段")
+        
+        # 分离稳态段和非稳态段（同时考虑质量分）
+        steady_windows = [w for w in linear_windows 
+                         if w.is_steady and w.stability_score >= 0.7 
+                         and getattr(w, 'quality_score', 1.0) >= 0.5]
+        unsteady_windows = [w for w in linear_windows 
+                           if not w.is_steady or w.stability_score < 0.7 
+                           or getattr(w, 'quality_score', 1.0) < 0.5]
         
         self.log(f"   稳态段: {len(steady_windows)}, 非稳态段: {len(unsteady_windows)}")
         

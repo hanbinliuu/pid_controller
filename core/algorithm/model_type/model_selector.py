@@ -35,6 +35,13 @@ class SegmentResult:
     best_model: str = ""
     best_r2: float = 0.0
     best_aic: float = float('inf')
+    
+    # 新增：数据质量指标
+    quality_score: float = 0.0          # 综合质量评分
+    nonlinearity_score: float = 0.0     # 非线性程度
+    step_response_score: float = 0.0    # 阶跃响应特征评分
+    oscillation_ratio: float = 0.0      # 振荡比例
+    is_nonlinear: bool = False          # 是否为非线性
 
 
 @dataclass
@@ -453,12 +460,14 @@ class ModelSelector:
         3. MV变化过小（无激励）
         4. PV=0 异常点过多
         5. 数据趋势不合理（非阶跃响应特征）
+        6. 非线性扰动检测（新增）
+        7. 数据质量检测（新增）
         """
         valid_segments = []
         segment_results = []
         
         self.log(f"\n{'='*60}")
-        self.log("📊 Step 1: 扰动段有效性检查")
+        self.log("📊 Step 1: 扰动段有效性检查（增强版）")
         self.log('='*60)
         
         for i, seg in enumerate(segments):
@@ -505,10 +514,40 @@ class ModelSelector:
                 segment_results.append(result)
                 continue
             
+            # 检查5 (新增): 数据质量检测（非线性、阶跃特征、振荡）
+            quality = self._preprocessor.analyze_quality(y, u)
+            result.quality_score = quality.quality_score
+            result.nonlinearity_score = quality.nonlinearity_score
+            result.step_response_score = quality.step_response_score
+            result.oscillation_ratio = quality.oscillation_ratio
+            result.is_nonlinear = quality.is_nonlinear
+            
+            # 检查6 (新增): 严重非线性过滤（非线性度 > 0.7 且阶跃响应特征很差）
+            if quality.nonlinearity_score > 0.7 and quality.step_response_score < 0.3:
+                self._mark_invalid(result, f"严重非线性(非线性={quality.nonlinearity_score:.2f}, 阶跃特征={quality.step_response_score:.2f})", i, segment_results)
+                continue
+            
+            # 检查7 (新增): 严重振荡过滤（振荡比例 > 0.5 且质量分很低）
+            if quality.oscillation_ratio > 0.5 and quality.quality_score < 0.3:
+                self._mark_invalid(result, f"严重振荡(振荡={quality.oscillation_ratio:.2f}, 质量分={quality.quality_score:.2f})", i, segment_results)
+                continue
+            
             # 有效段
             result.is_valid = True
             result.data_points = valid_count
+            
+            # 根据质量给出细分评价
+            quality_flag = ""
+            if quality.is_nonlinear:
+                quality_flag += " ⚠️非线性"
+            if quality.oscillation_ratio > 0.3:
+                quality_flag += " ⚠️振荡"
+            if quality.quality_score < 0.5:
+                quality_flag += " ⚠️低质量"
+            
             self.log(f"   段{i+1}: ✓ 有效 ({valid_count}点, PV范围={pv_range:.2f}, MV范围={mv_range:.2f})")
+            self.log(f"          质量评分={quality.quality_score:.2f}, 非线性={quality.nonlinearity_score:.2f}, "
+                    f"阶跃特征={quality.step_response_score:.2f}, 振荡={quality.oscillation_ratio:.2f}{quality_flag}")
             
             valid_segments.append(seg)
             segment_results.append(result)
@@ -764,6 +803,22 @@ class ModelSelector:
             # 如果最高分也很低，警告
             if best_score < 0.4:
                 self.log(f"\n   ⚠️ 所有模型拟合质量都较差")
+            
+            # 保护：当拟合质量差时避免选择积分器模型（容易发散）
+            # 积分器模型只有在拟合质量好且有明确积分特征时才使用
+            if best_model == ModelType.FOPI and best_score < 0.6:
+                # 检查是否有其他模型得分接近
+                alternative_models = {m: s for m, s in model_composite_scores.items() 
+                                     if m != ModelType.FOPI and s > 0.3}
+                if alternative_models:
+                    # 选择非积分器模型中得分最高的
+                    best_model = max(alternative_models.keys(), 
+                                   key=lambda m: alternative_models[m])
+                    self.log(f"   ⚠️ 积分器模型拟合质量不佳，回退到 {best_model}")
+                else:
+                    # 默认使用 FOPDT
+                    best_model = ModelType.FOPDT
+                    self.log(f"   ⚠️ 积分器模型拟合质量不佳，回退到 FOPDT")
         else:
             best_model = ModelType.FOPDT
         
@@ -832,6 +887,20 @@ class ModelSelector:
                     stability_score, oscillation_ratio, settling_quality, is_steady = \
                         self._analyze_segment_stability(seg, fit_result)
                 
+                # 使用 SegmentResult 中的质量指标（如果有）
+                # 综合考虑非线性和数据质量
+                quality_adjusted_stability = stability_score
+                if result.nonlinearity_score > 0.3:
+                    # 非线性较高时降低稳态评分
+                    quality_adjusted_stability *= (1 - result.nonlinearity_score * 0.5)
+                if result.quality_score < 0.5:
+                    # 质量分低时进一步调整
+                    quality_adjusted_stability *= (0.5 + result.quality_score)
+                
+                # 使用 SegmentResult 中的振荡指标覆盖计算结果（如果有）
+                if result.oscillation_ratio > 0:
+                    oscillation_ratio = result.oscillation_ratio
+                
                 window_results.append(FusionWindowResult(
                     window_idx=result.segment_idx,
                     K=K, T1=T1, 
@@ -839,10 +908,10 @@ class ModelSelector:
                     L=fit_result.get('L', 0),
                     r2=r2,
                     data_points=result.data_points,
-                    stability_score=stability_score,
+                    stability_score=quality_adjusted_stability,
                     oscillation_ratio=oscillation_ratio,
                     settling_quality=settling_quality,
-                    is_steady=is_steady
+                    is_steady=is_steady and not result.is_nonlinear  # 非线性段不认为是稳态
                 ))
                 added_indices.add(result.segment_idx)
                 valid_segment_idx += 1
@@ -1711,25 +1780,36 @@ class ModelSelector:
         self.log(f"   pv_model检查: sim_R²={sim_r2:.3f}, 振荡={oscillation_ratio:.2f}, "
                 f"PV范围={pv_range:.2f}, 模型范围={model_range:.2f}, 幅度比={amplitude_ratio:.2f}")
         
-        # 检查仿真质量（用于标记，不再替换pv_model）
-        # 幅度比在0.85-1.15之间认为是可接受的（±15%误差）
+        # 检查仿真质量
+        # 幅度比在0.5-2.0之间认为是可接受的
         sim_quality_poor = (
             sim_r2 < 0.5 or                                 # R²较低
             fusion.global_r2 < 0.3 or                       # 全局R²很低
             oscillation_ratio > 0.4 or                      # 振荡数据
-            amplitude_ratio < 0.85 or amplitude_ratio > 1.15  # 幅度不匹配超过±15%
+            amplitude_ratio < 0.5 or amplitude_ratio > 2.0  # 幅度不匹配超过合理范围
         )
         
-        if sim_quality_poor:
+        # 关键修复：当拟合完全失败时，用实际PV替换pv_model，避免显示误导性曲线
+        # 失败条件：使用段数=0 或 R²接近0 或 幅度比严重偏离
+        fitting_failed = (
+            fusion.n_segments_used == 0 or                  # 没有使用任何段
+            sim_r2 < 0.1 or                                 # R²接近0
+            amplitude_ratio < 0.3 or amplitude_ratio > 3.0  # 幅度比严重偏离
+        )
+        
+        if fitting_failed:
+            self.log(f"   ❌ 拟合完全失败，使用实际PV作为pv_model")
+            pv_model = y.copy()  # 用实际PV替换
+        elif sim_quality_poor:
             reason = []
             if sim_r2 < 0.5:
                 reason.append(f"R²={sim_r2:.3f}")
             if oscillation_ratio > 0.4:
                 reason.append(f"振荡={oscillation_ratio:.2f}")
-            if amplitude_ratio < 0.85 or amplitude_ratio > 1.15:
+            if amplitude_ratio < 0.5 or amplitude_ratio > 2.0:
                 reason.append(f"幅度比={amplitude_ratio:.2f}")
             self.log(f"   ⚠️ 模型仿真质量较差({', '.join(reason)})")
-        # 注意：不再替换pv_model，保留原始仿真值用于误差计算
+            # 质量差但不是完全失败，保留pv_model用于误差分析
         
         # 计算综合评分
         total_data_points = int(np.sum(valid_mask))
