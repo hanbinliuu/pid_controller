@@ -39,7 +39,7 @@ class ModelIdentifier:
     
     @staticmethod
     def fopdt_model(params, t, u, y0):
-        """一阶加纯滞后（FOPDT）模型"""
+        """一阶加纯滞后（FOPDT）模型 - 增量形式"""
         K, T, L = params
         T = max(T, Config.EPSILON)
         n = len(t)
@@ -49,19 +49,20 @@ class ModelIdentifier:
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
         L_int = ModelIdentifier._lag_to_samples(L, dt_avg)
         
-        u0 = u[0] if L_int == 0 else np.mean(u[:max(1, L_int)])
+        u_ref = u[0] if L_int == 0 else np.mean(u[:max(1, L_int)])
+        y_ref = y0
         
         for i in range(1, n):
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
             u_delay = u[max(0, i - L_int)]
-            delta_u = u_delay - u0
-            y_target = y0 + K * delta_u
-            y[i] = y[i-1] + (y_target - y[i-1]) / T * dt_step
+            y_target = y_ref + K * (u_delay - u_ref)
+            alpha = min(dt_step / T, 1.0)
+            y[i] = y[i-1] + alpha * (y_target - y[i-1])
         return y
     
     @staticmethod
     def first_order_model(params, t, u, y0):
-        """纯一阶惯性模型（无滞后）"""
+        """纯一阶惯性模型（无滞后）- 增量形式"""
         K, T = params
         T = max(T, Config.EPSILON)
         n = len(t)
@@ -69,18 +70,25 @@ class ModelIdentifier:
         y[0] = y0
         
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
-        u0 = u[0]
+        
+        # 使用增量形式：模型响应MV的实时变化
+        # 稳态目标基于当前MV相对于初始值的偏差
+        u_ref = u[0]  # 参考MV
+        y_ref = y0    # 参考PV
         
         for i in range(1, n):
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
-            delta_u = u[i] - u0
-            y_target = y0 + K * delta_u
-            y[i] = y[i-1] + (y_target - y[i-1]) / T * dt_step
+            # 稳态目标: y_target = y_ref + K * (u[i] - u_ref)
+            y_target = y_ref + K * (u[i] - u_ref)
+            # 一阶响应
+            alpha = dt_step / T
+            alpha = min(alpha, 1.0)  # 防止超调
+            y[i] = y[i-1] + alpha * (y_target - y[i-1])
         return y
     
     @staticmethod
     def second_order_model(params, t, u, y0):
-        """二阶模型（两个一阶环节串联，无滞后）"""
+        """二阶模型（两个一阶环节串联，无滞后）- 增量形式"""
         K, T1, T2 = params
         T1 = max(T1, Config.EPSILON)
         T2 = max(T2, Config.EPSILON)
@@ -89,22 +97,25 @@ class ModelIdentifier:
         y[0] = y0
         
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
-        u0 = u[0]
-        x1 = y0
+        u_ref = u[0]  # 参考MV
+        y_ref = y0    # 参考PV
+        x1 = y0       # 中间状态
         
         for i in range(1, n):
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
-            delta_u = u[i] - u0
-            x1_target = y0 + K * delta_u
-            dx1_dt = (x1_target - x1) / T1
-            x1 = x1 + dx1_dt * dt_step
-            dy_dt = (x1 - y[i-1]) / T2
-            y[i] = y[i-1] + dy_dt * dt_step
+            # 稳态目标
+            x1_target = y_ref + K * (u[i] - u_ref)
+            # 第一阶响应
+            alpha1 = min(dt_step / T1, 1.0)
+            x1 = x1 + alpha1 * (x1_target - x1)
+            # 第二阶响应
+            alpha2 = min(dt_step / T2, 1.0)
+            y[i] = y[i-1] + alpha2 * (x1 - y[i-1])
         return y
     
     @staticmethod
     def sopdt_model(params, t, u, y0):
-        """二阶滞后模型 (SOPDT)"""
+        """二阶滞后模型 (SOPDT) - 增量形式"""
         K, T1, T2, L = params
         T1 = max(T1, Config.EPSILON)
         T2 = max(T2, Config.EPSILON)
@@ -115,18 +126,18 @@ class ModelIdentifier:
         dt_avg, dt_array = ModelIdentifier._compute_sampling_info(t)
         L_int = ModelIdentifier._lag_to_samples(L, dt_avg)
         
-        u0 = u[0] if L_int == 0 else np.mean(u[:max(1, L_int)])
+        u_ref = u[0] if L_int == 0 else np.mean(u[:max(1, L_int)])
+        y_ref = y0
         x1 = y0
         
         for i in range(1, n):
             dt_step = dt_array[i] if i < len(dt_array) else dt_avg
             u_delay = u[max(0, i - L_int)]
-            delta_u = u_delay - u0
-            x1_target = y0 + K * delta_u
-            dx1_dt = (x1_target - x1) / T1
-            x1 = x1 + dx1_dt * dt_step
-            dy_dt = (x1 - y[i-1]) / T2
-            y[i] = y[i-1] + dy_dt * dt_step
+            x1_target = y_ref + K * (u_delay - u_ref)
+            alpha1 = min(dt_step / T1, 1.0)
+            x1 = x1 + alpha1 * (x1_target - x1)
+            alpha2 = min(dt_step / T2, 1.0)
+            y[i] = y[i-1] + alpha2 * (x1 - y[i-1])
         return y
     
     @staticmethod

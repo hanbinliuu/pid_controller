@@ -1853,7 +1853,7 @@ class ModelSelector:
                             reset_on_sv_change: bool = True,
                             sv: np.ndarray = None) -> np.ndarray:
         """
-        智能分段仿真：在SV变化点重置，其他位置连续仿真
+        混合仿真策略：只在SV显著变化时重置，段内连续仿真
         
         Args:
             params: 模型参数
@@ -1869,21 +1869,16 @@ class ModelSelector:
         if n == 0:
             return np.array([])
         
-        # 检测SV变化点（作为重置点）
-        reset_points = [0]  # 总是从第一个点开始
+        # 检测SV显著变化点作为重置点（只在大幅变化时重置）
+        reset_points = [0]  # 从起点开始
         
         if reset_on_sv_change and sv is not None and len(sv) == n:
-            # 检测SV的显著变化（超过阈值）
+            # 检测SV的显著变化（超过阈值才重置）
             sv_diff = np.abs(np.diff(sv))
-            sv_threshold = max(0.1, np.std(sv) * 0.5) if np.std(sv) > 0 else 0.1
+            # 使用较高阈值，只在SV大幅变化时才重置
+            sv_threshold = max(1.0, np.std(sv) * 2.0) if np.std(sv) > 0 else 1.0
             change_points = np.where(sv_diff > sv_threshold)[0] + 1
             reset_points.extend(change_points.tolist())
-        
-        # 添加长段分割点（每500点左右，避免长时间漂移）
-        MAX_SEGMENT = 500
-        for start in range(0, n, MAX_SEGMENT):
-            if start not in reset_points and start > 0:
-                reset_points.append(start)
         
         reset_points = sorted(set(reset_points))
         reset_points.append(n)  # 添加终点
