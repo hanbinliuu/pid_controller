@@ -16,6 +16,8 @@ class FusionStrategy(Enum):
     ROBUST_FUSION = "robust_fusion"          # 鲁棒融合
     MEDIAN_FUSION = "median_fusion"          # 中位数融合
     QUALITY_WEIGHTED = "quality_weighted"    # 质量加权融合
+    STABILITY_WEIGHTED = "stability_weighted"  # 稳态加权融合（处理非稳态段）
+    ADAPTIVE_FUSION = "adaptive_fusion"      # 自适应融合（综合考虑稳态特征）
 
 
 @dataclass
@@ -29,10 +31,20 @@ class WindowResult:
     r2: float
     data_points: int
     timestamp: Optional[float] = None
+    # 稳态特征（用于非稳态段处理）
+    stability_score: float = 1.0      # 稳态评分 (0-1)，1表示完全稳态
+    oscillation_ratio: float = 0.0    # 振荡比例
+    settling_quality: float = 1.0     # 收敛质量
+    is_steady: bool = True            # 是否为稳态段
     
     @property
     def params_dict(self) -> Dict[str, float]:
         return {'K': self.K, 'T1': self.T1, 'T2': self.T2, 'L': self.L}
+    
+    @property
+    def effective_weight(self) -> float:
+        """计算有效权重，综合考虑R²和稳态特征"""
+        return self.r2 * self.stability_score * self.settling_quality
 
 
 @dataclass
@@ -126,6 +138,8 @@ class PIDFusionStrategy:
             FusionStrategy.ROBUST_FUSION: self._robust_fusion,
             FusionStrategy.MEDIAN_FUSION: self._median_fusion,
             FusionStrategy.QUALITY_WEIGHTED: self._quality_weighted_fusion,
+            FusionStrategy.STABILITY_WEIGHTED: self._stability_weighted_fusion,
+            FusionStrategy.ADAPTIVE_FUSION: self._adaptive_fusion,
         }
         
         method = strategy_methods.get(strategy, self._weighted_fusion)
@@ -196,7 +210,21 @@ class PIDFusionStrategy:
         data_points = [w.data_points for w in windows]
         data_cv = np.std(data_points) / np.mean(data_points) if np.mean(data_points) > 0 else 0
         
-        # 如果R²方差大，说明各段拟合质量差异大，使用质量加权
+        # 检查是否存在非稳态段
+        has_unsteady = any(not w.is_steady or w.stability_score < 0.7 for w in windows)
+        avg_stability = np.mean([w.stability_score for w in windows])
+        avg_oscillation = np.mean([w.oscillation_ratio for w in windows])
+        
+        # 1. 如果存在非稳态段，优先使用稳态加权融合
+        if has_unsteady or avg_oscillation > 0.3:
+            return FusionStrategy.STABILITY_WEIGHTED, f"存在非稳态段(稳态={avg_stability:.2f})，稳态加权融合"
+        
+        # 2. 如果稳态评分差异大，使用自适应融合
+        stability_std = np.std([w.stability_score for w in windows])
+        if stability_std > 0.2:
+            return FusionStrategy.ADAPTIVE_FUSION, f"稳态差异大(std={stability_std:.2f})，自适应融合"
+        
+        # 3. 如果R²方差大，说明各段拟合质量差异大，使用质量加权
         if r2_std > 0.2 and r2_mean < 0.7:
             return FusionStrategy.QUALITY_WEIGHTED, f"R²方差大({r2_std:.2f})，质量加权融合"
         
@@ -435,4 +463,171 @@ class PIDFusionStrategy:
             confidence=min(r2_weighted, 1.0),
             windows_used=windows_used,
             reasoning=reasoning
+        )
+    
+    def _stability_weighted_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+        """
+        稳态加权融合策略
+        
+        专门处理存在非稳态扰动段的情况：
+        1. 稳态段给予更高权重
+        2. 非稳态段根据收敛质量给予适当权重
+        3. 振荡段权重降低
+        """
+        if len(windows) < 2:
+            return self._best_window(windows, reasoning)
+        
+        # 计算每个窗口的稳态权重
+        stability_weights = []
+        for w in windows:
+            # 基础权重 = R² × 稳态评分 × 收敛质量
+            base_weight = w.r2 * w.stability_score * w.settling_quality
+            
+            # 振荡惩罚：振荡比例越高，权重越低
+            oscillation_penalty = 1.0 - 0.5 * w.oscillation_ratio
+            
+            # 数据量因子（较大的数据集更可靠）
+            data_factor = np.sqrt(w.data_points / 100) if w.data_points > 0 else 0.1
+            data_factor = min(data_factor, 2.0)  # 上限
+            
+            # 最终权重
+            weight = base_weight * oscillation_penalty * data_factor
+            stability_weights.append(max(weight, 0.01))
+            
+            self.log(f"   窗口{w.window_idx+1}: R²={w.r2:.3f}, 稳态={w.stability_score:.2f}, "
+                    f"收敛={w.settling_quality:.2f}, 振荡={w.oscillation_ratio:.2f} → 权重={weight:.4f}")
+        
+        total_weight = sum(stability_weights)
+        if total_weight < self.EPSILON:
+            return self._median_fusion(windows, reasoning)
+        
+        # 加权平均
+        K = sum(w.K * wt for w, wt in zip(windows, stability_weights)) / total_weight
+        T1 = sum(w.T1 * wt for w, wt in zip(windows, stability_weights)) / total_weight
+        T2 = sum(w.T2 * wt for w, wt in zip(windows, stability_weights)) / total_weight
+        L = sum(w.L * wt for w, wt in zip(windows, stability_weights)) / total_weight
+        
+        # 置信度：考虑稳态质量
+        avg_stability = np.mean([w.stability_score for w in windows])
+        r2_weighted = sum(w.r2 * wt for w, wt in zip(windows, stability_weights)) / total_weight
+        confidence = r2_weighted * avg_stability
+        
+        # 找出主要贡献的窗口
+        windows_used = [w.window_idx for w, wt in zip(windows, stability_weights) 
+                       if wt / total_weight > 0.1]
+        if not windows_used:
+            windows_used = [max(zip(windows, stability_weights), key=lambda x: x[1])[0].window_idx]
+        
+        return FusionResult(
+            K=K, T1=T1, T2=T2, L=L,
+            strategy_used=FusionStrategy.STABILITY_WEIGHTED,
+            confidence=min(confidence, 1.0),
+            windows_used=windows_used,
+            reasoning=reasoning
+        )
+    
+    def _adaptive_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+        """
+        自适应融合策略
+        
+        综合考虑多个因素自动选择最优融合方式：
+        1. 分离稳态段和非稳态段
+        2. 优先使用稳态段的参数
+        3. 非稳态段用于验证和微调
+        """
+        if len(windows) < 2:
+            return self._best_window(windows, reasoning)
+        
+        # 分离稳态段和非稳态段
+        steady_windows = [w for w in windows if w.is_steady and w.stability_score >= 0.7]
+        unsteady_windows = [w for w in windows if not w.is_steady or w.stability_score < 0.7]
+        
+        self.log(f"   稳态段: {len(steady_windows)}, 非稳态段: {len(unsteady_windows)}")
+        
+        # 情况1：有足够的稳态段，主要使用稳态段
+        if len(steady_windows) >= 2:
+            self.log("   → 使用稳态段进行融合")
+            # 对稳态段使用质量加权
+            weights = [(w.r2 ** 2) * w.data_points * w.stability_score for w in steady_windows]
+            total_weight = sum(weights)
+            
+            if total_weight > self.EPSILON:
+                K = sum(w.K * wt for w, wt in zip(steady_windows, weights)) / total_weight
+                T1 = sum(w.T1 * wt for w, wt in zip(steady_windows, weights)) / total_weight
+                T2 = sum(w.T2 * wt for w, wt in zip(steady_windows, weights)) / total_weight
+                L = sum(w.L * wt for w, wt in zip(steady_windows, weights)) / total_weight
+                
+                r2_weighted = sum(w.r2 * wt for w, wt in zip(steady_windows, weights)) / total_weight
+                windows_used = [w.window_idx for w in steady_windows]
+                
+                return FusionResult(
+                    K=K, T1=T1, T2=T2, L=L,
+                    strategy_used=FusionStrategy.ADAPTIVE_FUSION,
+                    confidence=min(r2_weighted, 1.0),
+                    windows_used=windows_used,
+                    reasoning=reasoning + " (稳态段主导)"
+                )
+        
+        # 情况2：只有一个稳态段，以稳态段为主，非稳态段辅助
+        if len(steady_windows) == 1:
+            self.log("   → 以唯一稳态段为主")
+            w_steady = steady_windows[0]
+            
+            # 基础参数来自稳态段
+            K, T1, T2, L = w_steady.K, w_steady.T1, w_steady.T2, w_steady.L
+            
+            # 如果有非稳态段且K值一致，做微调
+            if unsteady_windows:
+                K_values = [w.K for w in unsteady_windows]
+                K_median = np.median(K_values)
+                
+                # 如果非稳态段的K与稳态段接近，做加权平均
+                if abs(K_median - K) / (abs(K) + self.EPSILON) < 0.3:
+                    # 稳态段权重70%，非稳态段权重30%
+                    unsteady_K = np.mean([w.K for w in unsteady_windows])
+                    K = 0.7 * K + 0.3 * unsteady_K
+                    self.log(f"   微调K: 稳态={w_steady.K:.4f}, 非稳态均值={unsteady_K:.4f} → {K:.4f}")
+            
+            return FusionResult(
+                K=K, T1=T1, T2=T2, L=L,
+                strategy_used=FusionStrategy.ADAPTIVE_FUSION,
+                confidence=min(w_steady.r2 * w_steady.stability_score, 1.0),
+                windows_used=[w_steady.window_idx],
+                reasoning=reasoning + " (稳态段+非稳态微调)"
+            )
+        
+        # 情况3：没有稳态段，从非稳态段中提取最可靠的参数
+        self.log("   → 无稳态段，从非稳态段提取参数")
+        
+        # 按 effective_weight 排序，选择最可靠的
+        sorted_windows = sorted(windows, key=lambda w: w.effective_weight, reverse=True)
+        
+        # 使用收敛质量最好的段为主
+        best_window = sorted_windows[0]
+        
+        # 计算所有非稳态段的中位数作为参考
+        K_median = np.median([w.K for w in windows])
+        T1_median = np.median([w.T1 for w in windows])
+        
+        # 如果最佳段与中位数差异不大，使用最佳段
+        if abs(best_window.K - K_median) / (abs(K_median) + self.EPSILON) < 0.5:
+            K, T1, T2, L = best_window.K, best_window.T1, best_window.T2, best_window.L
+            windows_used = [best_window.window_idx]
+        else:
+            # 差异大，使用鲁棒的中位数
+            K = K_median
+            T1 = T1_median
+            T2 = float(np.median([w.T2 for w in windows]))
+            L = float(np.median([w.L for w in windows]))
+            windows_used = [w.window_idx for w in windows]
+        
+        # 置信度降低（因为没有稳态段）
+        confidence = max([w.effective_weight for w in windows]) * 0.8
+        
+        return FusionResult(
+            K=K, T1=T1, T2=T2, L=L,
+            strategy_used=FusionStrategy.ADAPTIVE_FUSION,
+            confidence=min(confidence, 1.0),
+            windows_used=windows_used,
+            reasoning=reasoning + " (非稳态段鲁棒融合)"
         )
