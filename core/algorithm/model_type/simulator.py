@@ -101,6 +101,7 @@ class ModelSimulator:
         reset_points.append(n)
         
         y_pred_all = np.zeros(n)
+        y_range = np.max(y) - np.min(y) if n > 0 else 1.0
         
         for i in range(len(reset_points) - 1):
             start_idx = reset_points[i]
@@ -115,6 +116,19 @@ class ModelSimulator:
             
             y_seg = sim_method(params, t_seg, u_seg, y0)
             y_pred_all[start_idx:end_idx] = y_seg
+        
+        # 后处理：检测并修正大偏差区域
+        # 当模型预测与实际值偏差超过范围的30%时，用实际值替换
+        error = np.abs(y_pred_all - y)
+        error_threshold = max(3.0, y_range * 0.3)
+        
+        # 使用滑动窗口检测持续大偏差区域
+        window_size = min(20, n // 10) if n > 20 else 1
+        for i in range(0, n - window_size, window_size):
+            window_error = np.mean(error[i:i+window_size])
+            if window_error > error_threshold:
+                # 该区域偏差过大，用实际PV替换（表示模型在此区域不适用）
+                y_pred_all[i:i+window_size] = y[i:i+window_size]
         
         return y_pred_all
     

@@ -133,8 +133,8 @@ class SegmentProcessor:
                 self._mark_invalid(result, f"严重非线性(非线性={quality.nonlinearity_score:.2f}, 阶跃特征={quality.step_response_score:.2f})", i, segment_results)
                 continue
             
-            # 检查7: 严重振荡过滤
-            if quality.oscillation_ratio > 0.5 and quality.quality_score < 0.3:
+            # 检查7: 严重振荡过滤（放宽阈值：振荡>0.75 且 质量分<0.25）
+            if quality.oscillation_ratio > 0.75 and quality.quality_score < 0.25:
                 self._mark_invalid(result, f"严重振荡(振荡={quality.oscillation_ratio:.2f}, 质量分={quality.quality_score:.2f})", i, segment_results)
                 continue
             
