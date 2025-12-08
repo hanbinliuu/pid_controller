@@ -55,6 +55,7 @@ class LoopInfoDAO:
         Returns:
             Optional[LoopInfo]: 映射对象，不存在则返回None
         """
+        # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
         statement = select(LoopInfo).where(LoopInfo.id == mapping_id)
         return db.exec(statement).first()
     
@@ -200,6 +201,103 @@ class LoopInfoDAO:
         except Exception as e:
             logger.error(f"查询回路信息记录失败: {str(e)}")
             raise
+
+    @staticmethod
+    def query_list_no_excluded(
+            db: Session,
+            loop_name: Optional[str] = None,
+            loop_uri: Optional[str] = None,
+            loop_path: Optional[str] = None,
+            loop_type: Optional[str] = None,
+            is_active: Optional[bool] = True,
+            page_no: int = 1,
+            page_size: int = 10
+    ) -> Dict[str, Any]:
+        """
+         - SQLModel方式
+
+        Args:
+            db: 数据库会话
+            loop_name: 回路名称筛选（模糊匹配）
+            loop_uri: 回路URI筛选（模糊匹配）
+            loop_path: 回路路径筛选（模糊匹配）
+            is_active: 是否激活
+            page_no: 页码
+            page_size: 每页数量
+
+        Returns:
+            Dict: 包含记录列表和分页信息的字典
+        """
+        try:
+            # 构建select语句
+            statement = select(LoopInfo)
+
+            # 关联excluded_loop表，排除剔除表中的回路
+            from api.bean.excluded_loop import ExcludedLoop
+            # excluded_subquery = select(ExcludedLoop.loop_uri)
+            statement = statement.where(LoopInfo.loop_uri.notin_(select(ExcludedLoop.uri)))
+            # 回路名称筛选（模糊匹配）
+            if loop_name:
+                statement = statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
+
+            # 回路URI筛选（模糊匹配）
+            if loop_uri:
+                statement = statement.where(LoopInfo.loop_uri == loop_uri)
+
+            # 回路路径筛选（模糊匹配）
+            if loop_path:
+                statement = statement.where(LoopInfo.loop_path.like(f"%{loop_path}%"))
+            if loop_type:
+                statement = statement.where(LoopInfo.loop_type == loop_type)
+
+            # 激活状态筛选
+            if is_active is not None:
+                statement = statement.where(LoopInfo.is_active == is_active)
+
+            # 按创建时间倒序排列
+            statement = statement.order_by(desc(LoopInfo.created_time))
+
+            # 获取总数
+            count_statement = select(func.count()).select_from(LoopInfo)
+            count_statement = count_statement.where(LoopInfo.loop_uri.notin_(select(ExcludedLoop.uri)))
+
+            # 应用相同的筛选条件到计数查询
+            if loop_name:
+                count_statement = count_statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
+            if loop_uri:
+                count_statement = count_statement.where(LoopInfo.loop_uri == loop_uri)
+            if loop_path:
+                count_statement = count_statement.where(LoopInfo.loop_path.like(f"%{loop_path}%"))
+            if loop_type:
+                count_statement = count_statement.where(LoopInfo.loop_type == loop_type)
+            if is_active is not None:
+                count_statement = count_statement.where(LoopInfo.is_active == is_active)
+
+            total = db.exec(count_statement).one()
+
+            # 分页
+            offset = (page_no - 1) * page_size
+            statement = statement.offset(offset).limit(page_size)
+            mappings = db.exec(statement).all()
+
+            # 计算总页数
+            pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+            logger.info(f"查询回路信息记录成功，总数: {total}, 当前页: {page_no}")
+
+            return {
+                "mappings": mappings,
+                "pagination": {
+                    "total": total,
+                    "pages": pages,
+                    "pageNo": page_no,
+                    "pageSize": page_size
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"查询回路信息记录失败: {str(e)}")
+            raise
     
     @staticmethod
     def update(db: Session, mapping_id: str, update_data: Dict[str, Any]) -> Optional[LoopInfo]:
@@ -215,6 +313,7 @@ class LoopInfoDAO:
             Optional[LoopInfo]: 更新后的映射对象
         """
         try:
+            # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
             statement = select(LoopInfo).where(LoopInfo.id == mapping_id)
             mapping = db.exec(statement).first()
             
@@ -296,6 +395,7 @@ class LoopInfoDAO:
             bool: 是否删除成功
         """
         try:
+            # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
             statement = select(LoopInfo).where(LoopInfo.id == mapping_id)
             mapping = db.exec(statement).first()
             

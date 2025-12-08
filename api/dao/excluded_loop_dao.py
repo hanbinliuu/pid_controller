@@ -9,6 +9,7 @@ from sqlmodel import Session, select, func, desc, or_
 
 from api.bean.excluded_loop import ExcludedLoop
 from api.bean.loop_info import LoopInfo
+from api.middleware.exceptions import ValidationException
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class ExcludedLoopDAO:
         Returns:
             Optional[ExcludedLoop]: 剔除对象，不存在则返回None
         """
+        # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
         statement = select(ExcludedLoop).where(ExcludedLoop.id == excluded_id)
         return db.exec(statement).first()
     
@@ -207,7 +209,9 @@ class ExcludedLoopDAO:
         loop_name: Optional[str] = None,
         device_uri: Optional[str] = None,
         uri: Optional[str] = None,
-        loop_type: Optional[str] = None
+        loop_type: Optional[str] = None,
+            page_no: int = 1,
+            page_size: int = 10
     ) -> List[str]:
         """
         获取所有剔除回路URI列表（支持筛选）
@@ -247,6 +251,7 @@ class ExcludedLoopDAO:
             # 回路类型筛选（模糊匹配）
             if loop_type:
                 statement = statement.where(LoopInfo.loop_type==loop_type)
+
             
             # 按创建时间排序
             statement = statement.order_by(ExcludedLoop.created_time)
@@ -256,6 +261,67 @@ class ExcludedLoopDAO:
             logger.info(f"获取剔除URI列表成功，总数: {len(results)}")
             return list(results)
             
+        except Exception as e:
+            logger.error(f"获取剔除URI列表失败: {str(e)}")
+            raise
+
+    @staticmethod
+    def get_all_uris(
+            db: Session,
+            loop_name: Optional[str] = None,
+            device_uri: Optional[str] = None,
+            uri: Optional[str] = None,
+            loop_type: Optional[str] = None,
+            page_no: int = 1,
+            page_size: int = 10
+    ) -> List[str]:
+        """
+        获取所有非剔除回路列表（支持筛选）
+
+        Args:
+            db: 数据库会话
+            loop_name: 回路名称筛选（模糊匹配）
+            device_uri: 装置URI筛选（模糊匹配loop_path字段）
+            uri: 回路URI筛选（模糊匹配）
+
+        Returns:
+            List[str]: URI列表
+        """
+        try:
+            # 构建select语句
+            statement = select(ExcludedLoop.uri)
+
+            # 如果有loop_name或device_uri或loop_type筛选，需要关联loop_info表
+            if loop_name or device_uri or loop_type:
+                statement = statement.join(
+                    LoopInfo,
+                    ExcludedLoop.uri == LoopInfo.loop_uri
+                )
+
+            # 回路名称筛选（模糊匹配）
+            if loop_name:
+                statement = statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
+
+            # 装置URI筛选（模糊匹配loop_path字段）
+            if device_uri:
+                statement = statement.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
+
+            # 回路URI筛选（模糊匹配）
+            if uri:
+                statement = statement.where(ExcludedLoop.uri.like(f"%{uri}%"))
+
+            # 回路类型筛选（模糊匹配）
+            if loop_type:
+                statement = statement.where(LoopInfo.loop_type == loop_type)
+
+            # 按创建时间排序
+            statement = statement.order_by(ExcludedLoop.created_time)
+
+            results = db.exec(statement).all()
+
+            logger.info(f"获取剔除URI列表成功，总数: {len(results)}")
+            return list(results)
+
         except Exception as e:
             logger.error(f"获取剔除URI列表失败: {str(e)}")
             raise
@@ -274,6 +340,7 @@ class ExcludedLoopDAO:
             Optional[ExcludedLoop]: 更新后的剔除对象
         """
         try:
+            # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
             statement = select(ExcludedLoop).where(ExcludedLoop.id == excluded_id)
             excluded = db.exec(statement).first()
             
@@ -355,6 +422,7 @@ class ExcludedLoopDAO:
             bool: 是否删除成功
         """
         try:
+            # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
             statement = select(ExcludedLoop).where(ExcludedLoop.id == excluded_id)
             excluded = db.exec(statement).first()
             
@@ -372,7 +440,7 @@ class ExcludedLoopDAO:
             db.rollback()
             logger.error(f"删除条件剔除记录失败: {str(e)}")
             raise
-    
+
     @staticmethod
     def upsert_by_uri(
         db: Session,
@@ -434,7 +502,7 @@ class ExcludedLoopDAO:
         db: Session,
         uris: List[str],
         reason: str
-    ) -> int:
+    ) -> Dict[str, Any]:
         """
         根据多个URI批量更新剔除原因
         
@@ -448,13 +516,15 @@ class ExcludedLoopDAO:
         """
         try:
             if not uris:
-                return 0
+                return ValidationException(
+                    message="URI列表不能为空",
+                )
             
             # 构建更新语句
             statement = select(ExcludedLoop).where(
                 ExcludedLoop.uri.in_(uris)
             )
-            
+
             # 获取所有匹配的记录
             excluded_loops = db.exec(statement).all()
             
@@ -462,7 +532,6 @@ class ExcludedLoopDAO:
             updated_count = 0
             updated_uris = []
             for excluded_loop in excluded_loops:
-                excluded_loop.id=excluded_loop.id
                 excluded_loop.reason = reason
                 excluded_loop.updated_time = datetime.now()
                 db.add(excluded_loop)

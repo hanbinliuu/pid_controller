@@ -10,7 +10,7 @@ from datetime import datetime
 
 class TuningRecordData(BaseModel):
     """整定记录数据模型"""
-    id: UUID = Field(..., description="记录ID(UUID)")
+    id: str = Field(..., description="记录ID")
     loop_uri: str = Field(..., description="回路URI")
     loop_name: str = Field(..., description="回路名称")
     tuning_method: str = Field(..., description="整定方法")

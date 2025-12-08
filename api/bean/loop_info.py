@@ -20,9 +20,10 @@ class LoopInfo(SQLModel, table=True):
     __tablename__ = "loop_info"  # 数据库表名
     __table_args__ = {"comment": "回路信息表"}
 
+
     # 主键
     id: Optional[str] = Field(
-        default_factory=uuid4,
+        default_factory=lambda: str(uuid4()),
         primary_key=True,
         index=True,
         sa_column_kwargs={"comment": "记录ID(UUID)"}

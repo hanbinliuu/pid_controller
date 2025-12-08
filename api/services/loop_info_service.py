@@ -225,6 +225,111 @@ class LoopInfoService:
             return {"mappings": loop_infos, "pagination": pagination}
 
     @staticmethod
+    def list_mappings_exclude_excluded(
+            db: Session,
+            loop_name: Optional[str] = None,
+            loop_uri: Optional[str] = None,
+            loop_type: Optional[str] = None,
+            loop_path: Optional[str] = None,
+            page_no: int = 1,
+            page_size: int = 10
+    ) -> Dict[str, Any]:
+        """
+        分页查询映射关系列表
+
+        Args:
+            db: 数据库会话
+            loop_name: 回路名称
+            loop_uri: 回路URI
+            loop_path: 回路路径
+            page_no: 页码
+            page_size: 每页数量
+
+        Returns:
+            Dict: 包含映射列表和分页信息
+        """
+        result = LoopInfoDAO.query_list_no_excluded(
+            db,
+            loop_name=loop_name,
+            loop_uri=loop_uri,
+            loop_type=loop_type,
+            loop_path=loop_path,
+            is_active=True,
+            page_no=page_no,
+            page_size=page_size
+        )
+
+        # 获取回路列表
+        instances = result.get('mappings', [])
+        pagination = result["pagination"]
+        loop_infos = [
+            {
+                "id": instance.id,
+                "loop_uri": instance.loop_uri,
+                "loop_path": instance.loop_path,
+                "loop_name": instance.loop_name,
+                "description": instance.description,
+                "loop_type": instance.loop_type,
+                "created_time": instance.created_time.isoformat(),
+                "updated_time": instance.updated_time.isoformat(),
+                "is_active": instance.is_active
+            }
+            for instance in instances
+        ]
+
+        if instances:
+            # 构建批量查询配置：查询每个回路的PID参数 (PB, TI, TD)
+            loop_configs = [
+                {
+                    'loop_uri': instance.loop_uri,
+                    'point_names': ['PB', 'TI', 'TD', 'PV', 'SV', 'MV', 'AUTO']
+                }
+                for instance in instances
+            ]
+
+            # 一次查询所有回路的PID参数最新值
+            try:
+                with BFFModelClient() as client:
+
+                    loop_values = client.query_multi_loop_current_values(
+                        loop_configs=loop_configs,
+                        point_path=Config.BFF_MODEL_POINT_PATH
+                    )
+
+                    # 将PID参数添加到每个回路实例中
+                    for loop_info in loop_infos:
+                        loop_uri = loop_info['loop_uri']
+                        loop_statu_values = loop_values.get(loop_uri, {})
+
+                        loop_info['loop_status'] = {
+                            'PB': loop_statu_values.get('PB'),
+                            'TI': loop_statu_values.get('TI'),
+                            'TD': loop_statu_values.get('TD'),
+                            'PV': loop_statu_values.get('PV'),
+                            'SV': loop_statu_values.get('SV'),
+                            'MV': loop_statu_values.get('MV'),
+                            'AUTO': loop_statu_values.get('AUTO')
+                        }
+
+                    logger.info(f"成功查询 {len(loop_values)} 个回路的PID参数")
+                return {"mappings": loop_infos, "pagination": pagination}
+            except Exception as e:
+                logger.warning(f"查询PID参数失败: {str(e)}, 将返回不包含PID参数的结果")
+                # 如果PID参数查询失败，为每个回路添加空None值
+                for loop_info in loop_infos:
+                    loop_info['loop_status'] = {
+                        'PB': None,
+                        'TI': None,
+                        'TD': None,
+                        'PV': None,
+                        'SV': None,
+                        'MV': None,
+                        'AUTO': None
+                    }
+                return {"mappings": loop_infos, "pagination": pagination}
+        else:
+            return {"mappings": loop_infos, "pagination": pagination}
+    @staticmethod
     def update_mapping(
         db: Session,
         loop_uri: str,

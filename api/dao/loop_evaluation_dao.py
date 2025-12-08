@@ -104,6 +104,7 @@ class LoopEvaluationDAO:
         Returns:
             Optional[LoopEvaluation]: 评估对象，不存在则返回None
         """
+        # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
         statement = select(LoopEvaluation).where(LoopEvaluation.id == evaluation_id)
         return db.exec(statement).first()
     
@@ -302,7 +303,7 @@ class LoopEvaluationDAO:
     @staticmethod
     def update(db: Session, evaluation_id: str, update_data: Dict[str, Any]) -> Optional[LoopEvaluation]:
         """
-        更新回路评估记录 - SQLModel方式
+        更新评估记录 - SQLModel方式
         
         Args:
             db: 数据库会话
@@ -313,6 +314,7 @@ class LoopEvaluationDAO:
             Optional[LoopEvaluation]: 更新后的评估对象
         """
         try:
+            # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
             statement = select(LoopEvaluation).where(LoopEvaluation.id == evaluation_id)
             evaluation = db.exec(statement).first()
             
@@ -320,34 +322,30 @@ class LoopEvaluationDAO:
                 logger.warning(f"未找到ID为 {evaluation_id} 的评估记录")
                 return None
             
-            # 预处理更新数据
-            processed_data = LoopEvaluationDAO._prepare_evaluation_data(update_data, is_update=True)
-            
-            # 更新字段（排除不应更新的字段）
-            excluded_fields = {'id', 'created_time'}
-            for key, value in processed_data.items():
-                if key not in excluded_fields and hasattr(evaluation, key):
+            # 更新字段
+            for key, value in update_data.items():
+                if hasattr(evaluation, key):
                     setattr(evaluation, key, value)
+            
+            # 更新updated_time
+            evaluation.updated_time = datetime.now()
             
             db.add(evaluation)
             db.commit()
             db.refresh(evaluation)
             
-            logger.info(
-                f"更新回路评估记录成功: ID={evaluation_id}, "
-                f"回路={evaluation.loop_name}, URI={evaluation.loop_uri}"
-            )
+            logger.info(f"更新回路评估记录成功: ID={evaluation_id}")
             return evaluation
             
         except Exception as e:
             db.rollback()
-            logger.error(f"更新回路评估记录失败: ID={evaluation_id}, 错误: {str(e)}")
+            logger.error(f"更新回路评估记录失败: {str(e)}")
             raise
     
     @staticmethod
     def delete(db: Session, evaluation_id: str) -> bool:
         """
-        删除回路评估记录 - SQLModel方式
+        删除评估记录 - SQLModel方式
         
         Args:
             db: 数据库会话
@@ -357,6 +355,7 @@ class LoopEvaluationDAO:
             bool: 是否删除成功
         """
         try:
+            # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
             statement = select(LoopEvaluation).where(LoopEvaluation.id == evaluation_id)
             evaluation = db.exec(statement).first()
             
@@ -367,7 +366,7 @@ class LoopEvaluationDAO:
             db.delete(evaluation)
             db.commit()
             
-            logger.info(f"删除回路评估记录成功: ID={evaluation_id}, 回路={evaluation.loop_name}")
+            logger.info(f"删除回路评估记录成功: ID={evaluation_id}, loop_uri={evaluation.loop_uri}")
             return True
             
         except Exception as e:

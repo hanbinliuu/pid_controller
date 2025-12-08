@@ -51,7 +51,7 @@ class DeviceStats(BaseModel):
 
 class RecentTuningRecord(BaseModel):
     """近期整定记录"""
-    id: UUID = Field(..., description="记录ID(UUID)")
+    id: str = Field(..., description="记录ID")
     loop_name: str = Field(..., description="回路名称")
     tuning_method: str = Field(..., description="整定方法")
     operator: str = Field(..., description="操作人员")

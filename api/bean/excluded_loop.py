@@ -22,7 +22,7 @@ class ExcludedLoop(SQLModel, table=True):
 
     # 主键
     id: Optional[str] = Field(
-        default_factory=uuid4,
+        default_factory=lambda: str(uuid4()),
         primary_key=True,
         index=True,
         sa_column_kwargs={"comment": "记录ID(UUID)"}
@@ -32,7 +32,7 @@ class ExcludedLoop(SQLModel, table=True):
     uri: str = Field(
         max_length=500,
         index=True,
-        sa_column_kwargs={"comment": "回路/装置URI"}
+        sa_column_kwargs={"comment": "回路URI"}
     )
     
     # 剔除原因

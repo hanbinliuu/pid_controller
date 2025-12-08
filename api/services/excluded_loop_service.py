@@ -5,7 +5,7 @@
 import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from sqlmodel import Session, select
+from sqlmodel import Session, select, desc
 
 from api.dao.excluded_loop_dao import ExcludedLoopDAO
 from api.bean.excluded_loop import ExcludedLoop
@@ -107,7 +107,9 @@ class ExcludedLoopService:
         try:
             excluded = ExcludedLoopDAO.get_by_uri(db, uri)
             if excluded:
-                return ExcludedLoopDAO.delete(db, excluded.id)
+                # 确保传递给delete方法的是字符串ID，而不是UUID对象
+                excluded_id = str(excluded.id) if hasattr(excluded.id, '__str__') else excluded.id
+                return ExcludedLoopDAO.delete(db, excluded_id)
             return False
             
         except Exception as e:
@@ -126,8 +128,10 @@ class ExcludedLoopService:
         Returns:
             Optional[ExcludedLoop]: 剔除对象
         """
-        return ExcludedLoopDAO.get_by_id(db, excluded_id)
-    
+        # 确保传递给get_by_id方法的是字符串ID
+        excluded_id_str = str(excluded_id) if hasattr(excluded_id, '__str__') else excluded_id
+        return ExcludedLoopDAO.get_by_id(db, excluded_id_str)
+
     @staticmethod
     def get_excluded_by_uri(db: Session, uri: str) -> Optional[ExcludedLoop]:
         """
@@ -198,7 +202,9 @@ class ExcludedLoopService:
         loop_name: Optional[str] = None,
         device_uri: Optional[str] = None,
         uri: Optional[str] = None,
-        loop_type: Optional[str] = None
+        loop_type: Optional[str] = None,
+        page_no: int = 1,
+        page_size: int = 10
     ) -> List[str]:
         """
         获取所有剔除回路URI列表（支持筛选）
@@ -242,12 +248,14 @@ class ExcludedLoopService:
             if reason is not None:
                 update_data["reason"] = reason
             
-            return ExcludedLoopDAO.update(db, excluded_id, update_data)
+            # 确保传递给update方法的是字符串ID
+            excluded_id_str = str(excluded_id) if hasattr(excluded_id, '__str__') else excluded_id
+            return ExcludedLoopDAO.update(db, excluded_id_str, update_data)
             
         except Exception as e:
             logger.error(f"更新条件剔除记录失败: {str(e)}")
             raise
-    
+
     @staticmethod
     def delete_excluded(db: Session, excluded_id: str) -> bool:
         """
@@ -260,7 +268,9 @@ class ExcludedLoopService:
         Returns:
             bool: 是否删除成功
         """
-        return ExcludedLoopDAO.delete(db, excluded_id)
+        # 确保传递给delete方法的是字符串ID
+        excluded_id_str = str(excluded_id) if hasattr(excluded_id, '__str__') else excluded_id
+        return ExcludedLoopDAO.delete(db, excluded_id_str)
     
     @staticmethod
     def batch_add_excluded(
@@ -367,7 +377,7 @@ class ExcludedLoopService:
         db: Session,
         uris: List[str],
         reason: str
-    ) -> int:
+    ) -> Dict[str, Any]:
         """
         根据多个URI批量更新剔除原因
         
@@ -377,7 +387,7 @@ class ExcludedLoopService:
             reason: 新的剔除原因
             
         Returns:
-            int: 更新的记录数量
+            Dict[str, Any]: 更新结果
         """
         try:
             return ExcludedLoopDAO.batch_update_reason_by_uris(db, uris, reason)

@@ -181,6 +181,41 @@ async def list_loop_info(
         )
 
 
+@router.get("/loop-info/list-exclude-excluded",
+          summary="分页查询回路列表(排除已剔除)",
+          operation_id="list_loop_info_exclude_excluded",
+          response_model=Dict[str, Any])
+async def list_loop_info_exclude_excluded(
+        db: Session = Depends(get_db),
+        loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
+        loop_uri: Optional[str] = Query(None, description="回路URI"),
+        loop_path: Optional[str] = Query(None, description="回路路径"),
+        loop_type: Optional[str] = Query(None, description="回路类型"),
+        page_no: int = Query(1, description="页码，从1开始"),
+        page_size: int = Query(10, description="每页数量")
+) -> Dict[str, Any]:
+    """
+    分页查询所有回路信息记录
+    """
+    try:
+        result = LoopInfoService.list_mappings_exclude_excluded(
+            db,
+            loop_name=loop_name,
+            loop_uri=loop_uri,
+            loop_path=loop_path,
+            loop_type=loop_type,
+            page_no=page_no,
+            page_size=page_size
+        )
+
+        return result
+    except Exception as e:
+        logger.error(f"查询回路信息列表失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询回路信息列表失败: {str(e)}"
+        )
+
 @router.put("/loop-info",
            summary="更新回路信息",
            operation_id="update_loop_info",

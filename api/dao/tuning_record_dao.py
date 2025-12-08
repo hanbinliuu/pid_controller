@@ -55,6 +55,7 @@ class TuningRecordDAO:
         Returns:
             Optional[TuningRecord]: 记录对象，不存在则返回None
         """
+        # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
         statement = select(TuningRecord).where(TuningRecord.id == record_id)
         return db.exec(statement).first()
     
@@ -161,6 +162,7 @@ class TuningRecordDAO:
             Optional[TuningRecord]: 更新后的记录对象
         """
         try:
+            # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
             statement = select(TuningRecord).where(TuningRecord.id == record_id)
             record = db.exec(statement).first()
             
@@ -201,6 +203,7 @@ class TuningRecordDAO:
             bool: 是否删除成功
         """
         try:
+            # 直接使用字符串ID进行查询，因为数据库中存储的是VARCHAR类型
             statement = select(TuningRecord).where(TuningRecord.id == record_id)
             record = db.exec(statement).first()
             
