@@ -1,15 +1,18 @@
-"""模型选择器模块 - 多模型拟合与参数融合"""
+"""模型选择器模块 - 多模型拟合与参数融合协调器"""
 
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Tuple, Union
-from datetime import datetime
 from scipy.optimize import least_squares
 
 from .config import Config, ModelType
 from .identifier import ModelIdentifier
 from .fusion_strategy import PIDFusionStrategy, WindowResult as FusionWindowResult
-from .data_preprocessor import DataPreprocessor, NonlinearityAnalysis
+from .data_preprocessor import DataPreprocessor
+from .segment_validator import SegmentValidator, HistoricalData, TuningWindow
+from .pid_calculator import PIDCalculator
+from .model_evaluator import ModelEvaluator
+from .utils import MetricsCalculator, TimestampParser, SimulationHelper
 
 
 # ============================================================
@@ -19,18 +22,13 @@ from .data_preprocessor import DataPreprocessor, NonlinearityAnalysis
 @dataclass
 class SegmentResult:
     """单个扰动段的拟合结果"""
-    segment_idx: int                    # 段索引
-    start_idx: int                      # 起始索引
-    end_idx: int                        # 结束索引
-    data_points: int                    # 数据点数
-    is_valid: bool                      # 是否有效
-    invalid_reason: str = ""            # 无效原因
-    
-    # 各模型的拟合结果
+    segment_idx: int
+    start_idx: int
+    end_idx: int
+    data_points: int
+    is_valid: bool
+    invalid_reason: str = ""
     model_results: Dict[str, Dict] = field(default_factory=dict)
-    # 格式: {model_type: {K, T1, T2, L, r2, rss, aic, bic, params_raw}}
-    
-    # 最佳模型（该段）
     best_model: str = ""
     best_r2: float = 0.0
     best_aic: float = float('inf')
@@ -39,32 +37,19 @@ class SegmentResult:
 @dataclass
 class FusionResult:
     """参数融合结果"""
-    model_type: str                     # 最终模型类型
+    model_type: str
     K: float = 0.0
     T1: float = 0.0
     T2: float = 0.0
     L: float = 0.0
-    
-    # 融合统计
-    fusion_method: str = ""             # 融合方法
-    n_segments_used: int = 0            # 使用的段数
+    fusion_method: str = ""
+    n_segments_used: int = 0
     segment_weights: List[float] = field(default_factory=list)
-    
-    # 一致性评估
-    K_std: float = 0.0                  # K的标准差
-    T1_std: float = 0.0                 # T1的标准差
-    consistency_score: float = 0.0      # 一致性评分 (0-1)
-    
-    # 验证结果
-    global_r2: float = 0.0              # 全局R²
-    global_rmse: float = 0.0            # 全局RMSE
-
-
-@dataclass
-class TuningWindow:
-    """整定窗口"""
-    start_time: Any
-    end_time: Any
+    K_std: float = 0.0
+    T1_std: float = 0.0
+    consistency_score: float = 0.0
+    global_r2: float = 0.0
+    global_rmse: float = 0.0
 
 
 @dataclass
@@ -88,60 +73,38 @@ class TuningInput:
         )
 
 
-@dataclass
-class HistoricalData:
-    """历史数据"""
-    timestamp: np.ndarray
-    pv: np.ndarray
-    sv: np.ndarray
-    mv: np.ndarray
-    
-    @classmethod
-    def from_json(cls, data: List[Dict]) -> 'HistoricalData':
-        if not data:
-            raise ValueError("输入数据为空")
-        timestamps = np.array([item.get('timestamp', 0) for item in data], dtype=np.float64)
-        pvs = np.array([item.get('pv', 0.0) for item in data], dtype=np.float64)
-        svs = np.array([item.get('sv', 0.0) for item in data], dtype=np.float64)
-        mvs = np.array([item.get('mv', 0.0) for item in data], dtype=np.float64)
-        return cls(timestamp=timestamps, pv=pvs, sv=svs, mv=mvs)
-    
-    def __len__(self) -> int:
-        return len(self.pv)
-
-
 # ============================================================
 # 模型选择器主类
 # ============================================================
 
 class ModelSelector:
     """
-    模型类型选择器
+    模型类型选择器 - 协调器模式
     
     核心流程：
-    1. 剔除无效/扰动段 → 有效段筛选
+    1. 剔除无效/扰动段 → 有效段筛选 (SegmentValidator)
     2. 对每个有效段尝试多种模型拟合 → 获取各段各模型的KTL
     3. 基于AIC/RSS/形状特征选择最优模型结构 → 确定模型类型
-    4. 融合各段参数 → 唯一K, T, L（加权平均 / 全局优化）
-    5. 验证一致性与仿真匹配度 → 最终输出
+    4. 融合各段参数 → 唯一K, T, L (PIDFusionStrategy)
+    5. 验证一致性与仿真匹配度 → 最终输出 (ModelEvaluator)
     """
     
     # 候选模型
     CANDIDATE_MODELS = [
-        ModelType.FOPDT,    # 一阶加滞后（最常用）
-        ModelType.FO,       # 纯一阶
-        ModelType.SO,       # 二阶
-        ModelType.SOPDT,    # 二阶加滞后
-        ModelType.FOPI,     # 积分过程
+        ModelType.FOPDT,
+        ModelType.FO,
+        ModelType.SO,
+        ModelType.SOPDT,
+        ModelType.FOPI,
     ]
     
     # 模型参数数量（用于AIC/BIC计算）
     MODEL_PARAM_COUNT = {
-        ModelType.FOPDT: 3,   # K, T, L
-        ModelType.FO: 2,      # K, T
-        ModelType.SO: 3,      # K, T1, T2
-        ModelType.SOPDT: 4,   # K, T1, T2, L
-        ModelType.FOPI: 2,    # K, L
+        ModelType.FOPDT: 3,
+        ModelType.FO: 2,
+        ModelType.SO: 3,
+        ModelType.SOPDT: 4,
+        ModelType.FOPI: 2,
     }
     
     # 参数格式化
@@ -171,31 +134,15 @@ class ModelSelector:
         ModelType.FOPI: ModelIdentifier.integral_delay_model,
     }
     
-    # 评分等级阈值
-    RATING_THRESHOLDS = {
-        'excellent': (8.0, '优秀'),
-        'good': (6.0, '良好'),
-        'acceptable': (4.0, '可接受'),
-        'poor': (2.0, '较差'),
-        'unavailable': (0.0, '不可用')
-    }
-    
-    # 验证阈值常量
-    MIN_DATA_POINTS = 20          # 最小数据点数
-    MIN_PV_RANGE = 0.5            # 最小PV变化范围
-    MIN_MV_RANGE = 0.1            # 最小MV变化范围
-    MIN_R2_FOR_VOTE = 0.3         # 投票所需最小R²
-    MIN_R2_FOR_QUALITY = 0.4      # 高质量段最小R²
-    R2_THRESHOLDS = [0.5, 0.3, 0.15, 0.0]  # 参数融合阈值序列
-    
-    # 非线性阈值
-    NONLINEAR_R2_THRESHOLD = 0.5  # 低于此R²时考虑非线性
-    NONLINEAR_SCORE_THRESHOLD = 0.25  # 非线性评分阈值
-    
     def __init__(self, verbose: bool = False):
         self._verbose = verbose
         self._epsilon = Config.EPSILON
+        
+        # 组件初始化
         self._preprocessor = DataPreprocessor(verbose=verbose)
+        self._segment_validator = SegmentValidator(verbose=verbose)
+        self._pid_calculator = PIDCalculator()
+        self._evaluator = ModelEvaluator(verbose=verbose)
     
     @property
     def verbose(self) -> bool:
@@ -305,26 +252,12 @@ class ModelSelector:
         }
     
     def _get_recommendation(self, model_rating: float) -> str:
-        """根据评分获取推荐等级"""
-        if model_rating >= 8.0:
-            return '优秀'
-        elif model_rating >= 6.0:
-            return '良好'
-        elif model_rating >= 4.0:
-            return '可接受'
-        elif model_rating >= 2.0:
-            return '较差'
-        else:
-            return '不可用'
+        """根据评分获取推荐等级（委托给ModelEvaluator）"""
+        return self._evaluator.get_recommendation(model_rating)
     
     def _determine_turning_type(self, Kp: float, Ti: float, Td: float) -> str:
-        """根据 PID 参数确定整定类型"""
-        if Td > self._epsilon:
-            return 'PID'
-        elif Ti > self._epsilon:
-            return 'PI'
-        else:
-            return 'P'
+        """根据 PID 参数确定整定类型（委托给PIDCalculator）"""
+        return self._pid_calculator.determine_tuning_type(Kp, Ti, Td)
     
     def _empty_result_new(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """新格式空结果"""
@@ -475,28 +408,28 @@ class ModelSelector:
             )
             
             # 检查1: 数据点数
-            if len(seg) < self.MIN_DATA_POINTS:
-                self._mark_invalid(result, f"数据点不足({len(seg)}<{self.MIN_DATA_POINTS})", i, segment_results)
+            if len(seg) < Config.MIN_DATA_POINTS:
+                self._mark_invalid(result, f"数据点不足({len(seg)}<{Config.MIN_DATA_POINTS})", i, segment_results)
                 continue
             
             # 过滤PV=0的点
             valid_mask = seg.pv != 0
             valid_count = np.sum(valid_mask)
             
-            if valid_count < self.MIN_DATA_POINTS:
-                self._mark_invalid(result, f"有效点不足({valid_count}<{self.MIN_DATA_POINTS})", i, segment_results)
+            if valid_count < Config.MIN_DATA_POINTS:
+                self._mark_invalid(result, f"有效点不足({valid_count}<{Config.MIN_DATA_POINTS})", i, segment_results)
                 continue
             
             y, u = seg.pv[valid_mask], seg.mv[valid_mask]
             pv_range, mv_range = np.ptp(y), np.ptp(u)  # ptp = max - min
             
             # 检查2: PV变化
-            if pv_range < self.MIN_PV_RANGE and np.std(y) < 0.1:
+            if pv_range < Config.MIN_PV_RANGE and np.std(y) < 0.1:
                 self._mark_invalid(result, f"PV无变化(range={pv_range:.2f})", i, segment_results)
                 continue
             
             # 检查3: MV变化
-            if mv_range < self.MIN_MV_RANGE:
+            if mv_range < Config.MIN_MV_RANGE:
                 self._mark_invalid(result, f"MV无变化(range={mv_range:.2f})", i, segment_results)
                 continue
             
@@ -1009,15 +942,15 @@ class ModelSelector:
                 # 使用调整后的R²（如果有的话）
                 best_fit = result.model_results.get(result.best_model, {})
                 r2 = best_fit.get('r2_adjusted', best_fit.get('r2', 0))
-                if r2 >= self.MIN_R2_FOR_VOTE:
+                if r2 >= Config.MIN_R2_FOR_VOTE:
                     model_r2_scores[result.best_model].append(r2)
             
             # 只有高质量段才投票
-            if result.best_r2 >= self.MIN_R2_FOR_VOTE and result.best_model:
+            if result.best_r2 >= Config.MIN_R2_FOR_VOTE and result.best_model:
                 model_votes[result.best_model] += 1
                 high_quality_count += 1
         
-        self.log(f"\n   高质量段(R²≥{self.MIN_R2_FOR_VOTE}): {high_quality_count}/{len(valid_results)}")
+        self.log(f"\n   高质量段(R²≥{Config.MIN_R2_FOR_VOTE}): {high_quality_count}/{len(valid_results)}")
         
         # 计算各模型的平均R²
         self.log("\n   模型评估汇总:")
@@ -1095,7 +1028,7 @@ class ModelSelector:
         window_results = []
         added_indices = set()
         
-        for threshold in self.R2_THRESHOLDS:
+        for threshold in Config.R2_THRESHOLDS:
             for result in segment_results:
                 if not result.is_valid or result.segment_idx in added_indices:
                     continue
@@ -1124,7 +1057,7 @@ class ModelSelector:
                 added_indices.add(result.segment_idx)
             
             if window_results:
-                if threshold < self.R2_THRESHOLDS[0]:
+                if threshold < Config.R2_THRESHOLDS[0]:
                     self.log(f"   ⚠️ 使用阈值 R²≥{threshold} 收集到 {len(window_results)} 个有效段")
                 break
         
@@ -1507,48 +1440,28 @@ class ModelSelector:
         return TuningInput.from_dict(tuning_input)
     
     def _parse_timestamp(self, ts: Any) -> Optional[float]:
-        """解析时间戳为毫秒"""
-        if ts is None:
-            return None
-        if isinstance(ts, (int, float)):
-            return float(ts)
-        if isinstance(ts, str):
-            for fmt in ['%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S']:
-                try:
-                    dt = datetime.strptime(ts.replace('Z', '').split('+')[0], fmt)
-                    return dt.timestamp() * 1000
-                except ValueError:
-                    continue
-            return None
-        if hasattr(ts, 'timestamp'):
-            return ts.timestamp() * 1000
-        return None
+        """解析时间戳为毫秒（委托给TimestampParser）"""
+        return TimestampParser.parse(ts)
     
     def _calculate_r2(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        ss_res = np.sum((y_true - y_pred) ** 2)
-        ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
-        if ss_tot < self._epsilon:
-            return 0.0
-        r2 = 1 - ss_res / ss_tot
-        return float(np.clip(r2, 0.0, 1.0))
+        """计算R²（委托给MetricsCalculator）"""
+        return MetricsCalculator.calculate_r2(y_true, y_pred, self._epsilon)
     
     def _calculate_rmse(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+        """计算RMSE（委托给MetricsCalculator）"""
+        return MetricsCalculator.calculate_rmse(y_true, y_pred)
     
     def _calculate_rss(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        return float(np.sum((y_true - y_pred) ** 2))
+        """计算RSS（委托给MetricsCalculator）"""
+        return MetricsCalculator.calculate_rss(y_true, y_pred)
     
     def _calculate_aic(self, rss: float, n: int, k: int) -> float:
-        """计算AIC (Akaike Information Criterion)"""
-        if rss <= 0 or n <= k:
-            return float('inf')
-        return n * np.log(rss / n) + 2 * k
+        """计算AIC（委托给MetricsCalculator）"""
+        return MetricsCalculator.calculate_aic(rss, n, k)
     
     def _calculate_bic(self, rss: float, n: int, k: int) -> float:
-        """计算BIC (Bayesian Information Criterion)"""
-        if rss <= 0 or n <= k:
-            return float('inf')
-        return n * np.log(rss / n) + k * np.log(n)
+        """计算BIC（委托给MetricsCalculator）"""
+        return MetricsCalculator.calculate_bic(rss, n, k)
     
     def _fusion_to_params(self, fusion: FusionResult) -> tuple:
         """FusionResult转为参数元组"""
@@ -1600,240 +1513,22 @@ class ModelSelector:
     
     def _calculate_pid(self, K: float, T1: float, T2: float, L: float,
                        model_type: str, lambda_factor: float) -> Dict[str, float]:
-        """计算PID参数（Lambda方法）"""
-        K = max(abs(K), self._epsilon)
-        T1 = max(T1, self._epsilon)
-        L = max(L, 0.0)
-        T_eq = T1 + T2 if T2 > 0 else T1
-        lambda_val = T_eq * lambda_factor
-        
-        if model_type in [ModelType.FOPDT, ModelType.FO, 'PIECEWISE']:
-            # PIECEWISE模型使用FOPDT的PID计算公式
-            denom = K * (lambda_val + L / 2)
-            if denom < self._epsilon:
-                Kp, Ti, Td = 1.0, 20.0, 0.0
-            else:
-                Kp = (T1 + L / 2) / denom
-                Ti = T1 + L / 2
-                Td = (T1 * L) / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
-        
-        elif model_type in [ModelType.SO, ModelType.SOPDT]:
-            denom = K * (lambda_val + L / 2) if L > 0 else K * lambda_val
-            if denom < self._epsilon:
-                Kp, Ti, Td = 1.0, 20.0, 0.0
-            else:
-                Kp = T_eq / denom
-                Ti = T_eq
-                Td = (T1 * T2) / T_eq if T_eq > self._epsilon else 0.0
-        
-        elif model_type == ModelType.FOPI:
-            if K < self._epsilon:
-                Kp, Ti, Td = 1.0, 20.0, 0.0
-            else:
-                lv = max(T1 * 0.8, 0.2) if T1 > 0 else 0.2
-                Kp = T1 / (K * lv) if T1 > 0 else 1.0 / (K * lv)
-                Ti, Td = max(T1, 1.0), 0.0
-        else:
-            Kp, Ti, Td = 1.0, 20.0, 0.0
-        
-        Kp, Ti, Td = max(0.01, Kp), max(0.1, Ti), max(0.0, Td)
-        Ki = Kp / Ti if Ti > self._epsilon else 0.0
-        Kd = Kp * Td
-        
-        return {
-            'Kp': round(float(Kp), 4),
-            'Ki': round(float(Ki), 4),
-            'Kd': round(float(Kd), 4)
-        }
+        """计算PID参数（委托给PIDCalculator）"""
+        pid_params = self._pid_calculator.calculate(K, T1, T2, L, model_type, lambda_factor)
+        return pid_params.to_standard_dict()
     
     def _calculate_model_rating(self, fusion: FusionResult, 
                                   total_data_points: int) -> Tuple[float, Dict[str, float]]:
-        """
-        计算综合模型评分 (0-10分)
-        
-        综合考虑以下维度：
-        1. 拟合质量 (R²)        - 40%
-        2. 参数一致性            - 25%
-        3. 参数物理合理性        - 20%
-        4. 数据覆盖度            - 15%
-        
-        Returns:
-            (model_rating, score_details)
-        """
-        score_details = {}
-        
-        # ============================================================
-        # 1. 拟合质量评分 (0-10) - 权重 40%
-        # ============================================================
-        r2 = fusion.global_r2
-        # 使用非线性映射，R²<0.5 快速下降，R²>0.8 缓慢上升
-        if r2 >= 0.95:
-            r2_score = 10.0
-        elif r2 >= 0.9:
-            r2_score = 9.0 + (r2 - 0.9) * 20  # 0.9->9, 0.95->10
-        elif r2 >= 0.8:
-            r2_score = 7.5 + (r2 - 0.8) * 15  # 0.8->7.5, 0.9->9
-        elif r2 >= 0.6:
-            r2_score = 5.0 + (r2 - 0.6) * 12.5  # 0.6->5, 0.8->7.5
-        elif r2 >= 0.4:
-            r2_score = 3.0 + (r2 - 0.4) * 10  # 0.4->3, 0.6->5
-        elif r2 >= 0.2:
-            r2_score = 1.0 + (r2 - 0.2) * 10  # 0.2->1, 0.4->3
-        else:
-            r2_score = r2 * 5  # 0->0, 0.2->1
-        score_details['r2_score'] = round(r2_score, 2)
-        
-        # ============================================================
-        # 2. 参数一致性评分 (0-10) - 权重 25%
-        # ============================================================
-        # 基于 K 和 T1 的变异系数 (CV = std/mean)
-        consistency_score = 10.0
-        
-        if fusion.n_segments_used > 1:
-            # K 的变异系数
-            k_mean = abs(fusion.K) + self._epsilon
-            k_cv = fusion.K_std / k_mean
-            
-            # T1 的变异系数  
-            t1_mean = abs(fusion.T1) + self._epsilon
-            t1_cv = fusion.T1_std / t1_mean
-            
-            # CV < 0.1 优秀, CV > 0.5 较差
-            k_consistency = max(0, 10 - k_cv * 15)
-            t1_consistency = max(0, 10 - t1_cv * 15)
-            
-            # 取平均，K 权重略高
-            consistency_score = 0.6 * k_consistency + 0.4 * t1_consistency
-            
-            # 额外奖励：如果 fusion 使用了 confidence 评分
-            if fusion.consistency_score > 0:
-                consistency_score = 0.7 * consistency_score + 0.3 * (fusion.consistency_score * 10)
-        else:
-            # 单段情况，使用 fusion 的 consistency_score
-            if fusion.consistency_score > 0:
-                consistency_score = fusion.consistency_score * 10
-            else:
-                consistency_score = 6.0  # 单段默认中等分数
-        
-        consistency_score = min(10.0, max(0.0, consistency_score))
-        score_details['consistency_score'] = round(consistency_score, 2)
-        
-        # ============================================================
-        # 3. 参数物理合理性评分 (0-10) - 权重 20%
-        # ============================================================
-        validity_score = 10.0
-        penalties = []
-        
-        # K 检查: 应该非零，且绝对值不应过大或过小
-        K = fusion.K
-        if abs(K) < 0.001:
-            penalties.append(('K接近零', 4.0))
-        elif abs(K) > 50:
-            penalties.append(('K过大', 2.0))
-        elif abs(K) < 0.01:
-            penalties.append(('K过小', 1.0))
-        
-        # T1 检查: 时间常数应为正，且在合理范围
-        T1 = fusion.T1
-        if T1 <= 0:
-            penalties.append(('T1非正', 5.0))
-        elif T1 < 0.1:
-            penalties.append(('T1过小', 2.0))
-        elif T1 > 500:
-            penalties.append(('T1过大', 1.5))
-        
-        # L 检查: 滞后时间应非负
-        L = fusion.L
-        if L < 0:
-            penalties.append(('L为负', 3.0))
-        elif L > T1 * 2 and T1 > 0:
-            penalties.append(('L过大', 1.0))  # L > 2*T1 可能不合理
-        
-        # T2 检查 (如果有)
-        T2 = fusion.T2
-        if T2 < 0:
-            penalties.append(('T2为负', 2.0))
-        
-        # 应用惩罚
-        for reason, penalty in penalties:
-            validity_score -= penalty
-            self.log(f"   参数检查: {reason}, 扣{penalty}分")
-        
-        validity_score = max(0.0, validity_score)
-        score_details['validity_score'] = round(validity_score, 2)
-        
-        # ============================================================
-        # 4. 数据覆盖度评分 (0-10) - 权重 15%
-        # ============================================================
-        # 基于有效段数和数据点数
-        n_segments = fusion.n_segments_used
-        
-        # 段数评分: 1段=5分, 2段=7分, 3段=8.5分, 4+段=9-10分
-        if n_segments >= 4:
-            segment_score = 9.0 + min(1.0, (n_segments - 4) * 0.25)
-        elif n_segments == 3:
-            segment_score = 8.5
-        elif n_segments == 2:
-            segment_score = 7.0
-        elif n_segments == 1:
-            segment_score = 5.0
-        else:
-            segment_score = 0.0
-        
-        # 数据点数评分: 根据总数据点数调整
-        # 100点以下较少, 100-500中等, 500+充足
-        if total_data_points >= 500:
-            data_score = 10.0
-        elif total_data_points >= 200:
-            data_score = 7.0 + (total_data_points - 200) / 100
-        elif total_data_points >= 100:
-            data_score = 5.0 + (total_data_points - 100) / 50
-        elif total_data_points >= 50:
-            data_score = 3.0 + (total_data_points - 50) / 25
-        else:
-            data_score = total_data_points / 50 * 3
-        
-        coverage_score = 0.6 * segment_score + 0.4 * data_score
-        coverage_score = min(10.0, coverage_score)
-        score_details['coverage_score'] = round(coverage_score, 2)
-        score_details['n_segments'] = n_segments
-        score_details['total_data_points'] = total_data_points
-        
-        # ============================================================
-        # 综合评分
-        # ============================================================
-        weights = {
-            'r2': 0.40,
-            'consistency': 0.25,
-            'validity': 0.20,
-            'coverage': 0.15
-        }
-        
-        final_score = (
-            weights['r2'] * r2_score +
-            weights['consistency'] * consistency_score +
-            weights['validity'] * validity_score +
-            weights['coverage'] * coverage_score
+        """计算综合模型评分（委托给ModelEvaluator）"""
+        rating, details = self._evaluator.calculate_rating(
+            global_r2=fusion.global_r2,
+            n_segments=fusion.n_segments_used,
+            total_data_points=total_data_points,
+            K=fusion.K, T1=fusion.T1, T2=fusion.T2, L=fusion.L,
+            K_std=fusion.K_std, T1_std=fusion.T1_std,
+            consistency_score=fusion.consistency_score
         )
-        
-        # 应用总体调整
-        # 如果 R² 太低，整体评分也应受限
-        if r2 < 0.3:
-            final_score = min(final_score, 3.0)
-        elif r2 < 0.5:
-            final_score = min(final_score, 5.0)
-        
-        final_score = round(min(10.0, max(0.0, final_score)), 2)
-        score_details['weights'] = weights
-        
-        self.log(f"\n   📊 评分详情:")
-        self.log(f"      拟合质量 (R²={r2:.3f}): {r2_score:.1f}/10 × {weights['r2']:.0%}")
-        self.log(f"      参数一致性: {consistency_score:.1f}/10 × {weights['consistency']:.0%}")
-        self.log(f"      参数合理性: {validity_score:.1f}/10 × {weights['validity']:.0%}")
-        self.log(f"      数据覆盖度 ({n_segments}段/{total_data_points}点): {coverage_score:.1f}/10 × {weights['coverage']:.0%}")
-        self.log(f"      → 综合评分: {final_score}/10")
-        
-        return final_score, score_details
+        return rating, details.to_dict()
     
     def _build_output(self, fusion: FusionResult, hist_data: HistoricalData,
                       time_range: Dict, lambda_factor: float,
