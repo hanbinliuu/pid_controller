@@ -13,11 +13,13 @@ class TuningRecordData(BaseModel):
     id: str = Field(..., description="记录ID")
     loop_uri: str = Field(..., description="回路URI")
     loop_name: str = Field(..., description="回路名称")
+    loop_type: str = Field(..., description="回路类型")
+    description: str = Field(..., description="回路描述")
     tuning_method: str = Field(..., description="整定方法")
+    auto_status: datetime = Field(..., description="自控情况")
     operator: str = Field(..., description="操作人员")
     before_params: str = Field(..., description="整定前参数(JSON字符串)")
     after_params: str = Field(..., description="整定后参数(JSON字符串)")
-    description: Optional[str] = Field(None, description="描述")
     status: str = Field(..., description="状态")
     remark: Optional[str] = Field(None, description="备注")
     tuning_details: Optional[Dict[str, Any]] = Field(None, description="整定详情")
@@ -31,10 +33,11 @@ class TuningRecordData(BaseModel):
                 "loop_uri": "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
                 "loop_name": "FIC-101",
                 "tuning_method": "大模型整定",
+                "loop_type": "液位",
+                "description": "回路描述",
                 "operator": "admin",
                 "before_params": "{\"kp\":1.0,\"ki\":0.2,\"kd\":0.05}",
                 "after_params": "{\"kp\":1.5,\"ki\":0.3,\"kd\":0.1}",
-                "description": "整定说明",
                 "status": "成功",
                 "remark": "备注信息",
                 "tuning_details": {},

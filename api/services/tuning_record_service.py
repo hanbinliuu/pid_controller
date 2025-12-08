@@ -11,6 +11,7 @@ from sqlmodel import Session
 
 from api.dao.tuning_record_dao import TuningRecordDAO
 from api.bean.tuning_record import TuningRecord
+from core.database.database import get_db_session
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +21,8 @@ class TuningRecordService:
     
     @staticmethod
     def create_record(
-        db: Session,
         loop_uri: str,
-        loop_name: str,
+        loop_status: str,
         tuning_method: str,
         operator: str,
         before_params: str,
@@ -54,29 +54,30 @@ class TuningRecordService:
             TuningRecord: 创建的记录对象
         """
         try:
-            # 创建记录对象
-            record = TuningRecord(
-                loop_uri=loop_uri,
-                loop_name=loop_name,
-                description=description,
-                tuning_method=tuning_method,
-                tuning_time=datetime.now(),
-                operator=operator,
-                operator_id=operator_id,
-                before_params=before_params,
-                after_params=after_params,
-                status=status,
-                remark=remark,
-                tuning_details=tuning_details
-            )
+            with get_db_session() as db:
+                # 创建记录对象
+                record = TuningRecord(
+                    loop_uri=loop_uri,
+                    loop_status=loop_status,
+                    description=description,
+                    tuning_method=tuning_method,
+                    tuning_time=datetime.now(),
+                    operator=operator,
+                    operator_id=operator_id,
+                    before_params=before_params,
+                    after_params=after_params,
+                    status=status,
+                    remark=remark,
+                    tuning_details=tuning_details
+                )
+
+                # 保存到数据库
+                db.add(record)
+                db.commit()
+                db.refresh(record)
             
-            # 保存到数据库
-            db.add(record)
-            db.commit()
-            db.refresh(record)
-            
-            logger.info(f"创建整定记录成功: ID={record.id}, 回路={record.loop_name}")
-            return record
+                logger.info(f"创建整定记录成功: ID={record.id}, 回路={record.loop_name}")
+                return record
             
         except Exception as e:
             db.rollback()
@@ -86,6 +87,7 @@ class TuningRecordService:
     @staticmethod
     def query_records(
         db: Session,
+        loop_type: Optional[str] = None,
         loop_name: Optional[str] = None,
         tuning_method: Optional[str] = None,
         start_time: Optional[str] = None,
@@ -98,6 +100,7 @@ class TuningRecordService:
         
         Args:
             db: 数据库会话
+            loop_type: 回路类型
             loop_name: 回路名称筛选
             tuning_method: 整定方法筛选
             start_time: 开始时间
@@ -112,6 +115,7 @@ class TuningRecordService:
             # 使用DAO查询
             result = TuningRecordDAO.query_list(
                 db=db,
+                loop_type=loop_type,
                 loop_name=loop_name,
                 tuning_method=tuning_method,
                 start_time=start_time,
@@ -120,37 +124,14 @@ class TuningRecordService:
                 page_size=page_size
             )
             
-            # 构建返回数据（添加序号）
-            records = []
-            start_idx = (page_no - 1) * page_size
-            for idx, record in enumerate(result["records"], start=start_idx + 1):
-                records.append({
-                    "sequence": idx,
-                    "id": record.id,
-                    "loop_uri": record.loop_uri,
-                    "loop_name": record.loop_name,
-                    "description": record.description,
-                    "tuning_method": record.tuning_method,
-                    "tuning_time": record.tuning_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "operator": record.operator,
-                    "operator_id": record.operator_id,
-                    "before_params": record.before_params,
-                    "after_params": record.after_params,
-                    "status": record.status,
-                    "remark": record.remark
-                })
-            
-            return {
-                "records": records,
-                "pagination": result["pagination"]
-            }
+            return result
             
         except Exception as e:
             logger.error(f"查询整定记录失败: {str(e)}")
             raise
     
     @staticmethod
-    def get_record_by_id(db: Session, record_id: int) -> Optional[TuningRecord]:
+    def get_record_by_id(db: Session, record_id: str) -> Optional[TuningRecord]:
         """
         根据ID查询记录详情
         
@@ -230,24 +211,4 @@ class TuningRecordService:
             
         except Exception as e:
             logger.error(f"更新整定记录失败: {str(e)}")
-            raise
-    
-    @staticmethod
-    def get_statistics(db: Session) -> Dict[str, Any]:
-        """
-        获取统计信息
-        
-        Args:
-            db: 数据库会话
-        
-        Returns:
-            Dict: 统计信息
-        """
-        try:
-            stats = TuningRecordDAO.get_statistics(db)
-            logger.info("获取统计信息成功")
-            return stats
-            
-        except Exception as e:
-            logger.error(f"获取统计信息失败: {str(e)}")
             raise

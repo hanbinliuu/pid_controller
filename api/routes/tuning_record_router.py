@@ -13,6 +13,7 @@ from sqlmodel import Session
 from core.database.database import get_db
 from api.services.tuning_record_service import TuningRecordService
 from api.bean.tuning_record import TuningRecord
+from core.utils.idass import UserInfo, get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,38 +31,36 @@ logger = logging.getLogger(__name__)
 )
 async def create_tuning_record(
     loop_uri: str,
-    loop_name: str,
+    loop_status: str,
     tuning_method: str,
-    operator: str,
     before_params: str,
     after_params: str,
-    operator_id: Optional[str] = None,
     description: Optional[str] = None,
     status: str = "成功",
     remark: Optional[str] = None,
     tuning_details: Optional[Dict[str, Any]] = None,
-    db: Session = Depends(get_db)
+    user: UserInfo = Depends(get_current_user)
+        # ,db: Session = Depends(get_db)
 ) -> TuningRecord:
     """
     创建整定记录 - SQLModel优化版本
-    
+
     功能说明：
     - 保存整定操作的详细信息
     - 记录整定前后的参数对比
     - 支持常规整定和大模型整定两种方式
     - 使用SQLModel自动验证和序列化
-    
+
     返回格式：直接返回TuningRecord对象（自动序列化为JSON）
     """
     try:
         # 调用Service层创建记录
         record = TuningRecordService.create_record(
-            db=db,
             loop_uri=loop_uri,
-            loop_name=loop_name,
+            loop_status=loop_status,
             tuning_method=tuning_method,
-            operator=operator,
-            operator_id=operator_id,
+            operator=user.user_name,
+            operator_id=user.user_id,
             before_params=before_params,
             after_params=after_params,
             description=description,
@@ -69,9 +68,9 @@ async def create_tuning_record(
             remark=remark,
             tuning_details=tuning_details
         )
-        
+
         return record
-    
+
     except Exception as e:
         logger.error(f"创建整定记录失败: {str(e)}")
         raise HTTPException(
@@ -81,22 +80,26 @@ async def create_tuning_record(
 
 
 @router.get(
-    "/",
+    "/page",
     summary="查询整定记录列表",
     operation_id="查询整定记录列表",
     description="查询整定记录列表，支持筛选和分页"
 )
 async def query_tuning_records(
+        loop_type: Optional[str] = Query(
+            None,
+            description="回路类型筛选"
+        ),
     loop_name: Optional[str] = Query(
         None,
         description="回路名称筛选",
-        example="流量单回路实例_1"
     ),
     tuning_method: Optional[str] = Query(
         None,
-        description="整定方法筛选（全部/常规整定/大模型整定/AI优化/仿真整定）",
+        description="整定方法筛选（预整定/常规整定/大模型整定）",
         example="常规整定"
     ),
+
     start_time: Optional[str] = Query(
         None,
         description="开始时间",
@@ -156,6 +159,7 @@ async def query_tuning_records(
         # 调用Service层查询
         result = TuningRecordService.query_records(
             db=db,
+            loop_type=loop_type,
             loop_name=loop_name,
             tuning_method=tuning_method,
             start_time=start_time,
@@ -221,50 +225,3 @@ async def get_tuning_record(
             status_code=500,
             detail=f"查询整定记录详情失败: {str(e)}"
         )
-
-
-# @router.delete(
-#     "/{record_id}",
-#     summary="删除整定记录",
-#     operation_id="删除整定记录",
-#     description="根据ID删除整定记录"
-# )
-# async def delete_tuning_record(
-#     record_id: int,
-#     db: Session = Depends(get_db)
-# ) -> Dict[str, Any]:
-#     """
-#     删除整定记录
-#
-#     功能说明：
-#     - 根据记录ID删除记录
-#
-#     返回格式：
-#     {
-#         "message": "整定记录删除成功",
-#         "id": 1
-#     }
-#     """
-#     try:
-#         # 调用Service层删除
-#         success = TuningRecordService.delete_record(db, record_id)
-#
-#         if not success:
-#             raise HTTPException(
-#                 status_code=404,
-#                 detail=f"未找到ID为 {record_id} 的整定记录"
-#             )
-#
-#         return {
-#             "message": "整定记录删除成功",
-#             "id": record_id
-#         }
-#
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         logger.error(f"删除整定记录失败: {str(e)}")
-#         raise HTTPException(
-#             status_code=500,
-#             detail=f"删除整定记录失败: {str(e)}"
-#         )

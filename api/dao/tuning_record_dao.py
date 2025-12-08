@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from sqlmodel import Session, select, func, desc
 
+from api.bean.loop_info import LoopInfo
 from api.bean.tuning_record import TuningRecord
 
 logger = logging.getLogger(__name__)
@@ -30,12 +31,12 @@ class TuningRecordDAO:
         try:
             # SQLModel自动进行数据验证
             record = TuningRecord(**record_data)
-            
+
             db.add(record)
             db.commit()
             db.refresh(record)
             
-            logger.info(f"创建整定记录成功: ID={record.id}, 回路={record.loop_name}")
+            logger.info(f"创建整定记录成功: ID={record.id}")
             return record
             
         except Exception as e:
@@ -62,6 +63,7 @@ class TuningRecordDAO:
     @staticmethod
     def query_list(
         db: Session,
+        loop_type: Optional[str] = None,
         loop_name: Optional[str] = None,
         tuning_method: Optional[str] = None,
         start_time: Optional[str] = None,
@@ -86,14 +88,15 @@ class TuningRecordDAO:
         """
         try:
             # 构建select语句
-            statement = select(TuningRecord)
-            
+            statement = select(TuningRecord,LoopInfo.loop_name,LoopInfo.loop_type,LoopInfo.description).join(LoopInfo, TuningRecord.loop_uri == LoopInfo.loop_uri, isouter=True)
             # 回路名称筛选（模糊匹配）
             if loop_name:
-                statement = statement.where(TuningRecord.loop_name.like(f"%{loop_name}%"))
+                statement = statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
+            if loop_type:
+                statement = statement.where(LoopInfo.loop_type == loop_type)
             
             # 整定方法筛选（精确匹配）
-            if tuning_method and tuning_method != "全部方法":
+            if tuning_method:
                 statement = statement.where(TuningRecord.tuning_method == tuning_method)
             
             # 时间范围筛选
@@ -116,10 +119,13 @@ class TuningRecordDAO:
             statement = statement.order_by(desc(TuningRecord.tuning_time))
             
             # 获取总数
-            count_statement = select(func.count()).select_from(TuningRecord)
+            count_statement = select(func.count()).select_from(TuningRecord).join(LoopInfo, TuningRecord.loop_uri == LoopInfo.loop_uri)
+            # 回路名称筛选（模糊匹配）
             if loop_name:
-                count_statement = count_statement.where(TuningRecord.loop_name.like(f"%{loop_name}%"))
-            if tuning_method and tuning_method != "全部方法":
+                count_statement = count_statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
+            if loop_type:
+                count_statement = count_statement.where(LoopInfo.loop_type == loop_type)
+            if tuning_method:
                 count_statement = count_statement.where(TuningRecord.tuning_method == tuning_method)
             
             total = db.exec(count_statement).one()
@@ -127,8 +133,29 @@ class TuningRecordDAO:
             # 分页
             offset = (page_no - 1) * page_size
             statement = statement.offset(offset).limit(page_size)
-            records = db.exec(statement).all()
-            
+            record_rows = db.exec(statement).all()
+            records = []
+            for row in record_rows:
+                record={
+                    "id": row.TuningRecord.id,
+                    "loop_uri": row.TuningRecord.loop_uri,
+                    "loop_name": row.loop_name,
+                    "loop_type": row.loop_type,
+                    "loop_status": row.TuningRecord.loop_status,
+                    "description": row.description,
+                    "tuning_method": row.TuningRecord.tuning_method,
+                    "tuning_time": row.TuningRecord.tuning_time,
+                    "operator": row.TuningRecord.operator,
+                    "status": row.TuningRecord.status,
+                    "before_params": row.TuningRecord.before_params,
+                    "after_params": row.TuningRecord.after_params,
+                    "remark": row.TuningRecord.remark,
+                    "created_time": row.TuningRecord.created_time,
+                    "updated_time": row.TuningRecord.updated_time
+                }
+                records.append(record)
+
+
             # 计算总页数
             pages = (total + page_size - 1) // page_size if total > 0 else 0
             
@@ -214,7 +241,7 @@ class TuningRecordDAO:
             db.delete(record)
             db.commit()
             
-            logger.info(f"删除整定记录成功: ID={record_id}, 回路={record.loop_name}")
+            logger.info(f"删除整定记录成功: ID={record_id}, 回路={record.loop_uri}")
             return True
             
         except Exception as e:

@@ -24,7 +24,7 @@ class TuningRecord(SQLModel, table=True):
         default_factory=lambda: str(uuid4()),
         primary_key=True,
         index=True,
-        sa_column_kwargs={"comment": "记录ID(UUID)"}
+        sa_column_kwargs={"comment": "记录ID"}
     )
     
     # 回路信息
@@ -34,11 +34,11 @@ class TuningRecord(SQLModel, table=True):
         index=True,
         sa_column_kwargs={"comment": "回路URI"}
     )
-    loop_name: Optional[str] = Field(
+    loop_status: Optional[str] = Field(
         default=None,
-        max_length=200,
+        max_length=50,
         index=True,
-        sa_column_kwargs={"comment": "回路名称"}
+        sa_column_kwargs={"comment": "回路状态"}
     )
     description: Optional[str] = Field(
         default=None,
@@ -117,13 +117,14 @@ class TuningRecord(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "loop_uri": "/pid_zd/loop_001",
+                "loop_status": "自动",
                 "loop_name": "FIC101A",
                 "description": "Flow Control Loop",
-                "tuning_method": "KTL",
+                "tuning_method": "PID",
                 "operator": "admin",
                 "operator_id": "user_001",
-                "before_params": "PB:100, TI:50, TD:12.5",
-                "after_params": "PB:71.43, TI:3.11, TD:2",
+                "before_params": "{\"pb\": 18.5443, \"ti\": 1.0431, \"td\": 0.0, \"kp\": 5.3925, \"ki\": 5.1699, \"kd\": 0.0}",
+                "after_params": "{\"pb\": 18.5443, \"ti\": 1.0431, \"td\": 0.0, \"kp\": 5.3925, \"ki\": 5.1699, \"kd\": 0.0}",
                 "status": "成功",
                 "remark": "整定效果良好"
             }

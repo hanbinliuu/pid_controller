@@ -20,6 +20,7 @@ from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.algorithm import tuning_segment_selector
 from core.algorithm.model_type import ModelSelector
+from core.utils import PIDConverter
 from core.utils.model_type import ModelType
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
@@ -204,7 +205,16 @@ class ExpertTuningService:
             }
             model_selector = model_select.run(request)
             # 获取整定前设备参数
-            before_pid_params = LoopService.query_loop_values(["PB", "TI", "TD"], loop_uri)
+            before_pid= LoopService.query_loop_values(["PB", "TI", "TD"], loop_uri)
+            pid_convert=PIDConverter.classical_to_pid(before_pid.get("PB"), before_pid.get("TI"), before_pid.get("TD"))
+            before_pid_params = {
+                "kp": pid_convert.get("kp"),
+                "kd": pid_convert.get("kd"),
+                "ki": pid_convert.get("ki"),
+                "pb": before_pid.get("PB"),
+                "ti": before_pid.get("TI"),
+                "td": before_pid.get("TD")
+            }
 
             suggest_pid_params = model_selector.get("pid_parameters")
             tuning_details = {
@@ -229,19 +239,19 @@ class ExpertTuningService:
                 "turning_type": model_selector.get("turning_type"),
             }
             # #写入整定记录
-            # try:
-                # _save_tuning_record_liu(
-                #     loop_uri=loop_uri,
-                #     current_params=before_pid_params,
-                #     suggested_params=suggest_pid_params,
-                #     mode=mode,
-                #     operator=operator_name,
-                #     operator_id=operator_id,
-                #     model_type=model_type,
-                #     tuning_type=turning_type,
-                #     status=True,
-                #     tuning_details=tuning_details,
-                # )
+            try:
+                _save_tuning_record_liu(
+                    loop_uri=loop_uri,
+                    current_params=before_pid_params,
+                    suggested_params=suggest_pid_params,
+                    mode=mode,
+                    operator=operator_name,
+                    operator_id=operator_id,
+                    model_type=model_type,
+                    tuning_type=turning_type,
+                    status=True,
+                    tuning_details=tuning_details,
+                )
                 #     loop_info = LoopInfoDAO.get_by_loop_uri(db, loop_uri, include_inactive=True)
                 #     loop_name = loop_info.loop_name if loop_info else None
                 #     description = loop_info.description if loop_info else None
@@ -261,16 +271,16 @@ class ExpertTuningService:
                 #         remark=remark,
                 #         tuning_details=tuning_details
                 # )
-            # except Exception as e:
-            #     logger.error(f"写入整定记录失败: {str(e)}")
-            #     raise RuntimeException("写入整定记录失败")
+            except Exception as e:
+                logger.error(f"写入整定记录失败: {str(e)}")
+                raise RuntimeException("写入整定记录失败")
 
             return model_selector
         except Exception as e:
             logger.error(f"识别失败: {str(e)}")
             _save_tuning_record_liu(
                 loop_uri=loop_uri,
-                current_params={},
+                current_params=before_pid_params,
                 suggested_params={},
                 mode=mode,
                 operator=operator_name,
@@ -278,7 +288,7 @@ class ExpertTuningService:
                 model_type=model_type,
                 tuning_type=turning_type,
                 status=False,
-                error_message=f"整定异常:{e if e else ''}",
+                error_message=f"整定异常:{str(e)}",
             )
             raise
 
@@ -339,7 +349,7 @@ class ExpertTuningService:
             # 固定设备与字段配置
             table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
 
-            db = get_default_database()
+            iot_db = get_default_database()
 
             # 初始化变量
             qualified_windows = []
@@ -353,7 +363,7 @@ class ExpertTuningService:
 
                 # 获取历史数据
                 history_data = process_query_tsdb_data_interpolated(
-                    db=db,
+                    db=iot_db,
                     table_name=table,
                     required_fields=required_fields,
                     start_time=start_time_ms,
@@ -445,7 +455,7 @@ class ExpertTuningService:
                     f"找到 {len(qualified_windows)} 个合格窗口，选择最佳窗口：置信度={best_window['confidence']:.3f}, 阶跃大小={best_window.get('step_size', 'N/A'):.2f}, 时间范围: {format_time_to_string(best_window['start_timestamp'])} - {format_time_to_string(best_window['end_timestamp'])}")
                 # 提取最佳窗口数据用于整定
                 window_data = process_query_tsdb_data_interpolated(
-                    db=db,
+                    db=iot_db,
                     table_name=table,
                     required_fields=required_fields,
                     start_time=best_window['start_timestamp'],
@@ -459,7 +469,7 @@ class ExpertTuningService:
 
                 # 直接查询指定时间范围的数据
                 window_data = process_query_tsdb_data_interpolated(
-                    db=db,
+                    db=iot_db,
                     table_name=table,
                     required_fields=required_fields,
                     start_time=start_time_ms,
@@ -839,7 +849,6 @@ def _save_tuning_record(
             # 创建整定记录
             record_data = {
                 "loop_uri": loop_uri,
-                "loop_name": loop_name,
                 "description": description,
                 "tuning_method": f"常规整定",
                 "tuning_time": datetime.now(),
@@ -900,30 +909,34 @@ def _save_tuning_record_liu(
             # 根据状态处理参数
             if status:
                 # 格式化参数字符串
-                before_params_str = f"Kp:{current_params.get('Kp', 0):.2f}, Ti:{current_params.get('Ti', 0):.2f}, Td:{current_params.get('Td', 0):.2f}"
-                after_params_str = f"Kp:{suggested_params.get('Kp', 0):.2f}, Ti:{suggested_params.get('Ti', 0):.2f}, Td:{suggested_params.get('Td', 0):.2f}"
+                # before_params_str = f"Kp:{current_params.get('Kp', 0):.2f}, Ti:{current_params.get('Ti', 0):.2f}, Td:{current_params.get('Td', 0):.2f}"
+                # after_params_str = f"Kp:{suggested_params.get('Kp', 0):.2f}, Ti:{suggested_params.get('Ti', 0):.2f}, Td:{suggested_params.get('Td', 0):.2f}"
+                before_params_str=json.dumps(current_params)
+                after_params_str=json.dumps(suggested_params)
                 remark = f"整定模式: {mode}, 模型类型: {model_type.value}, 整定类型: {tuning_type}"
             else:
                 # 失败情况
                 before_params_str = None
                 after_params_str = None
                 remark = f"整定模式: {mode}, 模型类型: {model_type.value}, 整定类型: {tuning_type}, 错误: {error_message or '未知错误'}"
+            # 创建整定记录
+            record_data = {
+                "loop_uri": loop_uri,
+                "tuning_method": f"常规整定",
+                "tuning_time": datetime.now(),
+                "operator": operator,
+                "operator_id":operator_id,# 操作人
+                "before_params": before_params_str,
+                "after_params": after_params_str,
+                "status": status_str,
+                "remark": remark,
+                "tuning_details": tuning_details if tuning_details else {"error": error_message},
+                "created_time": datetime.now(),
+                "updated_time": datetime.now()
+            }
 
             # 写入数据库
-            TuningRecordService.create_record(
-                db=db,
-                loop_uri=loop_uri,
-                loop_name=loop_name,
-                tuning_method="常规整定",
-                operator=operator,
-                operator_id=operator_id,
-                before_params=before_params_str,
-                after_params=after_params_str,
-                description=description,
-                status=status_str,
-                remark=remark,
-                tuning_details=tuning_details if tuning_details else {"error": error_message}
-            )
+            TuningRecordDAO.create(db, record_data)
             logger.info(f"整定记录写入成功: loop_name={loop_name}, method=常规整定, status={status}")
 
     except Exception as e:
