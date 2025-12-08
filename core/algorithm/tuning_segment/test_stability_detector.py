@@ -105,12 +105,17 @@ def visualize_results(data: List[Dict], results: dict, scenario_name: str = None
         ax1.axvspan(start_time, end_time, alpha=0.3, color='red', 
                    label='非稳态段' if i == 0 else None)
     
-    # 标记扰动起始点（用垂直虚线）
-    disturbance_starts = results.get('disturbance_starts', [])
-    for i, (start_idx, setpoint) in enumerate(disturbance_starts):
+    # 标记扰动起始和结束点（每个非稳态段的起止）
+    non_steady_for_lines = results.get('non_steady_segments', [])
+    for i, (start_idx, end_idx, setpoint) in enumerate(non_steady_for_lines):
         if start_idx < len(time_array):
             ax1.axvline(x=time_array[start_idx], color='green', linestyle='--', 
                        linewidth=1.5, alpha=0.8, label='扰动起始' if i == 0 else None)
+        # 确保结束索引在有效范围内
+        end_plot_idx = min(end_idx - 1, len(time_array) - 1)
+        if end_plot_idx >= 0:
+            ax1.axvline(x=time_array[end_plot_idx], color='orange', linestyle='--', 
+                       linewidth=1.5, alpha=0.8, label='扰动结束' if i == 0 else None)
     
     ax1.set_ylabel('PV / SV')
     ax1.set_title('过程值(PV)与设定值(SV) - 非稳态段检测')
@@ -182,17 +187,18 @@ if __name__ == "__main__":
 
 
     test_scenarios = [
-        {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
-        {'start_time': '2025-11-05 10:55:58', 'end_time': '2025-11-05 13:14:58'},
-        {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
-        {'start_time': '2025-11-10 09:12:58', 'end_time': '2025-11-10 10:25:58'},
-        {'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'},
-        {'start_time': '2025-11-04 16:58:58', 'end_time': '2025-11-04 18:30:58'},
-        {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
-        {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
-        {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
-        {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
-        {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'},
+        # {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
+        # {'start_time': '2025-11-05 10:55:58', 'end_time': '2025-11-05 13:14:58'},
+        # {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
+        # {'start_time': '2025-11-10 09:12:58', 'end_time': '2025-11-10 10:25:58'},
+        # {'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'},
+        # {'start_time': '2025-11-04 16:58:58', 'end_time': '2025-11-04 18:30:58'},
+        # {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
+        # {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
+        # {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
+        # {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
+        # {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'},
+        {'start_time': '2025-12-07 05:00:58', 'end_time': '2025-12-07 12:42:58'},
     ]
 
     for idx, scenario in enumerate(test_scenarios, 1):

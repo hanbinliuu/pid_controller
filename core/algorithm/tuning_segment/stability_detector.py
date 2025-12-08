@@ -781,6 +781,21 @@ class StabilityDetector:
                                 break
                         
                         next_window = pv_data[j:j+window]
+                        
+                        # 检查是否跨越了SV段边界（SV明显变化）
+                        window_sv = sv_array[j:j+window] if j+window <= len(sv_array) else sv_array[j:]
+                        if len(window_sv) > 0:
+                            window_sv_val = np.median(window_sv)
+                            # 如果SV与段起始的设定值差异较大，说明跨越了SV段边界
+                            if abs(window_sv_val - seg_setpoint) > 1.0:
+                                # 检查该窗口在其自己的设定值下是否稳态
+                                if self.is_steady_state(next_window, window_sv_val):
+                                    end_idx = j
+                                    if end_idx - start_idx >= min_segment_len:
+                                        non_steady_segments.append((start_idx, end_idx, seg_setpoint))
+                                    i = j
+                                    break
+                        
                         if self.is_steady_state(next_window, seg_setpoint):
                             end_idx = j
                             if end_idx - start_idx >= min_segment_len:
@@ -861,19 +876,52 @@ class StabilityDetector:
                     merged_segments[-1] = (min(last_start, cur_start), max(last_end, cur_end), last_sp)
                 else:
                     merged_segments.append((cur_start, cur_end, cur_sp))
-            elif gap_length < 15 or (gap_length < 100 and sp_diff < 0.5) or (gap_length <= 50 and sp_diff < 3.0) or (gap_length < 30 and sp_diff < 5.0):
+            elif gap_length < 50:
+                # 较短的间隔直接合并（约50秒内）
                 merged_segments[-1] = (last_start, cur_end, last_sp)
+            elif gap_length < 100 and sp_diff < 0.5:
+                # 较短间隔且设定值相同，检查间隔区域是否为稳态
+                gap_pv = pv_data[last_end:cur_start]
+                gap_sv_val = np.median(sv_array[last_end:cur_start]) if last_end < len(sv_array) else last_sp
+                is_gap_steady = self._is_region_steady(pv_data, sv_array, last_end, cur_start, gap_sv_val)
+                if is_gap_steady:
+                    # 间隔区域是稳态的，不应该合并
+                    merged_segments.append((cur_start, cur_end, cur_sp))
+                else:
+                    merged_segments[-1] = (last_start, cur_end, last_sp)
             else:
                 # 对于任意长度的间隔，检查是否应该合并
                 gap_start = last_end
                 gap_end = cur_start
                 gap_sv = sv_array[gap_start:gap_end] if gap_start < len(sv_array) and gap_end <= len(sv_array) else None
                 
+                # 检查间隔区域内是否包含稳态的SV段
+                has_stable_sv_segment = False
+                if gap_sv is not None and len(gap_sv) > 0:
+                    sv_range_in_gap = np.max(gap_sv) - np.min(gap_sv)
+                    if sv_range_in_gap > 1.0:
+                        # SV在间隔内有明显变化，检查是否有稳态的子区间
+                        # 找到SV稳定的子区间，检查PV是否稳态
+                        unique_svs = np.unique(np.round(gap_sv, 1))
+                        for sv_val in unique_svs:
+                            if abs(sv_val - last_sp) > 1.0:  # SV与前段不同
+                                # 找到该SV值的区间
+                                sv_mask = np.abs(gap_sv - sv_val) < 0.5
+                                if np.sum(sv_mask) >= 20:  # 至少有20个点
+                                    sv_indices = np.where(sv_mask)[0]
+                                    sv_pv = pv_data[gap_start + sv_indices[0]:gap_start + sv_indices[-1] + 1]
+                                    if len(sv_pv) >= 20 and self.is_steady_state(sv_pv, sv_val):
+                                        has_stable_sv_segment = True
+                                        break
+                
                 # 检查间隔区域的特征
                 has_non_steady_features = self._has_non_steady_features(pv_data[gap_start:gap_end], last_sp) if gap_end > gap_start else False
                 
+                # 如果间隔区域包含稳态的SV段，则不合并
+                if has_stable_sv_segment:
+                    merged_segments.append((cur_start, cur_end, cur_sp))
                 # 如果间隔区域也有非稳态特征且设定值相同，则合并
-                if has_non_steady_features and sp_diff < 0.5:
+                elif has_non_steady_features and sp_diff < 0.5:
                     merged_segments[-1] = (min(last_start, cur_start), max(last_end, cur_end), last_sp)
                 elif gap_length < min_segment_len * 10:
                     # 较短间隔额外检查稳态
@@ -1007,45 +1055,10 @@ class StabilityDetector:
         sv_change_intervals = self.detect_sv_change_intervals(sv_array, threshold=0.1, min_stable_points=10, response_buffer=100, pv_data=pv_data)
         
         if non_steady_segments is not None and len(non_steady_segments) > 0:
+            # 每个非稳态段都生成一个扰动起始点
             for seg_start, seg_end, seg_setpoint in non_steady_segments:
-                seg_pv = pv_data[seg_start:min(seg_end, len(pv_data))]
-                has_large_oscillation = False
-                if len(seg_pv) >= 20:
-                    pv_range = np.max(seg_pv) - np.min(seg_pv)
-                    pv_std = np.std(seg_pv)
-                    if seg_setpoint > 0:
-                        if pv_range > max(seg_setpoint * 0.5, 5.0) or pv_std > max(seg_setpoint * 0.3, 2.0):
-                            has_large_oscillation = True
-                    else:
-                        if pv_range > 5.0 or pv_std > 2.0:
-                            has_large_oscillation = True
-                
-                in_sv_change = self.is_in_sv_change_interval(seg_start, sv_change_intervals)
-                if in_sv_change and not has_large_oscillation:
-                    continue
-                
-                if not has_large_oscillation:
-                    is_sv_changing = self.is_setpoint_changing(sv_array, seg_start, seg_end, threshold=0.1)
-                    if is_sv_changing:
-                        continue
-                
-                head_len = min(50, (seg_end - seg_start) // 3)
-                if head_len >= 20:
-                    head_segment = pv_data[seg_start:seg_start + head_len]
-                    is_head_steady = self.is_steady_state(head_segment, seg_setpoint)
-                    
-                    if is_head_steady:
-                        disturbance_start = self.find_disturbance_start(
-                            pv_data[seg_start:seg_end], seg_setpoint, head_len, threshold=0.5
-                        )
-                        if disturbance_start is not None:
-                            disturbance_starts.append((seg_start + disturbance_start, seg_setpoint))
-                        else:
-                            disturbance_starts.append((seg_start, seg_setpoint))
-                    else:
-                        disturbance_starts.append((seg_start, seg_setpoint))
-                else:
-                    disturbance_starts.append((seg_start, seg_setpoint))
+                # 直接使用非稳态段的起始点作为扰动起始点
+                disturbance_starts.append((seg_start, seg_setpoint))
         
         if non_steady_segments is None or len(non_steady_segments) == 0:
             sv_segments = self.detect_setpoint_segments(sv_array, min_change=0.5, min_stable_points=20)
