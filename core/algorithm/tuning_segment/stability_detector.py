@@ -43,8 +43,12 @@ class StabilityDetector:
             return 0
         return np.sum(np.diff(np.sign(diff)) != 0)
     
-    def _check_large_oscillation(self, pv_data, setpoint, include_sign_changes=True, strict=False):
-        """检查是否存在大幅振荡"""
+    def _check_large_oscillation(self, pv_data, setpoint, include_sign_changes=True, strict=False, during_sv_change=False):
+        """检查是否存在大幅振荡
+        
+        Args:
+            during_sv_change: 是否在SV变化期间，如果是则使用更高的阈值避免误识别正常响应
+        """
         if len(pv_data) < 10:
             return False
         
@@ -55,11 +59,21 @@ class StabilityDetector:
             range_ratio, std_ratio = 0.7, 0.4
             abs_range, abs_std = 7.0, 3.5
             sign_ratio, sign_std_ratio = 0.2, 0.25
+        elif during_sv_change:
+            # SV变化期间使用更高的阈值，避免将正常响应误识别为扰动
+            if pv_range > 15.0 or pv_std > 8.0:
+                return True
+            range_ratio, std_ratio = 0.5, 0.3
+            abs_range, abs_std = 5.0, 2.5
+            sign_ratio = 0.15 if len(pv_data) > 100 else 0.2
+            sign_std_ratio = 0.2
         else:
             if pv_range > 15.0 or pv_std > 8.0:
                 return True
             range_ratio, std_ratio = 0.4, 0.25
-            abs_range, abs_std = 4.0, 2.0
+            # 降低小设定值场景的绝对阈值，使小幅振荡能被检测
+            # pv_range > 1.5 或 pv_std > 0.4 即可触发
+            abs_range, abs_std = 1.5, 0.4
             sign_ratio = 0.1 if len(pv_data) > 100 else 0.15
             sign_std_ratio = 0.15
         
@@ -618,7 +632,8 @@ class StabilityDetector:
                     current_sv = np.median(change_sv)
                     
                     if sv_change_magnitude < 0.5:
-                        if self._check_large_oscillation(change_pv, current_sv):
+                        # SV变化幅度小时，使用更高阈值检测
+                        if self._check_large_oscillation(change_pv, current_sv, during_sv_change=True):
                             non_steady_segments.append((change_start, change_end, current_sv))
                     else:
                         if self._check_abnormal_oscillation_during_sv_change(change_pv, change_sv, sv_change_magnitude):
@@ -704,7 +719,8 @@ class StabilityDetector:
                     window_sv = sv_array[i:i+window] if i < len(sv_array) and i+window <= len(sv_array) else None
                     current_sv = np.median(window_sv) if window_sv is not None and len(window_sv) > 0 else seg_setpoint
                     
-                    if not self._check_large_oscillation(window_data, current_sv, include_sign_changes=False) and \
+                    # SV变化期间使用更高阈值，避免将正常响应误识别为扰动
+                    if not self._check_large_oscillation(window_data, current_sv, include_sign_changes=False, during_sv_change=True) and \
                        not self._check_rapid_change(window_data):
                         i += window // 3
                         continue
@@ -712,7 +728,8 @@ class StabilityDetector:
                 is_steady = self.is_steady_state(window_data, seg_setpoint)
                 
                 if not is_steady:
-                    if not self._check_large_oscillation(window_data, seg_setpoint):
+                    # 在SV变化期间使用更高阈值，避免将正常响应误识别为扰动
+                    if not self._check_large_oscillation(window_data, seg_setpoint, during_sv_change=in_sv_change):
                         i += window // 3
                         continue
                     
@@ -746,7 +763,8 @@ class StabilityDetector:
                             check_sv = sv_array[j:j+window] if j < len(sv_array) else None
                             check_sv_val = np.median(check_sv) if check_sv is not None and len(check_sv) > 0 else seg_setpoint
                             
-                            if self._check_large_oscillation(check_window, check_sv_val) or \
+                            # SV变化期间使用更高阈值
+                            if self._check_large_oscillation(check_window, check_sv_val, during_sv_change=True) or \
                                self._check_large_deviation(check_window, check_sv_val):
                                 j += window // 2
                                 continue
@@ -796,7 +814,8 @@ class StabilityDetector:
                 if len(seg_pv) >= min_segment_len:
                     overlap_sv = sv_array[seg_start:min(seg_end, len(sv_array))]
                     new_sv = np.median(overlap_sv) if len(overlap_sv) > 0 else seg_setpoint
-                    if self._check_large_oscillation(seg_pv, seg_setpoint) or self._check_large_deviation(seg_pv, new_sv):
+                    # 与SV变化区间重叠时，使用更高阈值
+                    if self._check_large_oscillation(seg_pv, seg_setpoint, during_sv_change=True) or self._check_large_deviation(seg_pv, new_sv):
                         filtered_segments.append((seg_start, seg_end, seg_setpoint))
                         continue
             
@@ -807,7 +826,8 @@ class StabilityDetector:
                         new_sv = np.median(sv_array[change_end:min(change_end+20, len(sv_array))])
                         if seg_start < len(pv_data) and seg_end <= len(pv_data):
                             seg_pv = pv_data[seg_start:seg_end]
-                            if self._check_large_oscillation(seg_pv, new_sv):
+                            # SV变化后的响应检查，使用更高阈值
+                            if self._check_large_oscillation(seg_pv, new_sv, during_sv_change=True):
                                 is_response_to_sv_change = False
                                 break
                             pv_start = seg_pv[0] if len(seg_pv) > 0 else pv_data[seg_start]
