@@ -159,10 +159,12 @@ class LoopEvaluationService:
     def list_evaluations(
         db: Session,
         loop_name: Optional[str] = None,
+        device_uri: Optional[str] = None,
         loop_uri: Optional[str] = None,
+        loop_type: Optional[str] = None,
         status: Optional[str] = None,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
         min_performance_score: Optional[float] = None,
         page_no: int = 1,
         page_size: int = 10
@@ -173,7 +175,9 @@ class LoopEvaluationService:
         Args:
             db: 数据库会话
             loop_name: 回路名称
+            device_uri: 装置URI
             loop_uri: 回路URI
+            loop_type: 回路类型
             status: 状态
             start_time: 开始时间
             end_time: 结束时间
@@ -187,7 +191,9 @@ class LoopEvaluationService:
         return LoopEvaluationDAO.query_list(
             db,
             loop_name=loop_name,
+            device_uri=device_uri,
             loop_uri=loop_uri,
+            loop_type=loop_type,
             status=status,
             start_time=start_time,
             end_time=end_time,

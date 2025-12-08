@@ -194,6 +194,7 @@ async def list_excluded_loops(
                         "loop_name": e.get("loop_name") if isinstance(e, dict) else None,
                         "loop_type": e.get("loop_type") if isinstance(e, dict) else None,
                         "reason": e["reason"] if isinstance(e, dict) else e.reason,
+                        "description": e["description"] if isinstance(e, dict) else None,
                         "created_time": e["created_time"].isoformat() if isinstance(e, dict) and e.get("created_time") else (e.created_time.isoformat() if hasattr(e, 'created_time') and e.created_time else None),
                         "updated_time": e["updated_time"].isoformat() if isinstance(e, dict) and e.get("updated_time") else (e.updated_time.isoformat() if hasattr(e, 'updated_time') and e.updated_time else None)
                     }
@@ -251,124 +252,6 @@ async def get_all_excluded_uris(
         )
 
 
-@router.get("/excluded-loop/{excluded_id}",
-           summary="根据ID查询剔除记录",
-           operation_id="get_excluded_loop_by_id",
-           response_model=Dict[str, Any])
-async def get_excluded_loop_by_id(
-    excluded_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    根据ID查询剔除回路记录
-    """
-    try:
-        excluded = ExcludedLoopService.get_excluded_by_id(db, excluded_id)
-        
-        if not excluded:
-            raise NotFoundException(
-                message=f"未找到ID为 {excluded_id} 的剔除记录",
-                data={"excluded_id": excluded_id}
-            )
-        
-        return {
-                "id": excluded.id,
-                "uri": excluded.uri,
-                "reason": excluded.reason,
-                "created_time": excluded.created_time.isoformat() if excluded.created_time else None,
-                "updated_time": excluded.updated_time.isoformat() if excluded.updated_time else None
-            }
-    except BusinessException:
-        raise
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"查询剔除回路失败 - ID: {excluded_id}: {str(e)}", exc_info=True)
-        raise DataProcessException(
-            message=f"查询剔除回路失败: {str(e)}",
-            data={"excluded_id": excluded_id}
-        )
-
-
-@router.put("/excluded-loop/{excluded_id}",
-           summary="更新剔除记录",
-           operation_id="update_excluded_loop",
-           response_model=Dict[str, Any])
-async def update_excluded_loop(
-    excluded_id: int,
-    uri: Optional[str] = Query(None, description="新的URI"),
-    reason: Optional[str] = Query(None, description="新的剔除原因"),
-    db: Session = Depends(get_db)
-):
-    """
-    更新剔除回路记录
-    """
-    try:
-        excluded = ExcludedLoopService.update_excluded(
-            db, excluded_id, uri, reason
-        )
-        
-        if not excluded:
-            raise NotFoundException(
-                message=f"未找到ID为 {excluded_id} 的剔除记录",
-                data={"excluded_id": excluded_id}
-            )
-        
-        return {
-                "id": excluded.id,
-                "uri": excluded.uri,
-                "reason": excluded.reason,
-                "updated_time": excluded.updated_time.isoformat() if excluded.updated_time else None
-            }
-    except BusinessException:
-        raise
-    except HTTPException:
-        raise
-    except ValueError as e:
-        logger.error(f"参数验证失败: {str(e)}", exc_info=True)
-        raise ValidationException(
-            message=f"参数验证失败: {str(e)}",
-            data={"excluded_id": excluded_id}
-        )
-    except Exception as e:
-        logger.error(f"更新剔除回路失败 - ID: {excluded_id}: {str(e)}", exc_info=True)
-        raise DataProcessException(
-            message=f"更新剔除回路失败: {str(e)}",
-            data={"excluded_id": excluded_id}
-        )
-
-
-@router.delete("/excluded-loop/{excluded_id}",
-              summary="删除剔除记录",
-              operation_id="delete_excluded_loop",
-              response_model=Dict[str, Any])
-async def delete_excluded_loop(
-    excluded_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    删除剔除回路记录
-    """
-    try:
-        success = ExcludedLoopService.delete_excluded(db, excluded_id)
-        
-        if not success:
-            raise NotFoundException(
-                message=f"未找到ID为 {excluded_id} 的剔除记录",
-                data={"excluded_id": excluded_id}
-            )
-        
-        return {"excluded_id": excluded_id}
-    except BusinessException:
-        raise
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除剔除回路失败 - ID: {excluded_id}: {str(e)}", exc_info=True)
-        raise DataProcessException(
-            message=f"删除剔除回路失败: {str(e)}",
-            data={"excluded_id": excluded_id}
-        )
 
 
 @router.post("/excluded-loop/batch-add",
@@ -465,4 +348,176 @@ async def batch_remove_excluded_loops(
         raise DataProcessException(
             message=f"批量移除剔除回路失败: {str(e)}",
             data={"uri_count": len(uris) if uris else 0}
+        )
+
+
+@router.put("/excluded-loop/batch-update-reason",
+            summary="批量更新剔除原因",
+            operation_id="batch_update_excluded_reason",
+            response_model=Dict[str, Any])
+async def batch_update_excluded_reason(
+    uris: List[str] = Body(..., description="URI列表"),
+    reason: str = Body(..., description="新的剔除原因"),
+    db: Session = Depends(get_db)
+):
+    """
+    根据URI列表批量更新剔除原因
+    
+    请求体示例：
+    ```json
+    {
+        "uris": ["/pid_zd/loop1", "/pid_zd/loop2"],
+        "reason": "数据质量差"
+    }
+    ```
+    """
+    try:
+        if not uris:
+            raise ValidationException(
+                message="URI列表不能为空",
+                data={"uris": uris}
+            )
+        
+        updated_count = ExcludedLoopService.batch_update_reason_by_uris(
+            db, uris, reason
+        )
+        
+        return {
+                "updated_count": updated_count
+            }
+    except BusinessException:
+        raise
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"参数验证失败: {str(e)}", exc_info=True)
+        raise ValidationException(
+            message=f"参数验证失败: {str(e)}",
+            data={"uris": uris}
+        )
+    except Exception as e:
+        logger.error(f"批量更新剔除原因失败: {str(e)}", exc_info=True)
+        raise DataProcessException(
+            message=f"批量更新剔除原因失败: {str(e)}",
+            data={"uri_count": len(uris) if uris else 0}
+        )
+
+
+@router.get("/excluded-loop/{excluded_id}",
+            summary="根据ID查询剔除记录",
+            operation_id="get_excluded_loop_by_id",
+            response_model=Dict[str, Any])
+async def get_excluded_loop_by_id(
+        excluded_id: int,
+        db: Session = Depends(get_db)
+):
+    """
+    根据ID查询剔除回路记录
+    """
+    try:
+        excluded = ExcludedLoopService.get_excluded_by_id(db, excluded_id)
+
+        if not excluded:
+            raise NotFoundException(
+                message=f"未找到ID为 {excluded_id} 的剔除记录",
+                data={"excluded_id": excluded_id}
+            )
+
+        return {
+            "id": excluded.id,
+            "uri": excluded.uri,
+            "reason": excluded.reason,
+            "created_time": excluded.created_time.isoformat() if excluded.created_time else None,
+            "updated_time": excluded.updated_time.isoformat() if excluded.updated_time else None
+        }
+    except BusinessException:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查询剔除回路失败 - ID: {excluded_id}: {str(e)}", exc_info=True)
+        raise DataProcessException(
+            message=f"查询剔除回路失败: {str(e)}",
+            data={"excluded_id": excluded_id}
+        )
+
+
+@router.put("/excluded-loop/{excluded_id}",
+            summary="更新剔除记录",
+            operation_id="update_excluded_loop",
+            response_model=Dict[str, Any])
+async def update_excluded_loop(
+        excluded_id: int,
+        uri: Optional[str] = Query(None, description="新的URI"),
+        reason: Optional[str] = Query(None, description="新的剔除原因"),
+        db: Session = Depends(get_db)
+):
+    """
+    更新剔除回路记录
+    """
+    try:
+        excluded = ExcludedLoopService.update_excluded(
+            db, excluded_id, uri, reason
+        )
+
+        if not excluded:
+            raise NotFoundException(
+                message=f"未找到ID为 {excluded_id} 的剔除记录",
+                data={"excluded_id": excluded_id}
+            )
+
+        return {
+            "id": excluded.id,
+            "uri": excluded.uri,
+            "reason": excluded.reason,
+            "updated_time": excluded.updated_time.isoformat() if excluded.updated_time else None
+        }
+    except BusinessException:
+        raise
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"参数验证失败: {str(e)}", exc_info=True)
+        raise ValidationException(
+            message=f"参数验证失败: {str(e)}",
+            data={"excluded_id": excluded_id}
+        )
+    except Exception as e:
+        logger.error(f"更新剔除回路失败 - ID: {excluded_id}: {str(e)}", exc_info=True)
+        raise DataProcessException(
+            message=f"更新剔除回路失败: {str(e)}",
+            data={"excluded_id": excluded_id}
+        )
+
+
+@router.delete("/excluded-loop/{excluded_id}",
+               summary="删除剔除记录",
+               operation_id="delete_excluded_loop",
+               response_model=Dict[str, Any])
+async def delete_excluded_loop(
+        excluded_id: int,
+        db: Session = Depends(get_db)
+):
+    """
+    删除剔除回路记录
+    """
+    try:
+        success = ExcludedLoopService.delete_excluded(db, excluded_id)
+
+        if not success:
+            raise NotFoundException(
+                message=f"未找到ID为 {excluded_id} 的剔除记录",
+                data={"excluded_id": excluded_id}
+            )
+
+        return {"excluded_id": excluded_id}
+    except BusinessException:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除剔除回路失败 - ID: {excluded_id}: {str(e)}", exc_info=True)
+        raise DataProcessException(
+            message=f"删除剔除回路失败: {str(e)}",
+            data={"excluded_id": excluded_id}
         )

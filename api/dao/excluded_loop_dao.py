@@ -108,7 +108,8 @@ class ExcludedLoopDAO:
             statement = select(
                 ExcludedLoop,
                 LoopInfo.loop_name,
-                LoopInfo.loop_type
+                LoopInfo.loop_type,
+                LoopInfo.description
             ).join(
                 LoopInfo,
                 ExcludedLoop.uri == LoopInfo.loop_uri
@@ -167,13 +168,14 @@ class ExcludedLoopDAO:
             
             # 组装结果，添加loop_name和loop_type字段
             excluded_loops = []
-            for excluded_loop, loop_name_value, loop_type_value in results:
+            for excluded_loop, loop_name_value, loop_type_value, description in results:
                 # 创建一个字典包含所有字段
                 loop_dict = {
                     "id": excluded_loop.id,
                     "uri": excluded_loop.uri,
                     "loop_name": loop_name_value,  # 从loop_info表关联获取
                     "loop_type": loop_type_value,  # 从loop_info表关联获取
+                    "description": description,
                     "reason": excluded_loop.reason,
                     "created_time": excluded_loop.created_time,
                     "updated_time": excluded_loop.updated_time
@@ -425,4 +427,58 @@ class ExcludedLoopDAO:
         except Exception as e:
             db.rollback()
             logger.error(f"Upsert条件剔除记录失败: {str(e)}")
+            raise
+    
+    @staticmethod
+    def batch_update_reason_by_uris(
+        db: Session,
+        uris: List[str],
+        reason: str
+    ) -> int:
+        """
+        根据多个URI批量更新剔除原因
+        
+        Args:
+            db: 数据库会话
+            uris: 回路/装置URI列表
+            reason: 新的剔除原因
+            
+        Returns:
+            int: 更新的记录数量
+        """
+        try:
+            if not uris:
+                return 0
+            
+            # 构建更新语句
+            statement = select(ExcludedLoop).where(
+                ExcludedLoop.uri.in_(uris)
+            )
+            
+            # 获取所有匹配的记录
+            excluded_loops = db.exec(statement).all()
+            
+            # 更新每个记录的原因和更新时间
+            updated_count = 0
+            updated_uris = []
+            for excluded_loop in excluded_loops:
+                excluded_loop.id=excluded_loop.id
+                excluded_loop.reason = reason
+                excluded_loop.updated_time = datetime.now()
+                db.add(excluded_loop)
+                updated_uris.append(excluded_loop.uri)
+                updated_count += 1
+            
+            # 提交更改
+            db.commit()
+            
+            logger.info(f"批量更新剔除原因成功，共更新 {updated_count} 条记录")
+            return {
+                "updated_count": updated_count,
+                "updated_uris": updated_uris
+            }
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"批量更新剔除原因失败: {str(e)}")
             raise

@@ -3,19 +3,19 @@
 评估接口响应模型
 """
 from typing import Optional, List
-from uuid import UUID
 from pydantic import BaseModel, Field
 from datetime import datetime, date
 
 
 class LoopEvaluationData(BaseModel):
     """回路评估数据模型"""
-    id: UUID = Field(..., description="评估记录ID(UUID)")
+    id: str = Field(..., description="评估记录ID")
     loop_uri: str = Field(..., description="回路URI")
     loop_name: str = Field(..., description="回路名称")
     description: Optional[str] = Field(None, description="回路描述")
+    loop_type: Optional[str] = Field(None, description="回路类型")
     tuning_method: Optional[str] = Field(None, description="整定方法")
-    tuning_time: Optional[datetime] = Field(None, description="整定时间")
+    assessment_time: Optional[datetime] = Field(None, description="整定时间")
     performance_score: Optional[float] = Field(None, description="性能得分(0-100)")
     stability_score: Optional[float] = Field(None, description="稳定性得分(0-100)")
     evaluation_date: date = Field(..., description="评估日期")
@@ -38,7 +38,7 @@ class LoopEvaluationData(BaseModel):
 
 class DeviceEvaluationData(BaseModel):
     """装置评估数据模型"""
-    id: UUID = Field(..., description="评估记录ID(UUID)")
+    id: str = Field(..., description="评估记录ID")
     device_uri: str = Field(..., description="装置URI")
     device_name: str = Field(..., description="装置名称")
     total_loops: int = Field(..., description="总回路数")
@@ -64,7 +64,7 @@ class DeviceEvaluationData(BaseModel):
 
 class ExcludedLoopData(BaseModel):
     """剔除回路数据模型"""
-    id: UUID = Field(..., description="记录ID(UUID)")
+    id: str = Field(..., description="记录ID")
     uri: str = Field(..., description="回路/装置URI")
     reason: Optional[str] = Field(None, description="剔除原因")
     created_at: datetime = Field(..., description="创建时间")
@@ -84,7 +84,7 @@ class BatchExcludeResult(BaseModel):
     """批量剔除结果"""
     uri: str = Field(..., description="URI")
     status: str = Field(..., description="状态(success/failed)")
-    id: Optional[UUID] = Field(None, description="记录ID(UUID)")
+    id: Optional[str] = Field(None, description="记录ID")
     error: Optional[str] = Field(None, description="错误信息")
     
     class Config:

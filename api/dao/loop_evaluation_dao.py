@@ -8,6 +8,8 @@ from datetime import datetime, date
 from sqlmodel import Session, select, func, desc
 
 from api.bean.loop_evaluation import LoopEvaluation
+from api.bean.loop_info import LoopInfo
+
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +111,9 @@ class LoopEvaluationDAO:
     def query_list(
         db: Session,
         loop_name: Optional[str] = None,
+        device_uri: Optional[str] = None,
         loop_uri: Optional[str] = None,
+        loop_type: Optional[str] = None,
         status: Optional[str] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
@@ -122,7 +126,8 @@ class LoopEvaluationDAO:
         
         Args:
             db: 数据库会话
-            loop_name: 回路名称筛选
+            loop_name: 回路名称筛选（来自回路信息表）
+            device_uri: 装置uri，根据loop_path过滤
             loop_uri: 节点uri
             status: 状态筛选
             start_time: 开始时间
@@ -135,17 +140,49 @@ class LoopEvaluationDAO:
             Dict: 包含记录列表和分页信息的字典
         """
         try:
-            # 构建select语句
-            statement = select(LoopEvaluation)
+
+            # 构建select语句，左连接LoopInfo表以获取回路信息表中的名称
+            statement = select(
+                LoopEvaluation.id,
+                LoopEvaluation.loop_uri,
+                LoopInfo.loop_name.label('loop_name'),
+                LoopInfo.loop_type,
+                LoopInfo.description,
+                LoopEvaluation.loop_name.label('eval_loop_name'),
+                LoopEvaluation.status,
+                LoopEvaluation.assessment_time,
+                LoopEvaluation.performance_score,
+                LoopEvaluation.auto_control_rate,
+                LoopEvaluation.stability_rate,
+                LoopEvaluation.auto_control_time,
+                LoopEvaluation.stable_time,
+                LoopEvaluation.total_time,
+                LoopEvaluation.pt_count,
+                LoopEvaluation.pv_sum_value,
+                LoopEvaluation.pv_sum_squares,
+                LoopEvaluation.mv_sum_value,
+                LoopEvaluation.mv_sum_squares,
+                LoopEvaluation.pb,
+                LoopEvaluation.ti,
+                LoopEvaluation.td,
+                LoopEvaluation.created_time,
+                LoopEvaluation.updated_time
+            ).join(LoopInfo, LoopEvaluation.loop_uri == LoopInfo.loop_uri, isouter=True)
+            
+            # 如果提供了device_uri，则需要根据loop_path进行过滤
+            if device_uri is None:
+                statement = statement.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
             
             # 回路名称筛选（模糊匹配）
             if loop_name:
-                statement = statement.where(LoopEvaluation.loop_name.like(f"%{loop_name}%"))
-            # 回路名称筛选（模糊匹配）
+                statement = statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
+            # 回路URI筛选（精确匹配）
             if loop_uri:
-                statement = statement.where(LoopEvaluation.loop_uri.like(f"%{loop_uri}%"))
+                statement = statement.where(LoopEvaluation.loop_uri == loop_uri)
+            if loop_type:
+                statement = statement.where(LoopInfo.loop_type == loop_type)
             # 整定方法筛选（精确匹配）
-            if status and status != "全部方法":
+            if status:
                 statement = statement.where(LoopEvaluation.status == status)
             
             # 时间范围筛选
@@ -172,11 +209,20 @@ class LoopEvaluationDAO:
             statement = statement.order_by(desc(LoopEvaluation.assessment_time))
             
             # 获取总数
-            count_statement = select(func.count()).select_from(LoopEvaluation)
+            count_statement = select(func.count()).select_from(LoopEvaluation).join(LoopInfo, LoopEvaluation.loop_uri == LoopInfo.loop_uri, isouter=True)
+            
+            # 如果提供了device_uri，则需要根据loop_path进行过滤
+            if device_uri:
+                count_statement = count_statement.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
+            
             # 应用相同的筛选条件到计数查询
             if loop_name:
-                count_statement = count_statement.where(LoopEvaluation.loop_name.like(f"%{loop_name}%"))
-            if status and status != "全部方法":
+                count_statement = count_statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
+            if loop_uri:
+                count_statement = count_statement.where(LoopEvaluation.loop_uri == loop_uri)
+            if loop_type:
+                count_statement = count_statement.where(LoopInfo.loop_type == loop_type)
+            if status:
                 count_statement = count_statement.where(LoopEvaluation.status == status)
             if start_time:
                 try:
@@ -198,7 +244,41 @@ class LoopEvaluationDAO:
             # 分页
             offset = (page_no - 1) * page_size
             statement = statement.offset(offset).limit(page_size)
-            evaluations = db.exec(statement).all()
+            evaluation_rows = db.exec(statement).all()
+            
+            # 将Row对象转换为LoopEvaluation对象
+            evaluations = []
+            for row in evaluation_rows:
+                # 创建一个新的LoopEvaluation对象
+                # 如果LoopInfo中没有对应的回路名称，则使用评估记录中的名称作为备选
+                loop_name = row.loop_name if row.loop_name is not None else row.eval_loop_name
+                # 将LoopEvaluationDetailResponse转换为Dict[str, Any]
+                evaluation = {
+                    "id": row.id,
+                    "loop_uri": row.loop_uri,
+                    "loop_name": loop_name,
+                    "status": row.status,
+                    "loop_type": row.loop_type,
+                    "description":row.description,
+                    "assessment_time": row.assessment_time,
+                    "performance_score": row.performance_score,
+                    "auto_control_rate": row.auto_control_rate,
+                    "stability_rate": row.stability_rate,
+                    "auto_control_time": row.auto_control_time,
+                    "stable_time": row.stable_time,
+                    "total_time": row.total_time,
+                    "pt_count": row.pt_count,
+                    "pv_sum_value": row.pv_sum_value,
+                    "pv_sum_squares": row.pv_sum_squares,
+                    "mv_sum_value": row.mv_sum_value,
+                    "mv_sum_squares": row.mv_sum_squares,
+                    "pb": row.pb,
+                    "ti": row.ti,
+                    "td": row.td,
+                    "created_time": row.created_time,
+                    "updated_time": row.updated_time
+                }
+                evaluations.append(evaluation)
             
             # 计算总页数
             pages = (total + page_size - 1) // page_size if total > 0 else 0

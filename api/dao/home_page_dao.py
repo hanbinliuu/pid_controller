@@ -18,14 +18,22 @@ class HomePageDAO:
     """
 
     @staticmethod
-    def get_perf_stats(session: Session, query_date: date):
+    def get_perf_stats(session: Session, query_date: date, device_uri: str):
         """
         Get performance statistics
         """
         stmt = select(
             LoopEvaluation.status,
             func.count(LoopEvaluation.id).label("count")
-        ).where(LoopEvaluation.assessment_time == query_date).group_by(LoopEvaluation.status)
+        ).join(
+            LoopInfo, LoopEvaluation.loop_uri == LoopInfo.loop_uri
+        ).where(
+            LoopEvaluation.assessment_time == query_date,
+
+        )
+        if device_uri:
+            stmt=stmt.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
+        stmt=stmt.group_by(LoopEvaluation.status)
         return session.exec(stmt).all()
 
     @staticmethod

@@ -15,7 +15,6 @@ from core.agent.tools import process_query_tsdb_data_interpolated, detect_and_vi
 from core.algorithm.ktl_simulator import KTLSimulator
 from api.services.expert_tuning_service import ExpertTuningService
 from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
-from core.algorithm.model_identifier.test_identifier.test_model_fitter import detect_tuning_windows
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database, query_raw_data
 from core.database import get_db

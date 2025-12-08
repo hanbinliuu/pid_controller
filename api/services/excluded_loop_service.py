@@ -361,3 +361,26 @@ class ExcludedLoopService:
         except Exception as e:
             logger.error(f"批量移除条件剔除失败: {str(e)}")
             raise
+    
+    @staticmethod
+    def batch_update_reason_by_uris(
+        db: Session,
+        uris: List[str],
+        reason: str
+    ) -> int:
+        """
+        根据多个URI批量更新剔除原因
+        
+        Args:
+            db: 数据库会话
+            uris: 回路/装置URI列表
+            reason: 新的剔除原因
+            
+        Returns:
+            int: 更新的记录数量
+        """
+        try:
+            return ExcludedLoopDAO.batch_update_reason_by_uris(db, uris, reason)
+        except Exception as e:
+            logger.error(f"批量更新剔除原因失败: {str(e)}")
+            raise

@@ -96,13 +96,13 @@ async def get_history_evaluation_by_device_uri(
             detail=f"查询装置评估失败: {str(e)}"
         )
 @router.get("/device-evaluation/page",
-            summary="分页装置及下级查询最新评估记录",
+            summary="分页查询所有装置评估记录",
             operation_id="list_device_evaluations",
             response_model=Dict[str, Any])
 async def list_device_evaluations(
         db: Session = Depends(get_db),
-        device_name: Optional[str] = Query(None, description="装置名称（模糊匹配）"),
-        device_uri: Optional[str] = Query(None, description="装置URI（模糊匹配）"),
+        device_name: Optional[str] = Query(None, description="装置名称"),
+        device_uri: Optional[str] = Query(None, description="装置URI"),
         start_time: Optional[datetime] = Query(None, description="开始时间"),
         end_time: Optional[datetime] = Query(None, description="结束时间"),
         is_child: bool = Query(False, description="是否查询下级装置"),

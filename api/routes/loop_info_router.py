@@ -172,9 +172,6 @@ async def list_loop_info(
             page_size=page_size
         )
         
-        mappings = result["mappings"]
-        pagination = result["pagination"]
-        
         return  result
     except Exception as e:
         logger.error(f"查询回路信息列表失败: {str(e)}")

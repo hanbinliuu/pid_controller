@@ -17,12 +17,14 @@ class HomePageService:
     """
 
     @staticmethod
-    def get_perf_stats(session: Session):
+    def get_perf_stats(session: Session, device_uri: str = None):
         """
         Get performance statistics
         """
         now = datetime.now().date()
-        return HomePageDAO.get_perf_stats(session, now)
+        if device_uri is None:
+            device_uri = Config.BFF_MODEL_ROOT_URI
+        return HomePageDAO.get_perf_stats(session, now, device_uri)
 
     @staticmethod
     def get_device_stats(session: Session,device_uri: str=None) -> List[DeviceRealTimeStats]:
