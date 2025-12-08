@@ -123,13 +123,13 @@ class LoopEvaluationService:
             raise
     
     @staticmethod
-    def get_evaluation_by_id(db: Session, evaluation_id: int) -> Optional[LoopEvaluation]:
+    def get_evaluation_by_id(db: Session, evaluation_id: str) -> Optional[LoopEvaluation]:
         """
         根据ID获取评估记录
         
         Args:
             db: 数据库会话
-            evaluation_id: 评估记录ID
+            evaluation_id: 评估记录ID (UUID字符串)
         
         Returns:
             Optional[LoopEvaluation]: 评估对象
@@ -197,13 +197,13 @@ class LoopEvaluationService:
         )
     
     @staticmethod
-    def delete_evaluation(db: Session, evaluation_id: int) -> bool:
+    def delete_evaluation(db: Session, evaluation_id: str) -> bool:
         """
         删除评估记录
         
         Args:
             db: 数据库会话
-            evaluation_id: 评估记录ID
+            evaluation_id: 评估记录ID (UUID字符串)
         
         Returns:
             bool: 是否删除成功

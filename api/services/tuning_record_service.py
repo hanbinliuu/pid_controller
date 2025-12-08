@@ -27,6 +27,7 @@ class TuningRecordService:
         operator: str,
         before_params: str,
         after_params: str,
+        operator_id: Optional[str] = None,
         description: Optional[str] = None,
         status: str = "成功",
         remark: Optional[str] = None,
@@ -43,6 +44,7 @@ class TuningRecordService:
             operator: 操作人员
             before_params: 整定前参数
             after_params: 整定后参数
+            operator_id: 操作人ID
             description: 描述
             status: 状态
             remark: 备注
@@ -60,6 +62,7 @@ class TuningRecordService:
                 tuning_method=tuning_method,
                 tuning_time=datetime.now(),
                 operator=operator,
+                operator_id=operator_id,
                 before_params=before_params,
                 after_params=after_params,
                 status=status,
@@ -130,6 +133,7 @@ class TuningRecordService:
                     "tuning_method": record.tuning_method,
                     "tuning_time": record.tuning_time.strftime("%Y-%m-%d %H:%M:%S"),
                     "operator": record.operator,
+                    "operator_id": record.operator_id,
                     "before_params": record.before_params,
                     "after_params": record.after_params,
                     "status": record.status,
@@ -172,13 +176,13 @@ class TuningRecordService:
             raise
     
     @staticmethod
-    def delete_record(db: Session, record_id: int) -> bool:
+    def delete_record(db: Session, record_id: str) -> bool:
         """
         删除整定记录
         
         Args:
             db: 数据库会话
-            record_id: 记录ID
+            record_id: 记录ID (UUID字符串)
         
         Returns:
             bool: 是否删除成功
@@ -200,7 +204,7 @@ class TuningRecordService:
     @staticmethod
     def update_record(
         db: Session,
-        record_id: int,
+        record_id: str,
         update_data: Dict[str, Any]
     ) -> Optional[TuningRecord]:
         """
@@ -208,7 +212,7 @@ class TuningRecordService:
         
         Args:
             db: 数据库会话
-            record_id: 记录ID
+            record_id: 记录ID (UUID字符串)
             update_data: 更新数据字典
         
         Returns:

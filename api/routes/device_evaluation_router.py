@@ -8,6 +8,7 @@ from datetime import datetime, date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
+from api.services.home_page_service import HomePageService
 from core.config import Config
 from core.database.database import get_db
 from api.services.device_evaluation_service import DeviceEvaluationService
@@ -53,6 +54,20 @@ async def get_evaluation_by_device_uri(
             status_code=500,
             detail=f"查询装置评估失败: {str(e)}"
         )
+@router.get("/device-and-child-evaluation/real-time-list",
+            summary="本级及下级装置实时统计列表",
+            operation_id="get_this_child_evaluation_now_by_device_uri",
+            response_model=List[Any])
+async def get_this_child_evaluation_now_by_device_uri(
+        device_uri: Optional[str] = Query(None, description="装置URI"),
+        db: Session = Depends(get_db)
+):
+    # 获取最新的装置评估数据
+    if device_uri is None:
+        device_uri = Config.BFF_MODEL_ROOT_URI
+    results = DeviceEvaluationService.get_this_child_by_device_uri_and_date_now(db, device_uri)
+    return results
+
 @router.get("/device-evaluation/history-data",
             summary="装置历史统计",
             operation_id="get_history_evaluation_by_device_uri",
@@ -80,26 +95,34 @@ async def get_history_evaluation_by_device_uri(
             status_code=500,
             detail=f"查询装置评估失败: {str(e)}"
         )
-
 @router.get("/device-evaluation/page",
-            summary="分页装置查询评估记录",
+            summary="分页装置及下级查询最新评估记录",
             operation_id="list_device_evaluations",
             response_model=Dict[str, Any])
 async def list_device_evaluations(
+        db: Session = Depends(get_db),
         device_name: Optional[str] = Query(None, description="装置名称（模糊匹配）"),
         device_uri: Optional[str] = Query(None, description="装置URI（模糊匹配）"),
+        start_time: Optional[datetime] = Query(None, description="开始时间"),
+        end_time: Optional[datetime] = Query(None, description="结束时间"),
+        is_child: bool = Query(False, description="是否查询下级装置"),
         page_no: int = Query(1, description="页码，从1开始"),
-        page_size: int = Query(10, description="每页数量"),
-        db: Session = Depends(get_db)
+        page_size: int = Query(10, description="每页数量")
 ):
     """
     分页查询所有装置评估记录
     """
+
     try:
-        result = DeviceEvaluationService.list_evaluations(
+        if device_uri is None:
+            device_uri = Config.BFF_MODEL_ROOT_URI
+        result = DeviceEvaluationService.get_evaluations_by_date_range_page(
             db,
             device_name=device_name,
             device_uri=device_uri,
+            start_date=start_time,
+            end_date=end_time,
+            is_child=is_child,
             page_no=page_no,
             page_size=page_size
         )

@@ -44,13 +44,13 @@ class LoopInfoDAO:
             raise
     
     @staticmethod
-    def get_by_id(db: Session, mapping_id: int) -> Optional[LoopInfo]:
+    def get_by_id(db: Session, mapping_id: str) -> Optional[LoopInfo]:
         """
         根据ID查询映射记录 - SQLModel方式
         
         Args:
             db: 数据库会话
-            mapping_id: 映射记录ID
+            mapping_id: 映射记录ID (UUID字符串)
         
         Returns:
             Optional[LoopInfo]: 映射对象，不存在则返回None
@@ -202,13 +202,13 @@ class LoopInfoDAO:
             raise
     
     @staticmethod
-    def update(db: Session, mapping_id: int, update_data: Dict[str, Any]) -> Optional[LoopInfo]:
+    def update(db: Session, mapping_id: str, update_data: Dict[str, Any]) -> Optional[LoopInfo]:
         """
         更新映射记录 - SQLModel方式
         
         Args:
             db: 数据库会话
-            mapping_id: 映射记录ID
+            mapping_id: 映射记录ID (UUID字符串)
             update_data: 更新数据字典
         
         Returns:
@@ -284,13 +284,13 @@ class LoopInfoDAO:
             raise
     
     @staticmethod
-    def delete(db: Session, mapping_id: int) -> bool:
+    def delete(db: Session, mapping_id: str) -> bool:
         """
         删除映射记录 - SQLModel方式
         
         Args:
             db: 数据库会话
-            mapping_id: 映射记录ID
+            mapping_id: 映射记录ID (UUID字符串)
         
         Returns:
             bool: 是否删除成功

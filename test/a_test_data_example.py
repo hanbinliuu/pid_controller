@@ -5,10 +5,11 @@ from datetime import datetime
 from typing import List, Dict
 
 from core.agent.tools import process_query_tsdb_data_interpolated
+from core.algorithm.model_identifier.model_type_detector import detect_model_type
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
 
-def get_history_data(start_time: datetime, end_time: datetime) -> List[Dict]:
+def get_history_data(start_time: datetime=None, end_time: datetime=None) -> List[Dict]:
     if not start_time:
         start_time = int(datetime.now().timestamp() * 1000) - 24 * 60 * 60 * 1000
     if not end_time:
@@ -34,5 +35,8 @@ def get_history_data(start_time: datetime, end_time: datetime) -> List[Dict]:
     if not history_data:
         print("未获取到历史数")
         return []
-    print("获取到历史数据："+len(history_data))
+    print(f"获取到历史数据：{len(history_data)}")
     return history_data
+
+if __name__ == '__main__':
+    print(detect_model_type(get_history_data(), verbose=True))

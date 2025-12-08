@@ -11,7 +11,7 @@ import json
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from core.client.bff_model_tree import (
+from core.client.bff_model_client import (
     BFFModelTreeParser,
     ModelTreeAnalyzer,
     TreeNode,

@@ -11,8 +11,11 @@ from datetime import datetime
 
 import pandas as pd
 import numpy as np
+from sqlmodel import Session
 
-from api.middleware.exceptions import RuntimeException
+from api.middleware.exceptions import RuntimeException, DataProcessException
+from api.services.loop_service import LoopService
+from api.services.tuning_record_service import TuningRecordService
 from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.algorithm import tuning_segment_selector
@@ -36,19 +39,19 @@ class ExpertTuningService:
 
     @staticmethod
     def get_tuning_windows(
-        loop_uri: str = None,
-        start_time: Union[int, str] = None,
-        end_time: Union[int, str] = None,
-        window_size: int = 120,
-        step_size: int = 10,
-        variability_threshold: float = 0.8,
-        analyst_column: Optional[str] = "pv",
-        window_sec: int = 60,
-        is_filter: bool = False
+            loop_uri: str = None,
+            start_time: Union[int, str] = None,
+            end_time: Union[int, str] = None,
+            window_size: int = 120,
+            step_size: int = 10,
+            variability_threshold: float = 0.8,
+            analyst_column: Optional[str] = "pv",
+            window_sec: int = 60,
+            is_filter: bool = False
     ) -> Dict[str, Any]:
         """
         自动识别曲线中高波动时段，输出适合经典整定分析的时间窗口列表
-        
+
         Args:
             loop_uri: 回路URI
             start_time: 开始时间，支持毫秒时间戳或字符串格式
@@ -59,7 +62,7 @@ class ExpertTuningService:
             analyst_column: 用于波动判断的列名
             window_sec: 插值采样间隔（分钟）
             is_filter: 是否对历史数据进行优化过滤（按最新参数）
-            
+
         Returns:
             Dict[str, Any]: 时间窗口列表
         """
@@ -78,7 +81,7 @@ class ExpertTuningService:
 
             # 固定设备与字段（与现有分析接口保持一致）
             table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
-            
+
             # 查询历史插值数据（数据访问层负责分页与解析）
             db = get_default_database()
             history_data = process_query_tsdb_data_interpolated(
@@ -124,27 +127,28 @@ class ExpertTuningService:
 
     @staticmethod
     def liu_pid_tuning(
-        mode: str = "auto",
-        loop_uri: str = None,
-        start_time: Union[int, str] = None,
-        end_time: Union[int, str] = None,
-        tuning_windows: Optional[List[Dict[str, Any]]] = None,
-        model_type: ModelType = ModelType.FOPDT,
-        turning_type: str = "PID",
-        lambda_val: Optional[float] = None,
-        window_size: int = 120,
-        step_size: int = 10,
-        confidence_threshold: float = 0.6,
-        window_sec: int = 60,
-        is_filter: bool = False
+            mode: str = "auto",
+            loop_uri: str = None,
+            start_time: Union[int, str] = None,
+            end_time: Union[int, str] = None,
+            tuning_windows: Optional[List[Dict[str, Any]]] = None,
+            model_type: ModelType = ModelType.FOPDT,
+            turning_type: str = "PID",
+            now_param: Optional[Dict[str, Any]] = None,
+            lambda_val: Optional[float] = None,
+            window_size: int = 120,
+            step_size: int = 10,
+            confidence_threshold: float = 0.6,
+            window_sec: int = 60,
+            is_filter: bool = False,
+            operator_id: str = None,
+            operator_name: str = None
     ) -> Dict[str, Any]:
-
 
         try:
             # 参数验证
             if mode not in ["auto", "manual"]:
                 mode = 'auto'
-
             # 时间范围处理
             if end_time is None:
                 end_time = int(datetime.now().timestamp() * 1000)
@@ -184,49 +188,119 @@ class ExpertTuningService:
                     is_filter=is_filter,
                     window=window_sec
                 )
-
-                # if not history_data or len(history_data) == 0:
-                #     logger.error("指定时间范围内无数据")
-                #     return {
-                #         "error": "未获取到历史数据"
-                #     }
+                #
+                if not history_data or len(history_data) == 0:
+                    logger.error("指定时间范围内无数据")
+                    raise DataProcessException("未查询到回路历史数据")
             model_select = ModelSelector()
             request = {
                 "history_data": history_data,
                 "params": {
-                    "model_type": model_type,  # 可选，强制使用指定模型
-                    "turning_type": turning_type,  # 可选，整定类型
+                    "model_type": model_type.value if model_type.value else None,  # 可选，强制使用指定模型
+                    "turning_type": turning_type if turning_type else None,  # 可选，整定类型
                     "analyst_column": "pv",
                 },
                 "qualified_windows": tuning_windows
             }
             model_selector = model_select.run(request)
+            # 获取整定前设备参数
+            before_pid_params = LoopService.query_loop_values(["PB", "TI", "TD"], loop_uri)
+
+            suggest_pid_params = model_selector.get("pid_parameters")
+            tuning_details = {
+                "end_time": model_selector.get("end_time"),
+                "model_parameters": {
+                    "K": model_selector.get("model_parameters.K"),
+                    "L": model_selector.get("model_parameters.L"),
+                    "T1": model_selector.get("model_parameters.T1"),
+                    "T2": model_selector.get("model_parameters.T2")
+                },
+                "model_rating": model_selector.get("model_rating"),
+                "model_type": model_selector.get("model_type"),
+                "pid_parameters": {
+                    "kd": model_selector.get("pid_parameters.kd"),
+                    "ki": model_selector.get("pid_parameters.ki"),
+                    "kp": model_selector.get("pid_parameters.kp"),
+                    "pb": model_selector.get("pid_parameters.pb"),
+                    "td": model_selector.get("pid_parameters.td"),
+                    "ti": model_selector.get("pid_parameters.ti")
+                },
+                "start_time": model_selector.get("start_time"),
+                "turning_type": model_selector.get("turning_type"),
+            }
+            # #写入整定记录
+            # try:
+                # _save_tuning_record_liu(
+                #     loop_uri=loop_uri,
+                #     current_params=before_pid_params,
+                #     suggested_params=suggest_pid_params,
+                #     mode=mode,
+                #     operator=operator_name,
+                #     operator_id=operator_id,
+                #     model_type=model_type,
+                #     tuning_type=turning_type,
+                #     status=True,
+                #     tuning_details=tuning_details,
+                # )
+                #     loop_info = LoopInfoDAO.get_by_loop_uri(db, loop_uri, include_inactive=True)
+                #     loop_name = loop_info.loop_name if loop_info else None
+                #     description = loop_info.description if loop_info else None
+                #     remark = f"整定模式: {mode}, 模型类型: {model_type.value}, 整定类型: {turning_type}"
+                #
+                #     TuningRecordService.create_record(
+                #         db=db,
+                #         loop_uri=loop_uri,
+                #         loop_name=loop_name,
+                #         tuning_method="常规整定",
+                #         operator=operator_name,
+                #         operator_id=operator_id,
+                #         before_params=json.dumps(before_pid_params),
+                #         after_params=json.dumps(suggest_pid_params),
+                #         description=description,
+                #         status="成功",
+                #         remark=remark,
+                #         tuning_details=tuning_details
+                # )
+            # except Exception as e:
+            #     logger.error(f"写入整定记录失败: {str(e)}")
+            #     raise RuntimeException("写入整定记录失败")
+
             return model_selector
         except Exception as e:
             logger.error(f"识别失败: {str(e)}")
+            _save_tuning_record_liu(
+                loop_uri=loop_uri,
+                current_params={},
+                suggested_params={},
+                mode=mode,
+                operator=operator_name,
+                operator_id=operator_id,
+                model_type=model_type,
+                tuning_type=turning_type,
+                status=False,
+                error_message=f"整定异常:{e if e else ''}",
+            )
             raise
-
-
 
     @staticmethod
     def auto_tuning(
-        mode: str = "auto",
-        loop_uri: str = None,
-        start_time: Union[int, str] = None,
-        end_time: Union[int, str] = None,
-        tuning_windows: Optional[List[Dict[str, Any]]] = None,
-        model_type: ModelType = ModelType.FOPDT,
-        turning_type: str = "PID",
-        lambda_val: Optional[float] = None,
-        window_size: int = 120,
-        step_size: int = 10,
-        confidence_threshold: float = 0.6,
-        window_sec: int = 60,
-        is_filter: bool = False
+            mode: str = "auto",
+            loop_uri: str = None,
+            start_time: Union[int, str] = None,
+            end_time: Union[int, str] = None,
+            tuning_windows: Optional[List[Dict[str, Any]]] = None,
+            model_type: ModelType = ModelType.FOPDT,
+            turning_type: str = "PID",
+            lambda_val: Optional[float] = None,
+            window_size: int = 120,
+            step_size: int = 10,
+            confidence_threshold: float = 0.6,
+            window_sec: int = 60,
+            is_filter: bool = False
     ) -> Dict[str, Any]:
         """
         智能PID参数整定接口
-        
+
         Args:
             mode: 整定模式：auto(自动筛选) 或 manual(手动指定时间范围)
             loop_uri: 回路URI
@@ -239,7 +313,7 @@ class ExpertTuningService:
             confidence_threshold: 置信度阈值（仅auto模式有效，0-1）
             window_sec: 插值采样间隔（秒）
             is_filter: 是否对历史数据进行优化过滤
-            
+
         Returns:
             Dict[str, Any]: PID参数整定结果
         """
@@ -298,7 +372,6 @@ class ExpertTuningService:
                 df = pd.DataFrame(history_data)
                 if "timestamp" not in df.columns or "pv" not in df.columns or "mv" not in df.columns:
                     raise ValueError("历史数据缺少必要字段")
-
 
                 # 滑动窗口检测阶跃响应
                 window_size_sec = window_size * 60
@@ -451,9 +524,10 @@ class ExpertTuningService:
                 try:
                     _save_tuning_record(
                         loop_uri=loop_uri,
-                        result_data=optimization_result,
+                        result_data=result_data,
                         mode=mode,
                         model_type=model_type.value,
+                        turning_type=turning_type,
                         status="成功"
                     )
                 except Exception as record_err:
@@ -464,7 +538,7 @@ class ExpertTuningService:
             except json.JSONDecodeError as json_err:
                 # JSON解析失败，记录失败状态
                 error_msg = f"参数整定失败: {optimization_result}"
-                
+
                 # 写入整定失败记录
                 try:
                     _save_tuning_record(
@@ -472,12 +546,12 @@ class ExpertTuningService:
                         result_data=None,
                         mode=mode,
                         model_type=model_type.value,
-                        status="失败",
+                        turning_type=turning_type,
                         error_message=error_msg
                     )
                 except Exception as record_err:
                     logger.warning(f"失败记录写入失败: {str(record_err)}")
-                
+
                 return {
                     "mode": mode,
                     "message": error_msg
@@ -486,7 +560,7 @@ class ExpertTuningService:
         except Exception as e:
             error_msg = f"自动整定失败: {str(e)}"
             logger.error(error_msg, exc_info=True)
-            
+
             # 写入整定失败记录
             try:
                 _save_tuning_record(
@@ -494,28 +568,29 @@ class ExpertTuningService:
                     result_data=None,
                     mode=mode,
                     model_type=model_type.value,
+                    turning_type=turning_type,
                     status="失败",
                     error_message=error_msg
                 )
             except Exception as record_err:
                 logger.warning(f"失败记录写入失败: {str(record_err)}")
-            
+
             raise
 
     @staticmethod
     def detect_and_visualize_service(
-        loop_uri: str = None,
-        start_time: Union[int, str] = None,
-        end_time: Union[int, str] = None
+            loop_uri: str = None,
+            start_time: Union[int, str] = None,
+            end_time: Union[int, str] = None
     ) -> Dict[str, Any]:
         """
         智能识别时间区间数据状态（稳态、非稳态）
-        
+
         Args:
             loop_uri: 回路URI
             start_time: 开始时间，支持毫秒时间戳或字符串格式
             end_time: 结束时间，支持毫秒时间戳或字符串格式
-            
+
         Returns:
             Dict[str, Any]: 检测结果
         """
@@ -564,16 +639,16 @@ class ExpertTuningService:
 
     @staticmethod
     def calculate_pid(
-        K: float,
-        T1: float,
-        T2: Optional[float] = None,
-        L: Optional[float] = 0,
-        lambda_val: Optional[float] = None,
-        model_type: ModelType = ModelType.FOPDT
+            K: float,
+            T1: float,
+            T2: Optional[float] = None,
+            L: Optional[float] = 0,
+            lambda_val: Optional[float] = None,
+            model_type: ModelType = ModelType.FOPDT
     ) -> Dict[str, Any]:
         """
         根据输入的模型参数(K、T、L)和模型类型，直接计算对应的PID参数
-        
+
         Args:
             K: 增益系数 K
             T1: 时间常数 T1 (秒)
@@ -581,7 +656,7 @@ class ExpertTuningService:
             L: 滞后时间 L (秒)
             lambda_val: Lambda值（期望闭环时间常数），不指定时自动计算
             model_type: 模型类型
-            
+
         Returns:
             Dict[str, Any]: PID参数计算结果
         """
@@ -714,22 +789,24 @@ def _get_model_recommendations(model_type: str) -> Dict[str, str]:
 
 
 def _save_tuning_record(
-    loop_uri: str,
-    result_data: Optional[Dict[str, Any]],
-    mode: str,
-    model_type: str,
-    operator: str,
-    status: str = "成功",
-    error_message: Optional[str] = None
+        loop_uri: str,
+        result_data: Optional[Dict[str, Any]],
+        mode: str,
+        model_type: str,
+        operator: str,
+        turning_type: str,
+        status: str = "成功",
+        error_message: Optional[str] = None
 ) -> None:
     """
     保存整定记录到数据库（支持成功和失败状态）
-    
+
     Args:
         loop_uri: 回路URI
         result_data: 整定结果数据（失败时为None）
         mode: 整定模式 (auto/manual)
-        model_type: 模型类型
+        model_type: 模型类型（FOPDI/FO....）
+        turning_type: 整定类型（PID/PI）
         operator: 操作人
         status: 整定状态 (成功/失败)
         error_message: 错误信息（失败时使用）
@@ -740,25 +817,25 @@ def _save_tuning_record(
             loop_info = LoopInfoDAO.get_by_loop_uri(db, loop_uri, include_inactive=True)
             loop_name = loop_info.loop_name if loop_info else None
             description = loop_info.description if loop_info else None
-            
+
             # 根据状态处理参数
-            if status == "成功" and result_data:
+            if status == "成功":
                 # 提取整定前后参数
-                current_params = result_data.get('current_params', {})
-                tuning_suggestions = result_data.get('tuning_suggestions', {})
-                lambda_params = tuning_suggestions.get('lambda_suggested_params', {})
-                suggested_params = lambda_params.get('params', {})
-                
+                # current_params = result_data.get('current_params', {})
+                # tuning_suggestions = result_data.get('tuning_suggestions', {})
+                # lambda_params = tuning_suggestions.get('lambda_suggested_params', {})
+                # suggested_params = lambda_params.get('params', {})
+
                 # 格式化参数字符串
-                before_params_str = f"Kp:{current_params.get('Kp', 0):.2f}, Ti:{current_params.get('Ti', 0):.2f}, Td:{current_params.get('Td', 0):.2f}"
-                after_params_str = f"Kp:{suggested_params.get('Kp', 0):.2f}, Ti:{suggested_params.get('Ti', 0):.2f}, Td:{suggested_params.get('Td', 0):.2f}"
-                remark = f"模式: {mode}, 模型类型: {model_type}"
+                # before_params_str = f"Kp:{current_params.get('Kp', 0):.2f}, Ti:{current_params.get('Ti', 0):.2f}, Td:{current_params.get('Td', 0):.2f}"
+                # after_params_str = f"Kp:{suggested_params.get('Kp', 0):.2f}, Ti:{suggested_params.get('Ti', 0):.2f}, Td:{suggested_params.get('Td', 0):.2f}"
+                remark = f"模式: {mode}, 模型类型: {model_type},整定类型: {turning_type}"
             else:
                 # 失败情况
                 before_params_str = None
                 after_params_str = None
-                remark = f"模式: {mode}, 模型类型: {model_type}, 错误: {error_message or '未知错误'}"
-            
+                remark = f"模式: {mode}, 模型类型: {model_type},整定类型: {turning_type}, 错误: {error_message or '未知错误'}"
+
             # 创建整定记录
             record_data = {
                 "loop_uri": loop_uri,
@@ -775,11 +852,80 @@ def _save_tuning_record(
                 "created_time": datetime.now(),
                 "updated_time": datetime.now()
             }
-            
+
             # 写入数据库
             TuningRecordDAO.create(db, record_data)
-            logger.info(f"整定记录写入成功: loop_uri={loop_uri}, method=常规整定, status={status}, status={status}")
-            
+            logger.info(
+                f"整定记录写入成功: loop_uri={loop_uri}, method=常规整定,整定类型={turning_type}, status={status}, status={status}")
+
+    except Exception as e:
+        logger.error(f"保存整定记录失败: {str(e)}")
+        raise
+
+
+def _save_tuning_record_liu(
+        loop_uri: str,
+        current_params: Dict[str, Any],
+        suggested_params: Dict[str, Any],
+        mode: str,
+        model_type: ModelType,
+        tuning_type: str,
+        operator: str,
+        operator_id: Optional[str] = None,
+        status: bool = True,
+        tuning_details: Optional[Dict[str, Any]] = None,
+        error_message: Optional[str] = None
+) -> None:
+    """
+    保存整定记录到数据库（支持成功和失败状态）
+
+    Args:
+        loop_uri: 回路URI
+        result_data: 整定结果数据（失败时为None）
+        mode: 整定模式 (手动/自动)
+        model_type: 模型类型(FODPT....)
+        tuning_type: 整定类型 (PID/PI)
+        operator: 操作人
+        operator_id: 操作人ID
+        status: 整定状态 (成功/失败)
+        error_message: 错误信息（失败时使用）
+    """
+    try:
+        with get_db_session() as db:
+            # 获取回路名称
+            loop_info = LoopInfoDAO.get_by_loop_uri(db, loop_uri, include_inactive=True)
+            loop_name = loop_info.loop_name if loop_info else None
+            description = loop_info.description if loop_info else None
+            status_str = "成功" if status else "失败"
+            # 根据状态处理参数
+            if status:
+                # 格式化参数字符串
+                before_params_str = f"Kp:{current_params.get('Kp', 0):.2f}, Ti:{current_params.get('Ti', 0):.2f}, Td:{current_params.get('Td', 0):.2f}"
+                after_params_str = f"Kp:{suggested_params.get('Kp', 0):.2f}, Ti:{suggested_params.get('Ti', 0):.2f}, Td:{suggested_params.get('Td', 0):.2f}"
+                remark = f"整定模式: {mode}, 模型类型: {model_type.value}, 整定类型: {tuning_type}"
+            else:
+                # 失败情况
+                before_params_str = None
+                after_params_str = None
+                remark = f"整定模式: {mode}, 模型类型: {model_type.value}, 整定类型: {tuning_type}, 错误: {error_message or '未知错误'}"
+
+            # 写入数据库
+            TuningRecordService.create_record(
+                db=db,
+                loop_uri=loop_uri,
+                loop_name=loop_name,
+                tuning_method="常规整定",
+                operator=operator,
+                operator_id=operator_id,
+                before_params=before_params_str,
+                after_params=after_params_str,
+                description=description,
+                status=status_str,
+                remark=remark,
+                tuning_details=tuning_details if tuning_details else {"error": error_message}
+            )
+            logger.info(f"整定记录写入成功: loop_name={loop_name}, method=常规整定, status={status}")
+
     except Exception as e:
         logger.error(f"保存整定记录失败: {str(e)}")
         raise
