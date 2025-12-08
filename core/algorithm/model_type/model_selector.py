@@ -291,6 +291,7 @@ class ModelSelector:
         fitting_result['recommendation'] = recommendation
         
         return {
+            'success': result.get('success', False),
             'model_type': result.get('model_type', 'FOPDT'),
             'turning_type': turning_type,
             'model_rating': model_rating,
@@ -333,6 +334,7 @@ class ModelSelector:
     def _empty_result_new(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """新格式空结果"""
         return {
+            'success': False,
             'model_type': params.get('model_type') or 'FOPDT',
             'turning_type': params.get('turning_type') or 'PID',
             'model_rating': 0.0,
@@ -1798,8 +1800,9 @@ class ModelSelector:
         )
         
         if fitting_failed:
-            self.log(f"   ❌ 拟合完全失败，使用实际PV作为pv_model")
-            pv_model = y.copy()  # 用实际PV替换
+            self.log(f"   ❌ 拟合完全失败，保留原始pv_model用于诊断分析")
+            # 不再替换pv_model，保留原始仿真结果便于分析问题
+            # pv_model = y.copy()
         elif sim_quality_poor:
             reason = []
             if sim_r2 < 0.5:
@@ -1816,6 +1819,7 @@ class ModelSelector:
         model_rating, score_details = self._calculate_model_rating(fusion, total_data_points)
         
         return {
+            'success': not fitting_failed,  # 拟合失败时为False
             'model_type': fusion.model_type,
             'model_rating': model_rating,
             'start_time': time_range.get('start_time'),
@@ -1905,6 +1909,7 @@ class ModelSelector:
     def _empty_result(self, input_data: Optional[TuningInput]) -> Dict[str, Any]:
         """空结果"""
         return {
+            'success': False,
             'model_type': ModelType.FOPDT,
             'model_rating': 0.0,
             'start_time': getattr(input_data, 'start_time', None) if input_data else None,
