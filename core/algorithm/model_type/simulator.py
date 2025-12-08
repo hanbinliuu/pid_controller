@@ -81,9 +81,21 @@ class ModelSimulator:
         
         if reset_on_sv_change and sv is not None and len(sv) == n:
             sv_diff = np.abs(np.diff(sv))
-            sv_threshold = max(1.0, np.std(sv) * 2.0) if np.std(sv) > 0 else 1.0
+            sv_range = np.max(sv) - np.min(sv)
+            
+            # 使用更灵敏的阈值：SV范围的5%或1.0中较大的
+            sv_threshold = max(1.0, sv_range * 0.05)
+            
             change_points = np.where(sv_diff > sv_threshold)[0] + 1
             reset_points.extend(change_points.tolist())
+            
+            # 同时检测PV的大幅跳变（可能是工况切换）
+            y_diff = np.abs(np.diff(y))
+            y_range = np.max(y) - np.min(y)
+            y_threshold = max(1.0, y_range * 0.2)  # PV变化超过范围20%则重置
+            
+            y_change_points = np.where(y_diff > y_threshold)[0] + 1
+            reset_points.extend(y_change_points.tolist())
         
         reset_points = sorted(set(reset_points))
         reset_points.append(n)

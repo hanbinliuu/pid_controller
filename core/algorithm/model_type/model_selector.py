@@ -12,6 +12,7 @@ from .data_preprocessor import DataPreprocessor
 from .segment_processor import SegmentProcessor
 from .simulator import ModelSimulator
 from .pid_calculator import PIDCalculator
+from .unified_model_selector import UnifiedModelSelector, SegmentModelFit
 from .utils import (
     calculate_r2, calculate_rmse, calculate_rss, calculate_aic, calculate_bic,
     parse_timestamp, get_recommendation, determine_turning_type
@@ -69,6 +70,7 @@ class ModelSelector:
         self._segment_processor = SegmentProcessor(verbose=verbose)
         self._simulator = ModelSimulator()
         self._pid_calculator = PIDCalculator()
+        self._unified_selector = UnifiedModelSelector(verbose=verbose)
     
     @property
     def verbose(self) -> bool:
@@ -328,88 +330,61 @@ class ModelSelector:
                 self.log(f"   ⚠️ 段{idx+1}所有模型R²<0.4或K值异常")
     
     # ============================================================
-    # Step 3: 模型选择
+    # Step 3: 模型选择（使用统一模型选择器）
     # ============================================================
     
     def _select_best_model_type(self, segment_results: List[SegmentResult]) -> str:
-        """选择最优模型结构"""
-        self.log(f"\n{'='*60}")
-        self.log("📊 Step 3: 模型结构选择")
-        self.log('='*60)
+        """
+        选择最优模型结构（统一模型选择）
         
-        model_r2_scores = {m: [] for m in self.CANDIDATE_MODELS}
-        model_votes = {m: 0 for m in self.CANDIDATE_MODELS}
+        改进：
+        1. 使用质量加权投票而非简单计数
+        2. 应用复杂度惩罚（奥卡姆剃刀）
+        3. 处理各段模型不一致的情况
+        """
+        # 转换为SegmentModelFit格式
+        segment_fits = self._convert_to_segment_fits(segment_results)
         
-        valid_results = [r for r in segment_results if r.is_valid and r.model_results]
-        
-        if not valid_results:
+        if not segment_fits:
             self.log("   无有效段结果，默认使用 FOPDT")
             return ModelType.FOPDT
         
-        high_quality_count = 0
+        # 使用统一模型选择器
+        best_model, reasoning = self._unified_selector.select_unified_model_type(segment_fits)
         
-        for result in valid_results:
-            for model_type, fit_result in result.model_results.items():
-                r2 = fit_result.get('r2', 0)
-                if r2 >= self.MIN_R2_FOR_VOTE:
-                    model_r2_scores[model_type].append(r2)
-            
-            if result.best_r2 >= self.MIN_R2_FOR_VOTE and result.best_model:
-                model_votes[result.best_model] += 1
-                high_quality_count += 1
+        # 诊断不一致性
+        diagnosis = self._unified_selector.handle_inconsistent_segments(segment_fits)
+        if diagnosis['has_inconsistency']:
+            self.log("\n   ⚠️ 检测到段间不一致:")
+            for issue in diagnosis['issues']:
+                self.log(f"      - {issue}")
+            if diagnosis['recommendations']:
+                self.log("   💡 建议:")
+                for rec in diagnosis['recommendations']:
+                    self.log(f"      - {rec}")
         
-        self.log(f"\n   高质量段(R²≥{self.MIN_R2_FOR_VOTE}): {high_quality_count}/{len(valid_results)}")
-        
-        self.log("\n   模型评估汇总:")
-        self.log(f"   {'模型':<15} | {'平均R²':>10} | {'有效段':>6} | {'投票':>6} | {'综合分':>10}")
-        self.log("   " + "-" * 60)
-        
-        model_composite_scores = {}
-        
-        for model_type in self.CANDIDATE_MODELS:
-            r2_scores = model_r2_scores[model_type]
-            votes = model_votes[model_type]
-            
-            if r2_scores:
-                avg_r2 = np.mean(r2_scores)
-                n_valid = len(r2_scores)
-                
-                vote_normalized = votes / max(high_quality_count, 1)
-                composite = 0.7 * avg_r2 + 0.3 * vote_normalized
-                model_composite_scores[model_type] = composite
-                
-                self.log(f"   {model_type:<15} | {avg_r2:>10.4f} | {n_valid:>6} | {votes:>6} | {composite:>10.4f}")
-            else:
-                all_r2 = [r.model_results.get(model_type, {}).get('r2', 0) 
-                         for r in valid_results if r.model_results.get(model_type)]
-                if all_r2:
-                    avg_r2 = np.mean(all_r2) * 0.5
-                    model_composite_scores[model_type] = avg_r2
-                    self.log(f"   {model_type:<15} | {np.mean(all_r2):>10.4f}* | {0:>6} | {votes:>6} | {avg_r2:>10.4f}")
-        
-        if model_composite_scores:
-            best_model = max(model_composite_scores.keys(), 
-                           key=lambda m: model_composite_scores[m])
-            best_score = model_composite_scores[best_model]
-            
-            if best_score < 0.4:
-                self.log(f"\n   ⚠️ 所有模型拟合质量都较差")
-            
-            if best_model == ModelType.FOPI and best_score < 0.6:
-                alternative_models = {m: s for m, s in model_composite_scores.items() 
-                                     if m != ModelType.FOPI and s > 0.3}
-                if alternative_models:
-                    best_model = max(alternative_models.keys(), 
-                                   key=lambda m: alternative_models[m])
-                    self.log(f"   ⚠️ 积分器模型拟合质量不佳，回退到 {best_model}")
-                else:
-                    best_model = ModelType.FOPDT
-                    self.log(f"   ⚠️ 积分器模型拟合质量不佳，回退到 FOPDT")
-        else:
-            best_model = ModelType.FOPDT
-        
-        self.log(f"\n   → 选择模型: {best_model}")
+        self.log(f"\n🎯 统一模型选择: {best_model}")
         return best_model
+    
+    def _convert_to_segment_fits(self, segment_results: List[SegmentResult]) -> List[SegmentModelFit]:
+        """将SegmentResult转换为SegmentModelFit格式"""
+        segment_fits = []
+        
+        for result in segment_results:
+            if not result.is_valid or not result.model_results:
+                continue
+            
+            fit = SegmentModelFit(
+                segment_idx=result.segment_idx,
+                data_points=result.data_points,
+                quality_score=result.quality_score,
+                nonlinearity_score=result.nonlinearity_score,
+                is_nonlinear=result.is_nonlinear,
+                model_fits=result.model_results
+            )
+            segment_fits.append(fit)
+        
+        return segment_fits
     
     # ============================================================
     # Step 4: 参数融合
@@ -479,7 +454,9 @@ class ModelSelector:
                     stability_score=quality_adjusted_stability,
                     oscillation_ratio=oscillation_ratio,
                     settling_quality=settling_quality,
-                    is_steady=is_steady and not result.is_nonlinear
+                    is_steady=is_steady and not result.is_nonlinear,
+                    nonlinearity_score=result.nonlinearity_score,
+                    quality_score=result.quality_score
                 ))
                 added_indices.add(result.segment_idx)
                 valid_segment_idx += 1

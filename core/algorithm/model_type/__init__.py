@@ -27,6 +27,7 @@ from .model_selector import ModelSelector
 from .simulator import ModelSimulator
 from .pid_calculator import PIDCalculator
 from .segment_processor import SegmentProcessor
+from .unified_model_selector import UnifiedModelSelector, SegmentModelFit
 
 __all__ = [
     'ModelSelector', 
@@ -40,4 +41,6 @@ __all__ = [
     'ModelSimulator',
     'PIDCalculator',
     'SegmentProcessor',
+    'UnifiedModelSelector',
+    'SegmentModelFit',
 ]
