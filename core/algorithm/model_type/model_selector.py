@@ -596,8 +596,15 @@ class ModelSelector:
         u_full = hist_data.mv[valid_mask]
         sv_full = hist_data.sv[valid_mask] if hist_data.sv is not None else None
         
-        y_pred_full = self._simulator.simulate_segmented(params, model_type, y_full, u_full, 
-                                                          reset_on_sv_change=True, sv=sv_full)
+        # 验证阶段：不使用振荡叠加，计算原始模型的R²
+        y_pred_full = self._simulator.simulate_segmented(
+            params, model_type, y_full, u_full, 
+            reset_on_sv_change=True, sv=sv_full,
+            enable_smooth=True,
+            enable_amplitude_calibration=True,
+            enable_offset_correction=True,
+            enable_oscillation_overlay=False  # 验证时不叠加振荡
+        )
         global_r2 = calculate_r2(y_full, y_pred_full)
         global_rmse = calculate_rmse(y_full, y_pred_full)
         
@@ -637,8 +644,14 @@ class ModelSelector:
                                                            model_type, params)
             
             if optimized_params is not None:
-                y_pred_opt = self._simulator.simulate_segmented(optimized_params, model_type, y_full, u_full,
-                                                                 reset_on_sv_change=True, sv=sv_full)
+                y_pred_opt = self._simulator.simulate_segmented(
+                    optimized_params, model_type, y_full, u_full,
+                    reset_on_sv_change=True, sv=sv_full,
+                    enable_smooth=True,
+                    enable_amplitude_calibration=True,
+                    enable_offset_correction=True,
+                    enable_oscillation_overlay=False  # 验证时不叠加振荡
+                )
                 r2_opt = calculate_r2(y_full, y_pred_opt)
                 rmse_opt = calculate_rmse(y_full, y_pred_opt)
                 
@@ -922,8 +935,15 @@ class ModelSelector:
         ts = hist_data.timestamp[valid_mask]
         sv = hist_data.sv[valid_mask]
         
-        pv_model = self._simulator.simulate_segmented(params, fusion.model_type, y, u, 
-                                                       reset_on_sv_change=True, sv=sv)
+        # 最终输出的pv_model：启用所有校正和振荡叠加
+        pv_model = self._simulator.simulate_segmented(
+            params, fusion.model_type, y, u, 
+            reset_on_sv_change=True, sv=sv,
+            enable_smooth=True,
+            enable_amplitude_calibration=True,
+            enable_offset_correction=True,
+            enable_oscillation_overlay=True  # 启用振荡叠加，使模型跟随实测振荡
+        )
         
         sim_r2 = calculate_r2(y, pv_model)
         

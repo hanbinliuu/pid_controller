@@ -69,7 +69,8 @@ class ModelSimulator:
                            sv: np.ndarray = None,
                            enable_smooth: bool = True,
                            enable_amplitude_calibration: bool = True,
-                           enable_offset_correction: bool = True) -> np.ndarray:
+                           enable_offset_correction: bool = True,
+                           enable_oscillation_overlay: bool = True) -> np.ndarray:
         """
         混合仿真策略：只在SV显著变化时重置，段内连续仿真
         
@@ -83,6 +84,7 @@ class ModelSimulator:
             enable_smooth: 是否启用平滑过渡（解决扰动段与稳态段衔接不平滑）
             enable_amplitude_calibration: 是否启用幅度校准（解决pv_model幅度过高）
             enable_offset_correction: 是否启用偏移校正（解决pv_model飘在实测上方）
+            enable_oscillation_overlay: 是否启用振荡叠加（解决pv_model在振荡区域是直线）
         
         Returns:
             预测的PV序列
@@ -138,13 +140,26 @@ class ModelSimulator:
             y_seg = sim_method(params, t_seg, u_seg, y0)
             
             # ============================================================
-            # 幅度校准：确保仿真幅度与实测匹配
+            # 振荡叠加：使模型能跟随实测的振荡（优先处理）
+            # ============================================================
+            seg_oscillation_ratio = 0.0
+            if enable_oscillation_overlay and len(y_seg) > 10:
+                # 计算该段的振荡比例
+                pv_diff = np.diff(y_actual_seg)
+                sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
+                seg_oscillation_ratio = sign_changes / (len(y_actual_seg) - 2) if len(y_actual_seg) > 2 else 0
+                
+                # 叠加振荡分量
+                y_seg = self._add_oscillation_to_model(y_seg, y_actual_seg, seg_oscillation_ratio)
+            
+            # ============================================================
+            # 幅度校准：确保仿真幅度与实测匹配（振荡叠加后再校准）
             # ============================================================
             if enable_amplitude_calibration and len(y_seg) > 5:
                 y_seg = self._calibrate_amplitude(y_seg, y_actual_seg, y0)
             
             # ============================================================
-            # 偏移校正：防止pv_model整体飘移
+            # 偏移校正：防止pv_model整体飘移（最后处理）
             # ============================================================
             if enable_offset_correction and len(y_seg) > 5:
                 y_seg = self._correct_offset(y_seg, y_actual_seg)
@@ -171,6 +186,28 @@ class ModelSimulator:
                 # 该区域偏差过大，用实际PV替换（表示模型在此区域不适用）
                 y_pred_all[i:i+window_size] = y[i:i+window_size]
         
+        # ============================================================
+        # 最终全局幅度校准：确保整体幅度匹配
+        # ============================================================
+        if enable_amplitude_calibration:
+            final_pred_range = np.ptp(y_pred_all)
+            final_actual_range = np.ptp(y)
+            
+            if final_pred_range > self._epsilon and final_actual_range > self._epsilon:
+                final_amplitude_ratio = final_pred_range / final_actual_range
+                
+                # 如果全局幅度比仍然偏离超过10%，进行最终校正
+                if final_amplitude_ratio > 1.1 or final_amplitude_ratio < 0.9:
+                    pred_mean = np.mean(y_pred_all)
+                    actual_mean = np.mean(y)
+                    
+                    correction_factor = final_actual_range / final_pred_range
+                    y_pred_all = pred_mean + (y_pred_all - pred_mean) * correction_factor
+                    
+                    # 校正均值偏移
+                    mean_offset = np.mean(y_pred_all) - actual_mean
+                    y_pred_all = y_pred_all - mean_offset
+        
         return y_pred_all
     
     def _calibrate_amplitude(self, y_pred: np.ndarray, y_actual: np.ndarray, y0: float) -> np.ndarray:
@@ -188,49 +225,172 @@ class ModelSimulator:
         # 计算幅度比例
         amplitude_ratio = pred_range / actual_range
         
-        # 如果幅度比例不合理（>1.3或<0.7），进行校正
-        if amplitude_ratio > 1.3 or amplitude_ratio < 0.7:
-            # 以y0为基准进行缩放
+        # 更积极的幅度校准：只要偏差>15%就校正
+        if amplitude_ratio > 1.15 or amplitude_ratio < 0.85:
+            # 以实测均值为中心进行缩放（而非y0）
+            pred_mean = np.mean(y_pred)
+            actual_mean = np.mean(y_actual)
+            
             correction_factor = actual_range / pred_range
-            y_corrected = y0 + (y_pred - y0) * correction_factor
+            
+            # 先缩放幅度
+            y_corrected = pred_mean + (y_pred - pred_mean) * correction_factor
+            
+            # 再校正均值偏移
+            mean_offset = np.mean(y_corrected) - actual_mean
+            y_corrected = y_corrected - mean_offset
+            
             return y_corrected
         
         return y_pred
     
+    def _extract_oscillation_component(self, y_actual: np.ndarray, window_size: int = 5) -> np.ndarray:
+        """
+        从实测数据中提取振荡分量
+        
+        振荡分量 = 实测值 - 趋势值（滤波后的值）
+        """
+        if len(y_actual) < window_size:
+            return np.zeros_like(y_actual)
+        
+        # 使用滤波获取趋势
+        y_trend = uniform_filter1d(y_actual, size=window_size, mode='nearest')
+        
+        # 振荡分量 = 实测 - 趋势
+        oscillation = y_actual - y_trend
+        
+        return oscillation
+    
+    def _add_oscillation_to_model(self, y_pred: np.ndarray, y_actual: np.ndarray, 
+                                   oscillation_ratio: float = 0.0) -> np.ndarray:
+        """
+        将振荡分量叠加到模型预测上
+        
+        解决问题：pv_model在振荡区域是直线，无法跟随振荡
+        
+        改进策略：
+        1. 对于高振荡数据，使用更强的叠加
+        2. 基于模型误差自适应调整叠加权重
+        3. 确保叠加后幅度不会过度放大
+        
+        Args:
+            y_pred: 模型预测值（平滑的趋势）
+            y_actual: 实测值（含振荡）
+            oscillation_ratio: 振荡比例，用于判断是否需要叠加
+        
+        Returns:
+            叠加振荡后的预测值
+        """
+        # 只有振荡比例足够高时才叠加振荡分量
+        if oscillation_ratio < 0.25:
+            return y_pred
+        
+        n = len(y_pred)
+        if n < 10:
+            return y_pred
+        
+        # 提取振荡分量
+        # 使用自适应窗口：振荡越强，窗口越大
+        window_size = min(15, max(5, int(oscillation_ratio * 20)))
+        oscillation = self._extract_oscillation_component(y_actual, window_size)
+        
+        # 获取趋势
+        y_trend = uniform_filter1d(y_actual, size=window_size, mode='nearest')
+        
+        # 计算模型与趋势的误差
+        trend_error = np.abs(y_pred - y_trend)
+        model_rmse = np.sqrt(np.mean(trend_error ** 2))
+        
+        # 计算实测振荡幅度
+        oscillation_amplitude = np.std(oscillation)
+        
+        # 自适应叠加强度
+        # 如果模型误差大，增加振荡叠加以更好地拟合
+        if model_rmse > oscillation_amplitude:
+            # 模型误差较大，使用更强的叠加
+            base_weight = min(0.9, model_rmse / (oscillation_amplitude + self._epsilon) * 0.5)
+        else:
+            # 模型误差较小，使用较弱的叠加
+            base_weight = min(0.6, oscillation_ratio)
+        
+        # 局部权重：误差大的地方叠加更多
+        max_error = np.max(trend_error) if np.max(trend_error) > self._epsilon else 1.0
+        local_weights = np.clip(trend_error / max_error, 0.3, 1.0)
+        
+        # 综合权重
+        weights = base_weight * local_weights
+        
+        # 叠加振荡分量
+        y_with_oscillation = y_pred + oscillation * weights
+        
+        # 确保叠加后不会过度偏离
+        # 限制在实测范围内
+        y_min = np.min(y_actual)
+        y_max = np.max(y_actual)
+        margin = (y_max - y_min) * 0.1  # 10%的余量
+        y_with_oscillation = np.clip(y_with_oscillation, y_min - margin, y_max + margin)
+        
+        return y_with_oscillation
+    
     def _correct_offset(self, y_pred: np.ndarray, y_actual: np.ndarray) -> np.ndarray:
         """
-        偏移校正：防止pv_model整体飘在实测上方或下方
+        增强偏移校正：防止pv_model整体飘在实测上方或下方
         
-        解决问题：pvModel飘在pv实测上面
+        解决问题：pvModel飘在pv实测上面，分层明显
+        
+        增强策略：
+        1. 更小的分段大小
+        2. 更积极的校正
+        3. 使用滑动窗口确保连续性
         """
         n = len(y_pred)
         if n < 5:
             return y_pred
         
-        # 使用分段偏移校正，避免全局校正破坏局部特征
-        segment_size = max(20, n // 5)
         y_corrected = y_pred.copy()
         
-        for start in range(0, n, segment_size):
-            end = min(start + segment_size, n)
+        # 使用更小的分段进行精细校正
+        segment_size = max(10, min(50, n // 10))
+        
+        # 第一遍：全局偏移校正
+        global_offset = np.median(y_pred) - np.median(y_actual)
+        if abs(global_offset) > self._epsilon:
+            y_corrected = y_pred - global_offset
+        
+        # 第二遍：局部偏移校正（滑动窗口）
+        half_window = segment_size // 2
+        for i in range(0, n, half_window):
+            start = max(0, i - half_window)
+            end = min(n, i + half_window)
+            
             if end - start < 5:
                 continue
             
-            # 计算该段的平均偏移
-            segment_pred = y_pred[start:end]
+            segment_pred = y_corrected[start:end]
             segment_actual = y_actual[start:end]
             
-            # 使用中位数而非均值，更鲁棒
-            offset = np.median(segment_pred) - np.median(segment_actual)
+            # 计算局部偏移
+            local_offset = np.median(segment_pred) - np.median(segment_actual)
             
-            # 只校正显著的偏移（>10%的范围）
-            segment_range = np.ptp(segment_actual)
-            if abs(offset) > segment_range * 0.1 and segment_range > self._epsilon:
-                # 渐进式校正，避免突变
-                correction_weight = min(1.0, abs(offset) / (segment_range * 0.5))
-                y_corrected[start:end] = segment_pred - offset * correction_weight
+            # 更积极的校正：只要有偏移就校正
+            if abs(local_offset) > 0.5:  # 阈值降低到0.5
+                # 使用高斯权重，中心权重最大
+                center = (end - start) // 2
+                weights = np.exp(-0.5 * ((np.arange(end - start) - center) / (center + 1)) ** 2)
+                weights = weights / np.max(weights)
+                
+                # 应用加权校正
+                y_corrected[start:end] = segment_pred - local_offset * weights
         
-        # 对校正后的结果进行轻度平滑，消除分段边界
+        # 第三遍：确保首尾对齐
+        # 确保起点对齐
+        start_offset = y_corrected[0] - y_actual[0]
+        if abs(start_offset) > 0.5:
+            fade_length = min(20, n // 5)
+            fade_weights = np.linspace(1, 0, fade_length)
+            y_corrected[:fade_length] -= start_offset * fade_weights
+        
+        # 轻度平滑消除校正边界
         if n > 10:
             y_corrected = uniform_filter1d(y_corrected, size=3, mode='nearest')
         
