@@ -2,6 +2,7 @@
 
 import numpy as np
 from scipy.optimize import least_squares
+from scipy.ndimage import uniform_filter1d
 
 from .config import Config
 
@@ -19,6 +20,110 @@ class ModelIdentifier:
         'SO_INTEGRATOR': lambda g: [g['K'], g['T'] / 2, g['T'] / 2],
         'FOPDT': lambda g: [g['K'], g['T'], g['L']],
     }
+    
+    # ============================================================
+    # 高振荡数据检测与预处理
+    # ============================================================
+    
+    @staticmethod
+    def detect_high_oscillation(y: np.ndarray, u: np.ndarray) -> dict:
+        """
+        检测是否为高振荡开环数据
+        
+        Returns:
+            dict: {is_oscillating, oscillation_ratio, amplitude_ratio, recommended_filter_size}
+        """
+        if len(y) < 20:
+            return {'is_oscillating': False, 'oscillation_ratio': 0.0}
+        
+        # 计算PV符号变化比例
+        pv_diff = np.diff(y)
+        sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
+        oscillation_ratio = sign_changes / (len(y) - 2)
+        
+        # 计算振荡幅度与总范围的比例
+        pv_range = np.ptp(y)
+        if pv_range > Config.EPSILON:
+            # 使用中位数振幅估计振荡大小
+            median_amplitude = np.median(np.abs(pv_diff))
+            amplitude_ratio = median_amplitude / pv_range
+        else:
+            amplitude_ratio = 0.0
+        
+        # 判断是否为高振荡数据
+        is_oscillating = oscillation_ratio > 0.25 or amplitude_ratio > 0.1
+        
+        # 推荐滤波窗口大小
+        if oscillation_ratio > 0.4:
+            recommended_filter = 9
+        elif oscillation_ratio > 0.3:
+            recommended_filter = 7
+        elif oscillation_ratio > 0.2:
+            recommended_filter = 5
+        else:
+            recommended_filter = 3
+        
+        return {
+            'is_oscillating': is_oscillating,
+            'oscillation_ratio': oscillation_ratio,
+            'amplitude_ratio': amplitude_ratio,
+            'recommended_filter_size': recommended_filter
+        }
+    
+    @staticmethod
+    def preprocess_oscillating_data(y: np.ndarray, u: np.ndarray, filter_size: int = 5) -> tuple:
+        """
+        预处理高振荡数据 - 使用自适应滤波
+        
+        Returns:
+            (y_filtered, u_filtered)
+        """
+        if len(y) < filter_size:
+            return y.copy(), u.copy()
+        
+        # 使用均值滤波平滑数据
+        y_filtered = uniform_filter1d(y, size=filter_size, mode='nearest')
+        u_filtered = uniform_filter1d(u, size=filter_size, mode='nearest')
+        
+        return y_filtered, u_filtered
+    
+    @staticmethod
+    def estimate_gain_from_oscillating_data(y: np.ndarray, u: np.ndarray) -> float:
+        """
+        从高振荡数据中估计增益K
+        使用包络线法而非直接计算
+        """
+        if len(y) < 20:
+            return ModelIdentifier._estimate_gain_from_correlation(u, y, y[0])
+        
+        # 计算PV的上下包络线
+        window = min(10, len(y) // 5)
+        y_upper = np.zeros_like(y)
+        y_lower = np.zeros_like(y)
+        
+        for i in range(len(y)):
+            start = max(0, i - window)
+            end = min(len(y), i + window + 1)
+            y_upper[i] = np.max(y[start:end])
+            y_lower[i] = np.min(y[start:end])
+        
+        # 使用包络线中线作为趋势
+        y_trend = (y_upper + y_lower) / 2
+        
+        # 计算趋势增益
+        y_trend_range = np.max(y_trend) - np.min(y_trend)
+        u_range = np.max(u) - np.min(u)
+        
+        if u_range < Config.EPSILON:
+            return 0.5
+        
+        K_magnitude = y_trend_range / u_range
+        
+        # 确定符号
+        corr = np.corrcoef(u, y_trend)[0, 1] if len(u) > 2 else 0
+        K_sign = 1.0 if np.isnan(corr) or corr >= 0 else -1.0
+        
+        return np.clip(K_magnitude * K_sign, -5.0, 5.0)
     
     @staticmethod
     def _compute_sampling_info(t):
@@ -260,10 +365,28 @@ class ModelIdentifier:
     
     @staticmethod
     def _identify_model_unified(t, y, u, model_type='FOPDT', **kwargs):
-        """统一的模型辨识方法"""
+        """
+        统一的模型辨识方法
+        
+        增强：自动检测高振荡数据并进行预处理
+        """
         y0 = y[0] if len(y) > 0 else 0.0
         
-        initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(t, y, u, y0)
+        # 检测是否为高振荡数据
+        oscillation_info = ModelIdentifier.detect_high_oscillation(y, u)
+        
+        if oscillation_info['is_oscillating']:
+            # 对高振荡数据进行预处理
+            filter_size = oscillation_info['recommended_filter_size']
+            y_proc, u_proc = ModelIdentifier.preprocess_oscillating_data(y, u, filter_size)
+            
+            # 使用包络线法估计增益
+            K_est = ModelIdentifier.estimate_gain_from_oscillating_data(y, u)
+            initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(t, y_proc, u_proc, y0)
+            initial_guess_dict['K'] = K_est
+        else:
+            y_proc, u_proc = y, u
+            initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(t, y, u, y0)
         
         formatter = ModelIdentifier.INITIAL_GUESS_FORMATS.get(
             model_type, ModelIdentifier.INITIAL_GUESS_FORMATS['FOPDT']
@@ -273,11 +396,12 @@ class ModelIdentifier:
         model_config = Config.MODEL_BOUNDS.get(model_type, Config.MODEL_BOUNDS['FOPDT'])
         bounds = model_config['initial']
         
+        # 第一次优化：使用预处理后的数据
         try:
             result = least_squares(
                 ModelIdentifier.residuals,
                 initial_guess,
-                args=(t, u, y, y0, model_type),
+                args=(t, u_proc, y_proc, y0, model_type),
                 kwargs=kwargs,
                 bounds=bounds,
                 method='trf',
@@ -289,6 +413,27 @@ class ModelIdentifier:
             params = result.x if result.success else initial_guess
         except Exception:
             params = initial_guess
+        
+        # 如果是高振荡数据，进行二次验证和校正
+        if oscillation_info['is_oscillating']:
+            # 使用原始数据验证结果
+            y_pred = ModelIdentifier.MODEL_SIMULATORS.get(
+                model_type, ModelIdentifier.fopdt_model
+            )(params, t, u, y0)
+            
+            # 计算幅度比例
+            pred_range = np.ptp(y_pred)
+            actual_range = np.ptp(y)
+            
+            if pred_range > Config.EPSILON and actual_range > Config.EPSILON:
+                amplitude_ratio = pred_range / actual_range
+                
+                # 如果幅度比例不合理（>1.5或<0.5），调整K值
+                if amplitude_ratio > 1.5 or amplitude_ratio < 0.5:
+                    K_correction = actual_range / pred_range
+                    params = list(params)
+                    params[0] = params[0] * K_correction  # 校正K值
+                    params = tuple(params)
         
         return ModelIdentifier._clip_params(params, model_type)
     

@@ -216,7 +216,15 @@ class ModelSelector:
     
     def _fit_all_segments(self, segments: List[HistoricalData],
                           segment_results: List[SegmentResult]) -> List[SegmentResult]:
-        """对每个有效段拟合所有候选模型"""
+        """
+        对每个有效段拟合所有候选模型
+        
+        增强：
+        1. 检测高振荡开环数据并特殊处理
+        2. 使用包络线法估计增益
+        3. 添加幅度验证和校正
+        """
+        from .identifier import ModelIdentifier
         
         self.log(f"\n{'='*60}")
         self.log("📊 Step 2: 多模型拟合")
@@ -245,19 +253,52 @@ class ModelSelector:
             
             self.log(f"\n📊 段{i+1}: {len(y)}点")
             
+            # 检测高振荡数据
+            oscillation_info = ModelIdentifier.detect_high_oscillation(y, u)
+            is_oscillating = oscillation_info['is_oscillating']
+            
+            if is_oscillating:
+                self.log(f"   ⚠️ 检测到高振荡开环数据 (振荡比={oscillation_info['oscillation_ratio']:.2f})")
+                # 对高振荡数据使用预处理后的数据进行辨识
+                filter_size = oscillation_info['recommended_filter_size']
+                y_fit, u_fit = ModelIdentifier.preprocess_oscillating_data(y, u, filter_size)
+                # 使用包络线法估计K值
+                k_expected = abs(ModelIdentifier.estimate_gain_from_oscillating_data(y, u))
+                k_min = k_expected * 0.3
+                k_max = k_expected * 3.0
+            else:
+                y_fit, u_fit = y, u
+            
             quality = self._preprocessor.analyze_quality(y, u)
-            use_multi_start = quality.is_noisy or not quality.is_correlated
+            use_multi_start = quality.is_noisy or not quality.is_correlated or is_oscillating
             
             for model_type in self.CANDIDATE_MODELS:
                 try:
+                    # 使用预处理后的数据进行辨识
                     if use_multi_start:
-                        params_raw, _ = self._multi_start_fit(t, y, u, model_type)
+                        params_raw, _ = self._multi_start_fit(t, y_fit, u_fit, model_type)
                     else:
                         method = self.IDENTIFY_METHODS.get(model_type)
-                        params_raw = method(t, y, u)
+                        params_raw = method(t, y_fit, u_fit)
                     
                     params_dict = self._simulator.PARAM_FORMATS[model_type](params_raw)
+                    
+                    # 使用原始数据验证拟合效果
                     y_pred = self._simulator.simulate(params_raw, model_type, t, u, y0)
+                    
+                    # 检查并校正幅度
+                    pred_range = np.ptp(y_pred)
+                    if is_oscillating and pred_range > self._epsilon and pv_range > self._epsilon:
+                        amplitude_ratio = pred_range / pv_range
+                        if amplitude_ratio > 1.5 or amplitude_ratio < 0.5:
+                            # 校正K值
+                            K_correction = pv_range / pred_range
+                            params_raw = list(params_raw)
+                            params_raw[0] = params_raw[0] * K_correction
+                            params_raw = tuple(params_raw)
+                            params_dict = self._simulator.PARAM_FORMATS[model_type](params_raw)
+                            # 重新仿真
+                            y_pred = self._simulator.simulate(params_raw, model_type, t, u, y0)
                     
                     r2 = calculate_r2(y, y_pred)
                     rss = calculate_rss(y, y_pred)
@@ -274,6 +315,11 @@ class ModelSelector:
                     else:
                         r2_adjusted = r2
                     
+                    # 对高振荡数据，额外奖励幅度匹配好的结果
+                    if is_oscillating:
+                        amplitude_match = 1 - min(abs(np.ptp(y_pred) - pv_range) / (pv_range + self._epsilon), 0.5)
+                        r2_adjusted = r2_adjusted * (0.7 + 0.3 * amplitude_match)
+                    
                     result.model_results[model_type] = {
                         'K': params_dict['K'],
                         'T1': params_dict['T1'],
@@ -287,12 +333,14 @@ class ModelSelector:
                         'bic': bic,
                         'y_pred': y_pred,
                         'k_expected': k_expected,
-                        'k_reasonable': k_reasonable
+                        'k_reasonable': k_reasonable,
+                        'is_oscillating': is_oscillating
                     }
                     
                     k_flag = "✓" if k_reasonable else "✗"
+                    osc_flag = " [振荡]" if is_oscillating else ""
                     self.log(f"   {model_type}: R²={r2:.4f}, AIC={aic:.1f}, "
-                             f"K={params_dict['K']:.4f} {k_flag}, T1={params_dict['T1']:.2f}")
+                             f"K={params_dict['K']:.4f} {k_flag}, T1={params_dict['T1']:.2f}{osc_flag}")
                     
                 except Exception as e:
                     self.log(f"   {model_type}: 拟合失败 - {e}")
@@ -633,8 +681,28 @@ class ModelSelector:
     def _global_optimize_full(self, y_full: np.ndarray, u_full: np.ndarray,
                                sv_full: np.ndarray, model_type: str,
                                initial_params: tuple) -> Optional[tuple]:
-        """全量数据优化"""
+        """
+        全量数据优化
+        
+        增强：
+        1. 检测高振荡数据并预处理
+        2. 添加幅度约束确保K值合理
+        3. 多起点优化提高鲁棒性
+        """
         try:
+            from .identifier import ModelIdentifier
+            
+            # 检测是否为高振荡数据
+            oscillation_info = ModelIdentifier.detect_high_oscillation(y_full, u_full)
+            
+            if oscillation_info['is_oscillating']:
+                # 对高振荡数据预处理
+                filter_size = oscillation_info['recommended_filter_size']
+                y_opt, u_opt = ModelIdentifier.preprocess_oscillating_data(y_full, u_full, filter_size)
+                self.log(f"   检测到高振荡数据(振荡比={oscillation_info['oscillation_ratio']:.2f})，使用滤波预处理")
+            else:
+                y_opt, u_opt = y_full, u_full
+            
             reset_points = [0]
             if sv_full is not None and len(sv_full) > 0:
                 sv_diff = np.abs(np.diff(sv_full))
@@ -650,8 +718,15 @@ class ModelSelector:
             reset_points = sorted(set(reset_points))
             reset_points.append(len(y_full))
             
+            # 计算期望的K值范围用于约束
+            pv_range = np.max(y_full) - np.min(y_full)
+            mv_range = np.max(u_full) - np.min(u_full)
+            k_expected = pv_range / (mv_range + self._epsilon) if mv_range > 0.5 else 0.5
+            k_min = k_expected * 0.2
+            k_max = k_expected * 3.0
+            
             def objective(params):
-                y_pred_all = np.zeros_like(y_full)
+                y_pred_all = np.zeros_like(y_opt)
                 
                 for i in range(len(reset_points) - 1):
                     start_idx = reset_points[i]
@@ -660,33 +735,44 @@ class ModelSelector:
                     if end_idx <= start_idx:
                         continue
                     
-                    y0 = y_full[start_idx]
+                    y0 = y_opt[start_idx]
                     t_seg = np.arange(end_idx - start_idx, dtype=float)
-                    u_seg = u_full[start_idx:end_idx]
+                    u_seg = u_opt[start_idx:end_idx]
                     
                     y_seg = self._simulator.simulate(tuple(params), model_type, t_seg, u_seg, y0)
                     y_pred_all[start_idx:end_idx] = y_seg
                 
-                y_std = np.std(y_full)
+                y_std = np.std(y_opt)
                 if y_std < self._epsilon:
                     y_std = 1.0
-                return (y_full - y_pred_all) / y_std
+                
+                residuals = (y_opt - y_pred_all) / y_std
+                
+                # 添加K值范围惩罚
+                K = abs(params[0])
+                if K < k_min or K > k_max:
+                    k_penalty = min(abs(K - k_expected) / k_expected, 1.0) * 0.1
+                    residuals = residuals * (1 + k_penalty)
+                
+                return residuals
             
             bounds = self._get_bounds(model_type)
             
             best_params = None
             best_cost = float('inf')
             
-            pv_range = np.max(y_full) - np.min(y_full)
-            mv_range = np.max(u_full) - np.min(u_full)
-            k_expected = pv_range / (mv_range + self._epsilon) if mv_range > 5 else 0.5
-            
+            # 使用更合理的初始点
             init_points = [
                 initial_params,
                 self._simulator.create_init_params(model_type, k_expected, 5.0),
-                self._simulator.create_init_params(model_type, k_expected * 0.5, 10.0),
-                self._simulator.create_init_params(model_type, -k_expected, 5.0),
+                self._simulator.create_init_params(model_type, k_expected * 0.7, 10.0),
+                self._simulator.create_init_params(model_type, k_expected * 0.5, 15.0),
             ]
+            
+            # 如果检测到负相关，添加负增益初始点
+            corr = np.corrcoef(u_full, y_full)[0, 1] if len(u_full) > 2 else 0
+            if not np.isnan(corr) and corr < -0.3:
+                init_points.append(self._simulator.create_init_params(model_type, -k_expected, 5.0))
             
             for init_p in init_points:
                 try:
@@ -694,10 +780,44 @@ class ModelSelector:
                                            method='trf', max_nfev=1000)
                     
                     if result.success and result.cost < best_cost:
-                        best_cost = result.cost
-                        best_params = tuple(result.x)
+                        # 验证结果的幅度合理性
+                        y_pred_check = self._simulator.simulate_segmented(
+                            tuple(result.x), model_type, y_full, u_full,
+                            reset_on_sv_change=True, sv=sv_full,
+                            enable_amplitude_calibration=False,
+                            enable_offset_correction=False,
+                            enable_smooth=False
+                        )
+                        pred_range = np.ptp(y_pred_check)
+                        amplitude_ratio = pred_range / (pv_range + self._epsilon)
+                        
+                        # 只接受幅度合理的结果
+                        if 0.3 < amplitude_ratio < 3.0:
+                            best_cost = result.cost
+                            best_params = tuple(result.x)
                 except:
                     continue
+            
+            # 如果优化结果的K值不合理，进行校正
+            if best_params is not None:
+                y_pred_final = self._simulator.simulate_segmented(
+                    best_params, model_type, y_full, u_full,
+                    reset_on_sv_change=True, sv=sv_full,
+                    enable_amplitude_calibration=False,
+                    enable_offset_correction=False,
+                    enable_smooth=False
+                )
+                pred_range = np.ptp(y_pred_final)
+                
+                if pred_range > self._epsilon and pv_range > self._epsilon:
+                    amplitude_ratio = pred_range / pv_range
+                    if amplitude_ratio > 1.5 or amplitude_ratio < 0.5:
+                        # 校正K值
+                        K_correction = pv_range / pred_range
+                        best_params = list(best_params)
+                        best_params[0] = best_params[0] * K_correction
+                        best_params = tuple(best_params)
+                        self.log(f"   K值校正: 幅度比={amplitude_ratio:.2f}, 校正因子={K_correction:.2f}")
             
             return best_params
             
