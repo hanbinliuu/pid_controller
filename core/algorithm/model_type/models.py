@@ -51,9 +51,10 @@ class FusionResult:
     T1_std: float = 0.0                 # T1的标准差
     consistency_score: float = 0.0      # 一致性评分 (0-1)
     
-    # 验证结果
-    global_r2: float = 0.0              # 全局R²
-    global_rmse: float = 0.0            # 全局RMSE
+    # 验证结果（基于扰动段）
+    global_r2: float = 0.0              # 扰动段综合R²（用于评分和输出）
+    global_rmse: float = 0.0            # 扰动段综合RMSE
+    full_data_r2: float = 0.0           # 全量数据R²（仅供参考）
 
 
 @dataclass

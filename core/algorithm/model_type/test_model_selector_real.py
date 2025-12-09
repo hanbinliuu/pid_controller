@@ -355,7 +355,7 @@ def test_model_selector_new_format(data: List[Dict], qualified_windows: List[Dic
 
 def visualize_fitting_result(data: List[Dict], tuning_input: Dict, 
                               fitting_result: Dict, scenario_name: str = None):
-    """可视化模型拟合结果"""
+    """可视化模型拟合结果（含闭环验证）"""
     pv_array, sv_array, mv_array, timestamps = convert_to_arrays(data)
     time_array = [datetime.fromtimestamp(ts / 1000) for ts in timestamps]
     
@@ -366,21 +366,32 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     fit_pv_model = fit_data.get('pv_model', [])
     fit_time_array = [datetime.fromtimestamp(ts / 1000) for ts in fit_timestamps] if fit_timestamps else []
     
-    # 创建图表
-    fig, axes = plt.subplots(3, 1, figsize=(16, 12), sharex=True)
+    # 获取闭环验证数据
+    closed_loop_info = fitting_result.get('closed_loop_verification', {})
+    has_closed_loop = closed_loop_info and closed_loop_info.get('is_stable') is not None
+    
+    # 创建图表：如果有闭环数据则4个子图，否则3个
+    n_plots = 4 if has_closed_loop else 3
+    fig = plt.figure(figsize=(16, 4 * n_plots))
     
     model_type = fitting_result.get('model_type', 'Unknown')
     r2 = fit_data.get('r_squared', 0)
     rmse = fit_data.get('rmse', 0)
     fusion_info = fitting_result.get('fusion_info', {})
     
-    fig.suptitle(f'ModelSelector 拟合结果 - {model_type} (R²={r2:.4f}, RMSE={rmse:.4f})\n'
+    # 闭环状态
+    cl_status = ""
+    if has_closed_loop:
+        is_stable = closed_loop_info.get('is_stable', False)
+        cl_status = f" | 闭环: {'✅稳定' if is_stable else '❌不稳定'}"
+    
+    fig.suptitle(f'ModelSelector 拟合结果 - {model_type} (R²={r2:.4f}, RMSE={rmse:.4f}){cl_status}\n'
                  f'融合方法: {fusion_info.get("method", "N/A")}, 使用段数: {fusion_info.get("n_segments", 0)}, '
                  f'一致性: {fusion_info.get("consistency_score", 0):.2f}', 
                  fontsize=12, fontweight='bold')
     
     # ========== 子图1: PV/SV + 拟合曲线 ==========
-    ax1 = axes[0]
+    ax1 = fig.add_subplot(n_plots, 1, 1)
     ax1.plot(time_array, pv_array, 'b-', label='PV (实测)', linewidth=0.8, alpha=0.7)
     ax1.plot(time_array, sv_array, 'r--', label='SV (设定值)', linewidth=1.2)
     
@@ -406,9 +417,10 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     ax1.set_title('过程值与模型拟合对比')
     ax1.legend(loc='upper right')
     ax1.grid(True, alpha=0.3)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
     
     # ========== 子图2: MV ==========
-    ax2 = axes[1]
+    ax2 = fig.add_subplot(n_plots, 1, 2, sharex=ax1)
     ax2.plot(time_array, mv_array, 'g-', label='MV', linewidth=0.8)
     
     for i, w in enumerate(tuning_windows):
@@ -429,7 +441,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     ax2.grid(True, alpha=0.3)
     
     # ========== 子图3: 拟合误差 ==========
-    ax3 = axes[2]
+    ax3 = fig.add_subplot(n_plots, 1, 3, sharex=ax1)
     if fit_time_array and fit_pv and fit_pv_model:
         error = np.array(fit_pv) - np.array(fit_pv_model)
         ax3.plot(fit_time_array, error, 'r-', label='误差 (PV - PV_model)', linewidth=0.8)
@@ -437,15 +449,113 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         ax3.fill_between(fit_time_array, error, 0, alpha=0.3, color='red')
     
     ax3.set_ylabel('误差')
-    ax3.set_xlabel('时间')
     ax3.set_title('拟合误差')
     ax3.legend(loc='upper right')
     ax3.grid(True, alpha=0.3)
     
-    # 格式化 x 轴
-    for ax in axes:
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+    # ========== 子图4: 闭环稳定性验证 ==========
+    if has_closed_loop:
+        ax4 = fig.add_subplot(n_plots, 1, 4)
+        
+        # 重新进行闭环仿真以获取曲线数据
+        from core.algorithm.model_type.pid_calculator import PIDCalculator
+        from core.algorithm.model_type.models import FusionResult
+        
+        model_params = fitting_result.get('model_parameters', {})
+        pid_params = fitting_result.get('pid_parameters', {})
+        
+        # 创建 FusionResult
+        fusion = FusionResult(
+            model_type=model_type,
+            K=model_params.get('K', 0),
+            T1=model_params.get('T1', 0),
+            T2=model_params.get('T2', 0),
+            L=model_params.get('L', 0)
+        )
+        
+        # 进行闭环仿真（使用实际数据的初值）
+        calculator = PIDCalculator()
+        
+        # 从 fitting_result 获取实际 SV 和 PV
+        sv_data = fitting_result.get('sv', [])
+        pv_data = fitting_result.get('pv', [])
+        
+        sp_initial = sv_data[0] if sv_data else 50.0
+        sp_final = sv_data[-1] if sv_data else 60.0
+        pv_initial = pv_data[0] if pv_data else sp_initial
+        
+        # 确保有足够的阶跃幅度
+        sp_change = abs(sp_final - sp_initial)
+        if sp_change < 5.0:
+            sp_final = sp_initial + 10.0
+            sp_change = 10.0
+        
+        # 自适应仿真参数
+        T_min = min(fusion.T1, fusion.T2 if fusion.T2 > 0 else fusion.T1)
+        dt = min(0.1, T_min / 10)
+        dt = max(0.01, dt)
+        T_max = max(fusion.T1, fusion.T2 if fusion.T2 > 0 else fusion.T1)
+        sim_time = max(100, T_max * 20)
+        n_steps = int(sim_time / dt)
+        n_steps = min(n_steps, 5000)
+        
+        metrics = calculator.simulate_closed_loop(
+            K=fusion.K, T1=fusion.T1, T2=fusion.T2, L=fusion.L,
+            model_type=fusion.model_type,
+            Kp=pid_params.get('kp', 1), Ki=pid_params.get('ki', 0), Kd=pid_params.get('kd', 0),
+            sp_initial=sp_initial,
+            sp_final=sp_final,
+            pv_initial=pv_initial,
+            n_steps=n_steps,
+            dt=dt
+        )
+        
+        # 时间轴
+        t_sim = np.arange(len(metrics.pv_history)) * dt
+        
+        # SP曲线
+        sp_sim = np.zeros_like(metrics.pv_history)
+        sp_sim[:10] = sp_initial
+        sp_sim[10:] = sp_final
+        
+        # 绘制闭环响应
+        ax4.plot(t_sim, metrics.pv_history, 'b-', label='PV (闭环响应)', linewidth=1.5)
+        ax4.plot(t_sim, sp_sim, 'r--', label='SP (设定值)', linewidth=1.2)
+        
+        # 标记性能指标
+        is_stable = closed_loop_info.get('is_stable', False)
+        settling_time = closed_loop_info.get('settling_time', -1)
+        overshoot = closed_loop_info.get('overshoot', 0)
+        rise_time = closed_loop_info.get('rise_time', -1)
+        sse = closed_loop_info.get('steady_state_error', 0)
+        
+        status_color = 'green' if is_stable else 'red'
+        status_text = '✅ 稳定' if is_stable else '❌ 不稳定'
+        
+        # 添加性能指标文本框
+        textstr = f'{status_text}\n'
+        textstr += f'调节时间: {settling_time:.1f}s\n' if settling_time >= 0 else '调节时间: N/A\n'
+        textstr += f'超调量: {overshoot:.1f}%\n'
+        textstr += f'上升时间: {rise_time:.1f}s\n' if rise_time >= 0 else '上升时间: N/A\n'
+        textstr += f'稳态误差: {sse:.2f}%'
+        
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+        ax4.text(0.98, 0.95, textstr, transform=ax4.transAxes, fontsize=10,
+                verticalalignment='top', horizontalalignment='right', bbox=props)
+        
+        # ±2%误差带（基于实际 sp_final）
+        error_band = sp_change * 0.02  # 2% 的阶跃幅度
+        ax4.axhline(y=sp_final + error_band, color='gray', linestyle=':', alpha=0.5, label='±2%误差带')
+        ax4.axhline(y=sp_final - error_band, color='gray', linestyle=':', alpha=0.5)
+        ax4.fill_between(t_sim, sp_final - error_band, sp_final + error_band, 
+                        alpha=0.1, color='green')
+        
+        ax4.set_xlabel('时间 (s)')
+        ax4.set_ylabel('PV / SP')
+        ax4.set_title(f'闭环稳定性验证 (Kp={pid_params.get("kp", 0):.3f}, Ki={pid_params.get("ki", 0):.3f}, Kd={pid_params.get("kd", 0):.3f})')
+        ax4.legend(loc='lower right')
+        ax4.grid(True, alpha=0.3)
+        ax4.set_xlim([0, min(t_sim[-1], 50)])  # 限制显示范围
     
     plt.tight_layout()
     
@@ -498,22 +608,20 @@ if __name__ == "__main__":
     
     # 测试场景
     test_scenarios =  [
-        {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
-        {'start_time': '2025-11-05 10:55:58', 'end_time': '2025-11-05 13:14:58'},
-        {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
-        {'start_time': '2025-11-10 09:12:58', 'end_time': '2025-11-10 10:25:58'},
-        {'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'},
-        {'start_time': '2025-11-04 16:58:58', 'end_time': '2025-11-04 18:30:58'},  
-        {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
-        {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
-        {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
-        {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
+        # {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
+        # {'start_time': '2025-11-05 10:55:58', 'end_time': '2025-11-05 13:14:58'},
+        # {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
+        # {'start_time': '2025-11-10 09:12:58', 'end_time': '2025-11-10 10:25:58'},
+        # {'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'},
+        # {'start_time': '2025-11-04 16:58:58', 'end_time': '2025-11-04 18:30:58'},  
+        # {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
+        # {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
+        # {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
+        # {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
         {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'}, 
-        {'start_time': '2025-12-07 05:00:58', 'end_time': '2025-12-07 12:42:58'},
-        {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
-        {'start_time': '2025-12-07 21:27:58', 'end_time': '2025-12-08 21:42:58'},
-        {'start_time': '2025-12-07 23:21:58', 'end_time': '2025-12-08 21:42:58'},
-
+        # {'start_time': '2025-12-07 05:00:58', 'end_time': '2025-12-07 12:42:58'},
+        # {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
+        # {'start_time': '2025-12-07 21:27:58', 'end_time': '2025-12-08 21:42:58'},
     ]
     
     for idx, scenario in enumerate(test_scenarios, 1):

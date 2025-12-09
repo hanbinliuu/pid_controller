@@ -143,7 +143,10 @@ class ModelSelector:
                 'ki': round(float(Ki), 4),
                 'kd': round(float(Kd), 4)
             },
-            'fitting_result': fitting_result
+            'fitting_result': fitting_result,
+            'fusion_info': result.get('fusion_info', {}),
+            'closed_loop_verification': result.get('closed_loop_verification', {}),
+            'rating_details': result.get('rating_details', {})
         }
     
     def _empty_result_new(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -608,10 +611,14 @@ class ModelSelector:
         global_r2 = calculate_r2(y_full, y_pred_full)
         global_rmse = calculate_rmse(y_full, y_pred_full)
         
-        self.log(f"   初始全量R²: {global_r2:.4f}, RMSE: {global_rmse:.4f}")
+        self.log(f"   全量数据R²: {global_r2:.4f}, RMSE: {global_rmse:.4f}")
         
-        # 分段R²用于诊断
+        # 计算扰动段的综合R²和RMSE（这才是真正反映模型质量的指标）
         segment_r2s = []
+        segment_rmses = []
+        segment_pv_all = []
+        segment_pv_pred_all = []
+        
         for seg in segments:
             seg_valid = seg.pv != 0
             y = seg.pv[seg_valid]
@@ -622,10 +629,24 @@ class ModelSelector:
             t = np.arange(len(y), dtype=float)
             y_pred = self._simulator.simulate(params, model_type, t, u, y0)
             r2 = calculate_r2(y, y_pred)
+            rmse = calculate_rmse(y, y_pred)
             segment_r2s.append(r2)
+            segment_rmses.append(rmse)
+            segment_pv_all.extend(y.tolist())
+            segment_pv_pred_all.extend(y_pred.tolist())
+        
+        # 计算扰动段综合R²（合并所有扰动段数据）
+        if segment_pv_all:
+            segment_pv_arr = np.array(segment_pv_all)
+            segment_pred_arr = np.array(segment_pv_pred_all)
+            segment_combined_r2 = calculate_r2(segment_pv_arr, segment_pred_arr)
+            segment_combined_rmse = calculate_rmse(segment_pv_arr, segment_pred_arr)
+        else:
+            segment_combined_r2 = 0.0
+            segment_combined_rmse = 0.0
         
         if segment_r2s:
-            self.log(f"   分段R²: {[f'{r:.3f}' for r in segment_r2s]}")
+            self.log(f"   扰动段R²: {[f'{r:.3f}' for r in segment_r2s]}, 综合R²: {segment_combined_r2:.4f}")
         
         OPTIMIZATION_THRESHOLD = 0.85
         min_segment_r2 = min(segment_r2s) if segment_r2s else 0
@@ -664,21 +685,46 @@ class ModelSelector:
                     fusion.fusion_method += " + 全量优化"
                     self.log(f"   → 采用优化结果")
         
-        fusion.global_r2 = global_r2
-        fusion.global_rmse = global_rmse
+        # 使用扰动段综合R²作为最终评估指标（更能反映模型在整定数据上的拟合质量）
+        # 如果优化后全量R²更高，也重新计算扰动段R²
+        if segment_pv_all:
+            # 重新计算扰动段R²（使用可能优化后的参数）
+            segment_pv_pred_new = []
+            for seg in segments:
+                seg_valid = seg.pv != 0
+                y = seg.pv[seg_valid]
+                u = seg.mv[seg_valid]
+                if len(y) < 5:
+                    continue
+                y0 = y[0]
+                t = np.arange(len(y), dtype=float)
+                y_pred = self._simulator.simulate(params, model_type, t, u, y0)
+                segment_pv_pred_new.extend(y_pred.tolist())
+            
+            if segment_pv_pred_new:
+                segment_combined_r2 = calculate_r2(segment_pv_arr, np.array(segment_pv_pred_new))
+                segment_combined_rmse = calculate_rmse(segment_pv_arr, np.array(segment_pv_pred_new))
         
-        if global_r2 >= 0.9:
+        # 输出使用扰动段R²（更准确反映模型质量）
+        fusion.global_r2 = segment_combined_r2 if segment_pv_all else global_r2
+        fusion.global_rmse = segment_combined_rmse if segment_pv_all else global_rmse
+        
+        # 同时保存全量R²用于参考
+        fusion.full_data_r2 = global_r2
+        
+        eval_r2 = fusion.global_r2
+        if eval_r2 >= 0.9:
             quality = "优秀"
-        elif global_r2 >= 0.7:
+        elif eval_r2 >= 0.7:
             quality = "良好"
-        elif global_r2 >= 0.5:
+        elif eval_r2 >= 0.5:
             quality = "一般"
         else:
             quality = "较差"
         
-        self.log(f"\n   最终评估: R²={global_r2:.4f} ({quality})")
+        self.log(f"\n   最终评估: 扰动段R²={eval_r2:.4f} ({quality}), 全量R²={global_r2:.4f}")
         
-        if global_r2 < 0.5:
+        if eval_r2 < 0.5:
             self.log(f"\n   ⚠️ 模型拟合质量较差，可能原因：")
             if min_segment_r2 < 0.1:
                 self.log(f"      - 扰动段数据不符合阶跃响应特征")
@@ -996,6 +1042,32 @@ class ModelSelector:
             self.log(f"      数据覆盖度 ({fusion.n_segments_used}段/{total_data_points}点): {score_details.get('coverage_score', 0):.1f}/10 × 15%")
             self.log(f"      → 综合评分: {model_rating}/10")
         
+        # 闭环稳定性验证（使用实际数据的初值）
+        sp_initial = float(sv[0]) if len(sv) > 0 else 50.0
+        sp_final = float(sv[-1]) if len(sv) > 0 else 60.0
+        pv_initial = float(y[0]) if len(y) > 0 else sp_initial
+        
+        # 确保有足够的阶跃幅度
+        sp_change = abs(sp_final - sp_initial)
+        if sp_change < 5.0:
+            sp_final = sp_initial + 10.0  # 如果实际变化太小，使用默认阶跃
+        
+        is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
+            fusion, pid_params, 
+            sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
+            verbose=self._verbose
+        )
+        
+        closed_loop_info = {
+            'is_stable': is_stable,
+            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
+            'overshoot': cl_metrics.overshoot,
+            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
+            'steady_state_error': cl_metrics.steady_state_error,
+            'oscillation_count': cl_metrics.oscillation_count,
+            'decay_ratio': cl_metrics.decay_ratio
+        }
+        
         return {
             'success': not fitting_failed,
             'model_type': fusion.model_type,
@@ -1025,6 +1097,7 @@ class ModelSelector:
                 'K_std': round(fusion.K_std, 4),
                 'T1_std': round(fusion.T1_std, 4)
             },
+            'closed_loop_verification': closed_loop_info,
             'rating_details': score_details
         }
     

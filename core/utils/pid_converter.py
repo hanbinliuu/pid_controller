@@ -55,7 +55,8 @@ class PIDConverter:
             ValueError: 当PB为0或负数时
         """
         if pb <= 0:
-            logging.error("比例带必须大于0%")
+            logging.warning("比例带必须大于0%，使用默认值 pb=100")
+            pb = 100.0  # 默认比例带 100%，对应 Kp=1
         return 100.0 / pb
     
     @staticmethod
