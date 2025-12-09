@@ -230,7 +230,7 @@ class LoopInfoService:
             loop_name: Optional[str] = None,
             loop_uri: Optional[str] = None,
             loop_type: Optional[str] = None,
-            loop_path: Optional[str] = None,
+            device_uri: Optional[str] = None,
             page_no: int = 1,
             page_size: int = 10
     ) -> Dict[str, Any]:
@@ -253,7 +253,7 @@ class LoopInfoService:
             loop_name=loop_name,
             loop_uri=loop_uri,
             loop_type=loop_type,
-            loop_path=loop_path,
+            device_uri=device_uri,
             is_active=True,
             page_no=page_no,
             page_size=page_size

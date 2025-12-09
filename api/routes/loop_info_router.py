@@ -188,8 +188,8 @@ async def list_loop_info(
 async def list_loop_info_exclude_excluded(
         db: Session = Depends(get_db),
         loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
+        device_uri: Optional[str] = Query(None, description="设备URI"),
         loop_uri: Optional[str] = Query(None, description="回路URI"),
-        loop_path: Optional[str] = Query(None, description="回路路径"),
         loop_type: Optional[str] = Query(None, description="回路类型"),
         page_no: int = Query(1, description="页码，从1开始"),
         page_size: int = Query(10, description="每页数量")
@@ -202,7 +202,7 @@ async def list_loop_info_exclude_excluded(
             db,
             loop_name=loop_name,
             loop_uri=loop_uri,
-            loop_path=loop_path,
+            device_uri=device_uri,
             loop_type=loop_type,
             page_no=page_no,
             page_size=page_size
