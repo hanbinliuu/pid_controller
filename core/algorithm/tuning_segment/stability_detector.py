@@ -865,14 +865,24 @@ class StabilityDetector:
         filtered_segments.sort(key=lambda x: x[0])
         merged_segments = [filtered_segments[0]]
         
+        # 调试：打印过滤后的段（正常运行时注释掉）
+        # print(f"[DEBUG] filtered_segments: {len(filtered_segments)} 段")
+        # for idx, (s, e, sp) in enumerate(filtered_segments):
+        #     print(f"  段{idx+1}: [{s}, {e}], setpoint={sp:.2f}")
+        
         for i in range(1, len(filtered_segments)):
             last_start, last_end, last_sp = merged_segments[-1]
             cur_start, cur_end, cur_sp = filtered_segments[i]
             gap_length = cur_start - last_end
             sp_diff = abs(cur_sp - last_sp)
             
+            # 调试：打印合并决策
+            # print(f"[DEBUG] 检查合并: [{last_start},{last_end}](sp={last_sp:.1f}) vs [{cur_start},{cur_end}](sp={cur_sp:.1f})")
+            # print(f"        gap={gap_length}, sp_diff={sp_diff:.2f}")
+            
             if cur_start <= last_end:
-                if sp_diff < 0.5:
+                # 完全相邻或重叠的段，无论设定值是否相同都合并
+                if gap_length <= 1 or sp_diff < 0.5:
                     merged_segments[-1] = (min(last_start, cur_start), max(last_end, cur_end), last_sp)
                 else:
                     merged_segments.append((cur_start, cur_end, cur_sp))

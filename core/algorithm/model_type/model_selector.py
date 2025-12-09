@@ -464,7 +464,7 @@ class ModelSelector:
         pid_params = self._pid_calculator.calculate_from_oscillation(
             best_analysis['osc_info'], 
             current_pid=current_pid,
-            method='tyreus_luyben'  # 使用更稳定的 Tyreus-Luyben 法
+            method='zn'  # Ziegler-Nichols 经典法，响应更快
         )
         
         if pid_params is None:

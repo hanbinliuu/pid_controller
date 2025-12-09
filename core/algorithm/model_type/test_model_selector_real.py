@@ -519,9 +519,9 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         dt = min(0.1, T_min / 10)
         dt = max(0.01, dt)
         T_max = max(T_ref, T2_val)
-        sim_time = max(100, T_max * 20)
+        sim_time = max(200, T_max * 25)  # 增加仿真时间确保看到稳态
         n_steps = int(sim_time / dt)
-        n_steps = min(n_steps, 5000)
+        n_steps = min(n_steps, 10000)  # 增加最大步数
         
         # 直接使用 fusion 中的模型参数（振荡整定已经估算了合理的参数）
         K_est = fusion.K
@@ -597,11 +597,27 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         ax4.grid(True, alpha=0.3)
         
         # 调整 x 轴范围：确保能看到完整的稳态过程
-        if settling_time >= 0 and settling_time < t_sim[-1]:
-            # 至少显示到调节时间的1.5倍，让用户能看到稳态
-            x_max = min(t_sim[-1], max(80, settling_time * 1.5))
+        # 检查 PV 是否已经达到稳态（在 ±2% 误差带内）
+        pv_final = metrics.pv_history[-1]
+        error_band = abs(sp_final - sp_initial) * 0.02  # 2% 误差带
+        is_converged = abs(pv_final - sp_final) <= error_band
+        
+        if is_converged and settling_time >= 0 and settling_time < t_sim[-1]:
+            # 已收敛，显示到调节时间的1.3倍
+            x_max = min(t_sim[-1], max(80, settling_time * 1.3))
+        elif not is_converged:
+            # 还在收敛中，显示到仿真结束或找到稳态点
+            # 找到首次进入误差带的时间
+            for i in range(len(metrics.pv_history) - 1, -1, -1):
+                if abs(metrics.pv_history[i] - sp_final) > error_band:
+                    # 从这个点开始还没稳定，显示到后面一点
+                    converge_time = (i + 1) * dt
+                    x_max = min(t_sim[-1], converge_time * 1.2)
+                    break
+            else:
+                x_max = t_sim[-1]  # 整个过程都在收敛
         else:
-            x_max = min(t_sim[-1], 100)  # 默认显示更长时间
+            x_max = t_sim[-1]  # 默认显示完整仿真
         ax4.set_xlim([0, x_max])
         
         # 调整 y 轴范围：确保能显示完整的 PV 响应（包括超调峰值）
@@ -674,22 +690,22 @@ if __name__ == "__main__":
     
     # 测试场景
     test_scenarios =  [
-        # {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
-        # {'start_time': '2025-11-05 10:55:58', 'end_time': '2025-11-05 13:14:58'},
-        # {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
-        # {'start_time': '2025-11-10 09:12:58', 'end_time': '2025-11-10 10:25:58'},
-        # {'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'},
-        # {'start_time': '2025-11-04 16:58:58', 'end_time': '2025-11-04 18:30:58'},  
-        # {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
-        # {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
-        # {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
-        # {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
-        ## 1
+        {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
+        {'start_time': '2025-11-05 10:55:58', 'end_time': '2025-11-05 13:14:58'},
+        {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
+        {'start_time': '2025-11-10 09:12:58', 'end_time': '2025-11-10 10:25:58'},
+        {'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'},
+        {'start_time': '2025-11-04 16:58:58', 'end_time': '2025-11-04 18:30:58'},  
+        {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
+        {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
+        {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
+        {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
+        # # 1
         {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'}, 
-        # {'start_time': '2025-12-07 05:00:58', 'end_time': '2025-12-07 12:42:58'},
-        ## 1
-        # {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
-        # {'start_time': '2025-12-07 21:27:58', 'end_time': '2025-12-08 21:42:58'},
+        {'start_time': '2025-12-07 05:00:58', 'end_time': '2025-12-07 12:42:58'},
+        # # 1
+        {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
+        {'start_time': '2025-12-07 21:27:58', 'end_time': '2025-12-08 21:42:58'},
     ]
     
     for idx, scenario in enumerate(test_scenarios, 1):
