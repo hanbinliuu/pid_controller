@@ -629,6 +629,7 @@ class ModelSelector:
         # 使用增强仿真（与 pv_model 显示一致）
         segment_r2s = []
         segment_rmses = []
+        segment_points = []  # 记录每段点数，用于加权平均
         segment_pv_all = []
         segment_pv_pred_all = []
         
@@ -654,21 +655,23 @@ class ModelSelector:
             rmse = calculate_rmse(y, y_pred)
             segment_r2s.append(r2)
             segment_rmses.append(rmse)
+            segment_points.append(len(y))  # 记录点数
             segment_pv_all.extend(y.tolist())
             segment_pv_pred_all.extend(y_pred.tolist())
         
-        # 计算扰动段综合R²（合并所有扰动段数据）
-        if segment_pv_all:
+        # 计算扰动段加权平均R²（按点数加权，更合理）
+        if segment_r2s:
+            total_points = sum(segment_points)
+            weighted_r2 = sum(r2 * pts for r2, pts in zip(segment_r2s, segment_points)) / total_points
+            weighted_rmse = sum(rmse * pts for rmse, pts in zip(segment_rmses, segment_points)) / total_points
             segment_pv_arr = np.array(segment_pv_all)
-            segment_pred_arr = np.array(segment_pv_pred_all)
-            segment_combined_r2 = calculate_r2(segment_pv_arr, segment_pred_arr)
-            segment_combined_rmse = calculate_rmse(segment_pv_arr, segment_pred_arr)
         else:
-            segment_combined_r2 = 0.0
-            segment_combined_rmse = 0.0
+            weighted_r2 = 0.0
+            weighted_rmse = 0.0
+            segment_pv_arr = np.array([])
         
         if segment_r2s:
-            self.log(f"   扰动段R²: {[f'{r:.3f}' for r in segment_r2s]}, 综合R²: {segment_combined_r2:.4f}")
+            self.log(f"   扰动段R²: {[f'{r:.3f}' for r in segment_r2s]}, 加权R²: {weighted_r2:.4f}")
         
         OPTIMIZATION_THRESHOLD = 0.85
         min_segment_r2 = min(segment_r2s) if segment_r2s else 0
@@ -716,11 +719,14 @@ class ModelSelector:
                     fusion.fusion_method += " + 全量优化"
                     self.log(f"   → 采用优化结果")
         
-        # 使用扰动段综合R²作为最终评估指标（更能反映模型在整定数据上的拟合质量）
+        # 使用扰动段加权平均R²作为最终评估指标（更能反映模型在整定数据上的拟合质量）
         # 如果优化后全量R²更高，也重新计算扰动段R²（使用增强仿真）
-        if segment_pv_all:
+        if segment_r2s:
             # 重新计算扰动段R²（使用可能优化后的参数，增强仿真）
-            segment_pv_pred_new = []
+            new_segment_r2s = []
+            new_segment_rmses = []
+            new_segment_points = []
+            
             for seg in segments:
                 seg_valid = seg.pv != 0
                 y = seg.pv[seg_valid]
@@ -738,15 +744,21 @@ class ModelSelector:
                     enable_offset_correction=True,
                     enable_oscillation_overlay=True
                 )
-                segment_pv_pred_new.extend(y_pred.tolist())
+                r2 = calculate_r2(y, y_pred)
+                rmse = calculate_rmse(y, y_pred)
+                new_segment_r2s.append(r2)
+                new_segment_rmses.append(rmse)
+                new_segment_points.append(len(y))
             
-            if segment_pv_pred_new:
-                segment_combined_r2 = calculate_r2(segment_pv_arr, np.array(segment_pv_pred_new))
-                segment_combined_rmse = calculate_rmse(segment_pv_arr, np.array(segment_pv_pred_new))
+            if new_segment_r2s:
+                # 使用加权平均 R²
+                total_pts = sum(new_segment_points)
+                weighted_r2 = sum(r2 * pts for r2, pts in zip(new_segment_r2s, new_segment_points)) / total_pts
+                weighted_rmse = sum(rmse * pts for rmse, pts in zip(new_segment_rmses, new_segment_points)) / total_pts
         
-        # 输出使用扰动段R²（更准确反映模型质量）
-        fusion.global_r2 = segment_combined_r2 if segment_pv_all else global_r2
-        fusion.global_rmse = segment_combined_rmse if segment_pv_all else global_rmse
+        # 输出使用扰动段加权平均R²（更准确反映模型质量）
+        fusion.global_r2 = weighted_r2 if segment_r2s else global_r2
+        fusion.global_rmse = weighted_rmse if segment_r2s else global_rmse
         
         # 同时保存全量R²用于参考
         fusion.full_data_r2 = global_r2
@@ -1087,33 +1099,41 @@ class ModelSelector:
             self.log(f"   ⚠️ 模型仿真质量较差({', '.join(reason)})")
         
         total_data_points = int(np.sum(valid_mask))
-        model_rating, score_details = self._pid_calculator.calculate_model_rating(
-            fusion, total_data_points, verbose=self._verbose
-        )
         
-        if self._verbose:
-            self.log(f"\n   📊 评分详情:")
-            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × 40%")
-            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × 25%")
-            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × 20%")
-            self.log(f"      数据覆盖度 ({fusion.n_segments_used}段/{total_data_points}点): {score_details.get('coverage_score', 0):.1f}/10 × 15%")
-            self.log(f"      → 综合评分: {model_rating}/10")
-        
-        # 闭环稳定性验证（使用实际数据的初值）
+        # 先进行闭环稳定性验证（使用实际数据的初值）
         sp_initial = float(sv[0]) if len(sv) > 0 else 50.0
         sp_final = float(sv[-1]) if len(sv) > 0 else 60.0
         pv_initial = float(y[0]) if len(y) > 0 else sp_initial
         
-        # 确保有足够的阶跃幅度
+        # 确保有足够的阶跃幅度，并且初值合理
         sp_change = abs(sp_final - sp_initial)
-        if sp_change < 5.0:
-            sp_final = sp_initial + 10.0  # 如果实际变化太小，使用默认阶跃
+        pv_sp_diff = abs(pv_initial - sp_initial)
+        
+        # 如果 SP 阶跃幅度太小，或者 PV 初值与 SP 初值差距太大，使用默认阶跃测试
+        if sp_change < 5.0 or pv_sp_diff > sp_change * 2:
+            sp_initial = 50.0
+            sp_final = 60.0
+            pv_initial = 50.0  # 假设稳态开始
         
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
             fusion, pid_params, 
             sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
             verbose=self._verbose
         )
+        
+        # 再计算 model_rating（传入闭环指标）
+        model_rating, score_details = self._pid_calculator.calculate_model_rating(
+            fusion, total_data_points, cl_metrics=cl_metrics, verbose=self._verbose
+        )
+        
+        if self._verbose:
+            self.log(f"\n   📊 评分详情:")
+            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × 30%")
+            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × 20%")
+            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × 15%")
+            self.log(f"      数据覆盖度 ({fusion.n_segments_used}段/{total_data_points}点): {score_details.get('coverage_score', 0):.1f}/10 × 10%")
+            self.log(f"      闭环稳定性: {score_details.get('stability_score', 0):.1f}/10 × 25%")
+            self.log(f"      → 综合评分: {model_rating}/10")
         
         closed_loop_info = {
             'is_stable': is_stable,

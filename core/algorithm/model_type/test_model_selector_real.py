@@ -476,19 +476,24 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         # 进行闭环仿真（使用实际数据的初值）
         calculator = PIDCalculator()
         
-        # 从 fitting_result 获取实际 SV 和 PV
-        sv_data = fitting_result.get('sv', [])
-        pv_data = fitting_result.get('pv', [])
+        # 从 fit_data 获取实际 SV 和 PV（fit_data 已在函数开始处定义）
+        sv_data = fit_data.get('sv', [])
+        pv_data = fit_data.get('pv', [])
         
         sp_initial = sv_data[0] if sv_data else 50.0
         sp_final = sv_data[-1] if sv_data else 60.0
         pv_initial = pv_data[0] if pv_data else sp_initial
         
-        # 确保有足够的阶跃幅度
+        # 确保有足够的阶跃幅度，并且初值合理
         sp_change = abs(sp_final - sp_initial)
-        if sp_change < 5.0:
-            sp_final = sp_initial + 10.0
+        pv_sp_diff = abs(pv_initial - sp_initial)
+        
+        # 如果 SP 阶跃幅度太小，或者 PV 初值与 SP 初值差距太大，使用默认阶跃测试
+        if sp_change < 5.0 or pv_sp_diff > sp_change * 2:
+            sp_initial = 50.0
+            sp_final = 60.0
             sp_change = 10.0
+            pv_initial = 50.0  # 假设稳态开始
         
         # 自适应仿真参数
         T_min = min(fusion.T1, fusion.T2 if fusion.T2 > 0 else fusion.T1)
@@ -550,12 +555,48 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         ax4.fill_between(t_sim, sp_final - error_band, sp_final + error_band, 
                         alpha=0.1, color='green')
         
+        # 如果有有效的调节时间，画垂直线标注
+        if settling_time >= 0 and settling_time < t_sim[-1]:
+            ax4.axvline(x=settling_time, color='purple', linestyle='--', linewidth=1.5, 
+                       label=f'调节时间 ({settling_time:.1f}s)')
+            # 在调节时间点添加标注
+            ax4.annotate(f'{settling_time:.1f}s', 
+                        xy=(settling_time, sp_final), 
+                        xytext=(settling_time + 2, sp_final + error_band * 2),
+                        fontsize=9, color='purple',
+                        arrowprops=dict(arrowstyle='->', color='purple', lw=1))
+        
         ax4.set_xlabel('时间 (s)')
         ax4.set_ylabel('PV / SP')
         ax4.set_title(f'闭环稳定性验证 (Kp={pid_params.get("kp", 0):.3f}, Ki={pid_params.get("ki", 0):.3f}, Kd={pid_params.get("kd", 0):.3f})')
         ax4.legend(loc='lower right')
         ax4.grid(True, alpha=0.3)
-        ax4.set_xlim([0, min(t_sim[-1], 50)])  # 限制显示范围
+        
+        # 调整 x 轴范围：如果有有效调节时间，确保能显示完整
+        if settling_time >= 0 and settling_time < t_sim[-1]:
+            x_max = min(t_sim[-1], max(50, settling_time * 1.2))  # 至少显示到调节时间的1.2倍
+        else:
+            x_max = min(t_sim[-1], 50)
+        ax4.set_xlim([0, x_max])
+        
+        # 调整 y 轴范围：确保能显示完整的 PV 响应（包括超调峰值）
+        pv_min = min(np.min(metrics.pv_history), sp_initial, sp_final)
+        pv_max = max(np.max(metrics.pv_history), sp_initial, sp_final)
+        y_margin = (pv_max - pv_min) * 0.1  # 10% 边距
+        ax4.set_ylim([pv_min - y_margin, pv_max + y_margin])
+        
+        # 如果有超调，标注峰值
+        if overshoot > 0:
+            peak_idx = np.argmax(metrics.pv_history) if sp_change > 0 else np.argmin(metrics.pv_history)
+            peak_val = metrics.pv_history[peak_idx]
+            peak_time = peak_idx * dt
+            if peak_time <= x_max:  # 只在显示范围内标注
+                ax4.plot(peak_time, peak_val, 'ro', markersize=6)
+                ax4.annotate(f'峰值: {peak_val:.1f}\n超调: {overshoot:.1f}%', 
+                            xy=(peak_time, peak_val), 
+                            xytext=(peak_time + 5, peak_val),
+                            fontsize=8, color='red',
+                            arrowprops=dict(arrowstyle='->', color='red', lw=0.8))
     
     plt.tight_layout()
     
@@ -608,20 +649,22 @@ if __name__ == "__main__":
     
     # 测试场景
     test_scenarios =  [
-        {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
-        {'start_time': '2025-11-05 10:55:58', 'end_time': '2025-11-05 13:14:58'},
-        {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
-        {'start_time': '2025-11-10 09:12:58', 'end_time': '2025-11-10 10:25:58'},
-        {'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'},
-        {'start_time': '2025-11-04 16:58:58', 'end_time': '2025-11-04 18:30:58'},  
-        {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
-        {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
-        {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
-        {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
+        # {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
+        # {'start_time': '2025-11-05 10:55:58', 'end_time': '2025-11-05 13:14:58'},
+        # {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
+        # {'start_time': '2025-11-10 09:12:58', 'end_time': '2025-11-10 10:25:58'},
+        # {'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'},
+        # {'start_time': '2025-11-04 16:58:58', 'end_time': '2025-11-04 18:30:58'},  
+        # {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
+        # {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
+        # {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
+        # {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
+        ## 1
         {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'}, 
-        {'start_time': '2025-12-07 05:00:58', 'end_time': '2025-12-07 12:42:58'},
-        {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
-        {'start_time': '2025-12-07 21:27:58', 'end_time': '2025-12-08 21:42:58'},
+        # {'start_time': '2025-12-07 05:00:58', 'end_time': '2025-12-07 12:42:58'},
+        ## 1
+        # {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
+        # {'start_time': '2025-12-07 21:27:58', 'end_time': '2025-12-08 21:42:58'},
     ]
     
     for idx, scenario in enumerate(test_scenarios, 1):
