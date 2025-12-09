@@ -32,17 +32,22 @@ class PIDCalculator:
         self._epsilon = EPSILON
     
     def calculate(self, K: float, T1: float, T2: float, L: float,
-                  model_type: str, lambda_factor: float) -> Dict[str, float]:
+                  model_type: str, lambda_factor: float,
+                  method: str = 'lambda') -> Dict[str, float]:
         """
-        计算PID参数（Lambda方法）
+        根据模型类型和整定方法计算PID参数
         
         Args:
             K: 增益（可为负，表示反向作用系统）
             T1: 时间常数1
-            T2: 时间常数2
+            T2: 时间常数2（二阶模型）
             L: 滞后时间
-            model_type: 模型类型
-            lambda_factor: Lambda整定系数
+            model_type: 模型类型 (FOPDT, FO, SOPDT, SO, FOPI)
+            lambda_factor: Lambda/IMC 整定系数（闭环时间常数 = T1 * lambda_factor）
+            method: 整定方法
+                - 'lambda': Lambda/IMC 法（默认，适用于所有模型）
+                - 'cohen_coon': Cohen-Coon 法（仅 FOPDT）
+                - 'imc_aggressive': IMC 激进模式（更快响应）
         
         Returns:
             PID参数字典 {Kp, Ki, Kd}，Kp符号与K一致
@@ -53,65 +58,145 @@ class PIDCalculator:
         
         T1 = max(T1, self._epsilon)
         L = max(L, 0.0)
+        T2 = max(T2, 0.0)
         T_eq = T1 + T2 if T2 > 0 else T1
-        lambda_val = T_eq * lambda_factor
         
-        if model_type in [ModelType.FOPDT, ModelType.FO]:
-            denom = K_abs * (lambda_val + L / 2)
-            if denom < self._epsilon:
-                Kp, Ti, Td = 1.0, 20.0, 0.0
-            else:
-                Kp = (T1 + L / 2) / denom
-                Ti = T1 + L / 2
-                Td = (T1 * L) / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
-        
+        # 根据模型类型和方法选择整定公式
+        if model_type == ModelType.FO:
+            # ========== 一阶无滞后 (FO) ==========
+            # 无滞后系统可以使用更激进的参数
+            Kp, Ti, Td = self._tune_fo(K_abs, T1, lambda_factor, method)
+            
+        elif model_type == ModelType.FOPDT:
+            # ========== 一阶加纯滞后 (FOPDT) ==========
+            Kp, Ti, Td = self._tune_fopdt(K_abs, T1, L, lambda_factor, method)
+            
         elif model_type in [ModelType.SO, ModelType.SOPDT]:
-            denom = K_abs * (lambda_val + L / 2) if L > 0 else K_abs * lambda_val
-            if denom < self._epsilon:
-                Kp, Ti, Td = 1.0, 20.0, 0.0
-            else:
-                Kp = T_eq / denom
-                Ti = T_eq
-                Td = (T1 * T2) / T_eq if T_eq > self._epsilon else 0.0
-        
+            # ========== 二阶系统 (SO/SOPDT) ==========
+            Kp, Ti, Td = self._tune_sopdt(K_abs, T1, T2, L, lambda_factor)
+            
         elif model_type == ModelType.FOPI:
-            if K_abs < self._epsilon:
-                Kp, Ti, Td = 1.0, 20.0, 0.0
-            else:
-                lv = max(T1 * 0.8, 0.2) if T1 > 0 else 0.2
-                Kp = T1 / (K_abs * lv) if T1 > 0 else 1.0 / (K_abs * lv)
-                Ti, Td = max(T1, 1.0), 0.0
+            # ========== 积分过程 (FOPI) ==========
+            Kp, Ti, Td = self._tune_integrator(K_abs, T1, lambda_factor)
+            
         else:
+            # 默认保守参数
             Kp, Ti, Td = 1.0, 20.0, 0.0
         
         # 应用K的符号到Kp（反向作用系统Kp为负）
         Kp = Kp * K_sign
         
         # 参数合理性约束
-        # 1. 限制Kp的绝对值下限，但保留符号
-        if abs(Kp) < 0.01:
-            Kp = 0.01 * K_sign
+        Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign)
         
-        # 2. 限制Ti的上限（避免积分作用过弱导致响应过慢）
-        Ti_max = 60.0  # 最大积分时间60秒
-        Ti = max(0.1, min(Ti, Ti_max))
-        
-        # 3. 限制Td的上下限
-        Td = max(0.0, min(Td, Ti / 4))  # Td 不超过 Ti/4
-        
+        # 转换为 Ki, Kd
         Ki = Kp / Ti if Ti > self._epsilon else 0.0
         Kd = Kp * Td
-        
-        # 4. 确保Ki有足够的积分作用（避免响应过慢）
-        Ki_min = abs(Kp) * 0.01  # Ki 至少是 |Kp| 的 1%
-        if abs(Ki) < Ki_min:
-            Ki = Ki_min * K_sign
         
         return {
             'Kp': round(float(Kp), 4),
             'Ki': round(float(Ki), 4),
             'Kd': round(float(Kd), 4)
         }
+    
+    def _tune_fo(self, K: float, T1: float, lambda_factor: float, 
+                 method: str) -> Tuple[float, float, float]:
+        """一阶无滞后系统整定（更激进）"""
+        # FO 系统无滞后，可以使用更小的 lambda（更快响应）
+        lambda_val = T1 * lambda_factor * 0.5  # 比 FOPDT 更激进
+        
+        denom = K * lambda_val
+        if denom < self._epsilon:
+            return 1.0, T1, 0.0
+        
+        Kp = T1 / denom
+        Ti = T1
+        Td = 0.0  # 无滞后时不需要微分
+        
+        return Kp, Ti, Td
+    
+    def _tune_fopdt(self, K: float, T1: float, L: float, 
+                    lambda_factor: float, method: str) -> Tuple[float, float, float]:
+        """一阶加纯滞后系统整定"""
+        
+        if method == 'cohen_coon' and L > self._epsilon:
+            # Cohen-Coon 法（适合 L/T1 较大的系统）
+            tau = L / T1
+            Kp = (1.35 / K) * (T1 / L + 0.185)
+            Ti = 2.5 * L * (T1 + 0.185 * L) / (T1 + 0.611 * L)
+            Td = 0.37 * L * T1 / (T1 + 0.185 * L)
+            
+        elif method == 'imc_aggressive':
+            # IMC 激进模式（lambda = L）
+            lambda_val = max(L, T1 * 0.1)
+            denom = K * (lambda_val + L / 2)
+            if denom < self._epsilon:
+                return 1.0, T1, 0.0
+            Kp = (T1 + L / 2) / denom
+            Ti = T1 + L / 2
+            Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
+            
+        else:
+            # Lambda/IMC 标准法
+            lambda_val = T1 * lambda_factor
+            denom = K * (lambda_val + L / 2)
+            if denom < self._epsilon:
+                return 1.0, T1 + L / 2, 0.0
+            Kp = (T1 + L / 2) / denom
+            Ti = T1 + L / 2
+            Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
+        
+        return Kp, Ti, Td
+    
+    def _tune_sopdt(self, K: float, T1: float, T2: float, L: float,
+                    lambda_factor: float) -> Tuple[float, float, float]:
+        """二阶系统整定"""
+        T_eq = T1 + T2 if T2 > 0 else T1
+        lambda_val = T_eq * lambda_factor
+        
+        denom = K * (lambda_val + L / 2) if L > 0 else K * lambda_val
+        if denom < self._epsilon:
+            return 1.0, T_eq, 0.0
+        
+        Kp = T_eq / denom
+        Ti = T_eq
+        # 二阶系统的微分时间：串联时间常数的几何平均
+        Td = (T1 * T2) / T_eq if T_eq > self._epsilon and T2 > 0 else 0.0
+        
+        return Kp, Ti, Td
+    
+    def _tune_integrator(self, K: float, T1: float, 
+                         lambda_factor: float) -> Tuple[float, float, float]:
+        """积分过程整定（专用公式）"""
+        # 积分过程: G(s) = K / (T1*s + 1) / s
+        # 使用 SIMC 规则
+        if K < self._epsilon:
+            return 1.0, 20.0, 0.0
+        
+        lambda_val = max(T1 * lambda_factor, 0.2)
+        
+        # SIMC 积分过程公式
+        Kp = T1 / (K * lambda_val) if T1 > 0 else 1.0 / (K * lambda_val)
+        Ti = 4 * lambda_val  # 积分时间 = 4 * 闭环时间常数
+        Td = 0.0  # 积分过程一般不用微分
+        
+        return Kp, Ti, Td
+    
+    def _apply_constraints(self, Kp: float, Ti: float, Td: float,
+                           K_sign: int) -> Tuple[float, float, float]:
+        """应用参数合理性约束"""
+        # 1. 限制Kp的绝对值下限
+        if abs(Kp) < 0.01:
+            Kp = 0.01 * K_sign
+        
+        # 2. 限制Ti的范围
+        Ti_max = 120.0  # 最大积分时间 120 秒
+        Ti = max(0.1, min(Ti, Ti_max))
+        
+        # 3. 限制Td的范围（不超过 Ti/4）
+        Td = max(0.0, min(Td, Ti / 4))
+        
+        return Kp, Ti, Td
     
     def calculate_from_fusion(self, fusion: FusionResult, 
                                lambda_factor: float) -> Dict[str, float]:
@@ -126,6 +211,11 @@ class PIDCalculator:
         """
         分析振荡数据，提取临界振荡特征
         
+        使用多种方法综合检测，提高精度：
+        1. 峰值检测法 + 插值精化
+        2. FFT 法检测主频
+        3. 自相关法验证
+        
         Args:
             pv: 过程变量数组
             mv: 操作变量数组
@@ -134,81 +224,230 @@ class PIDCalculator:
         Returns:
             振荡特征字典，如果无法分析则返回 None
         """
-        if len(pv) < 10:
+        if len(pv) < 20:
             return None
         
-        # 去趋势
-        pv_detrend = pv - np.mean(pv)
+        # 去趋势（使用线性去趋势更好）
+        x = np.arange(len(pv))
+        coeffs = np.polyfit(x, pv, 1)
+        trend = np.polyval(coeffs, x)
+        pv_detrend = pv - trend
         
-        # 1. 检测过零点，计算振荡周期
-        zero_crossings = np.where(np.diff(np.sign(pv_detrend)))[0]
+        # ========== 方法1: 精确峰值检测法 ==========
+        Pu_peaks = self._detect_period_from_peaks(pv_detrend, dt)
         
-        if len(zero_crossings) < 4:
-            return None  # 至少需要2个完整周期
+        # ========== 方法2: FFT 法 ==========
+        Pu_fft = self._detect_period_from_fft(pv_detrend, dt)
         
-        # 计算半周期，然后转换为全周期
-        half_periods = np.diff(zero_crossings) * dt
-        full_periods = []
-        for i in range(0, len(half_periods) - 1, 2):
-            full_periods.append(half_periods[i] + half_periods[i + 1])
+        # ========== 方法3: 自相关法 ==========
+        Pu_autocorr = self._detect_period_from_autocorr(pv_detrend, dt)
         
-        if len(full_periods) == 0:
+        # 综合多种方法的结果
+        # 工业 PID 的典型振荡周期范围：1 秒 ~ 120 秒
+        MIN_PERIOD = 1.0   # 最小周期 1 秒
+        MAX_PERIOD = 120.0  # 最大周期 120 秒（超过这个通常不是真正的振荡）
+        
+        valid_periods = []
+        weights = []
+        
+        if Pu_peaks is not None and MIN_PERIOD < Pu_peaks < MAX_PERIOD:
+            valid_periods.append(Pu_peaks)
+            weights.append(2.0)  # 峰值法权重更高（更可靠）
+        
+        if Pu_fft is not None and MIN_PERIOD < Pu_fft < MAX_PERIOD:
+            valid_periods.append(Pu_fft)
+            weights.append(1.0)
+        
+        if Pu_autocorr is not None and MIN_PERIOD < Pu_autocorr < MAX_PERIOD:
+            valid_periods.append(Pu_autocorr)
+            weights.append(1.5)
+        
+        if not valid_periods:
             return None
         
-        Pu = np.median(full_periods)  # 临界周期
+        # 如果多种方法结果差异太大，使用中位数而不是加权平均
+        if len(valid_periods) >= 2:
+            period_range = max(valid_periods) / min(valid_periods)
+            if period_range > 2.0:
+                # 结果差异太大，使用中位数
+                Pu = float(np.median(valid_periods))
+            else:
+                Pu = np.average(valid_periods, weights=weights)
+        else:
+            Pu = valid_periods[0]
         
-        # 2. 计算振荡幅度
-        peaks = []
-        valleys = []
-        for i in range(1, len(pv) - 1):
-            if pv[i] > pv[i-1] and pv[i] > pv[i+1]:
-                peaks.append(pv[i])
-            elif pv[i] < pv[i-1] and pv[i] < pv[i+1]:
-                valleys.append(pv[i])
+        # ========== 计算振荡幅度和衰减比 ==========
+        peak_indices, peak_values, valley_indices, valley_values = self._find_peaks_valleys(pv_detrend)
         
-        if len(peaks) < 2 or len(valleys) < 2:
+        if len(peak_values) < 2 or len(valley_values) < 2:
             return None
         
-        amplitude = (np.mean(peaks) - np.mean(valleys)) / 2  # 振荡幅度
+        amplitude = (np.mean(peak_values) - np.mean(valley_values)) / 2
         
-        # 3. 计算衰减比（判断是否为临界振荡）
-        if len(peaks) >= 3:
+        # 计算衰减比
+        if len(peak_values) >= 3:
+            # 使用去趋势后的峰值计算衰减比
+            peak_amplitudes = np.abs(peak_values - np.mean(pv_detrend))
             decay_ratios = []
-            for i in range(len(peaks) - 1):
-                if peaks[i] != 0:
-                    decay_ratios.append(peaks[i + 1] / peaks[i])
-            avg_decay = np.mean(decay_ratios) if decay_ratios else 1.0
+            for i in range(len(peak_amplitudes) - 1):
+                if peak_amplitudes[i] > self._epsilon:
+                    decay_ratios.append(peak_amplitudes[i + 1] / peak_amplitudes[i])
+            avg_decay = np.median(decay_ratios) if decay_ratios else 1.0
         else:
             avg_decay = 1.0
         
-        # 4. 估算MV的等效继电器幅度
+        # 估算 MV 的等效继电器幅度
         mv_amplitude = (np.max(mv) - np.min(mv)) / 2
         
-        # 5. 使用继电器反馈法估算临界增益
-        # Ku = 4d / (π × a)，其中 d 是继电器幅度，a 是振荡幅度
+        # 使用继电器反馈法估算临界增益
         if amplitude > self._epsilon:
             Ku_estimate = 4 * mv_amplitude / (np.pi * amplitude)
         else:
             Ku_estimate = 1.0
         
-        # 6. 判断振荡类型
+        # 判断振荡类型
         if avg_decay > 1.1:
-            osc_type = 'diverging'  # 发散振荡
+            osc_type = 'diverging'
         elif avg_decay < 0.9:
-            osc_type = 'converging'  # 收敛振荡
+            osc_type = 'converging'
         else:
-            osc_type = 'sustained'  # 持续振荡（临界状态）
+            osc_type = 'sustained'
+        
+        n_cycles = max(len(peak_indices), len(valley_indices)) - 1
         
         return {
-            'Pu': round(Pu, 2),              # 临界周期
+            'Pu': round(Pu, 3),              # 临界周期（提高精度）
             'Ku': round(Ku_estimate, 4),     # 临界增益估计
             'amplitude': round(amplitude, 2), # 振荡幅度
             'mv_amplitude': round(mv_amplitude, 2),  # MV幅度
             'decay_ratio': round(avg_decay, 3),      # 衰减比
             'oscillation_type': osc_type,    # 振荡类型
-            'n_cycles': len(full_periods),   # 完整振荡周期数
-            'is_valid': len(full_periods) >= 2 and osc_type != 'diverging'
+            'n_cycles': n_cycles,            # 完整振荡周期数
+            'is_valid': n_cycles >= 2 and osc_type != 'diverging',
+            'detection_methods': {           # 各方法检测结果（调试用）
+                'peaks': round(Pu_peaks, 3) if Pu_peaks else None,
+                'fft': round(Pu_fft, 3) if Pu_fft else None,
+                'autocorr': round(Pu_autocorr, 3) if Pu_autocorr else None
+            }
         }
+    
+    def _detect_period_from_peaks(self, pv: np.ndarray, dt: float) -> Optional[float]:
+        """使用峰值检测法计算周期"""
+        peak_indices, peak_values, _, _ = self._find_peaks_valleys(pv)
+        
+        if len(peak_indices) < 3:
+            return None
+        
+        # 使用抛物线插值精化峰值位置
+        refined_indices = []
+        for idx in peak_indices:
+            if 1 <= idx < len(pv) - 1:
+                # 抛物线插值: y = a*x^2 + b*x + c
+                # 峰值位置: x_peak = -b / (2a)
+                y0, y1, y2 = pv[idx-1], pv[idx], pv[idx+1]
+                denom = 2 * (y0 - 2*y1 + y2)
+                if abs(denom) > self._epsilon:
+                    delta = (y0 - y2) / denom
+                    refined_indices.append(idx + delta)
+                else:
+                    refined_indices.append(float(idx))
+            else:
+                refined_indices.append(float(idx))
+        
+        # 计算相邻峰值间的周期
+        periods = np.diff(refined_indices) * dt
+        
+        # 过滤异常值（使用 IQR 方法）
+        if len(periods) >= 3:
+            q1, q3 = np.percentile(periods, [25, 75])
+            iqr = q3 - q1
+            valid_periods = periods[(periods >= q1 - 1.5*iqr) & (periods <= q3 + 1.5*iqr)]
+            if len(valid_periods) > 0:
+                return float(np.median(valid_periods))
+        
+        return float(np.median(periods)) if len(periods) > 0 else None
+    
+    def _detect_period_from_fft(self, pv: np.ndarray, dt: float) -> Optional[float]:
+        """使用 FFT 检测主频"""
+        n = len(pv)
+        if n < 10:
+            return None
+        
+        # 加窗减少频谱泄漏
+        window = np.hanning(n)
+        pv_windowed = pv * window
+        
+        # FFT
+        fft_result = np.fft.rfft(pv_windowed)
+        freqs = np.fft.rfftfreq(n, dt)
+        
+        # 找到主频（排除直流分量）
+        magnitude = np.abs(fft_result)
+        
+        # 只考虑合理的频率范围（周期在 2*dt 到 n*dt/2 之间）
+        min_freq = 2.0 / (n * dt)  # 至少 2 个周期
+        max_freq = 1.0 / (2 * dt)   # 奈奎斯特频率
+        
+        valid_mask = (freqs > min_freq) & (freqs < max_freq)
+        if not np.any(valid_mask):
+            return None
+        
+        valid_freqs = freqs[valid_mask]
+        valid_magnitude = magnitude[valid_mask]
+        
+        # 找到最大幅度对应的频率
+        peak_idx = np.argmax(valid_magnitude)
+        dominant_freq = valid_freqs[peak_idx]
+        
+        if dominant_freq > self._epsilon:
+            return 1.0 / dominant_freq
+        return None
+    
+    def _detect_period_from_autocorr(self, pv: np.ndarray, dt: float) -> Optional[float]:
+        """使用自相关法检测周期"""
+        n = len(pv)
+        if n < 20:
+            return None
+        
+        # 计算自相关
+        pv_normalized = pv - np.mean(pv)
+        autocorr = np.correlate(pv_normalized, pv_normalized, mode='full')
+        autocorr = autocorr[n-1:]  # 只取正延迟部分
+        autocorr = autocorr / autocorr[0]  # 归一化
+        
+        # 找到第一个极大值（排除 lag=0）
+        min_lag = max(2, int(1.0 / dt))  # 至少 1 秒
+        max_lag = n // 2
+        
+        for i in range(min_lag, max_lag):
+            if autocorr[i] > autocorr[i-1] and autocorr[i] > autocorr[i+1]:
+                # 使用抛物线插值精化
+                y0, y1, y2 = autocorr[i-1], autocorr[i], autocorr[i+1]
+                denom = 2 * (y0 - 2*y1 + y2)
+                if abs(denom) > self._epsilon:
+                    delta = (y0 - y2) / denom
+                    return (i + delta) * dt
+                return i * dt
+        
+        return None
+    
+    def _find_peaks_valleys(self, pv: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """找到峰值和谷值的位置和值"""
+        peak_indices = []
+        peak_values = []
+        valley_indices = []
+        valley_values = []
+        
+        for i in range(1, len(pv) - 1):
+            if pv[i] > pv[i-1] and pv[i] > pv[i+1]:
+                peak_indices.append(i)
+                peak_values.append(pv[i])
+            elif pv[i] < pv[i-1] and pv[i] < pv[i+1]:
+                valley_indices.append(i)
+                valley_values.append(pv[i])
+        
+        return (np.array(peak_indices), np.array(peak_values), 
+                np.array(valley_indices), np.array(valley_values))
     
     def calculate_from_oscillation(self, osc_info: Dict, 
                                    current_pid: Dict = None,
