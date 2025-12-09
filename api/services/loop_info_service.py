@@ -194,7 +194,8 @@ class LoopInfoService:
                     for loop_info in loop_infos:
                         loop_uri = loop_info['loop_uri']
                         loop_statu_values = loop_values.get(loop_uri, {})
-
+                        auto_control_status = 1 if loop_statu_values.get('AUTO') in ["auto", 1, 255, "true", "自动"] else 0
+                        # action_type = "未知" if loop_statu_values.get('action_type') is None else loop_statu_values.get('action_type')
                         loop_info['loop_status'] = {
                             'PB': loop_statu_values.get('PB'),
                             'TI': loop_statu_values.get('TI'),
@@ -202,7 +203,7 @@ class LoopInfoService:
                             'PV': loop_statu_values.get('PV'),
                             'SV': loop_statu_values.get('SV'),
                             'MV': loop_statu_values.get('MV'),
-                            'AUTO': loop_statu_values.get('AUTO')
+                            'AUTO': auto_control_status
                         }
 
                     logger.info(f"成功查询 {len(loop_values)} 个回路的PID参数")
@@ -300,6 +301,7 @@ class LoopInfoService:
                     for loop_info in loop_infos:
                         loop_uri = loop_info['loop_uri']
                         loop_statu_values = loop_values.get(loop_uri, {})
+                        auto_control_status = 1 if loop_statu_values.get('AUTO') in ["auto", 1, 255, "true", "自动"] else 0
 
                         loop_info['loop_status'] = {
                             'PB': loop_statu_values.get('PB'),
@@ -308,7 +310,7 @@ class LoopInfoService:
                             'PV': loop_statu_values.get('PV'),
                             'SV': loop_statu_values.get('SV'),
                             'MV': loop_statu_values.get('MV'),
-                            'AUTO': loop_statu_values.get('AUTO')
+                            'AUTO': auto_control_status
                         }
 
                     logger.info(f"成功查询 {len(loop_values)} 个回路的PID参数")
