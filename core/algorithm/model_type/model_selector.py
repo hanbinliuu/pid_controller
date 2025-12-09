@@ -497,7 +497,17 @@ class ModelSelector:
         # 先估算模型参数（用于闭环验证和输出，保持一致）
         Pu = osc_info['Pu']
         Ku = pid_params['Ku']
-        K_est = round(1.0 / Ku if Ku > 0.01 else 1.0, 4)
+        
+        # 使用振荡数据估算过程增益 K
+        # K = PV振幅 / MV振幅（而不是简单地用 1/Ku）
+        pv_amplitude = osc_info.get('amplitude', 1.0)
+        mv_amplitude = osc_info.get('mv_amplitude', 1.0)
+        if mv_amplitude > 0.01:
+            K_from_data = pv_amplitude / mv_amplitude
+        else:
+            K_from_data = 1.0 / Ku if Ku > 0.01 else 1.0
+        
+        K_est = round(K_from_data, 4)
         T1_est = round(Pu, 4)
         L_est = round(Pu / 4, 4)
         
