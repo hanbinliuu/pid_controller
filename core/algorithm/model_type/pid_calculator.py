@@ -121,6 +121,179 @@ class PIDCalculator:
             fusion.model_type, lambda_factor
         )
     
+    def analyze_oscillation(self, pv: np.ndarray, mv: np.ndarray, 
+                            dt: float = 1.0) -> Optional[Dict]:
+        """
+        分析振荡数据，提取临界振荡特征
+        
+        Args:
+            pv: 过程变量数组
+            mv: 操作变量数组
+            dt: 采样周期（秒）
+        
+        Returns:
+            振荡特征字典，如果无法分析则返回 None
+        """
+        if len(pv) < 10:
+            return None
+        
+        # 去趋势
+        pv_detrend = pv - np.mean(pv)
+        
+        # 1. 检测过零点，计算振荡周期
+        zero_crossings = np.where(np.diff(np.sign(pv_detrend)))[0]
+        
+        if len(zero_crossings) < 4:
+            return None  # 至少需要2个完整周期
+        
+        # 计算半周期，然后转换为全周期
+        half_periods = np.diff(zero_crossings) * dt
+        full_periods = []
+        for i in range(0, len(half_periods) - 1, 2):
+            full_periods.append(half_periods[i] + half_periods[i + 1])
+        
+        if len(full_periods) == 0:
+            return None
+        
+        Pu = np.median(full_periods)  # 临界周期
+        
+        # 2. 计算振荡幅度
+        peaks = []
+        valleys = []
+        for i in range(1, len(pv) - 1):
+            if pv[i] > pv[i-1] and pv[i] > pv[i+1]:
+                peaks.append(pv[i])
+            elif pv[i] < pv[i-1] and pv[i] < pv[i+1]:
+                valleys.append(pv[i])
+        
+        if len(peaks) < 2 or len(valleys) < 2:
+            return None
+        
+        amplitude = (np.mean(peaks) - np.mean(valleys)) / 2  # 振荡幅度
+        
+        # 3. 计算衰减比（判断是否为临界振荡）
+        if len(peaks) >= 3:
+            decay_ratios = []
+            for i in range(len(peaks) - 1):
+                if peaks[i] != 0:
+                    decay_ratios.append(peaks[i + 1] / peaks[i])
+            avg_decay = np.mean(decay_ratios) if decay_ratios else 1.0
+        else:
+            avg_decay = 1.0
+        
+        # 4. 估算MV的等效继电器幅度
+        mv_amplitude = (np.max(mv) - np.min(mv)) / 2
+        
+        # 5. 使用继电器反馈法估算临界增益
+        # Ku = 4d / (π × a)，其中 d 是继电器幅度，a 是振荡幅度
+        if amplitude > self._epsilon:
+            Ku_estimate = 4 * mv_amplitude / (np.pi * amplitude)
+        else:
+            Ku_estimate = 1.0
+        
+        # 6. 判断振荡类型
+        if avg_decay > 1.1:
+            osc_type = 'diverging'  # 发散振荡
+        elif avg_decay < 0.9:
+            osc_type = 'converging'  # 收敛振荡
+        else:
+            osc_type = 'sustained'  # 持续振荡（临界状态）
+        
+        return {
+            'Pu': round(Pu, 2),              # 临界周期
+            'Ku': round(Ku_estimate, 4),     # 临界增益估计
+            'amplitude': round(amplitude, 2), # 振荡幅度
+            'mv_amplitude': round(mv_amplitude, 2),  # MV幅度
+            'decay_ratio': round(avg_decay, 3),      # 衰减比
+            'oscillation_type': osc_type,    # 振荡类型
+            'n_cycles': len(full_periods),   # 完整振荡周期数
+            'is_valid': len(full_periods) >= 2 and osc_type != 'diverging'
+        }
+    
+    def calculate_from_oscillation(self, osc_info: Dict, 
+                                   current_pid: Dict = None,
+                                   method: str = 'zn') -> Optional[Dict[str, float]]:
+        """
+        基于振荡特征计算 PID 参数（Ziegler-Nichols 临界法）
+        
+        Args:
+            osc_info: 振荡分析结果（来自 analyze_oscillation）
+            current_pid: 当前 PID 参数 {'Kp': ..., 'Ki': ..., 'Kd': ...}
+            method: 整定方法
+                - 'zn': Ziegler-Nichols 经典法
+                - 'zn_no_overshoot': ZN 无超调法
+                - 'zn_some_overshoot': ZN 少超调法
+                - 'tyreus_luyben': Tyreus-Luyben 法（更稳定）
+        
+        Returns:
+            PID 参数字典，如果无法计算则返回 None
+        """
+        if not osc_info or not osc_info.get('is_valid', False):
+            return None
+        
+        Pu = osc_info['Pu']
+        Ku = osc_info['Ku']
+        
+        # 如果有当前 PID 参数，可以用于校正 Ku 估计
+        if current_pid and current_pid.get('Kp', 0) != 0:
+            current_Kp = abs(current_pid['Kp'])
+            # 如果当前系统正在临界振荡，则 Ku ≈ current_Kp
+            # 如果是发散振荡，Ku < current_Kp
+            # 如果是收敛振荡，Ku > current_Kp
+            osc_type = osc_info.get('oscillation_type', 'sustained')
+            if osc_type == 'sustained':
+                Ku = current_Kp
+            elif osc_type == 'diverging':
+                Ku = current_Kp * 0.8  # 保守估计
+            else:  # converging
+                Ku = current_Kp * 1.2
+        
+        # 根据不同方法计算 PID 参数
+        if method == 'zn':
+            # Ziegler-Nichols 经典法（可能有较大超调）
+            Kp = 0.6 * Ku
+            Ti = Pu / 2
+            Td = Pu / 8
+        elif method == 'zn_no_overshoot':
+            # ZN 无超调法
+            Kp = 0.2 * Ku
+            Ti = Pu / 2
+            Td = Pu / 3
+        elif method == 'zn_some_overshoot':
+            # ZN 少超调法
+            Kp = 0.33 * Ku
+            Ti = Pu / 2
+            Td = Pu / 3
+        elif method == 'tyreus_luyben':
+            # Tyreus-Luyben 法（更稳定，适合工业应用）
+            Kp = 0.45 * Ku
+            Ti = 2.2 * Pu
+            Td = Pu / 6.3
+        else:
+            # 默认使用保守的 ZN 法
+            Kp = 0.45 * Ku
+            Ti = Pu / 1.2
+            Td = Pu / 8
+        
+        # 计算 Ki 和 Kd
+        Ki = Kp / Ti if Ti > self._epsilon else 0.0
+        Kd = Kp * Td
+        
+        # 确定符号（如果有当前 PID，保持符号一致）
+        if current_pid and current_pid.get('Kp', 0) < 0:
+            Kp = -Kp
+            Ki = -Ki
+            Kd = -Kd
+        
+        return {
+            'Kp': round(float(Kp), 4),
+            'Ki': round(float(Ki), 4),
+            'Kd': round(float(Kd), 4),
+            'method': f'oscillation_{method}',
+            'Pu': Pu,
+            'Ku': round(Ku, 4)
+        }
+    
     def calculate_model_rating(self, fusion: FusionResult, 
                                 total_data_points: int,
                                 cl_metrics: 'ClosedLoopMetrics' = None,
@@ -600,7 +773,7 @@ class PIDCalculator:
             mv_history=mv
         )
     
-    def verify_pid_stability(self, fusion: FusionResult, 
+    def verify_pid_stability(self, fusion: Optional[FusionResult], 
                               pid_params: Dict[str, float],
                               sp_initial: float = 50.0,
                               sp_final: float = 60.0,
@@ -610,7 +783,7 @@ class PIDCalculator:
         验证PID参数的闭环稳定性
         
         Args:
-            fusion: 模型参数
+            fusion: 模型参数（可以为 None，用于振荡整定场景）
             pid_params: PID参数 {Kp, Ki, Kd}
             sp_initial: SP初始值（来自实际数据）
             sp_final: SP目标值（来自实际数据）
@@ -623,20 +796,37 @@ class PIDCalculator:
         if pv_initial is None:
             pv_initial = sp_initial
         
+        # 如果 fusion 为 None（振荡整定），使用默认模型参数
+        if fusion is None:
+            # 根据 PID 参数估算过程特性
+            Kp = abs(pid_params.get('Kp', 1.0))
+            # 假设一个典型的一阶过程
+            K = 1.0 / Kp if Kp > self._epsilon else 1.0  # 反推过程增益
+            T1 = pid_params.get('Pu', 10.0) if 'Pu' in pid_params else 10.0  # 使用临界周期作为参考
+            T2 = 0.0
+            L = 0.0
+            model_type = ModelType.FO
+        else:
+            K = fusion.K
+            T1 = fusion.T1
+            T2 = fusion.T2
+            L = fusion.L
+            model_type = fusion.model_type
+        
         # 自适应仿真参数：确保数值稳定性
-        T_min = min(fusion.T1, fusion.T2 if fusion.T2 > 0 else fusion.T1)
+        T_min = min(T1, T2 if T2 > 0 else T1)
         dt = min(0.1, T_min / 10)  # 步长不超过最小时间常数的1/10
         dt = max(0.01, dt)         # 但也不要太小
         
         # 仿真时长：至少10倍最大时间常数
-        T_max = max(fusion.T1, fusion.T2 if fusion.T2 > 0 else fusion.T1)
+        T_max = max(T1, T2 if T2 > 0 else T1)
         sim_time = max(100, T_max * 20)
         n_steps = int(sim_time / dt)
         n_steps = min(n_steps, 5000)  # 限制最大步数
         
         metrics = self.simulate_closed_loop(
-            K=fusion.K, T1=fusion.T1, T2=fusion.T2, L=fusion.L,
-            model_type=fusion.model_type,
+            K=K, T1=T1, T2=T2, L=L,
+            model_type=model_type,
             Kp=pid_params['Kp'], Ki=pid_params['Ki'], Kd=pid_params['Kd'],
             sp_initial=sp_initial,
             sp_final=sp_final,

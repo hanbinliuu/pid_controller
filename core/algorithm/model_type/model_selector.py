@@ -89,6 +89,7 @@ class ModelSelector:
         history_data = input_data.get('history_data', [])
         params = input_data.get('params', {})
         qualified_windows = input_data.get('qualified_windows', [])
+        current_pid = input_data.get('current_pid', None)  # 当前 PID 参数
         
         if not history_data:
             return self._empty_result_new(params)
@@ -105,7 +106,8 @@ class ModelSelector:
             ]
         }
         
-        result = self.fit(tuning_input, history_data, lambda_factor=0.8)
+        result = self.fit(tuning_input, history_data, lambda_factor=0.8, 
+                          current_pid=current_pid)
         return self._convert_output_format(result, params)
     
     def _convert_output_format(self, result: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
@@ -176,8 +178,16 @@ class ModelSelector:
     
     def fit(self, tuning_input: Union[Dict, TuningInput],
             raw_data: List[Dict],
-            lambda_factor: float = 0.8) -> Dict[str, Any]:
-        """模型整定主入口"""
+            lambda_factor: float = 0.8,
+            current_pid: Dict = None) -> Dict[str, Any]:
+        """模型整定主入口
+        
+        Args:
+            tuning_input: 整定输入
+            raw_data: 原始数据
+            lambda_factor: Lambda整定系数
+            current_pid: 当前PID参数 {'Kp': ..., 'Ki': ..., 'Kd': ...}，用于振荡分析
+        """
         input_data = self._parse_input(tuning_input)
         if input_data is None or not input_data.tuning_window or not raw_data:
             return self._empty_result(input_data)
@@ -199,6 +209,13 @@ class ModelSelector:
         
         # Step 2: 对每个有效段尝试多种模型拟合
         segment_results = self._fit_all_segments(valid_segments, segment_results)
+        
+        # Step 2.5: 检查是否所有段都是高振荡且拟合失败
+        oscillation_result = self._try_oscillation_tuning(valid_segments, segment_results, current_pid)
+        if oscillation_result is not None:
+            # 使用振荡分析结果，跳过后续的模型融合
+            return self._build_oscillation_output(oscillation_result, hist_data, time_range, 
+                                                  input_data.tuning_window)
         
         # Step 3: 基于AIC/RSS/形状特征选择最优模型结构
         best_model_type = self._select_best_model_type(segment_results)
@@ -380,6 +397,182 @@ class ModelSelector:
             
             if result.best_r2 < 0.4:
                 self.log(f"   ⚠️ 段{idx+1}所有模型R²<0.4或K值异常")
+    
+    # ============================================================
+    # Step 2.5: 振荡分析与临界法整定
+    # ============================================================
+    
+    def _try_oscillation_tuning(self, segments: List[HistoricalData], 
+                                segment_results: List[SegmentResult],
+                                current_pid: Dict = None) -> Optional[Dict]:
+        """
+        尝试使用振荡分析进行临界法整定
+        
+        当检测到高振荡数据且常规模型拟合失败时，使用振荡特征进行PID整定
+        
+        Returns:
+            振荡整定结果，如果不适用则返回 None
+        """
+        # 检查是否有高振荡段且拟合失败
+        oscillating_segments = []
+        for i, (seg, result) in enumerate(zip(segments, segment_results)):
+            is_oscillating = result.oscillation_ratio > 0.5
+            fit_failed = result.best_r2 < 0.3
+            
+            if is_oscillating and fit_failed:
+                oscillating_segments.append((i, seg, result))
+        
+        if not oscillating_segments:
+            return None  # 没有符合条件的振荡段
+        
+        self.log(f"\n🔄 检测到 {len(oscillating_segments)} 个高振荡拟合失败段，尝试临界法整定")
+        
+        # 分析每个振荡段
+        oscillation_analyses = []
+        for idx, seg, result in oscillating_segments:
+            dt = 1.0  # 假设采样周期为1秒
+            if len(seg.timestamp) > 1:
+                dt = (seg.timestamp[1] - seg.timestamp[0]) / 1000  # 转换为秒
+            
+            osc_info = self._pid_calculator.analyze_oscillation(seg.pv, seg.mv, dt)
+            
+            if osc_info and osc_info.get('is_valid', False):
+                oscillation_analyses.append({
+                    'segment_idx': idx,
+                    'osc_info': osc_info,
+                    'data_points': len(seg.pv)
+                })
+                self.log(f"   段{idx+1}: Pu={osc_info['Pu']:.1f}s, Ku≈{osc_info['Ku']:.3f}, "
+                        f"振幅={osc_info['amplitude']:.2f}, 类型={osc_info['oscillation_type']}")
+        
+        if not oscillation_analyses:
+            self.log("   ⚠️ 无法从振荡数据中提取有效特征")
+            return None
+        
+        # 选择最佳振荡分析结果（优先使用持续振荡，数据点数最多的段）
+        best_analysis = None
+        for analysis in oscillation_analyses:
+            osc_type = analysis['osc_info']['oscillation_type']
+            if best_analysis is None:
+                best_analysis = analysis
+            elif osc_type == 'sustained' and best_analysis['osc_info']['oscillation_type'] != 'sustained':
+                best_analysis = analysis
+            elif analysis['data_points'] > best_analysis['data_points']:
+                best_analysis = analysis
+        
+        # 使用临界法计算 PID 参数
+        pid_params = self._pid_calculator.calculate_from_oscillation(
+            best_analysis['osc_info'], 
+            current_pid=current_pid,
+            method='tyreus_luyben'  # 使用更稳定的 Tyreus-Luyben 法
+        )
+        
+        if pid_params is None:
+            self.log("   ⚠️ 临界法整定失败")
+            return None
+        
+        self.log(f"   ✅ 临界法整定成功:")
+        self.log(f"      Pu={best_analysis['osc_info']['Pu']:.1f}s, Ku={pid_params['Ku']:.3f}")
+        self.log(f"      Kp={pid_params['Kp']:.4f}, Ki={pid_params['Ki']:.4f}, Kd={pid_params['Kd']:.4f}")
+        self.log(f"      方法: {pid_params['method']}")
+        
+        return {
+            'pid_params': pid_params,
+            'oscillation_info': best_analysis['osc_info'],
+            'segment_idx': best_analysis['segment_idx'],
+            'method': 'oscillation_critical'
+        }
+    
+    def _build_oscillation_output(self, osc_result: Dict, hist_data: HistoricalData,
+                                  time_range: Dict, tuning_windows: List) -> Dict[str, Any]:
+        """构建振荡分析整定的输出结果"""
+        pid_params = osc_result['pid_params']
+        osc_info = osc_result['oscillation_info']
+        
+        valid_mask = hist_data.pv != 0
+        y = hist_data.pv[valid_mask]
+        ts = hist_data.timestamp[valid_mask]
+        sv = hist_data.sv[valid_mask]
+        
+        # 闭环验证
+        sp_initial = 50.0
+        sp_final = 60.0
+        pv_initial = 50.0
+        
+        is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
+            None, pid_params,
+            sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
+            verbose=self._verbose
+        )
+        
+        # 计算评分（振荡整定的评分规则不同）
+        stability_score = 10.0 if is_stable else 5.0
+        if cl_metrics.overshoot > 30:
+            stability_score -= 2.0
+        if cl_metrics.oscillation_count > 3:
+            stability_score -= 1.0
+        
+        # 综合评分（振荡整定的基础分较低，因为没有模型拟合验证）
+        model_rating = round(min(10.0, max(0.0, stability_score * 0.6 + 2.0)), 2)
+        
+        closed_loop_info = {
+            'is_stable': is_stable,
+            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
+            'overshoot': cl_metrics.overshoot,
+            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
+            'steady_state_error': cl_metrics.steady_state_error,
+            'oscillation_count': cl_metrics.oscillation_count,
+            'decay_ratio': cl_metrics.decay_ratio
+        }
+        
+        # 从振荡特征估算模型参数
+        Pu = osc_info['Pu']
+        Ku = pid_params['Ku']
+        Kp_val = abs(pid_params.get('Kp', 1.0))
+        
+        # 估算模型参数：
+        # K ≈ 1/Ku（临界增益的倒数）
+        # T1 ≈ Pu（临界周期作为时间常数）
+        # L ≈ Pu/4（典型的滞后时间估算）
+        K_est = round(1.0 / Ku if Ku > 0.01 else 1.0, 4)
+        T1_est = round(Pu, 4)
+        L_est = round(Pu / 4, 4)
+        
+        return {
+            'success': True,
+            'model_type': 'FOPDT',  # 使用 FOPDT 作为模型类型
+            'model_rating': model_rating,
+            'start_time': time_range.get('start_time'),
+            'end_time': time_range.get('end_time'),
+            'model_parameters': {
+                'K': K_est,
+                'T1': T1_est,
+                'T2': 0.0,
+                'L': L_est
+            },
+            'pid_parameters': pid_params,
+            'fitting_result': {
+                'timestamp': ts.tolist(),
+                'sv': sv.tolist(),
+                'pv': y.tolist(),
+                'mv': hist_data.mv[valid_mask].tolist(),
+                'pv_model': y.tolist(),  # 振荡法没有模型拟合
+                'r_squared': 0.0,
+                'rmse': 0.0
+            },
+            'fusion_info': {
+                'method': 'oscillation_critical',
+                'n_segments': 1,
+                'consistency_score': 0.0,
+                'oscillation_type': osc_info['oscillation_type'],
+                'oscillation_amplitude': osc_info['amplitude']
+            },
+            'closed_loop_verification': closed_loop_info,
+            'rating_details': {
+                'stability_score': stability_score,
+                'method': 'oscillation_critical'
+            }
+        }
     
     # ============================================================
     # Step 3: 模型选择（使用统一模型选择器）

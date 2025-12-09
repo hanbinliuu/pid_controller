@@ -442,14 +442,24 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     
     # ========== 子图3: 拟合误差 ==========
     ax3 = fig.add_subplot(n_plots, 1, 3, sharex=ax1)
-    if fit_time_array and fit_pv and fit_pv_model:
+    # 判断是否为振荡整定模式
+    is_oscillation_tuning = fusion_info.get('method') == 'oscillation_critical'
+    if is_oscillation_tuning:
+        # 振荡整定没有模型拟合，显示提示信息
+        ax3.text(0.5, 0.5, '振荡整定模式\n无模型拟合（使用临界法）', 
+                transform=ax3.transAxes, ha='center', va='center',
+                fontsize=14, color='gray', style='italic')
+        ax3.set_title('拟合误差 - 振荡整定模式')
+    elif fit_time_array and fit_pv and fit_pv_model:
         error = np.array(fit_pv) - np.array(fit_pv_model)
         ax3.plot(fit_time_array, error, 'r-', label='误差 (PV - PV_model)', linewidth=0.8)
         ax3.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
         ax3.fill_between(fit_time_array, error, 0, alpha=0.3, color='red')
+        ax3.set_title('拟合误差')
+    else:
+        ax3.set_title('拟合误差')
     
     ax3.set_ylabel('误差')
-    ax3.set_title('拟合误差')
     ax3.legend(loc='upper right')
     ax3.grid(True, alpha=0.3)
     
@@ -496,17 +506,31 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
             pv_initial = 50.0  # 假设稳态开始
         
         # 自适应仿真参数
-        T_min = min(fusion.T1, fusion.T2 if fusion.T2 > 0 else fusion.T1)
+        # 对于振荡整定，使用临界周期 Pu 作为参考
+        if is_oscillation_tuning:
+            Pu = model_params.get('T1', 10.0)  # 振荡整定时 T1 = Pu
+            T_ref = Pu
+        else:
+            T_ref = fusion.T1 if fusion.T1 > 0 else 10.0
+        
+        T_min = T_ref
+        T2_val = fusion.T2 if fusion.T2 > 0 else T_ref
+        T_min = min(T_ref, T2_val)
         dt = min(0.1, T_min / 10)
         dt = max(0.01, dt)
-        T_max = max(fusion.T1, fusion.T2 if fusion.T2 > 0 else fusion.T1)
+        T_max = max(T_ref, T2_val)
         sim_time = max(100, T_max * 20)
         n_steps = int(sim_time / dt)
         n_steps = min(n_steps, 5000)
         
+        # 直接使用 fusion 中的模型参数（振荡整定已经估算了合理的参数）
+        K_est = fusion.K
+        T1_est = fusion.T1
+        sim_model_type = fusion.model_type
+        
         metrics = calculator.simulate_closed_loop(
-            K=fusion.K, T1=fusion.T1, T2=fusion.T2, L=fusion.L,
-            model_type=fusion.model_type,
+            K=K_est, T1=T1_est, T2=fusion.T2, L=fusion.L,
+            model_type=sim_model_type,
             Kp=pid_params.get('kp', 1), Ki=pid_params.get('ki', 0), Kd=pid_params.get('kd', 0),
             sp_initial=sp_initial,
             sp_final=sp_final,
@@ -572,11 +596,12 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         ax4.legend(loc='lower right')
         ax4.grid(True, alpha=0.3)
         
-        # 调整 x 轴范围：如果有有效调节时间，确保能显示完整
+        # 调整 x 轴范围：确保能看到完整的稳态过程
         if settling_time >= 0 and settling_time < t_sim[-1]:
-            x_max = min(t_sim[-1], max(50, settling_time * 1.2))  # 至少显示到调节时间的1.2倍
+            # 至少显示到调节时间的1.5倍，让用户能看到稳态
+            x_max = min(t_sim[-1], max(80, settling_time * 1.5))
         else:
-            x_max = min(t_sim[-1], 50)
+            x_max = min(t_sim[-1], 100)  # 默认显示更长时间
         ax4.set_xlim([0, x_max])
         
         # 调整 y 轴范围：确保能显示完整的 PV 响应（包括超调峰值）
