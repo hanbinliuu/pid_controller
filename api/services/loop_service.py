@@ -77,6 +77,8 @@ class LoopService:
                         for instance in instances:
                             loop_uri = instance['uri']
                             loop_statu_values = loop_values.get(loop_uri, {})
+                            auto_control_status = 1 if loop_statu_values.get('AUTO') in ["auto", 1, 255, "true",
+                                                                                         "自动"] else 0
                             instance['pid_params'] = {
                                 'PB': loop_statu_values.get('PB'),
                                 'TI': loop_statu_values.get('TI'),
@@ -84,7 +86,7 @@ class LoopService:
                                 'PV': loop_statu_values.get('PV'),
                                 'SV': loop_statu_values.get('SV'),
                                 'MV': loop_statu_values.get('MV'),
-                                'AUTO': loop_statu_values.get('AUTO')
+                                'AUTO': auto_control_status
                             }
                         
                         logger.info(f"成功查询 {len(loop_values)} 个回路的PID参数")

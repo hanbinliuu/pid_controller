@@ -14,6 +14,7 @@ import logging
 
 from api.routes.time_util import format_time_to_string
 from core.client.tsdb_data_source import DataPoint, TSDBDataSource
+from core.config import Config
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -63,12 +64,12 @@ class RealTSDBDataSource(TSDBDataSource):
         # 设置超时（注意：requests.Session 没有 timeout 属性，需要在请求时传递）
         self.default_timeout = config.timeout
         
-        logger.info(f"初始化实际TSDB客户端，连接到: {config.base_url}")
+        logger.info(f"初始化TSDB客户端，连接到: {config.base_url}")
     
     def _load_config_from_env(self) -> TSDBConfig:
         """从环境变量加载配置"""
         # 优先从环境变量读取
-        base_url = os.getenv('TSDB_BASE_URL')
+        base_url = Config.TSDB_BASE_URL
         
         # 如果环境变量没有设置，使用默认配置
         if not base_url:
@@ -465,8 +466,7 @@ class TSDBClientFactory:
             RealTSDBDataSource: 实际TSDB数据源
         """
         if base_url is None:
-            base_url = os.getenv('TSDB_BASE_URL', 
-                               'http://tsdb-select-infra-system.sit-cloud.ieccloud.hollicube.com')
+            base_url = Config.TSDB_BASE_URL
         
         config = TSDBConfig(
             base_url=base_url,
