@@ -86,10 +86,14 @@ async def create_tuning_record(
     description="查询整定记录列表，支持筛选和分页"
 )
 async def query_tuning_records(
-        loop_type: Optional[str] = Query(
+    loop_type: Optional[str] = Query(
             None,
             description="回路类型筛选"
-        ),
+    ),
+    device_uri: Optional[str] = Query(
+            None,
+            description="设备URI筛选"
+    ),
     loop_name: Optional[str] = Query(
         None,
         description="回路名称筛选",
@@ -160,6 +164,7 @@ async def query_tuning_records(
         result = TuningRecordService.query_records(
             db=db,
             loop_type=loop_type,
+            device_uri=device_uri,
             loop_name=loop_name,
             tuning_method=tuning_method,
             start_time=start_time,
@@ -186,7 +191,7 @@ async def query_tuning_records(
     response_model=TuningRecord
 )
 async def get_tuning_record(
-    record_id: int,
+    record_id: str,
     db: Session = Depends(get_db)
 ) -> TuningRecord:
     """

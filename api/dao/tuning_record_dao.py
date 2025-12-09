@@ -63,6 +63,7 @@ class TuningRecordDAO:
     @staticmethod
     def query_list(
         db: Session,
+        device_uri: Optional[str] = None,
         loop_type: Optional[str] = None,
         loop_name: Optional[str] = None,
         tuning_method: Optional[str] = None,
@@ -94,7 +95,8 @@ class TuningRecordDAO:
                 statement = statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
             if loop_type:
                 statement = statement.where(LoopInfo.loop_type == loop_type)
-            
+            if device_uri:
+                statement = statement.where(LoopInfo.loop_path .like(f"%{device_uri}%"))
             # 整定方法筛选（精确匹配）
             if tuning_method:
                 statement = statement.where(TuningRecord.tuning_method == tuning_method)
@@ -125,6 +127,8 @@ class TuningRecordDAO:
                 count_statement = count_statement.where(LoopInfo.loop_name.like(f"%{loop_name}%"))
             if loop_type:
                 count_statement = count_statement.where(LoopInfo.loop_type == loop_type)
+            if device_uri:
+                count_statement = count_statement.where(LoopInfo.loop_path .like(f"%{device_uri}%"))
             if tuning_method:
                 count_statement = count_statement.where(TuningRecord.tuning_method == tuning_method)
             

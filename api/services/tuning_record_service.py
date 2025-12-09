@@ -87,6 +87,7 @@ class TuningRecordService:
     @staticmethod
     def query_records(
         db: Session,
+        device_uri: Optional[str] = None,
         loop_type: Optional[str] = None,
         loop_name: Optional[str] = None,
         tuning_method: Optional[str] = None,
@@ -115,6 +116,7 @@ class TuningRecordService:
             # 使用DAO查询
             result = TuningRecordDAO.query_list(
                 db=db,
+                device_uri=device_uri,
                 loop_type=loop_type,
                 loop_name=loop_name,
                 tuning_method=tuning_method,

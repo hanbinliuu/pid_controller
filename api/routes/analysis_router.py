@@ -292,7 +292,7 @@ async def run_workflow(
                                     # 直接转发原始字节数据块，确保立即传输
                                     decoded_chunk = chunk.decode('utf-8')
                                     #回路暂停
-                                    await asyncio.sleep(0.02)
+                                    # await asyncio.sleep(0.08)
                                     yield decoded_chunk
                                     logger.debug(f"流式数据块大小: {len(decoded_chunk)} bytes")
                             

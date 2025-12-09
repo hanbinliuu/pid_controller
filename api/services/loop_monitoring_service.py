@@ -264,7 +264,7 @@ class LoopMonitoringService:
         except Exception as e:
             logger.error(f"查询回路趋势数据失败: {str(e)}")
             return {
-                "message": f"错误描述：趋势图数据加载超时",
+                "message": f"趋势图数据加载失败",
                 "trend_data": {
                     "timestamps": [],
                     "pv_values": [],
