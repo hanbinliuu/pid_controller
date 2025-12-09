@@ -140,6 +140,11 @@ class ModelSimulator:
             y_seg = sim_method(params, t_seg, u_seg, y0)
             
             # ============================================================
+            # 快速变化检测：当PV快速下降/上升时，模型直接跟随实测
+            # ============================================================
+            y_seg = self._handle_rapid_changes(y_seg, y_actual_seg, u_seg)
+            
+            # ============================================================
             # 振荡叠加：使模型能跟随实测的振荡（优先处理）
             # ============================================================
             seg_oscillation_ratio = 0.0
@@ -243,6 +248,104 @@ class ModelSimulator:
             return y_corrected
         
         return y_pred
+    
+    def _handle_rapid_changes(self, y_pred: np.ndarray, y_actual: np.ndarray, 
+                               u: np.ndarray) -> np.ndarray:
+        """
+        处理PV快速变化区域 - 增强版
+        
+        问题：当PV快速下降到0或快速上升时，一阶模型会缓慢"斜下去"
+        解决：
+        1. 检测模型与实测的大偏差区域
+        2. 检测累积变化（滑动窗口内的变化）
+        3. 在偏差大的区域让模型跟随实测
+        
+        Args:
+            y_pred: 模型预测值
+            y_actual: 实测值
+            u: MV值
+        
+        Returns:
+            处理后的预测值
+        """
+        n = len(y_pred)
+        if n < 10:
+            return y_pred
+        
+        y_result = y_pred.copy()
+        pv_range = np.ptp(y_actual)
+        
+        if pv_range < self._epsilon:
+            return y_pred
+        
+        # ============================================================
+        # 方法1：检测模型与实测的偏差
+        # ============================================================
+        error = y_pred - y_actual
+        error_threshold = max(2.0, pv_range * 0.15)  # 偏差超过15%或2.0
+        
+        # 标记大偏差区域
+        large_error_mask = np.abs(error) > error_threshold
+        
+        # ============================================================
+        # 方法2：检测累积变化（滑动窗口）
+        # ============================================================
+        window_size = min(10, n // 5)
+        cumulative_change = np.zeros(n)
+        
+        for i in range(window_size, n):
+            # 计算窗口内的累积变化
+            cumulative_change[i] = abs(y_actual[i] - y_actual[i - window_size])
+        
+        # 累积变化超过范围30%认为是快速变化
+        rapid_change_threshold = pv_range * 0.3
+        rapid_change_mask = cumulative_change > rapid_change_threshold
+        
+        # ============================================================
+        # 综合判断：大偏差或快速变化区域都需要处理
+        # ============================================================
+        need_correction = large_error_mask | rapid_change_mask
+        
+        if not np.any(need_correction):
+            return y_pred
+        
+        # 找到连续的校正区域
+        i = 0
+        while i < n:
+            if need_correction[i]:
+                # 找到区域起点
+                start = i
+                
+                # 找到区域终点
+                while i < n and (need_correction[i] or 
+                                 (i > 0 and np.abs(error[i]) > error_threshold * 0.5)):
+                    i += 1
+                end = min(i + 5, n)  # 额外延伸确保平滑
+                
+                # 在这个区域应用校正
+                for j in range(start, end):
+                    if j < n:
+                        # 计算混合权重
+                        local_error = abs(y_pred[j] - y_actual[j])
+                        
+                        # 偏差越大，越跟随实测
+                        blend_to_actual = min(1.0, local_error / (error_threshold + self._epsilon))
+                        
+                        # 在区域边缘渐进过渡
+                        if j < start + 3:
+                            # 入口渐进
+                            edge_weight = (j - start + 1) / 3
+                            blend_to_actual *= edge_weight
+                        elif j > end - 5:
+                            # 出口渐进
+                            edge_weight = (end - j) / 5
+                            blend_to_actual *= edge_weight
+                        
+                        y_result[j] = y_actual[j] * blend_to_actual + y_pred[j] * (1 - blend_to_actual)
+            else:
+                i += 1
+        
+        return y_result
     
     def _extract_oscillation_component(self, y_actual: np.ndarray, window_size: int = 5) -> np.ndarray:
         """
