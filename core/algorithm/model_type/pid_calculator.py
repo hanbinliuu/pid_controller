@@ -87,14 +87,25 @@ class PIDCalculator:
         # 应用K的符号到Kp（反向作用系统Kp为负）
         Kp = Kp * K_sign
         
-        # 限制Kp的绝对值下限，但保留符号
+        # 参数合理性约束
+        # 1. 限制Kp的绝对值下限，但保留符号
         if abs(Kp) < 0.01:
             Kp = 0.01 * K_sign
-        Ti = max(0.1, Ti)
-        Td = max(0.0, Td)
+        
+        # 2. 限制Ti的上限（避免积分作用过弱导致响应过慢）
+        Ti_max = 60.0  # 最大积分时间60秒
+        Ti = max(0.1, min(Ti, Ti_max))
+        
+        # 3. 限制Td的上下限
+        Td = max(0.0, min(Td, Ti / 4))  # Td 不超过 Ti/4
         
         Ki = Kp / Ti if Ti > self._epsilon else 0.0
         Kd = Kp * Td
+        
+        # 4. 确保Ki有足够的积分作用（避免响应过慢）
+        Ki_min = abs(Kp) * 0.01  # Ki 至少是 |Kp| 的 1%
+        if abs(Ki) < Ki_min:
+            Ki = Ki_min * K_sign
         
         return {
             'Kp': round(float(Kp), 4),

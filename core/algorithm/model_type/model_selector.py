@@ -210,8 +210,9 @@ class ModelSelector:
         # Step 5: 验证一致性与仿真匹配度
         fusion_result = self._validate_and_refine(fusion_result, valid_segments, hist_data)
         
-        # 构建最终输出
-        return self._build_output(fusion_result, hist_data, time_range, lambda_factor)
+        # 构建最终输出（传入扰动段信息）
+        return self._build_output(fusion_result, hist_data, time_range, lambda_factor, 
+                                  input_data.tuning_window)
     
     # ============================================================
     # Step 2: 多模型拟合
@@ -564,6 +565,17 @@ class ModelSelector:
             fusion.consistency_score = best_window.r2
             fusion.n_segments_used = 1
         
+        # 模型参数合理性约束（避免参数过于极端导致闭环响应过慢）
+        T1_max = 30.0  # 最大时间常数 30 秒
+        L_max = 10.0   # 最大死区时间 10 秒
+        
+        if fusion.T1 > T1_max:
+            self.log(f"   ⚠️ T1={fusion.T1:.2f}s 过大，限制为 {T1_max}s")
+            fusion.T1 = T1_max
+        if fusion.L > L_max:
+            self.log(f"   ⚠️ L={fusion.L:.2f}s 过大，限制为 {L_max}s")
+            fusion.L = L_max
+        
         self.log(f"\n   融合结果 ({fusion.fusion_method}, {fusion.n_segments_used}段):")
         self.log(f"   K  = {fusion.K:.4f} ± {fusion.K_std:.4f}")
         self.log(f"   T1 = {fusion.T1:.2f} ± {fusion.T1_std:.2f}")
@@ -614,6 +626,7 @@ class ModelSelector:
         self.log(f"   全量数据R²: {global_r2:.4f}, RMSE: {global_rmse:.4f}")
         
         # 计算扰动段的综合R²和RMSE（这才是真正反映模型质量的指标）
+        # 使用增强仿真（与 pv_model 显示一致）
         segment_r2s = []
         segment_rmses = []
         segment_pv_all = []
@@ -623,11 +636,20 @@ class ModelSelector:
             seg_valid = seg.pv != 0
             y = seg.pv[seg_valid]
             u = seg.mv[seg_valid]
+            sv = seg.sv[seg_valid] if hasattr(seg, 'sv') and seg.sv is not None else None
             if len(y) < 5:
                 continue
-            y0 = y[0]
-            t = np.arange(len(y), dtype=float)
-            y_pred = self._simulator.simulate(params, model_type, t, u, y0)
+            
+            # 使用增强仿真（与 pv_model 显示一致）
+            y_pred = self._simulator.simulate_segmented(
+                params, model_type, y, u,
+                reset_on_sv_change=True, sv=sv,
+                enable_smooth=True,
+                enable_amplitude_calibration=True,
+                enable_offset_correction=True,
+                enable_oscillation_overlay=True
+            )
+            
             r2 = calculate_r2(y, y_pred)
             rmse = calculate_rmse(y, y_pred)
             segment_r2s.append(r2)
@@ -682,23 +704,40 @@ class ModelSelector:
                     global_r2 = r2_opt
                     global_rmse = rmse_opt
                     fusion = self._simulator.params_to_fusion(optimized_params, model_type, fusion)
+                    
+                    # 优化后也应用参数约束
+                    T1_max = 30.0
+                    L_max = 10.0
+                    if fusion.T1 > T1_max:
+                        fusion.T1 = T1_max
+                    if fusion.L > L_max:
+                        fusion.L = L_max
+                    
                     fusion.fusion_method += " + 全量优化"
                     self.log(f"   → 采用优化结果")
         
         # 使用扰动段综合R²作为最终评估指标（更能反映模型在整定数据上的拟合质量）
-        # 如果优化后全量R²更高，也重新计算扰动段R²
+        # 如果优化后全量R²更高，也重新计算扰动段R²（使用增强仿真）
         if segment_pv_all:
-            # 重新计算扰动段R²（使用可能优化后的参数）
+            # 重新计算扰动段R²（使用可能优化后的参数，增强仿真）
             segment_pv_pred_new = []
             for seg in segments:
                 seg_valid = seg.pv != 0
                 y = seg.pv[seg_valid]
                 u = seg.mv[seg_valid]
+                sv = seg.sv[seg_valid] if hasattr(seg, 'sv') and seg.sv is not None else None
                 if len(y) < 5:
                     continue
-                y0 = y[0]
-                t = np.arange(len(y), dtype=float)
-                y_pred = self._simulator.simulate(params, model_type, t, u, y0)
+                
+                # 使用增强仿真（与 pv_model 显示一致）
+                y_pred = self._simulator.simulate_segmented(
+                    params, model_type, y, u,
+                    reset_on_sv_change=True, sv=sv,
+                    enable_smooth=True,
+                    enable_amplitude_calibration=True,
+                    enable_offset_correction=True,
+                    enable_oscillation_overlay=True
+                )
                 segment_pv_pred_new.extend(y_pred.tolist())
             
             if segment_pv_pred_new:
@@ -969,7 +1008,8 @@ class ModelSelector:
         return ([-20, 0.1, 0], [20, 1000, 100])
     
     def _build_output(self, fusion: FusionResult, hist_data: HistoricalData,
-                      time_range: Dict, lambda_factor: float) -> Dict[str, Any]:
+                      time_range: Dict, lambda_factor: float,
+                      tuning_windows: List[Dict] = None) -> Dict[str, Any]:
         """构建最终输出"""
         pid_params = self._pid_calculator.calculate_from_fusion(fusion, lambda_factor)
         
@@ -981,15 +1021,32 @@ class ModelSelector:
         ts = hist_data.timestamp[valid_mask]
         sv = hist_data.sv[valid_mask]
         
-        # 最终输出的pv_model：启用所有校正和振荡叠加
-        pv_model = self._simulator.simulate_segmented(
+        # 构建扰动段掩码：只在扰动段内使用模型拟合
+        disturbance_mask = np.zeros(len(ts), dtype=bool)
+        if tuning_windows:
+            for window in tuning_windows:
+                # 支持 TuningWindow 对象或字典
+                if hasattr(window, 'start_time'):
+                    start_ts = window.start_time
+                    end_ts = window.end_time
+                else:
+                    start_ts = window.get('start_time', 0)
+                    end_ts = window.get('end_time', 0)
+                disturbance_mask |= (ts >= start_ts) & (ts <= end_ts)
+        
+        # 对全量数据进行模型仿真
+        pv_model_full = self._simulator.simulate_segmented(
             params, fusion.model_type, y, u, 
             reset_on_sv_change=True, sv=sv,
             enable_smooth=True,
             enable_amplitude_calibration=True,
             enable_offset_correction=True,
-            enable_oscillation_overlay=True  # 启用振荡叠加，使模型跟随实测振荡
+            enable_oscillation_overlay=True
         )
+        
+        # pv_model: 扰动段用模型拟合，稳态段用实际PV
+        pv_model = y.copy()  # 先用实际PV填充
+        pv_model[disturbance_mask] = pv_model_full[disturbance_mask]  # 扰动段用模型值
         
         sim_r2 = calculate_r2(y, pv_model)
         
