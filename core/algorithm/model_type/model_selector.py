@@ -494,13 +494,28 @@ class ModelSelector:
         ts = hist_data.timestamp[valid_mask]
         sv = hist_data.sv[valid_mask]
         
-        # 闭环验证
+        # 先估算模型参数（用于闭环验证和输出，保持一致）
+        Pu = osc_info['Pu']
+        Ku = pid_params['Ku']
+        K_est = round(1.0 / Ku if Ku > 0.01 else 1.0, 4)
+        T1_est = round(Pu, 4)
+        L_est = round(Pu / 4, 4)
+        
+        # 创建 FusionResult 用于闭环验证（与可视化使用相同参数）
+        from .models import FusionResult
+        from .config import ModelType
+        temp_fusion = FusionResult(
+            model_type=ModelType.FOPDT,
+            K=K_est, T1=T1_est, T2=0.0, L=L_est
+        )
+        
+        # 闭环验证（使用估算的模型参数，与可视化一致）
         sp_initial = 50.0
         sp_final = 60.0
         pv_initial = 50.0
         
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
-            None, pid_params,
+            temp_fusion, pid_params,
             sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
             verbose=self._verbose
         )
@@ -524,19 +539,6 @@ class ModelSelector:
             'oscillation_count': cl_metrics.oscillation_count,
             'decay_ratio': cl_metrics.decay_ratio
         }
-        
-        # 从振荡特征估算模型参数
-        Pu = osc_info['Pu']
-        Ku = pid_params['Ku']
-        Kp_val = abs(pid_params.get('Kp', 1.0))
-        
-        # 估算模型参数：
-        # K ≈ 1/Ku（临界增益的倒数）
-        # T1 ≈ Pu（临界周期作为时间常数）
-        # L ≈ Pu/4（典型的滞后时间估算）
-        K_est = round(1.0 / Ku if Ku > 0.01 else 1.0, 4)
-        T1_est = round(Pu, 4)
-        L_est = round(Pu / 4, 4)
         
         return {
             'success': True,

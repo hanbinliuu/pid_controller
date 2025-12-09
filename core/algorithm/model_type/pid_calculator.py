@@ -575,7 +575,27 @@ class PIDCalculator:
         
         # 工作点：初始稳态
         pv0 = pv_initial  # 初始PV工作点
-        mv0 = 50.0        # 初始MV工作点（假设在MV范围中点）
+        
+        # MV 工作点：根据模型增益和 SP 变化量估算需要的 MV 变化
+        # 确保 MV 有足够的调节空间
+        sp_change = sp_final - sp_initial
+        if abs(K) > self._epsilon:
+            delta_mv_needed = sp_change / K  # 理论需要的 MV 变化量
+        else:
+            delta_mv_needed = 0.0
+        
+        # 设置 MV 工作点，确保有足够的调节空间
+        mv_range = mv_max - mv_min
+        if delta_mv_needed > 0:
+            # 需要增加 MV，所以初始 MV 应该足够低
+            mv0 = max(mv_min + 5, mv_max - abs(delta_mv_needed) * 1.5)
+            mv0 = min(mv0, (mv_min + mv_max) / 2)  # 但也不要太低
+        elif delta_mv_needed < 0:
+            # 需要减少 MV，所以初始 MV 应该足够高
+            mv0 = min(mv_max - 5, mv_min + abs(delta_mv_needed) * 1.5)
+            mv0 = max(mv0, (mv_min + mv_max) / 2)  # 但也不要太高
+        else:
+            mv0 = (mv_min + mv_max) / 2  # 默认中点
         
         # 增量状态变量
         delta_pv = 0.0    # ΔPV = PV - PV0
