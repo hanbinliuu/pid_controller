@@ -6,6 +6,8 @@
 from datetime import datetime
 from typing import Optional
 from uuid import uuid4
+
+from sqlalchemy import func
 from sqlmodel import SQLModel, Field
 
 
@@ -114,14 +116,19 @@ class LoopInfo(SQLModel, table=True):
     )
 
     # 时间戳
+    # 时间戳
     created_time: Optional[datetime] = Field(
         default=None,
-        sa_column_kwargs={"comment": "创建时间"}
+        sa_column_kwargs={"server_default": func.now(), "comment": "创建时间"}
     )
-    
+
     updated_time: Optional[datetime] = Field(
         default=None,
-        sa_column_kwargs={"comment": "更新时间"}
+        sa_column_kwargs={
+            "server_default": func.now(),
+            "onupdate": func.now(),
+            "comment": "更新时间"
+        }
     )
     
     is_active: Optional[bool] = Field(

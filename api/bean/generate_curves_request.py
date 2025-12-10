@@ -18,15 +18,15 @@ class GenerateCurvesRequest(BaseModel):
     
     # 模型参数
     K: float = Field(..., description="系统增益", examples=[1.0, 1.5, 2.0])
-    T1: float = Field(..., description="时间常数(秒)", gt=0, examples=[30.0, 45.0, 60.0])
+    T1: float = Field(..., description="时间常数(秒)", examples=[30.0, 45.0, 60.0])
     T2: Optional[float] = Field(None, description="二阶时间常数(秒)",  examples=[20.0, 30.0])
-    L: float = Field(0.0, description="滞后时间(秒)", ge=0, examples=[0.0, 1.0, 2.0])
+    L: float = Field(0.0, description="滞后时间(秒)", examples=[0.0, 1.0, 2.0])
     model_type: ModelType = Field(ModelType.FOPDT, description="模型类型")
     
     # PID参数
     Kp: Optional[float] = Field(None, description="PID比例系数", examples=[1.0, 1.2, 1.5])
-    Ki: Optional[float] = Field(None, description="PID积分系数", ge=0, examples=[0.05, 0.1, 0.15])
-    Kd: Optional[float] = Field(None, description="PID微分系数", ge=0, examples=[0.0, 0.1, 0.2])
+    Ki: Optional[float] = Field(None, description="PID积分系数", examples=[0.05, 0.1, 0.15])
+    Kd: Optional[float] = Field(None, description="PID微分系数", examples=[0.0, 0.1, 0.2])
     
     # 仿真参数
     step_value: float = Field(1.0, description="阶跃输入幅值", examples=[1.0, 2.0, 5.0])

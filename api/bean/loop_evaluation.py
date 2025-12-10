@@ -7,7 +7,7 @@ from datetime import datetime, date
 from typing import Optional, Dict, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Text
+from sqlalchemy import Text, func
 from sqlmodel import SQLModel, Field, Column, JSON
 
 
@@ -111,13 +111,19 @@ class LoopEvaluation(SQLModel, table=True):
         sa_column_kwargs={"comment": "TD"}
     )
     # 时间戳
+    # 时间戳
     created_time: Optional[datetime] = Field(
         default=None,
-        sa_column_kwargs={"comment": "创建时间"}
+        sa_column_kwargs={"server_default": func.now(), "comment": "创建时间"}
     )
+
     updated_time: Optional[datetime] = Field(
         default=None,
-        sa_column_kwargs={"comment": "更新时间"}
+        sa_column_kwargs={
+            "server_default": func.now(),
+            "onupdate": func.now(),
+            "comment": "更新时间"
+        }
     )
 
     class Config:

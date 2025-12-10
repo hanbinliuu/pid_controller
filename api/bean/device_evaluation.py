@@ -6,6 +6,8 @@
 from datetime import datetime
 from typing import Optional
 from uuid import UUID, uuid4
+
+from sqlalchemy import UniqueConstraint, func
 from sqlmodel import SQLModel, Field
 
 
@@ -18,8 +20,10 @@ class DeviceEvaluation(SQLModel, table=True):
     用途: 存储装置级别的评估数据，包括回路数、自动回路数、自控率等关键指标
     """
     __tablename__ = "device_evaluation"  # 数据库表名
-    __table_args__ = {"comment": "装置评估表"}
-
+    __table_args__ = (
+        UniqueConstraint('device_uri', 'statistics_time', name='uq_device_date'),
+        {"comment": "装置评估表"}
+    )
     # 主键
     id: Optional[str] = Field(
         default_factory=lambda: str(uuid4()),
@@ -96,12 +100,16 @@ class DeviceEvaluation(SQLModel, table=True):
     # 时间戳
     created_time: Optional[datetime] = Field(
         default=None,
-        sa_column_kwargs={"comment": "创建时间"}
+        sa_column_kwargs={"server_default": func.now(), "comment": "创建时间"}
     )
     
     updated_time: Optional[datetime] = Field(
         default=None,
-        sa_column_kwargs={"comment": "更新时间"}
+        sa_column_kwargs={
+            "server_default": func.now(),
+            "onupdate": func.now(),
+            "comment": "更新时间"
+        }
     )
 
     class Config:
