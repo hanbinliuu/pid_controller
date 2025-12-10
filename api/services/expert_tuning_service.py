@@ -140,7 +140,7 @@ class ExpertTuningService:
             window_size: int = 120,
             step_size: int = 10,
             confidence_threshold: float = 0.6,
-            window_sec: int = 60,
+            window_sec: int = 1,
             is_filter: bool = False,
             operator_id: str = None,
             operator_name: str = None

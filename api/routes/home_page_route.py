@@ -31,8 +31,7 @@ async def get_perf_stats(
         session: Session = Depends(get_db),
         device_uri: Optional[str] = Query(None, description="装置uri")
 ) -> Dict[str, int]:
-    if device_uri:
-        device_uri=Config.BFF_MODEL_ROOT_URI
+
     results = HomePageService.get_perf_stats(session, device_uri)
     if not results or len(results) == 0:
         return None

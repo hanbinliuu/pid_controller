@@ -31,7 +31,7 @@ class HomePageDAO:
             LoopEvaluation.assessment_time == query_date,
 
         )
-        if device_uri:
+        if device_uri is not None:
             stmt=stmt.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
         stmt=stmt.group_by(LoopEvaluation.status)
         return session.exec(stmt).all()
