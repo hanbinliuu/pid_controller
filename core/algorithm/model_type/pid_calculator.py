@@ -101,15 +101,23 @@ class PIDCalculator:
     
     def _tune_fo(self, K: float, T1: float, lambda_factor: float, 
                  method: str) -> Tuple[float, float, float]:
-        """一阶无滞后系统整定（更激进）"""
-        # FO 系统无滞后，可以使用更小的 lambda（更快响应）
-        lambda_val = T1 * lambda_factor * 0.5  # 比 FOPDT 更激进
+        """一阶无滞后系统整定"""
+        # FO 系统使用保守整定，避免pb过小导致控制过于激进
+        # 增大lambda确保稳定性优先
+        lambda_val = T1 * lambda_factor * 4.0  # 保守因子，确保pb在合理范围
         
         denom = K * lambda_val
         if denom < self._epsilon:
             return 1.0, T1, 0.0
         
         Kp = T1 / denom
+        
+        # 确保 pb 不低于 60（Kp 不超过 1.67）
+        # 用户实测稳定参数 pb=71.3, Kp≈1.4
+        max_Kp = 1.67  # 对应 pb=60
+        if Kp > max_Kp:
+            Kp = max_Kp
+        
         Ti = T1
         Td = 0.0  # 无滞后时不需要微分
         

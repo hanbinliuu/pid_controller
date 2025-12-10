@@ -296,10 +296,17 @@ class ModelSelector:
                 # 对高振荡数据使用预处理后的数据进行辨识
                 filter_size = oscillation_info['recommended_filter_size']
                 y_fit, u_fit = ModelIdentifier.preprocess_oscillating_data(y, u, filter_size)
-                # 使用包络线法估计K值
-                k_expected = abs(ModelIdentifier.estimate_gain_from_oscillating_data(y, u))
-                k_min = k_expected * 0.3
-                k_max = k_expected * 3.0
+                
+                # 振荡数据的K值估计：使用多种方法取最大值
+                # 方法1：包络线法
+                k_envelope = abs(ModelIdentifier.estimate_gain_from_oscillating_data(y, u))
+                # 方法2：简单比值法（对稳态振荡更准确）
+                k_simple = pv_range / (mv_range + self._epsilon) if mv_range > 0.1 else 0.5
+                # 取较大值（避免稳态振荡时包络线法低估）
+                k_expected = max(k_envelope, k_simple)
+                # 对振荡数据放宽K值范围（×0.1 ~ ×10）
+                k_min = k_expected * 0.1
+                k_max = k_expected * 10.0
             else:
                 y_fit, u_fit = y, u
             
@@ -431,13 +438,24 @@ class ModelSelector:
         osc_ratio_threshold = osc_config['oscillation_ratio_threshold']
         r2_failure_threshold = osc_config['r2_failure_threshold']
         
+        # 首先检查是否有任何段拟合成功
+        successful_segments = []
         oscillating_segments = []
         for i, (seg, result) in enumerate(zip(segments, segment_results)):
             is_oscillating = result.oscillation_ratio > osc_ratio_threshold
             fit_failed = result.best_r2 < r2_failure_threshold
             
+            if not fit_failed and result.best_r2 >= r2_failure_threshold:
+                # 有成功拟合的段
+                successful_segments.append((i, seg, result))
+            
             if is_oscillating and fit_failed:
                 oscillating_segments.append((i, seg, result))
+        
+        # 如果有成功拟合的段，优先使用常规流程，不使用临界法
+        if successful_segments:
+            self.log(f"\n📊 有 {len(successful_segments)} 个段拟合成功，使用常规模型融合流程")
+            return None
         
         if not oscillating_segments:
             return None  # 没有符合条件的振荡段
@@ -501,6 +519,10 @@ class ModelSelector:
                 elif Ku > 5.0:
                     use_conservative = True
                     self.log(f"   ⚠️ Ku={Ku:.2f}>5.0，临界增益过大，使用保守参数")
+                # 条件3: Ku过小（估计不可靠，会导致Kp过小、pb过大）
+                elif Ku < 0.5:
+                    use_conservative = True
+                    self.log(f"   ⚠️ Ku={Ku:.3f}<0.5，临界增益过小，使用保守参数")
         
         if use_conservative:
             # 对于低增益系统，直接使用保守的pb值
@@ -903,6 +925,13 @@ class ModelSelector:
                 
                 K, T1 = fit_result.get('K', 0), fit_result.get('T1', 0)
                 if K == 0 and T1 == 0:
+                    valid_segment_idx += 1
+                    continue
+                
+                # 跳过K值不合理的段（已在拟合阶段标记）
+                k_reasonable = fit_result.get('k_reasonable', True)
+                if not k_reasonable:
+                    self.log(f"      段{result.segment_idx+1}: K={K:.4f} 超出合理范围，跳过融合")
                     valid_segment_idx += 1
                     continue
                 

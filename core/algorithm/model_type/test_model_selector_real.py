@@ -754,7 +754,7 @@ if __name__ == "__main__":
         # 1
         {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
         {'start_time': '2025-12-07 21:27:58', 'end_time': '2025-12-08 21:42:58'},
-        {'start_time': '2025-12-10 06:41:58', 'end_time': '2025-12-10 11:30:58'},
+        {'start_time': '2025-12-10 12:24:03', 'end_time': '2025-12-10 18:24:03'}, 
     ]
     
     for idx, scenario in enumerate(test_scenarios, 1):
