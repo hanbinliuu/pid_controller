@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
+import io
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -659,6 +660,20 @@ def print_result_json(result: Dict):
     
     fitting_result = result.get('fitting_result', {})
     
+    # 格式化 pid_parameters 保留4位小数
+    pid_params = result.get('pid_parameters', {})
+    pid_params_formatted = {
+        k: f"{v:.4f}" if isinstance(v, (int, float)) else v 
+        for k, v in pid_params.items()
+    }
+    
+    # 格式化 model_parameters 保留4位小数
+    model_params = result.get('model_parameters', {})
+    model_params_formatted = {
+        k: f"{v:.4f}" if isinstance(v, (int, float)) else v 
+        for k, v in model_params.items()
+    }
+    
     output = {
         'success': result.get('success'),
         'model_type': result.get('model_type'),
@@ -666,11 +681,11 @@ def print_result_json(result: Dict):
         'model_rating': result.get('model_rating'),
         'start_time': str(result.get('start_time')),
         'end_time': str(result.get('end_time')),
-        'model_parameters': result.get('model_parameters'),
-        'pid_parameters': result.get('pid_parameters'),
+        'model_parameters': model_params_formatted,
+        'pid_parameters': pid_params_formatted,
         'fitting_result': {
-            'r_squared': fitting_result.get('r_squared'),
-            'rmse': fitting_result.get('rmse'),
+            'r_squared': round(fitting_result.get('r_squared', 0), 4),
+            'rmse': round(fitting_result.get('rmse', 0), 4),
             'data_points': len(fitting_result.get('pv', [])),
             'recommendation': fitting_result.get('recommendation')
         }
@@ -683,10 +698,43 @@ def print_result_json(result: Dict):
 
 
 # ============================================================
+# 日志保存类
+# ============================================================
+
+class TeeOutput:
+    """同时输出到控制台和文件"""
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, 'w', encoding='utf-8')
+    
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+    
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+    
+    def close(self):
+        self.log.close()
+
+
+# ============================================================
 # 主测试入口
 # ============================================================
 
 if __name__ == "__main__":
+    
+    # 设置日志文件
+    log_dir = '/Users/lhb/Documents/pycharmProject/hollicube/pid-agent-mvp/test'
+    os.makedirs(log_dir, exist_ok=True)
+    log_filename = os.path.join(log_dir, f'model_selector_test_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+    
+    # 启用日志保存
+    tee = TeeOutput(log_filename)
+    sys.stdout = tee
+    print(f"📝 日志保存至: {log_filename}\n")
     
     # 测试场景
     test_scenarios =  [
@@ -704,8 +752,9 @@ if __name__ == "__main__":
         # {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'}, 
         # {'start_time': '2025-12-07 05:00:58', 'end_time': '2025-12-07 12:42:58'},
         # # 1
-        {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
+        # {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
         # {'start_time': '2025-12-07 21:27:58', 'end_time': '2025-12-08 21:42:58'},
+        {'start_time': '2025-12-10 06:41:58', 'end_time': '2025-12-10 13:30:58'},
     ]
     
     for idx, scenario in enumerate(test_scenarios, 1):
@@ -742,3 +791,10 @@ if __name__ == "__main__":
         # Step 5: 可视化
         scenario_name = start_time_str.replace(' ', '_').replace(':', '-')
         visualize_fitting_result(data, tuning_input, result, scenario_name)
+    
+    # 关闭日志
+    print(f"\n{'='*60}")
+    print(f"✅ 测试完成，日志已保存至: {log_filename}")
+    print(f"{'='*60}")
+    sys.stdout = tee.terminal
+    tee.close()

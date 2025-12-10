@@ -218,8 +218,8 @@ class ModelSelector:
             return self._build_oscillation_output(oscillation_result, hist_data, time_range, 
                                                   input_data.tuning_window)
         
-        # Step 3: 基于AIC/RSS/形状特征选择最优模型结构
-        best_model_type = self._select_best_model_type(segment_results)
+        # Step 3: 基于AIC/RSS/形状特征选择最优模型结构（支持全量数据验证）
+        best_model_type = self._select_best_model_type(segment_results, hist_data)
         self.log(f"🎯 选择模型类型: {best_model_type}")
         
         # Step 4: 融合各段参数
@@ -598,7 +598,8 @@ class ModelSelector:
     # Step 3: 模型选择（使用统一模型选择器）
     # ============================================================
     
-    def _select_best_model_type(self, segment_results: List[SegmentResult]) -> str:
+    def _select_best_model_type(self, segment_results: List[SegmentResult],
+                                 hist_data: 'HistoricalData' = None) -> str:
         """
         选择最优模型结构（统一模型选择）
         
@@ -606,6 +607,7 @@ class ModelSelector:
         1. 使用质量加权投票而非简单计数
         2. 应用复杂度惩罚（奥卡姆剃刀）
         3. 处理各段模型不一致的情况
+        4. 扰动段无法判断时，使用全量数据验证
         """
         # 转换为SegmentModelFit格式
         segment_fits = self._convert_to_segment_fits(segment_results)
@@ -615,7 +617,7 @@ class ModelSelector:
             return ModelType.FOPDT
         
         # 使用统一模型选择器
-        best_model, reasoning = self._unified_selector.select_unified_model_type(segment_fits)
+        best_model, reasoning, need_fulldata = self._unified_selector.select_unified_model_type(segment_fits)
         
         # 诊断不一致性
         diagnosis = self._unified_selector.handle_inconsistent_segments(segment_fits)
@@ -629,7 +631,77 @@ class ModelSelector:
                     self.log(f"      - {rec}")
         
         self.log(f"\n🎯 统一模型选择: {best_model}")
+        
+        # 如果扰动段无法有效判断且有全量数据，使用全量数据验证
+        if need_fulldata and hist_data is not None:
+            fulldata_model = self._validate_model_type_with_fulldata(best_model, hist_data)
+            if fulldata_model != best_model:
+                self.log(f"   📊 全量数据验证: {best_model} → {fulldata_model}")
+                best_model = fulldata_model
+        
         return best_model
+    
+    def _validate_model_type_with_fulldata(self, current_model: str, 
+                                            hist_data: 'HistoricalData') -> str:
+        """
+        使用全量数据验证/选择模型类型
+        
+        当扰动段拟合质量差时，用全量数据做多模型拟合来辅助判断
+        """
+        self.log("\n   📊 全量数据模型验证:")
+        
+        valid_mask = hist_data.pv != 0
+        y = hist_data.pv[valid_mask]
+        u = hist_data.mv[valid_mask]
+        
+        if len(y) < 50:
+            self.log("      数据点数不足，保持原选择")
+            return current_model
+        
+        t = np.arange(len(y))
+        y0 = y[0]
+        
+        model_r2s = {}
+        
+        for model_type in self.CANDIDATE_MODELS:
+            try:
+                method = self.IDENTIFY_METHODS.get(model_type)
+                if method is None:
+                    continue
+                
+                params_raw = method(t, y, u)
+                y_pred = self._simulator.simulate(params_raw, model_type, t, u, y0)
+                r2 = calculate_r2(y, y_pred)
+                
+                # 应用复杂度惩罚
+                penalty = self._unified_selector.COMPLEXITY_PENALTY.get(model_type, 0)
+                adjusted_r2 = r2 - penalty
+                
+                model_r2s[model_type] = {
+                    'r2': r2,
+                    'adjusted_r2': adjusted_r2
+                }
+                self.log(f"      {model_type}: R²={r2:.4f}, 调整R²={adjusted_r2:.4f}")
+                
+            except Exception as e:
+                self.log(f"      {model_type}: 拟合失败 - {e}")
+        
+        if not model_r2s:
+            return current_model
+        
+        # 选择调整R²最高的模型
+        best_fulldata_model = max(model_r2s.keys(), 
+                                   key=lambda m: model_r2s[m]['adjusted_r2'])
+        best_r2 = model_r2s[best_fulldata_model]['adjusted_r2']
+        current_r2 = model_r2s.get(current_model, {}).get('adjusted_r2', 0)
+        
+        # 只有当全量数据选择的模型明显更好时才替换
+        if best_r2 > current_r2 + 0.05:
+            self.log(f"      → 全量数据选择: {best_fulldata_model} (R²提升: {best_r2 - current_r2:.4f})")
+            return best_fulldata_model
+        else:
+            self.log(f"      → 保持原选择: {current_model}")
+            return current_model
     
     def _convert_to_segment_fits(self, segment_results: List[SegmentResult]) -> List[SegmentModelFit]:
         """将SegmentResult转换为SegmentModelFit格式"""
@@ -838,11 +910,12 @@ class ModelSelector:
         
         self.log(f"   全量数据R²: {global_r2:.4f}, RMSE: {global_rmse:.4f}")
         
-        # 计算扰动段的综合R²和RMSE（这才是真正反映模型质量的指标）
-        # 使用增强仿真（与 pv_model 显示一致）
-        segment_r2s = []
+        # 计算扰动段的综合R²和RMSE
+        # 分两种：纯模型R²（用于评分）和增强R²（用于参考）
+        segment_r2s_pure = []      # 纯模型R²（评分用）
+        segment_r2s_enhanced = []  # 增强R²（参考用）
         segment_rmses = []
-        segment_points = []  # 记录每段点数，用于加权平均
+        segment_points = []
         segment_pv_all = []
         segment_pv_pred_all = []
         
@@ -854,8 +927,18 @@ class ModelSelector:
             if len(y) < 5:
                 continue
             
-            # 使用增强仿真（与 pv_model 显示一致）
-            y_pred = self._simulator.simulate_segmented(
+            # 纯模型仿真（关闭所有增强，用于真实评分）
+            y_pred_pure = self._simulator.simulate_segmented(
+                params, model_type, y, u,
+                reset_on_sv_change=True, sv=sv,
+                enable_smooth=True,
+                enable_amplitude_calibration=False,  # 关闭幅度校准！
+                enable_offset_correction=False,      # 关闭偏移校正！
+                enable_oscillation_overlay=False     # 关闭振荡叠加！
+            )
+            
+            # 增强仿真（用于可视化参考）
+            y_pred_enhanced = self._simulator.simulate_segmented(
                 params, model_type, y, u,
                 reset_on_sv_change=True, sv=sv,
                 enable_smooth=True,
@@ -864,27 +947,37 @@ class ModelSelector:
                 enable_oscillation_overlay=True
             )
             
-            r2 = calculate_r2(y, y_pred)
-            rmse = calculate_rmse(y, y_pred)
-            segment_r2s.append(r2)
+            r2_pure = calculate_r2(y, y_pred_pure)
+            r2_enhanced = calculate_r2(y, y_pred_enhanced)
+            rmse = calculate_rmse(y, y_pred_pure)
+            
+            segment_r2s_pure.append(r2_pure)
+            segment_r2s_enhanced.append(r2_enhanced)
             segment_rmses.append(rmse)
-            segment_points.append(len(y))  # 记录点数
+            segment_points.append(len(y))
             segment_pv_all.extend(y.tolist())
-            segment_pv_pred_all.extend(y_pred.tolist())
+            segment_pv_pred_all.extend(y_pred_enhanced.tolist())
         
-        # 计算扰动段加权平均R²（按点数加权，更合理）
-        if segment_r2s:
+        # 计算扰动段加权平均R²（使用纯模型R²评分）
+        if segment_r2s_pure:
             total_points = sum(segment_points)
-            weighted_r2 = sum(r2 * pts for r2, pts in zip(segment_r2s, segment_points)) / total_points
+            weighted_r2 = sum(r2 * pts for r2, pts in zip(segment_r2s_pure, segment_points)) / total_points
+            weighted_r2_enhanced = sum(r2 * pts for r2, pts in zip(segment_r2s_enhanced, segment_points)) / total_points
             weighted_rmse = sum(rmse * pts for rmse, pts in zip(segment_rmses, segment_points)) / total_points
             segment_pv_arr = np.array(segment_pv_all)
         else:
             weighted_r2 = 0.0
+            weighted_r2_enhanced = 0.0
             weighted_rmse = 0.0
             segment_pv_arr = np.array([])
         
+        # 使用纯模型R²列表（用于后续逻辑）
+        segment_r2s = segment_r2s_pure
+        
         if segment_r2s:
-            self.log(f"   扰动段R²: {[f'{r:.3f}' for r in segment_r2s]}, 加权R²: {weighted_r2:.4f}")
+            self.log(f"   扰动段R²(纯模型): {[f'{r:.3f}' for r in segment_r2s_pure]}, 加权R²: {weighted_r2:.4f}")
+            if any(r2_e > r2_p + 0.1 for r2_e, r2_p in zip(segment_r2s_enhanced, segment_r2s_pure)):
+                self.log(f"   扰动段R²(增强后): {[f'{r:.3f}' for r in segment_r2s_enhanced]}, 加权R²: {weighted_r2_enhanced:.4f}")
         
         OPTIMIZATION_THRESHOLD = 0.85
         min_segment_r2 = min(segment_r2s) if segment_r2s else 0
@@ -916,7 +1009,26 @@ class ModelSelector:
                 
                 self.log(f"   优化后全量R²: {r2_opt:.4f}, RMSE: {rmse_opt:.4f}")
                 
-                if r2_opt > global_r2:
+                # 检查优化后K值是否合理
+                K_original = params[0]
+                K_optimized = optimized_params[0]
+                k_reasonable = True
+                
+                # K值合理性检查：
+                # 1. 符号不能反转（除非原始K接近0）
+                # 2. 数量级变化不能太大（不超过10倍）
+                if abs(K_original) > 0.01:
+                    if K_original * K_optimized < 0:  # 符号反转
+                        k_reasonable = False
+                        self.log(f"   ⚠️ 优化后K值符号反转({K_original:.4f} → {K_optimized:.4f})，不采用优化结果")
+                    elif abs(K_optimized) < abs(K_original) * 0.1:  # K变得太小
+                        k_reasonable = False
+                        self.log(f"   ⚠️ 优化后K值过小({K_original:.4f} → {K_optimized:.4f})，不采用优化结果")
+                    elif abs(K_optimized) > abs(K_original) * 10:  # K变得太大
+                        k_reasonable = False
+                        self.log(f"   ⚠️ 优化后K值过大({K_original:.4f} → {K_optimized:.4f})，不采用优化结果")
+                
+                if r2_opt > global_r2 and k_reasonable:
                     global_r2 = r2_opt
                     global_rmse = rmse_opt
                     fusion = self._simulator.params_to_fusion(optimized_params, model_type, fusion)
@@ -933,9 +1045,9 @@ class ModelSelector:
                     self.log(f"   → 采用优化结果")
         
         # 使用扰动段加权平均R²作为最终评估指标（更能反映模型在整定数据上的拟合质量）
-        # 如果优化后全量R²更高，也重新计算扰动段R²（使用增强仿真）
+        # 如果优化后全量R²更高，也重新计算扰动段R²（使用纯模型，不叠加振荡）
         if segment_r2s:
-            # 重新计算扰动段R²（使用可能优化后的参数，增强仿真）
+            # 重新计算扰动段R²（使用可能优化后的参数，纯模型仿真）
             new_segment_r2s = []
             new_segment_rmses = []
             new_segment_points = []
@@ -948,14 +1060,14 @@ class ModelSelector:
                 if len(y) < 5:
                     continue
                 
-                # 使用增强仿真（与 pv_model 显示一致）
+                # 使用纯模型仿真（关闭所有增强，用于真实评分）
                 y_pred = self._simulator.simulate_segmented(
                     params, model_type, y, u,
                     reset_on_sv_change=True, sv=sv,
                     enable_smooth=True,
-                    enable_amplitude_calibration=True,
-                    enable_offset_correction=True,
-                    enable_oscillation_overlay=True
+                    enable_amplitude_calibration=False,  # 关闭幅度校准！
+                    enable_offset_correction=False,      # 关闭偏移校正！
+                    enable_oscillation_overlay=False     # 关闭振荡叠加！
                 )
                 r2 = calculate_r2(y, y_pred)
                 rmse = calculate_rmse(y, y_pred)

@@ -72,7 +72,8 @@ class UnifiedModelSelector:
         if self._verbose:
             print(msg)
     
-    def select_unified_model_type(self, segment_fits: List[SegmentModelFit]) -> Tuple[str, str]:
+    def select_unified_model_type(self, segment_fits: List[SegmentModelFit], 
+                                   return_need_fulldata: bool = False) -> Tuple[str, str, bool]:
         """
         统一模型类型选择
         
@@ -81,9 +82,10 @@ class UnifiedModelSelector:
         2. 使用R²加权的AIC最小化
         3. 应用复杂度惩罚（奥卡姆剃刀）
         4. 处理边界情况
+        5. 当扰动段无法判断时，标记需要全量数据验证
         
         Returns:
-            (best_model_type, reasoning)
+            (best_model_type, reasoning, need_fulldata_validation)
         """
         self.log(f"\n{'='*60}")
         self.log("🎯 统一模型类型选择")
@@ -96,7 +98,7 @@ class UnifiedModelSelector:
         self.log(f"   高质量段: {len(high_quality_segments)}/{len(segment_fits)}")
         
         if not usable_segments:
-            return ModelType.FOPDT, "无有效数据，使用默认FOPDT"
+            return ModelType.FOPDT, "无有效数据，使用默认FOPDT", True
         
         # 2. 计算每个模型的综合得分
         model_scores = {}
@@ -152,7 +154,7 @@ class UnifiedModelSelector:
         
         # 4. 选择最佳模型
         if not model_scores:
-            return ModelType.FOPDT, "无有效拟合结果，使用默认FOPDT"
+            return ModelType.FOPDT, "无有效拟合结果，使用默认FOPDT", True
         
         best_model = max(model_scores.keys(), 
                         key=lambda m: model_scores[m]['adjusted_score'])
@@ -167,14 +169,18 @@ class UnifiedModelSelector:
                 simpler_score = model_scores[simpler]['adjusted_score']
                 if simpler_score > best_info['adjusted_score'] * 0.85:
                     self.log(f"\n   ⚠️ 拟合质量较差，回退到更简单的 {simpler}")
-                    return simpler, f"质量较差，使用简单模型{simpler}"
+                    # 调整分<0.4且回退到简单模型，标记需要全量数据验证
+                    return simpler, f"质量较差，使用简单模型{simpler}", True
         
         reasoning = (f"加权R²={best_info['weighted_r2']:.4f}, "
                     f"调整分={best_info['adjusted_score']:.4f}, "
                     f"使用{best_info['n_valid_segments']}个有效段")
         
+        # 调整分<0.4时仍标记需要全量数据验证
+        need_fulldata = best_info['adjusted_score'] < 0.4
+        
         self.log(f"\n   → 选择: {best_model} ({reasoning})")
-        return best_model, reasoning
+        return best_model, reasoning, need_fulldata
     
     def compute_segment_reliability(self, seg: SegmentModelFit, 
                                      model_type: str) -> float:
