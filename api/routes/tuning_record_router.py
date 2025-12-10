@@ -7,7 +7,7 @@
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Body
 from sqlmodel import Session
 
 from core.database.database import get_db
@@ -24,23 +24,23 @@ logger = logging.getLogger(__name__)
 
 @router.post(
     "/",
-    summary="创建整定记录",
-    operation_id="创建整定记录",
-    description="保存常规整定或大模型整定的参数结果",
+    summary="创建整定下发记录",
+    operation_id="创建整定下发记录",
+    description="保存常规整定或大模型整定的参数整定下发结果",
     response_model=TuningRecord
 )
 async def create_tuning_record(
-    loop_uri: str,
-    loop_status: str,
-    tuning_method: str,
-    before_params: str,
-    after_params: str,
-    description: Optional[str] = None,
-    status: str = "成功",
-    remark: Optional[str] = None,
-    tuning_details: Optional[Dict[str, Any]] = None,
+    loop_uri: str  = Body(..., description="URI列表"),
+    loop_status: str = Body(..., description="回路状态", example=["自动", "手动"]),
+    tuning_type: datetime = Body(..., description="整定类型"),
+    tuning_method: str = Body(..., description="整定方法", example=["常规整定", "大模型整定"]),
+    before_params: str = Body(None, description="整定前参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
+    after_params: str = Body(None, description="整定后参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
+    description: Optional[str]  = Body(None, description="整定描述"),
+    status: str = Body(..., description="整定状态", example=["成功", "失败"]),
+    remark: Optional[str] = Body(..., description="描述", example="参数已下发"),
+    tuning_details: str = Body(..., description="整定详情"),
     user: UserInfo = Depends(get_current_user)
-        # ,db: Session = Depends(get_db)
 ) -> TuningRecord:
     """
     创建整定记录 - SQLModel优化版本
@@ -72,10 +72,10 @@ async def create_tuning_record(
         return record
 
     except Exception as e:
-        logger.error(f"创建整定记录失败: {str(e)}")
+        logger.error(f"创建整定下发记录异常: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"创建整定记录失败: {str(e)}"
+            detail=f"创建整定下发记录异常: {str(e)}"
         )
 
 

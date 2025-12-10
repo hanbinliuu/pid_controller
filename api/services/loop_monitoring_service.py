@@ -525,7 +525,7 @@ class LoopMonitoringService:
             logger.error(f"计算回路 {loop_uri} 过去性能状态失败: {str(e)}")
             return {
                 "loop_uri": loop_uri,
-                "status": "计算失败",
+                "status": f"计算失败:{str(e)}",
                 "error": str(e),
                 "auto_control_rate": None,
                 "stability_rate": None,

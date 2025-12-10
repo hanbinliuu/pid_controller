@@ -160,7 +160,7 @@ class KTLSimulator:
                 T1 = parameters.get('T1')
                 L = parameters.get('L', 0.0)
                 if T1 is None or T1 <= 0:
-                    raise ValueError(f"时间常数T必须大于0，当前值: {T1}")
+                    raise ValueError(f"时间常数T1必须大于0，当前值: {T1}")
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
@@ -198,7 +198,7 @@ class KTLSimulator:
                 # 一阶积分模型
                 T1 = parameters.get('T1')
                 if T1 is None or T1 <= 0:
-                    raise ValueError(f"时间常数T必须大于0，当前值: {T1}")
+                    raise ValueError(f"时间常数T1必须大于0，当前值: {T1}")
                 
                 y_int = 0.0  # 积分态
                 for i in range(1, n):

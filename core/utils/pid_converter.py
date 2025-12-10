@@ -37,7 +37,7 @@ class PIDConverter:
             ValueError: 当Kp为0或负数时
         """
         if kp <= 0:
-            raise ValueError("比例增益Kp必须大于0")
+            raise ValueError(f"比例增益Kp必须大于0:{kp}")
         return 100.0 / kp
     
     @staticmethod
@@ -55,8 +55,8 @@ class PIDConverter:
             ValueError: 当PB为0或负数时
         """
         if pb <= 0:
-            logging.warning("比例带必须大于0%，使用默认值 pb=100")
-            pb = 100.0  # 默认比例带 100%，对应 Kp=1
+            logging.warning(f"比例带必须大于0:{pb}")
+            return 0
         return 100.0 / pb
     
     @staticmethod
@@ -94,7 +94,7 @@ class PIDConverter:
             ValueError: 当Ti为0时
         """
         if ti == 0:
-            raise ValueError("积分时间Ti不能为0")
+            raise ValueError(f"积分时间Ti不能为0:{ti}")
         return kp / ti
     
     @staticmethod
@@ -113,7 +113,7 @@ class PIDConverter:
             ValueError: 当Kp为0时
         """
         if kp == 0:
-            raise ValueError("比例增益Kp不能为0")
+            raise ValueError(f"比例增益Kp不能为0:{kp}")
         return kd / kp
     
     @staticmethod
@@ -169,16 +169,16 @@ class PIDConverter:
         return result
     
     @staticmethod
-    def classical_to_pid(proportional_band: float, 
-                        integral_time: Optional[float] = None,
-                        derivative_time: Optional[float] = None) -> Dict[str, float]:
+    def classical_to_pid(pb: float,
+                         ti: Optional[float] = None,
+                         td: Optional[float] = None) -> Dict[str, float]:
         """
         将经典控制参数转换为PID参数
         
         Args:
-            proportional_band: 比例带 (%)
-            integral_time: 积分时间 (秒)，可选
-            derivative_time: 微分时间 (秒)，可选
+            pb: 比例带 (%)
+            ti: 积分时间 (秒)，可选
+            td: 微分时间 (秒)，可选
             
         Returns:
             包含PID参数的字典：
@@ -189,17 +189,20 @@ class PIDConverter:
         result = {}
         
         # 比例增益转换
-        result['kp'] = PIDConverter.proportional_band_to_kp(proportional_band)
+        if pb > 0:
+            result['kp'] = PIDConverter.proportional_band_to_kp(pb)
+        else:
+            result['kp'] = 0.0
         
         # 积分增益转换
-        if integral_time is not None and integral_time > 0:
-            result['ki'] = PIDConverter.integral_time_to_ki(result['kp'], integral_time)
+        if ti is not None and ti > 0:
+            result['ki'] = PIDConverter.integral_time_to_ki(result['kp'], ti)
         else:
             result['ki'] = 0.0
         
         # 微分增益转换
-        if derivative_time is not None:
-            result['kd'] = PIDConverter.derivative_time_to_kd(result['kp'], derivative_time)
+        if td is not None:
+            result['kd'] = PIDConverter.derivative_time_to_kd(result['kp'], td)
         else:
             result['kd'] = 0.0
         
@@ -265,11 +268,11 @@ def convert_pid_to_pb(kp: float, ki: float, kd: float) -> Dict[str, float]:
     return PIDConverter.pid_to_classical(kp, ki, kd)
 
 
-def convert_pb_to_pid(proportional_band: float, 
-                     integral_time: float = None, 
-                     derivative_time: float = None) -> Dict[str, float]:
+def convert_pb_to_pid(pb: float,
+                     ti: float = None,
+                     td: float = None) -> Dict[str, float]:
     """便捷函数：比例带形式转换为PID参数"""
-    return PIDConverter.classical_to_pid(proportional_band, integral_time, derivative_time)
+    return PIDConverter.classical_to_pid(pb, ti, td)
 
 # 截取最新的一组pid数据
 def process_lists_optimized(*lists):

@@ -31,7 +31,7 @@ class TuningRecordService:
         description: Optional[str] = None,
         status: str = "成功",
         remark: Optional[str] = None,
-        tuning_details: Optional[Dict[str, Any]] = None
+        tuning_details: str = None
     ) -> TuningRecord:
         """
         创建整定记录
@@ -76,7 +76,7 @@ class TuningRecordService:
                 db.commit()
                 db.refresh(record)
             
-                logger.info(f"创建整定记录成功: ID={record.id}, 回路={record.loop_name}")
+                logger.info(f"创建整定下发记录成功: ID={record.id}, 回路={record.loop_uri}")
                 return record
             
         except Exception as e:

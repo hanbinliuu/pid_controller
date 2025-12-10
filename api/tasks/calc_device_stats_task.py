@@ -217,7 +217,7 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                 'device_uri': device_uri,
                 'device_name': device_name,
                 'parent_device_uri': parent_device_uri,
-                'statistics_date': statistics_date,
+                'statistics_time': statistics_date,
                 'loop_count': stats['total_loops'],
                 'open_loop_count': stats['open_loops'],
                 'auto_loop_count': stats['auto_control_loops'],

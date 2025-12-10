@@ -6,6 +6,7 @@ import logging
 from typing import List, Optional, Dict, Any, Sequence
 from datetime import datetime, date
 from sqlmodel import Session, select, func, desc, asc
+from sqlalchemy.dialects.postgresql import insert
 
 from api.bean.device_evaluation import DeviceEvaluation
 
@@ -347,46 +348,26 @@ class DeviceEvaluationDAO:
         """
         try:
             # 确保统计时间为当天00:00:00
-            statistics_datetime = datetime.combine(statistics_date, datetime.min.time())
+            statistics_datetime = datetime.combine(statistics_date, datetime.time())
             evaluation_data['statistics_time'] = statistics_datetime
             evaluation_data['device_uri'] = device_uri
-            
-            # 查找是否存在记录
-            existing = DeviceEvaluationDAO.get_by_device_uri_and_date(
-                db, device_uri, statistics_date
+            from sqlalchemy.dialects.postgresql import insert
+
+            stmt = insert(DeviceEvaluation).values(
+                device_uri=device_uri,
+                statistics_time=statistics_datetime,
+                **evaluation_data
             )
-            
-            if existing:
-                # 更新现有记录
-                for key, value in evaluation_data.items():
-                    if hasattr(existing, key) and key not in ['id', 'statistics_time']:
-                        setattr(existing, key, value)
-                
-                existing.updated_time = datetime.now()
-                db.add(existing)
-                db.commit()
-                db.refresh(existing)
-                
-                logger.info(
-                    f"更新装置评估记录: device_uri={device_uri}, "
-                    f"date={statistics_date}, id={existing.id}"
-                )
-                return existing
-            else:
-                # 创建新记录
-                evaluation_data['created_time'] = datetime.now()
-                evaluation_data['updated_time'] = datetime.now()
-                evaluation = DeviceEvaluation(**evaluation_data)
-                
-                db.add(evaluation)
-                db.commit()
-                db.refresh(evaluation)
-                
-                logger.info(
-                    f"创建装置评估记录: device_uri={device_uri}, "
-                    f"date={statistics_date}, id={evaluation.id}"
-                )
-                return evaluation
+
+            # 假设存在对 device_uri + statistics_date 的唯一约束
+            do_update_stmt = stmt.on_conflict_do_update(
+                # 依据唯一约束或索引
+                index_elements=['device_uri', 'statistics_date'],
+                set_={**evaluation_data, 'updated_time': datetime.now()}
+            )
+
+            db.execute(do_update_stmt)
+            db.commit()
                 
         except Exception as e:
             db.rollback()
@@ -396,7 +377,7 @@ class DeviceEvaluationDAO:
     @staticmethod
     def batch_upsert_by_device_uri_and_date(
         db: Session,
-        upsert_data_list: List[Dict[str, Any]]
+        items: List[Dict[str, Any]]
     ) -> List[DeviceEvaluation]:
         """
         批量按装置URI和统计日期进行更新插入(upsert)
@@ -409,29 +390,32 @@ class DeviceEvaluationDAO:
             List[DeviceEvaluation]: 创建或更新的评估对象列表
         """
         try:
-            results = []
-            for upsert_data in upsert_data_list:
-                device_uri = upsert_data.get('device_uri')
-                statistics_date = upsert_data.get('statistics_date')
-                
-                if not device_uri or not statistics_date:
-                    logger.warning(f"批量upsert数据缺少必要字段: {upsert_data}")
-                    continue
-                
-                # 转换statistics_date为date类型
-                if isinstance(statistics_date, str):
-                    statistics_date = datetime.strptime(statistics_date.split()[0], "%Y-%m-%d").date()
-                elif isinstance(statistics_date, datetime):
-                    statistics_date = statistics_date.date()
-                
-                result = DeviceEvaluationDAO.upsert_by_device_uri_and_date(
-                    db, device_uri, statistics_date, upsert_data
-                )
-                results.append(result)
-            
-            logger.info(f"批量upsert装置评估记录成功，共处理 {len(results)} 条")
-            return results
-            
+            """
+               批量 UPSERT （设备评估）
+               items: List[Dict]，每条数据包含 device_uri + statistics_time + 其他字段
+               """
+            # 设置 created/updated 时间
+            now = datetime.now()
+            for item in items:
+                item.setdefault("created_time", now)
+                item["updated_time"] = now
+
+            stmt = insert(DeviceEvaluation).values(items)
+
+            update_columns = {
+                c.name: getattr(stmt.excluded, c.name)
+                for c in DeviceEvaluation.__table__.columns
+                if c.name not in ["id", "created_time"]  # created_time 不更新
+            }
+
+            upsert_stmt = stmt.on_conflict_do_update(
+                index_elements=["device_uri", "statistics_time"],
+                set_=update_columns
+            )
+
+            db.execute(upsert_stmt)
+            db.commit()
+
         except Exception as e:
             db.rollback()
             logger.error(f"批量upsert装置评估记录失败: {str(e)}")

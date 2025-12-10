@@ -142,7 +142,8 @@ def _calc_loop_performance(start_time: datetime, end_time: datetime, max_workers
 
         logger.info(f"性能计算完成，成功: {result.get('summary', {}).get('successful_loops', 0)}, "
                     f"失败: {result.get('summary', {}).get('failed_loops', 0)}, "
-                    f"写入: {persisted_count}")
+                    f"写入: {persisted_count} "
+                    )
 
         return result
 
