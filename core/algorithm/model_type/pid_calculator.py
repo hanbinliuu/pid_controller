@@ -22,6 +22,16 @@ class ClosedLoopMetrics:
     mv_history: np.ndarray       # MV输出历史
 
 
+@dataclass
+class DataQualityInfo:
+    """数据质量信息，用于自适应保守调整"""
+    quality_score: float = 0.5      # 质量评分 (0~1)
+    oscillation_ratio: float = 0.0  # 振荡比 (0~1)
+    r_squared: float = 0.5          # 拟合R² (0~1)
+    is_noisy: bool = False          # 是否高噪声
+    consistency_score: float = 0.5  # 参数一致性 (0~1)
+
+
 EPSILON = Config.EPSILON
 
 
@@ -33,7 +43,8 @@ class PIDCalculator:
     
     def calculate(self, K: float, T1: float, T2: float, L: float,
                   model_type: str, lambda_factor: float,
-                  method: str = 'lambda') -> Dict[str, float]:
+                  method: str = 'lambda',
+                  quality_info: Optional[DataQualityInfo] = None) -> Dict[str, float]:
         """
         根据模型类型和整定方法计算PID参数
         
@@ -48,6 +59,7 @@ class PIDCalculator:
                 - 'lambda': Lambda/IMC 法（默认，适用于所有模型）
                 - 'cohen_coon': Cohen-Coon 法（仅 FOPDT）
                 - 'imc_aggressive': IMC 激进模式（更快响应）
+            quality_info: 数据质量信息，用于自适应保守调整
         
         Returns:
             PID参数字典 {Kp, Ki, Kd}，Kp符号与K一致
@@ -61,23 +73,29 @@ class PIDCalculator:
         T2 = max(T2, 0.0)
         T_eq = T1 + T2 if T2 > 0 else T1
         
+        # 计算自适应保守等级
+        conservative_level, pb_min = self._calculate_conservative_level(quality_info)
+        
         # 根据模型类型和方法选择整定公式
         if model_type == ModelType.FO:
             # ========== 一阶无滞后 (FO) ==========
-            # 无滞后系统可以使用更激进的参数
-            Kp, Ti, Td = self._tune_fo(K_abs, T1, lambda_factor, method)
+            Kp, Ti, Td = self._tune_fo(K_abs, T1, lambda_factor, method,
+                                        conservative_level, pb_min)
             
         elif model_type == ModelType.FOPDT:
             # ========== 一阶加纯滞后 (FOPDT) ==========
-            Kp, Ti, Td = self._tune_fopdt(K_abs, T1, L, lambda_factor, method)
+            Kp, Ti, Td = self._tune_fopdt(K_abs, T1, L, lambda_factor, method,
+                                           conservative_level, pb_min)
             
         elif model_type in [ModelType.SO, ModelType.SOPDT]:
             # ========== 二阶系统 (SO/SOPDT) ==========
-            Kp, Ti, Td = self._tune_sopdt(K_abs, T1, T2, L, lambda_factor)
+            Kp, Ti, Td = self._tune_sopdt(K_abs, T1, T2, L, lambda_factor,
+                                           conservative_level, pb_min)
             
         elif model_type == ModelType.FOPI:
             # ========== 积分过程 (FOPI) ==========
-            Kp, Ti, Td = self._tune_integrator(K_abs, T1, lambda_factor)
+            Kp, Ti, Td = self._tune_integrator(K_abs, T1, lambda_factor,
+                                                conservative_level, pb_min)
             
         else:
             # 默认保守参数
@@ -99,12 +117,68 @@ class PIDCalculator:
             'Kd': round(float(Kd), 4)
         }
     
+    def _calculate_conservative_level(self, quality_info: Optional[DataQualityInfo]) -> Tuple[float, float]:
+        """
+        根据数据质量计算自适应保守等级
+        
+        Returns:
+            (conservative_level, pb_min)
+            - conservative_level: 保守因子 (3.0~8.0)，越大越保守
+            - pb_min: pb最小值 (50~100)
+        """
+        if quality_info is None:
+            # 无质量信息时使用默认保守参数
+            return 4.0, 60
+        
+        # 计算综合质量得分
+        q_score = quality_info.quality_score
+        osc_ratio = quality_info.oscillation_ratio
+        r2 = quality_info.r_squared
+        consistency = quality_info.consistency_score
+        
+        # 质量因子：越差越保守
+        quality_factor = 1.0 - q_score  # 0~1，质量越差越高
+        
+        # 振荡因子：振荡越大越保守
+        osc_factor = osc_ratio  # 0~1
+        
+        # 拟合因子：R²越低越保守
+        r2_factor = max(0, 1.0 - r2)  # 0~1
+        
+        # 一致性因子：一致性越低越保守
+        consist_factor = max(0, 1.0 - consistency)  # 0~1
+        
+        # 综合保守度：加权平均
+        conservativeness = (
+            0.3 * quality_factor +
+            0.3 * osc_factor +
+            0.2 * r2_factor +
+            0.2 * consist_factor
+        )
+        
+        # 映射到保守等级
+        # conservativeness: 0 (最优) -> 1 (最差)
+        # conservative_level: 3.0 (标准) -> 8.0 (极保守)
+        conservative_level = 3.0 + conservativeness * 5.0
+        
+        # 映射到pb最小值
+        # pb_min: 50 (标准) -> 100 (极保守)
+        pb_min = 50 + conservativeness * 50
+        
+        return conservative_level, pb_min
+    
     def _tune_fo(self, K: float, T1: float, lambda_factor: float, 
-                 method: str) -> Tuple[float, float, float]:
-        """一阶无滞后系统整定"""
-        # FO 系统使用保守整定，避免pb过小导致控制过于激进
-        # 增大lambda确保稳定性优先
-        lambda_val = T1 * lambda_factor * 4.0  # 保守因子，确保pb在合理范围
+                 method: str, conservative_level: float = 4.0,
+                 pb_min: float = 60.0) -> Tuple[float, float, float]:
+        """
+        一阶无滞后系统整定（自适应保守）
+        
+        Args:
+            conservative_level: 保守因子 (3.0~8.0)
+            pb_min: pb最小值 (50~100)
+        """
+        # 使用自适应保守因子
+        lambda_val = T1 * lambda_factor * conservative_level
         
         denom = K * lambda_val
         if denom < self._epsilon:
@@ -112,9 +186,8 @@ class PIDCalculator:
         
         Kp = T1 / denom
         
-        # 确保 pb 不低于 60（Kp 不超过 1.67）
-        # 用户实测稳定参数 pb=71.3, Kp≈1.4
-        max_Kp = 1.67  # 对应 pb=60
+        # 根据pb_min计算max_Kp: pb = 100/Kp -> Kp = 100/pb
+        max_Kp = 100.0 / pb_min
         if Kp > max_Kp:
             Kp = max_Kp
         
@@ -124,8 +197,10 @@ class PIDCalculator:
         return Kp, Ti, Td
     
     def _tune_fopdt(self, K: float, T1: float, L: float, 
-                    lambda_factor: float, method: str) -> Tuple[float, float, float]:
-        """一阶加纯滞后系统整定"""
+                    lambda_factor: float, method: str,
+                    conservative_level: float = 4.0,
+                    pb_min: float = 60.0) -> Tuple[float, float, float]:
+        """一阶加纯滞后系统整定（自适应保守）"""
         
         if method == 'cohen_coon' and L > self._epsilon:
             # Cohen-Coon 法（适合 L/T1 较大的系统）
@@ -145,8 +220,8 @@ class PIDCalculator:
             Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
             
         else:
-            # Lambda/IMC 标准法
-            lambda_val = T1 * lambda_factor
+            # Lambda/IMC 标准法（使用自适应保守因子）
+            lambda_val = T1 * lambda_factor * (conservative_level / 4.0)  # 标准化到基准
             denom = K * (lambda_val + L / 2)
             if denom < self._epsilon:
                 return 1.0, T1 + L / 2, 0.0
@@ -154,13 +229,20 @@ class PIDCalculator:
             Ti = T1 + L / 2
             Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
         
+        # 应用pb下限
+        max_Kp = 100.0 / pb_min
+        if Kp > max_Kp:
+            Kp = max_Kp
+        
         return Kp, Ti, Td
     
     def _tune_sopdt(self, K: float, T1: float, T2: float, L: float,
-                    lambda_factor: float) -> Tuple[float, float, float]:
-        """二阶系统整定"""
+                    lambda_factor: float, conservative_level: float = 4.0,
+                    pb_min: float = 60.0) -> Tuple[float, float, float]:
+        """二阶系统整定（自适应保守）"""
         T_eq = T1 + T2 if T2 > 0 else T1
-        lambda_val = T_eq * lambda_factor
+        # 使用自适应保守因子
+        lambda_val = T_eq * lambda_factor * (conservative_level / 4.0)
         
         denom = K * (lambda_val + L / 2) if L > 0 else K * lambda_val
         if denom < self._epsilon:
@@ -171,22 +253,34 @@ class PIDCalculator:
         # 二阶系统的微分时间：串联时间常数的几何平均
         Td = (T1 * T2) / T_eq if T_eq > self._epsilon and T2 > 0 else 0.0
         
+        # 应用pb下限
+        max_Kp = 100.0 / pb_min
+        if Kp > max_Kp:
+            Kp = max_Kp
+        
         return Kp, Ti, Td
     
     def _tune_integrator(self, K: float, T1: float, 
-                         lambda_factor: float) -> Tuple[float, float, float]:
-        """积分过程整定（专用公式）"""
+                         lambda_factor: float, conservative_level: float = 4.0,
+                         pb_min: float = 60.0) -> Tuple[float, float, float]:
+        """积分过程整定（自适应保守）"""
         # 积分过程: G(s) = K / (T1*s + 1) / s
         # 使用 SIMC 规则
         if K < self._epsilon:
             return 1.0, 20.0, 0.0
         
-        lambda_val = max(T1 * lambda_factor, 0.2)
+        # 使用自适应保守因子
+        lambda_val = max(T1 * lambda_factor * (conservative_level / 4.0), 0.2)
         
         # SIMC 积分过程公式
         Kp = T1 / (K * lambda_val) if T1 > 0 else 1.0 / (K * lambda_val)
         Ti = 4 * lambda_val  # 积分时间 = 4 * 闭环时间常数
         Td = 0.0  # 积分过程一般不用微分
+        
+        # 应用pb下限
+        max_Kp = 100.0 / pb_min
+        if Kp > max_Kp:
+            Kp = max_Kp
         
         return Kp, Ti, Td
     
@@ -207,11 +301,20 @@ class PIDCalculator:
         return Kp, Ti, Td
     
     def calculate_from_fusion(self, fusion: FusionResult, 
-                               lambda_factor: float) -> Dict[str, float]:
-        """从FusionResult计算PID参数"""
+                               lambda_factor: float,
+                               quality_info: Optional[DataQualityInfo] = None) -> Dict[str, float]:
+        """
+        从FusionResult计算PID参数
+        
+        Args:
+            fusion: 融合结果
+            lambda_factor: Lambda系数
+            quality_info: 数据质量信息，用于自适应保守调整
+        """
         return self.calculate(
             fusion.K, fusion.T1, fusion.T2, fusion.L,
-            fusion.model_type, lambda_factor
+            fusion.model_type, lambda_factor,
+            quality_info=quality_info
         )
     
     def analyze_oscillation(self, pv: np.ndarray, mv: np.ndarray, 

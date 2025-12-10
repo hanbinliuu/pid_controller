@@ -10,7 +10,7 @@ from .fusion_strategy import PIDFusionStrategy, WindowResult as FusionWindowResu
 from .data_preprocessor import DataPreprocessor
 from .segment_processor import SegmentProcessor
 from .simulator import ModelSimulator
-from .pid_calculator import PIDCalculator
+from .pid_calculator import PIDCalculator, DataQualityInfo
 from .unified_model_selector import UnifiedModelSelector, SegmentModelFit
 from .segment_fitter import SegmentFitter
 from .output_builder import OutputBuilder
@@ -240,9 +240,65 @@ class ModelSelector:
         # Step 5: 验证一致性与仿真匹配度
         fusion_result = self._validate_and_refine(fusion_result, valid_segments, hist_data)
         
-        # 构建最终输出（传入扰动段信息）
+        # 构建数据质量信息，用于自适应保守PID整定
+        quality_info = self._build_quality_info(valid_segments, segment_results, fusion_result)
+        
+        # 构建最终输出（传入扰动段信息和质量信息）
         return self._build_output(fusion_result, hist_data, time_range, lambda_factor, 
-                                  input_data.tuning_window)
+                                  input_data.tuning_window, quality_info)
+    
+    def _build_quality_info(self, valid_segments: List[HistoricalData],
+                            segment_results: List[SegmentResult],
+                            fusion_result: FusionResult) -> DataQualityInfo:
+        """
+        构建数据质量信息，用于自适应保守PID整定
+        
+        评估因素:
+        1. 数据质量评分 - 基于噪声、相关性等
+        2. 振荡比 - 数据振荡程度
+        3. 拟合R² - 模型拟合质量
+        4. 参数一致性 - 多段参数一致程度
+        """
+        # 计算平均振荡比
+        oscillation_ratios = []
+        quality_scores = []
+        
+        for seg in valid_segments:
+            y = seg.pv
+            pv_diff = np.diff(y)
+            sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
+            osc_ratio = sign_changes / (len(y) - 2) if len(y) > 2 else 0
+            oscillation_ratios.append(osc_ratio)
+            
+            # 使用预处理器分析质量
+            quality = self._preprocessor.analyze_quality(y, seg.mv)
+            quality_scores.append(quality.quality_score if hasattr(quality, 'quality_score') else 0.5)
+        
+        avg_oscillation = np.mean(oscillation_ratios) if oscillation_ratios else 0.0
+        avg_quality = np.mean(quality_scores) if quality_scores else 0.5
+        
+        # 检查是否有高噪声段
+        is_noisy = any(
+            hasattr(self._preprocessor.analyze_quality(seg.pv, seg.mv), 'is_noisy') and 
+            self._preprocessor.analyze_quality(seg.pv, seg.mv).is_noisy 
+            for seg in valid_segments
+        )
+        
+        quality_info = DataQualityInfo(
+            quality_score=avg_quality,
+            oscillation_ratio=avg_oscillation,
+            r_squared=fusion_result.global_r2,
+            is_noisy=is_noisy,
+            consistency_score=fusion_result.consistency_score
+        )
+        
+        # 日志输出保守等级信息
+        conservative_level, pb_min = self._pid_calculator._calculate_conservative_level(quality_info)
+        self.log(f"   📊 自适应保守调整: 质量={avg_quality:.2f}, 振荡={avg_oscillation:.2f}, "
+                f"R²={fusion_result.global_r2:.2f}, 一致性={fusion_result.consistency_score:.2f}")
+        self.log(f"   → 保守等级={conservative_level:.1f}, pb最小值={pb_min:.0f}")
+        
+        return quality_info
     
     # ============================================================
     # Step 2: 多模型拟合
@@ -1529,9 +1585,17 @@ class ModelSelector:
     
     def _build_output(self, fusion: FusionResult, hist_data: HistoricalData,
                       time_range: Dict, lambda_factor: float,
-                      tuning_windows: List[Dict] = None) -> Dict[str, Any]:
-        """构建最终输出"""
-        pid_params = self._pid_calculator.calculate_from_fusion(fusion, lambda_factor)
+                      tuning_windows: List[Dict] = None,
+                      quality_info: DataQualityInfo = None) -> Dict[str, Any]:
+        """
+        构建最终输出
+        
+        Args:
+            quality_info: 数据质量信息，用于自适应保守PID整定
+        """
+        pid_params = self._pid_calculator.calculate_from_fusion(
+            fusion, lambda_factor, quality_info=quality_info
+        )
         
         params = self._simulator.fusion_to_params(fusion)
         
