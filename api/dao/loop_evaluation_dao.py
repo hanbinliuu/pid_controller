@@ -171,7 +171,7 @@ class LoopEvaluationDAO:
             ).join(LoopInfo, LoopEvaluation.loop_uri == LoopInfo.loop_uri, isouter=True)
             
             # 如果提供了device_uri，则需要根据loop_path进行过滤
-            if device_uri is None:
+            if device_uri is not None:
                 statement = statement.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
             
             # 回路名称筛选（模糊匹配）
@@ -213,7 +213,7 @@ class LoopEvaluationDAO:
             count_statement = select(func.count()).select_from(LoopEvaluation).join(LoopInfo, LoopEvaluation.loop_uri == LoopInfo.loop_uri, isouter=True)
             
             # 如果提供了device_uri，则需要根据loop_path进行过滤
-            if device_uri:
+            if device_uri is not None:
                 count_statement = count_statement.where(LoopInfo.loop_path.like(f"%{device_uri}%"))
             
             # 应用相同的筛选条件到计数查询

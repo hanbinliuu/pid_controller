@@ -87,7 +87,7 @@ class AutoTuningRequest(BaseModel):
     window_size: int = Field(120, description="窗口大小（分钟）", ge=1)
     step_size: int = Field(10, description="滑动步长（分钟）", ge=1)
     confidence_threshold: float = Field(0.6, description="置信度阈值（仅auto模式有效，0-1）", ge=0, le=1)
-    window_sec: int = Field(10, description="插值采样间隔（秒）", ge=1)
+    window_sec: int = Field(60, description="插值采样间隔（秒）", ge=1)
     is_filter: bool = Field(False, description="是否对历史数据进行优化过滤")
 
     class Config:

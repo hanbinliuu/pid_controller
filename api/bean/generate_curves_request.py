@@ -30,7 +30,7 @@ class GenerateCurvesRequest(BaseModel):
     
     # 仿真参数
     step_value: float = Field(1.0, description="阶跃输入幅值", examples=[1.0, 2.0, 5.0])
-    duration: float = Field(100, description="仿真时长(秒)", gt=0, examples=[300.0, 600.0, 1200.0])
+    duration: float = Field(500, description="仿真时长(秒)", gt=0, examples=[300.0, 600.0, 1200.0])
     dt: float = Field(1.0, description="采样时间间隔(秒)", gt=0, examples=[0.1, 0.5, 1.0])
     initial_output: float = Field(0.0, description="初始输出值", examples=[0.0, 5.0, 10.0])
     setpoint: Optional[float] = Field(10, description="设定值(闭环仿真目标值)", examples=[50.0, 100.0, 150.0])

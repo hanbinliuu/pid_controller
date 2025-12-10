@@ -203,7 +203,7 @@ class Config:
     )
     TASK_LOAD_MODEL_TREE_CRON: str = _get_config(
         'task.load_model_tree.cron',
-        '0 0 * * *'  # 默认每天00:00执行
+        '*/10 * * * *'  # 默认每天00:00执行
     )
     
     # 装置性能统计任务配置

@@ -9,6 +9,7 @@ from sqlmodel import Session
 
 from api.dao.loop_evaluation_dao import LoopEvaluationDAO
 from api.bean.loop_evaluation import LoopEvaluation
+from core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,8 @@ class LoopEvaluationService:
         Returns:
             Dict: 包含评估列表和分页信息
         """
+        # if device_uri:
+        #     device_uri = Config.BFF_MODEL_ROOT_URI
         return LoopEvaluationDAO.query_list(
             db,
             loop_name=loop_name,
