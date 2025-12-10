@@ -2,6 +2,7 @@ import numpy as np
 from typing import List, Dict, Any, Optional, Tuple, Union
 from scipy.optimize import least_squares
 
+from api.routes.time_util import parse_time_to_milliseconds
 from .config import Config, ModelType
 from .models import SegmentResult, FusionResult, TuningInput, TuningWindow, HistoricalData
 from .identifier import ModelIdentifier
@@ -1401,11 +1402,11 @@ class ModelSelector:
             for window in tuning_windows:
                 # 支持 TuningWindow 对象或字典
                 if hasattr(window, 'start_time'):
-                    start_ts = int(window.start_time)
-                    end_ts = int(window.end_time)
+                    start_ts = parse_time_to_milliseconds(window.start_time)
+                    end_ts = parse_time_to_milliseconds(window.end_time)
                 else:
-                    start_ts = int(window.get('start_time', 0))
-                    end_ts = int(window.get('end_time', 0))
+                    start_ts = parse_time_to_milliseconds(window.get('start_time'))
+                    end_ts = parse_time_to_milliseconds(window.get('end_time'))
                 disturbance_mask |= (ts >= start_ts) & (ts <= end_ts)
         
         # 对全量数据进行模型仿真

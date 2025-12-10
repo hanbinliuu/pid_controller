@@ -329,7 +329,7 @@ class LoopMonitoringService:
                 start_time=start_time_ms,
                 end_time=end_time_ms,
                 is_filter=False,
-                window=60
+                window=10
             )
 
 

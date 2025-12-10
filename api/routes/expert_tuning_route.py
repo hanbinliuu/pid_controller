@@ -87,7 +87,7 @@ class AutoTuningRequest(BaseModel):
     window_size: int = Field(120, description="窗口大小（分钟）", ge=1)
     step_size: int = Field(10, description="滑动步长（分钟）", ge=1)
     confidence_threshold: float = Field(0.6, description="置信度阈值（仅auto模式有效，0-1）", ge=0, le=1)
-    window_sec: int = Field(60, description="插值采样间隔（秒）", ge=1)
+    window_sec: int = Field(10, description="插值采样间隔（秒）", ge=1)
     is_filter: bool = Field(False, description="是否对历史数据进行优化过滤")
 
     class Config:
@@ -638,7 +638,7 @@ async def get_response_windows(
         # min_response_ratio: float = Query(0.1, description="最小响应比例（响应幅值/输入变化）", ge=0.05, le=1.0),
         # confidence_min: float = Query(0.5, description="最小置信度要求（0-1）", ge=0, le=1),
         # analyst_column: Optional[str] = Query("pv", description="用于分析的列名", examples=["pv", "mv", "sv"]),
-        window_sec: int = Query(30, description="插值采样间隔（秒）", examples=[1, 60]),
+        window_sec: int = Query(1, description="插值采样间隔（秒）", examples=[1, 60]),
         is_filter: bool = Query(False, description="是否对历史数据进行优化过滤", examples=[False])
 ):
     # 时间默认值：最近一天
