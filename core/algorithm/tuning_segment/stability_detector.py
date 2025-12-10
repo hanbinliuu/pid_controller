@@ -944,7 +944,10 @@ class StabilityDetector:
                 else:
                     merged_segments.append((cur_start, cur_end, cur_sp))
         
-        return merged_segments
+        # 后处理：分割过长的非稳态段（内部可能包含平稳区域）
+        final_segments = self._split_long_segments(merged_segments, pv_data, sv_array, min_segment_len)
+        
+        return final_segments
     
     def _check_gap_steady_state(self, pv_data, sv_array, gap_start, gap_end, gap_sv, fallback_sp):
         """检查间隔区域是否为稳态"""
@@ -1054,6 +1057,163 @@ class StabilityDetector:
                 pass
         
         return is_low_variation and has_no_trend
+    
+    def _split_long_segments(self, segments, pv_data, sv_array, min_segment_len=20):
+        """
+        分割过长的非稳态段
+        
+        对于较长的非稳态段，检查其内部是否存在连续的平稳区域，
+        如果存在则将其分割为多个独立的扰动段。
+        
+        Args:
+            segments: 非稳态段列表 [(start, end, setpoint), ...]
+            pv_data: PV数据
+            sv_array: SV数据
+            min_segment_len: 最小段长度
+        
+        Returns:
+            分割后的段列表
+        """
+        if not segments:
+            return segments
+        
+        result = []
+        
+        # 阈值配置
+        MIN_SPLIT_LENGTH = 1800  # 段长度超过1800点（约30分钟@1s采样）才考虑分割
+        MIN_STEADY_LENGTH = 600  # 平稳区域至少600点（约10分钟）才作为分割点
+        SCAN_WINDOW = 120        # 扫描窗口大小（约2分钟）
+        
+        for seg_start, seg_end, seg_setpoint in segments:
+            seg_len = seg_end - seg_start
+            
+            # 短段不分割
+            if seg_len < MIN_SPLIT_LENGTH:
+                result.append((seg_start, seg_end, seg_setpoint))
+                continue
+            
+            # 扫描段内的平稳区域
+            steady_regions = []
+            i = seg_start + min_segment_len  # 跳过开头
+            
+            while i < seg_end - min_segment_len - SCAN_WINDOW:
+                window_pv = pv_data[i:i + SCAN_WINDOW]
+                window_sv = sv_array[i:i + SCAN_WINDOW] if i + SCAN_WINDOW <= len(sv_array) else None
+                
+                if window_sv is not None and len(window_sv) > 0:
+                    window_setpoint = np.median(window_sv)
+                else:
+                    window_setpoint = seg_setpoint
+                
+                # 检查该窗口是否为稳态
+                if self._is_window_truly_steady(window_pv, window_setpoint):
+                    # 找到平稳区域，向前后扩展
+                    steady_start = i
+                    steady_end = i + SCAN_WINDOW
+                    
+                    # 向后扩展
+                    j = steady_end
+                    while j < seg_end - min_segment_len:
+                        ext_window = pv_data[j:min(j + SCAN_WINDOW // 2, seg_end)]
+                        ext_sv = sv_array[j:min(j + SCAN_WINDOW // 2, len(sv_array))] if j < len(sv_array) else None
+                        ext_setpoint = np.median(ext_sv) if ext_sv is not None and len(ext_sv) > 0 else window_setpoint
+                        
+                        if self._is_window_truly_steady(ext_window, ext_setpoint):
+                            steady_end = min(j + SCAN_WINDOW // 2, seg_end)
+                            j += SCAN_WINDOW // 2
+                        else:
+                            break
+                    
+                    # 向前扩展
+                    k = steady_start - SCAN_WINDOW // 2
+                    while k > seg_start + min_segment_len:
+                        ext_window = pv_data[k:steady_start]
+                        ext_sv = sv_array[k:steady_start] if k >= 0 and steady_start <= len(sv_array) else None
+                        ext_setpoint = np.median(ext_sv) if ext_sv is not None and len(ext_sv) > 0 else window_setpoint
+                        
+                        if self._is_window_truly_steady(ext_window, ext_setpoint):
+                            steady_start = k
+                            k -= SCAN_WINDOW // 2
+                        else:
+                            break
+                    
+                    # 记录平稳区域（如果足够长）
+                    steady_len = steady_end - steady_start
+                    if steady_len >= MIN_STEADY_LENGTH:
+                        steady_regions.append((steady_start, steady_end))
+                    
+                    # 跳过已检查的区域
+                    i = steady_end
+                else:
+                    i += SCAN_WINDOW // 2
+            
+            # 根据平稳区域分割段
+            if not steady_regions:
+                result.append((seg_start, seg_end, seg_setpoint))
+            else:
+                # 按平稳区域分割
+                split_points = []
+                for steady_start, steady_end in steady_regions:
+                    # 使用平稳区域的中点作为分割点
+                    split_point = (steady_start + steady_end) // 2
+                    split_points.append((split_point, steady_start, steady_end))
+                
+                # 生成分割后的段
+                prev_end = seg_start
+                for split_point, steady_start, steady_end in sorted(split_points):
+                    # 前半段（到平稳区域开始）
+                    if steady_start - prev_end >= min_segment_len:
+                        sub_sv = sv_array[prev_end:steady_start] if prev_end < len(sv_array) else None
+                        sub_setpoint = np.median(sub_sv) if sub_sv is not None and len(sub_sv) > 0 else seg_setpoint
+                        result.append((prev_end, steady_start, sub_setpoint))
+                    prev_end = steady_end
+                
+                # 最后一段（从最后一个平稳区域结束到段结束）
+                if seg_end - prev_end >= min_segment_len:
+                    sub_sv = sv_array[prev_end:seg_end] if prev_end < len(sv_array) else None
+                    sub_setpoint = np.median(sub_sv) if sub_sv is not None and len(sub_sv) > 0 else seg_setpoint
+                    result.append((prev_end, seg_end, sub_setpoint))
+        
+        return result
+    
+    def _is_window_truly_steady(self, window_pv, setpoint):
+        """
+        检查窗口是否真正稳态（用于分割长段时的判断）
+        使用比常规稳态检查更严格的标准
+        """
+        if len(window_pv) < 10:
+            return False
+        
+        pv_std = np.std(window_pv)
+        pv_range = np.max(window_pv) - np.min(window_pv)
+        pv_mean = np.mean(window_pv)
+        
+        # 检查是否接近设定值
+        mean_error = abs(pv_mean - setpoint)
+        
+        # 严格的稳态标准
+        if setpoint > 0:
+            # 相对阈值
+            std_ok = pv_std < max(setpoint * 0.08, 0.3)  # 标准差 < 8% 或 0.3
+            range_ok = pv_range < max(setpoint * 0.15, 0.8)  # 范围 < 15% 或 0.8
+            error_ok = mean_error < max(setpoint * 0.1, 0.5)  # 误差 < 10% 或 0.5
+        else:
+            # 绝对阈值
+            std_ok = pv_std < 0.3
+            range_ok = pv_range < 0.8
+            error_ok = mean_error < 0.5
+        
+        # 检查无明显趋势
+        has_no_trend = True
+        if len(window_pv) > 10:
+            try:
+                coeffs = np.polyfit(np.arange(len(window_pv)), window_pv, 1)
+                if abs(coeffs[0]) > 0.03:  # 斜率阈值
+                    has_no_trend = False
+            except:
+                pass
+        
+        return std_ok and range_ok and error_ok and has_no_trend
     
     def detect_all_disturbances(self, pv_data, sv_array, non_steady_segments=None):
         """检测所有扰动（非稳态）的起始点"""
