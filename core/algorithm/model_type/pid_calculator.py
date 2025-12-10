@@ -816,25 +816,19 @@ class PIDCalculator:
         pv0 = pv_initial  # 初始PV工作点
         
         # MV 工作点：根据模型增益和 SP 变化量估算需要的 MV 变化
-        # 确保 MV 有足够的调节空间
+        # 简化逻辑：从中点开始，确保有足够的调节空间
         sp_change = sp_final - sp_initial
+        mv_mid = (mv_min + mv_max) / 2
+        mv_range = mv_max - mv_min
+        
         if abs(K) > self._epsilon:
             delta_mv_needed = sp_change / K  # 理论需要的 MV 变化量
+            # 根据需要的MV变化方向，从中点偏移以留出调节空间
+            # 但偏移量不超过范围的25%
+            mv_offset = np.clip(-delta_mv_needed * 0.3, -mv_range * 0.25, mv_range * 0.25)
+            mv0 = np.clip(mv_mid + mv_offset, mv_min + 5, mv_max - 5)
         else:
-            delta_mv_needed = 0.0
-        
-        # 设置 MV 工作点，确保有足够的调节空间
-        mv_range = mv_max - mv_min
-        if delta_mv_needed > 0:
-            # 需要增加 MV，所以初始 MV 应该足够低
-            mv0 = max(mv_min + 5, mv_max - abs(delta_mv_needed) * 1.5)
-            mv0 = min(mv0, (mv_min + mv_max) / 2)  # 但也不要太低
-        elif delta_mv_needed < 0:
-            # 需要减少 MV，所以初始 MV 应该足够高
-            mv0 = min(mv_max - 5, mv_min + abs(delta_mv_needed) * 1.5)
-            mv0 = max(mv0, (mv_min + mv_max) / 2)  # 但也不要太高
-        else:
-            mv0 = (mv_min + mv_max) / 2  # 默认中点
+            mv0 = mv_mid
         
         # 增量状态变量
         delta_pv = 0.0    # ΔPV = PV - PV0

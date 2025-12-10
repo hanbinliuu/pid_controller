@@ -496,6 +496,7 @@ class ModelSelector:
         
         valid_mask = hist_data.pv != 0
         y = hist_data.pv[valid_mask]
+        u = hist_data.mv[valid_mask]
         ts = hist_data.timestamp[valid_mask]
         sv = hist_data.sv[valid_mask]
         
@@ -516,9 +517,20 @@ class ModelSelector:
         T1_est = round(Pu, 4)
         L_est = round(Pu / 4, 4)
         
+        # 使用估算的模型参数生成 pv_model（振荡整定也需要可视化）
+        # 注意：这里使用顶层已导入的 ModelType
+        temp_params = (K_est, T1_est, L_est)
+        pv_model = self._simulator.simulate_segmented(
+            temp_params, 'FOPDT', y, u,  # 直接使用字符串避免导入顺序问题
+            reset_on_sv_change=True, sv=sv,
+            enable_smooth=True,
+            enable_amplitude_calibration=True,
+            enable_offset_correction=True,
+            enable_oscillation_overlay=True  # 振荡数据叠加振荡分量
+        )
+        
         # 创建 FusionResult 用于闭环验证（与可视化使用相同参数）
         from .models import FusionResult
-        from .config import ModelType
         temp_fusion = FusionResult(
             model_type=ModelType.FOPDT,
             K=K_est, T1=T1_est, T2=0.0, L=L_est
@@ -575,10 +587,10 @@ class ModelSelector:
                 'timestamp': ts.tolist(),
                 'sv': sv.tolist(),
                 'pv': y.tolist(),
-                'mv': hist_data.mv[valid_mask].tolist(),
-                'pv_model': y.tolist(),  # 振荡法没有模型拟合
-                'r_squared': 0.0,
-                'rmse': 0.0
+                'mv': u.tolist(),
+                'pv_model': pv_model.tolist(),  # 使用估算模型生成的pv_model
+                'r_squared': calculate_r2(y, pv_model),
+                'rmse': calculate_rmse(y, pv_model)
             },
             'fusion_info': {
                 'method': 'oscillation_critical',
@@ -983,6 +995,9 @@ class ModelSelector:
         min_segment_r2 = min(segment_r2s) if segment_r2s else 0
         segment_r2_std = np.std(segment_r2s) if len(segment_r2s) > 1 else 0
         
+        # 保存当前参数，用于后续重新计算
+        current_params = params
+        
         need_optimization = (
             global_r2 < OPTIMIZATION_THRESHOLD or
             min_segment_r2 < 0.3 or
@@ -1061,8 +1076,10 @@ class ModelSelector:
                     continue
                 
                 # 使用纯模型仿真（关闭所有增强，用于真实评分）
+                # 注意：使用可能已优化的融合参数
+                current_params = self._simulator.fusion_to_params(fusion)
                 y_pred = self._simulator.simulate_segmented(
-                    params, model_type, y, u,
+                    current_params, model_type, y, u,
                     reset_on_sv_change=True, sv=sv,
                     enable_smooth=True,
                     enable_amplitude_calibration=False,  # 关闭幅度校准！
@@ -1230,7 +1247,8 @@ class ModelSelector:
                         if 0.3 < amplitude_ratio < 3.0:
                             best_cost = result.cost
                             best_params = tuple(result.x)
-                except:
+                except Exception:
+                    # 优化失败，尝试下一个初始点
                     continue
             
             # 如果优化结果的K值不合理，进行校正
@@ -1282,8 +1300,8 @@ class ModelSelector:
             if r2 > best_r2:
                 best_r2 = r2
                 best_params = params
-        except:
-            pass
+        except Exception as e:
+            self.log(f"      默认拟合失败: {e}")
         
         try:
             y_f, u_f = self._preprocessor.preprocess(y, u)
@@ -1293,8 +1311,8 @@ class ModelSelector:
             if r2 > best_r2:
                 best_r2 = r2
                 best_params = params
-        except:
-            pass
+        except Exception as e:
+            self.log(f"      预处理拟合失败: {e}")
         
         if best_params is not None and n_starts > 2:
             try:
@@ -1313,7 +1331,8 @@ class ModelSelector:
                     if r2 > best_r2:
                         best_r2 = r2
                         best_params = tuple(result.x)
-            except:
+            except Exception:
+                # 扰动优化失败，使用已有最佳结果
                 pass
         
         return best_params if best_params else method(t, y, u), max(best_r2, 0)
