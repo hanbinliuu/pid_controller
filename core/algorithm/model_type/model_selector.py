@@ -1,5 +1,3 @@
-"""模型选择器模块 - 多模型拟合与参数融合（重构版）"""
-
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple, Union
 from scipy.optimize import least_squares
@@ -13,6 +11,9 @@ from .segment_processor import SegmentProcessor
 from .simulator import ModelSimulator
 from .pid_calculator import PIDCalculator
 from .unified_model_selector import UnifiedModelSelector, SegmentModelFit
+from .segment_fitter import SegmentFitter
+from .output_builder import OutputBuilder
+from .logger import LoggerMixin
 from .utils import (
     calculate_r2, calculate_rmse, calculate_rss, calculate_aic, calculate_bic,
     parse_timestamp, get_recommendation, determine_turning_type
@@ -66,11 +67,21 @@ class ModelSelector:
     def __init__(self, verbose: bool = False):
         self._verbose = verbose
         self._epsilon = Config.EPSILON
+        
+        # 初始化子模块
         self._preprocessor = DataPreprocessor(verbose=verbose)
         self._segment_processor = SegmentProcessor(verbose=verbose)
         self._simulator = ModelSimulator()
         self._pid_calculator = PIDCalculator()
         self._unified_selector = UnifiedModelSelector(verbose=verbose)
+        
+        # 拆分后的子模块
+        self._segment_fitter = SegmentFitter(
+            self._simulator, self._preprocessor, self._pid_calculator, verbose
+        )
+        self._output_builder = OutputBuilder(
+            self._simulator, self._pid_calculator, verbose
+        )
     
     @property
     def verbose(self) -> bool:
@@ -991,7 +1002,12 @@ class ModelSelector:
             if any(r2_e > r2_p + 0.1 for r2_e, r2_p in zip(segment_r2s_enhanced, segment_r2s_pure)):
                 self.log(f"   扰动段R²(增强后): {[f'{r:.3f}' for r in segment_r2s_enhanced]}, 加权R²: {weighted_r2_enhanced:.4f}")
         
-        OPTIMIZATION_THRESHOLD = 0.85
+        # 从集中化配置获取优化阈值
+        opt_config = Config.OPTIMIZATION
+        r2_threshold = opt_config['r2_threshold']
+        min_seg_r2_threshold = opt_config['min_segment_r2']
+        seg_r2_std_max = opt_config['segment_r2_std_max']
+        
         min_segment_r2 = min(segment_r2s) if segment_r2s else 0
         segment_r2_std = np.std(segment_r2s) if len(segment_r2s) > 1 else 0
         
@@ -999,13 +1015,13 @@ class ModelSelector:
         current_params = params
         
         need_optimization = (
-            global_r2 < OPTIMIZATION_THRESHOLD or
-            min_segment_r2 < 0.3 or
-            segment_r2_std > 0.25
+            global_r2 < r2_threshold or
+            min_segment_r2 < min_seg_r2_threshold or
+            segment_r2_std > seg_r2_std_max
         )
         
         if need_optimization:
-            self.log(f"   → R²<{OPTIMIZATION_THRESHOLD}，尝试全量数据优化...")
+            self.log(f"   → R²<{r2_threshold}，尝试全量数据优化...")
             
             optimized_params = self._global_optimize_full(y_full, u_full, sv_full, 
                                                            model_type, params)
@@ -1029,17 +1045,18 @@ class ModelSelector:
                 K_optimized = optimized_params[0]
                 k_reasonable = True
                 
-                # K值合理性检查：
-                # 1. 符号不能反转（除非原始K接近0）
-                # 2. 数量级变化不能太大（不超过10倍）
-                if abs(K_original) > 0.01:
-                    if K_original * K_optimized < 0:  # 符号反转
+                # K值合理性检查（从配置获取阈值）
+                k_min = Config.PARAMETER_CONSTRAINTS['k_reasonable_min']
+                k_ratio_max = opt_config['k_magnitude_ratio_max']
+                
+                if abs(K_original) > k_min:
+                    if opt_config['k_sign_check'] and K_original * K_optimized < 0:  # 符号反转
                         k_reasonable = False
                         self.log(f"   ⚠️ 优化后K值符号反转({K_original:.4f} → {K_optimized:.4f})，不采用优化结果")
-                    elif abs(K_optimized) < abs(K_original) * 0.1:  # K变得太小
+                    elif abs(K_optimized) < abs(K_original) / k_ratio_max:  # K变得太小
                         k_reasonable = False
                         self.log(f"   ⚠️ 优化后K值过小({K_original:.4f} → {K_optimized:.4f})，不采用优化结果")
-                    elif abs(K_optimized) > abs(K_original) * 10:  # K变得太大
+                    elif abs(K_optimized) > abs(K_original) * k_ratio_max:  # K变得太大
                         k_reasonable = False
                         self.log(f"   ⚠️ 优化后K值过大({K_original:.4f} → {K_optimized:.4f})，不采用优化结果")
                 
@@ -1048,13 +1065,12 @@ class ModelSelector:
                     global_rmse = rmse_opt
                     fusion = self._simulator.params_to_fusion(optimized_params, model_type, fusion)
                     
-                    # 优化后也应用参数约束
-                    T1_max = 30.0
-                    L_max = 10.0
-                    if fusion.T1 > T1_max:
-                        fusion.T1 = T1_max
-                    if fusion.L > L_max:
-                        fusion.L = L_max
+                    # 优化后也应用参数约束（从配置获取）
+                    param_constraints = Config.PARAMETER_CONSTRAINTS
+                    if fusion.T1 > param_constraints['T1_max']:
+                        fusion.T1 = param_constraints['T1_max']
+                    if fusion.L > param_constraints['L_max']:
+                        fusion.L = param_constraints['L_max']
                     
                     fusion.fusion_method += " + 全量优化"
                     self.log(f"   → 采用优化结果")
@@ -1243,8 +1259,10 @@ class ModelSelector:
                         pred_range = np.ptp(y_pred_check)
                         amplitude_ratio = pred_range / (pv_range + self._epsilon)
                         
-                        # 只接受幅度合理的结果
-                        if 0.3 < amplitude_ratio < 3.0:
+                        # 只接受幅度合理的结果（从配置获取阈值）
+                        amp_min = Config.OPTIMIZATION['amplitude_ratio_min']
+                        amp_max = Config.OPTIMIZATION['amplitude_ratio_max']
+                        if amp_min < amplitude_ratio < amp_max:
                             best_cost = result.cost
                             best_params = tuple(result.x)
                 except Exception:

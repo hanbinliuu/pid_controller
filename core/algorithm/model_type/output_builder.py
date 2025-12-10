@@ -1,0 +1,336 @@
+"""输出构建模块 - 负责构建最终整定结果"""
+
+import numpy as np
+from typing import List, Dict, Any, Optional
+
+from .config import Config, ModelType
+from .models import FusionResult, HistoricalData, TuningInput
+from .logger import LoggerMixin
+from .utils import calculate_r2, calculate_rmse
+
+
+class OutputBuilder(LoggerMixin):
+    """
+    输出构建器 - 构建最终整定结果
+    
+    职责：
+    1. 构建常规整定输出
+    2. 构建振荡整定输出
+    3. 生成空结果
+    """
+    
+    def __init__(self, simulator, pid_calculator, verbose: bool = False):
+        self._init_logger(verbose)
+        self._epsilon = Config.EPSILON
+        self._simulator = simulator
+        self._pid_calculator = pid_calculator
+    
+    def build_output(self, fusion: FusionResult, hist_data: HistoricalData,
+                     time_range: Dict, lambda_factor: float,
+                     tuning_windows: List[Dict] = None) -> Dict[str, Any]:
+        """构建最终输出"""
+        pid_params = self._pid_calculator.calculate_from_fusion(fusion, lambda_factor)
+        
+        params = self._simulator.fusion_to_params(fusion)
+        
+        valid_mask = hist_data.pv != 0
+        y = hist_data.pv[valid_mask]
+        u = hist_data.mv[valid_mask]
+        ts = hist_data.timestamp[valid_mask]
+        sv = hist_data.sv[valid_mask]
+        
+        # 构建扰动段掩码
+        disturbance_mask = np.zeros(len(ts), dtype=bool)
+        if tuning_windows:
+            for window in tuning_windows:
+                if hasattr(window, 'start_time'):
+                    start_ts = window.start_time
+                    end_ts = window.end_time
+                else:
+                    start_ts = window.get('start_time', 0)
+                    end_ts = window.get('end_time', 0)
+                disturbance_mask |= (ts >= start_ts) & (ts <= end_ts)
+        
+        # 对全量数据进行模型仿真
+        pv_model_full = self._simulator.simulate_segmented(
+            params, fusion.model_type, y, u, 
+            reset_on_sv_change=True, sv=sv,
+            enable_smooth=True,
+            enable_amplitude_calibration=True,
+            enable_offset_correction=True,
+            enable_oscillation_overlay=True
+        )
+        
+        # pv_model: 扰动段用模型拟合，稳态段用实际PV
+        pv_model = y.copy()
+        pv_model[disturbance_mask] = pv_model_full[disturbance_mask]
+        
+        sim_r2 = calculate_r2(y, pv_model)
+        
+        pv_diff = np.diff(y)
+        sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
+        oscillation_ratio = sign_changes / (len(y) - 2) if len(y) > 2 else 0
+        
+        pv_range = np.ptp(y)
+        model_range = np.ptp(pv_model)
+        amplitude_ratio = model_range / (pv_range + self._epsilon) if pv_range > 0.1 else 1.0
+        
+        self.log(f"   pv_model检查: sim_R²={sim_r2:.3f}, 振荡={oscillation_ratio:.2f}, "
+                f"PV范围={pv_range:.2f}, 模型范围={model_range:.2f}, 幅度比={amplitude_ratio:.2f}")
+        
+        sim_quality_poor = (
+            sim_r2 < 0.5 or
+            fusion.global_r2 < 0.3 or
+            oscillation_ratio > 0.4 or
+            amplitude_ratio < 0.5 or amplitude_ratio > 2.0
+        )
+        
+        fitting_failed = (
+            fusion.n_segments_used == 0 or
+            sim_r2 < 0.1 or
+            amplitude_ratio < 0.3 or amplitude_ratio > 3.0
+        )
+        
+        if fitting_failed:
+            self.log(f"   ❌ 拟合完全失败，保留原始pv_model用于诊断分析")
+        elif sim_quality_poor:
+            reason = []
+            if sim_r2 < 0.5:
+                reason.append(f"R²={sim_r2:.3f}")
+            if oscillation_ratio > 0.4:
+                reason.append(f"振荡={oscillation_ratio:.2f}")
+            if amplitude_ratio < 0.5 or amplitude_ratio > 2.0:
+                reason.append(f"幅度比={amplitude_ratio:.2f}")
+            self.log(f"   ⚠️ 模型仿真质量较差({', '.join(reason)})")
+        
+        total_data_points = int(np.sum(valid_mask))
+        
+        # 闭环稳定性验证
+        sp_initial = float(sv[0]) if len(sv) > 0 else 50.0
+        sp_final = float(sv[-1]) if len(sv) > 0 else 60.0
+        pv_initial = float(y[0]) if len(y) > 0 else sp_initial
+        
+        sp_change = abs(sp_final - sp_initial)
+        pv_sp_diff = abs(pv_initial - sp_initial)
+        
+        if sp_change < 5.0 or pv_sp_diff > sp_change * 2:
+            sp_initial = 50.0
+            sp_final = 60.0
+            pv_initial = 50.0
+        
+        is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
+            fusion, pid_params, 
+            sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
+            verbose=self._verbose
+        )
+        
+        # 计算 model_rating
+        model_rating, score_details = self._pid_calculator.calculate_model_rating(
+            fusion, total_data_points, cl_metrics=cl_metrics, verbose=self._verbose
+        )
+        
+        if self._verbose:
+            self.log(f"\n   📊 评分详情:")
+            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × 30%")
+            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × 20%")
+            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × 15%")
+            self.log(f"      数据覆盖度 ({fusion.n_segments_used}段/{total_data_points}点): {score_details.get('coverage_score', 0):.1f}/10 × 10%")
+            self.log(f"      闭环稳定性: {score_details.get('stability_score', 0):.1f}/10 × 25%")
+            self.log(f"      → 综合评分: {model_rating}/10")
+        
+        closed_loop_info = {
+            'is_stable': is_stable,
+            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
+            'overshoot': cl_metrics.overshoot,
+            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
+            'steady_state_error': cl_metrics.steady_state_error,
+            'oscillation_count': cl_metrics.oscillation_count,
+            'decay_ratio': cl_metrics.decay_ratio
+        }
+        
+        return {
+            'success': not fitting_failed,
+            'model_type': fusion.model_type,
+            'model_rating': model_rating,
+            'start_time': time_range.get('start_time'),
+            'end_time': time_range.get('end_time'),
+            'model_parameters': {
+                'K': round(fusion.K, 4),
+                'T1': round(fusion.T1, 4),
+                'T2': round(fusion.T2, 4),
+                'L': round(fusion.L, 4)
+            },
+            'pid_parameters': pid_params,
+            'fitting_result': {
+                'timestamp': ts.tolist(),
+                'sv': sv.tolist(),
+                'pv': y.tolist(),
+                'mv': u.tolist(),
+                'pv_model': pv_model.tolist(),
+                'r_squared': round(fusion.global_r2, 4),
+                'rmse': round(fusion.global_rmse, 4)
+            },
+            'fusion_info': {
+                'method': fusion.fusion_method,
+                'n_segments': fusion.n_segments_used,
+                'consistency_score': round(fusion.consistency_score, 4),
+                'K_std': round(fusion.K_std, 4),
+                'T1_std': round(fusion.T1_std, 4)
+            },
+            'closed_loop_verification': closed_loop_info,
+            'rating_details': score_details
+        }
+    
+    def build_oscillation_output(self, osc_result: Dict, hist_data: HistoricalData,
+                                 time_range: Dict, tuning_windows: List) -> Dict[str, Any]:
+        """构建振荡分析整定的输出结果"""
+        pid_params = osc_result['pid_params']
+        osc_info = osc_result['oscillation_info']
+        
+        valid_mask = hist_data.pv != 0
+        y = hist_data.pv[valid_mask]
+        u = hist_data.mv[valid_mask]
+        ts = hist_data.timestamp[valid_mask]
+        sv = hist_data.sv[valid_mask]
+        
+        Pu = osc_info['Pu']
+        Ku = pid_params['Ku']
+        
+        pv_amplitude = osc_info.get('amplitude', 1.0)
+        mv_amplitude = osc_info.get('mv_amplitude', 1.0)
+        if mv_amplitude > 0.01:
+            K_from_data = pv_amplitude / mv_amplitude
+        else:
+            K_from_data = 1.0 / Ku if Ku > 0.01 else 1.0
+        
+        K_est = round(K_from_data, 4)
+        T1_est = round(Pu, 4)
+        L_est = round(Pu / 4, 4)
+        
+        # 生成 pv_model
+        temp_params = (K_est, T1_est, L_est)
+        pv_model = self._simulator.simulate_segmented(
+            temp_params, 'FOPDT', y, u,
+            reset_on_sv_change=True, sv=sv,
+            enable_smooth=True,
+            enable_amplitude_calibration=True,
+            enable_offset_correction=True,
+            enable_oscillation_overlay=True
+        )
+        
+        # 创建 FusionResult 用于闭环验证
+        from .models import FusionResult
+        temp_fusion = FusionResult(
+            model_type=ModelType.FOPDT,
+            K=K_est, T1=T1_est, T2=0.0, L=L_est
+        )
+        
+        # 闭环验证
+        osc_config = Config.OSCILLATION_TUNING
+        cl_config = Config.CLOSED_LOOP
+        
+        sp_initial = osc_config['sp_initial']
+        sp_final = osc_config['sp_final']
+        pv_initial = osc_config['pv_initial']
+        
+        is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
+            temp_fusion, pid_params, 
+            sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
+            verbose=self._verbose
+        )
+        
+        # 基于闭环性能计算评分
+        stability_score = 0.0
+        if is_stable:
+            stability_score += 5.0
+            if cl_metrics.overshoot < cl_config['overshoot_good']:
+                stability_score += 2.0
+            elif cl_metrics.overshoot < cl_config['overshoot_acceptable']:
+                stability_score += 1.0
+            if cl_config['rise_time_min'] < cl_metrics.rise_time < cl_config['rise_time_max']:
+                stability_score += 1.5
+            if cl_metrics.oscillation_count <= cl_config['oscillation_count_ideal']:
+                stability_score += 1.5
+        
+        model_rating = round(min(10.0, max(0.0, stability_score * 0.6 + 2.0)), 2)
+        
+        closed_loop_info = {
+            'is_stable': is_stable,
+            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
+            'overshoot': cl_metrics.overshoot,
+            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
+            'steady_state_error': cl_metrics.steady_state_error,
+            'oscillation_count': cl_metrics.oscillation_count,
+            'decay_ratio': cl_metrics.decay_ratio
+        }
+        
+        return {
+            'success': True,
+            'model_type': ModelType.FOPDT,
+            'turning_type': 'PID',
+            'model_rating': model_rating,
+            'start_time': time_range.get('start_time'),
+            'end_time': time_range.get('end_time'),
+            'model_parameters': {
+                'K': K_est,
+                'T1': T1_est,
+                'T2': 0.0,
+                'L': L_est
+            },
+            'pid_parameters': pid_params,
+            'fitting_result': {
+                'timestamp': ts.tolist(),
+                'sv': sv.tolist(),
+                'pv': y.tolist(),
+                'mv': u.tolist(),
+                'pv_model': pv_model.tolist(),
+                'r_squared': calculate_r2(y, pv_model),
+                'rmse': calculate_rmse(y, pv_model)
+            },
+            'fusion_info': {
+                'method': 'oscillation_critical',
+                'n_segments': 1,
+                'consistency_score': 0.0,
+                'oscillation_type': osc_info['oscillation_type'],
+                'oscillation_amplitude': osc_info['amplitude']
+            },
+            'closed_loop_verification': closed_loop_info,
+            'rating_details': {
+                'r2_score': 0.0,
+                'consistency_score': 0.0,
+                'validity_score': 5.0,
+                'coverage_score': 5.0,
+                'stability_score': stability_score,
+                'n_segments': 1,
+                'total_data_points': len(y)
+            }
+        }
+    
+    def empty_result(self, input_data: Optional[TuningInput] = None) -> Dict[str, Any]:
+        """空结果"""
+        return {
+            'success': False,
+            'model_type': ModelType.FOPDT,
+            'model_rating': 0.0,
+            'start_time': getattr(input_data, 'start_time', None) if input_data else None,
+            'end_time': getattr(input_data, 'end_time', None) if input_data else None,
+            'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
+            'pid_parameters': {'Kp': 1.0, 'Ki': 0.05, 'Kd': 0.0},
+            'fitting_result': {
+                'timestamp': [], 'sv': [], 'pv': [], 'mv': [],
+                'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0
+            },
+            'fusion_info': {
+                'method': 'none',
+                'n_segments': 0,
+                'consistency_score': 0.0
+            },
+            'rating_details': {
+                'r2_score': 0.0,
+                'consistency_score': 0.0,
+                'validity_score': 0.0,
+                'coverage_score': 0.0,
+                'n_segments': 0,
+                'total_data_points': 0
+            }
+        }

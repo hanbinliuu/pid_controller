@@ -12,15 +12,12 @@ from .utils import parse_timestamp
 class SegmentProcessor:
     """段处理器 - 负责段提取、过滤和有效性检查"""
     
-    # 验证阈值常量
-    MIN_DATA_POINTS = 20          # 最小数据点数
-    MIN_PV_RANGE = 0.5            # 最小PV变化范围
-    MIN_MV_RANGE = 0.1            # 最小MV变化范围
-    
     def __init__(self, verbose: bool = False):
         self._verbose = verbose
         self._epsilon = Config.EPSILON
         self._preprocessor = DataPreprocessor(verbose=verbose)
+        # 从集中化配置获取阈值
+        self._seg_config = Config.SEGMENT_PROCESSING
     
     def log(self, msg: str):
         if self._verbose:
@@ -85,29 +82,34 @@ class SegmentProcessor:
                 is_valid=True
             )
             
+            # 从配置获取阈值
+            min_points = self._seg_config['min_data_points']
+            min_pv = self._seg_config['min_pv_range']
+            min_mv = self._seg_config['min_mv_range']
+            
             # 检查1: 数据点数
-            if len(seg) < self.MIN_DATA_POINTS:
-                self._mark_invalid(result, f"数据点不足({len(seg)}<{self.MIN_DATA_POINTS})", i, segment_results)
+            if len(seg) < min_points:
+                self._mark_invalid(result, f"数据点不足({len(seg)}<{min_points})", i, segment_results)
                 continue
             
             # 过滤PV=0的点
             valid_mask = seg.pv != 0
             valid_count = np.sum(valid_mask)
             
-            if valid_count < self.MIN_DATA_POINTS:
-                self._mark_invalid(result, f"有效点不足({valid_count}<{self.MIN_DATA_POINTS})", i, segment_results)
+            if valid_count < min_points:
+                self._mark_invalid(result, f"有效点不足({valid_count}<{min_points})", i, segment_results)
                 continue
             
             y, u = seg.pv[valid_mask], seg.mv[valid_mask]
             pv_range, mv_range = np.ptp(y), np.ptp(u)
             
             # 检查2: PV变化
-            if pv_range < self.MIN_PV_RANGE and np.std(y) < 0.1:
+            if pv_range < min_pv and np.std(y) < 0.1:
                 self._mark_invalid(result, f"PV无变化(range={pv_range:.2f})", i, segment_results)
                 continue
             
             # 检查3: MV变化
-            if mv_range < self.MIN_MV_RANGE:
+            if mv_range < min_mv:
                 self._mark_invalid(result, f"MV无变化(range={mv_range:.2f})", i, segment_results)
                 continue
             
@@ -129,12 +131,15 @@ class SegmentProcessor:
             result.is_nonlinear = quality.is_nonlinear
             
             # 检查6: 严重非线性过滤
-            if quality.nonlinearity_score > 0.7 and quality.step_response_score < 0.3:
+            severe_nonlin = self._seg_config['severe_nonlinearity']
+            if quality.nonlinearity_score > severe_nonlin and quality.step_response_score < 0.3:
                 self._mark_invalid(result, f"严重非线性(非线性={quality.nonlinearity_score:.2f}, 阶跃特征={quality.step_response_score:.2f})", i, segment_results)
                 continue
             
-            # 检查7: 严重振荡过滤（放宽阈值：振荡>0.75 且 质量分<0.25）
-            if quality.oscillation_ratio > 0.75 and quality.quality_score < 0.25:
+            # 检查7: 严重振荡过滤
+            severe_osc = self._seg_config['severe_oscillation']
+            low_quality = self._seg_config['low_quality_threshold']
+            if quality.oscillation_ratio > severe_osc and quality.quality_score < low_quality:
                 self._mark_invalid(result, f"严重振荡(振荡={quality.oscillation_ratio:.2f}, 质量分={quality.quality_score:.2f})", i, segment_results)
                 continue
             
