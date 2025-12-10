@@ -242,10 +242,10 @@ class PIDCalculator:
         # ========== 方法3: 自相关法 ==========
         Pu_autocorr = self._detect_period_from_autocorr(pv_detrend, dt)
         
-        # 综合多种方法的结果
-        # 工业 PID 的典型振荡周期范围：1 秒 ~ 120 秒
-        MIN_PERIOD = 1.0   # 最小周期 1 秒
-        MAX_PERIOD = 120.0  # 最大周期 120 秒（超过这个通常不是真正的振荡）
+        # 综合多种方法的结果（使用配置的周期范围）
+        osc_config = Config.OSCILLATION_TUNING
+        MIN_PERIOD = osc_config['period_min']
+        MAX_PERIOD = osc_config['period_max']
         
         valid_periods = []
         weights = []

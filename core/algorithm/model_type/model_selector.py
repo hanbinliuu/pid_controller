@@ -120,9 +120,10 @@ class ModelSelector:
         Ki = pid_params.get('Ki', 0.0)
         Kd = pid_params.get('Kd', 0.0)
         
-        Ti = Kp / Ki if Ki > self._epsilon else 0.0
-        Td = Kd / Kp if Kp > self._epsilon else 0.0
-        Pb = 100.0 / Kp if Kp > self._epsilon else 100.0
+        # 处理反向作用系统（Kp/Ki/Kd可能为负）
+        Ti = Kp / Ki if abs(Ki) > self._epsilon else 0.0
+        Td = Kd / Kp if abs(Kp) > self._epsilon else 0.0
+        Pb = 100.0 / abs(Kp) if abs(Kp) > self._epsilon else 100.0
         
         turning_type = params.get('turning_type') or determine_turning_type(Kp, Ti, Td)
         
@@ -413,11 +414,15 @@ class ModelSelector:
         Returns:
             振荡整定结果，如果不适用则返回 None
         """
-        # 检查是否有高振荡段且拟合失败
+        # 检查是否有高振荡段且拟合失败（使用配置阈值）
+        osc_config = Config.OSCILLATION_TUNING
+        osc_ratio_threshold = osc_config['oscillation_ratio_threshold']
+        r2_failure_threshold = osc_config['r2_failure_threshold']
+        
         oscillating_segments = []
         for i, (seg, result) in enumerate(zip(segments, segment_results)):
-            is_oscillating = result.oscillation_ratio > 0.5
-            fit_failed = result.best_r2 < 0.3
+            is_oscillating = result.oscillation_ratio > osc_ratio_threshold
+            fit_failed = result.best_r2 < r2_failure_threshold
             
             if is_oscillating and fit_failed:
                 oscillating_segments.append((i, seg, result))
@@ -519,10 +524,13 @@ class ModelSelector:
             K=K_est, T1=T1_est, T2=0.0, L=L_est
         )
         
-        # 闭环验证（使用估算的模型参数，与可视化一致）
-        sp_initial = 50.0
-        sp_final = 60.0
-        pv_initial = 50.0
+        # 闭环验证（使用配置中的仿真参数）
+        osc_config = Config.OSCILLATION_TUNING
+        cl_config = Config.CLOSED_LOOP
+        
+        sp_initial = osc_config['sp_initial']
+        sp_final = osc_config['sp_final']
+        pv_initial = osc_config['pv_initial']
         
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
             temp_fusion, pid_params,
@@ -530,11 +538,11 @@ class ModelSelector:
             verbose=self._verbose
         )
         
-        # 计算评分（振荡整定的评分规则不同）
+        # 计算评分（振荡整定的评分规则，使用配置阈值）
         stability_score = 10.0 if is_stable else 5.0
-        if cl_metrics.overshoot > 30:
+        if cl_metrics.overshoot > cl_config['overshoot_acceptable']:
             stability_score -= 2.0
-        if cl_metrics.oscillation_count > 3:
+        if cl_metrics.oscillation_count > cl_config['oscillation_count_ideal']:
             stability_score -= 1.0
         
         # 综合评分（振荡整定的基础分较低，因为没有模型拟合验证）
