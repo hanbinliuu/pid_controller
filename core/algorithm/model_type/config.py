@@ -20,7 +20,7 @@ class Config:
     # ============================================================
     OSCILLATION_TUNING = {
         # 触发振荡整定的条件
-        'oscillation_ratio_threshold': 0.5,  # 振荡比阈值，超过此值认为是高振荡数据
+        'oscillation_ratio_threshold': 0.1,  # 振荡比阈值，超过此值认为是高振荡数据
         'r2_failure_threshold': 0.3,         # R² 阈值，低于此值认为模型拟合失败
         
         # 振荡周期检测

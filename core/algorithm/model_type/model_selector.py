@@ -1392,7 +1392,7 @@ class ModelSelector:
         valid_mask = hist_data.pv != 0
         y = hist_data.pv[valid_mask]
         u = hist_data.mv[valid_mask]
-        ts = hist_data.timestamp[valid_mask]
+        ts = np.array(hist_data.timestamp[valid_mask], dtype=np.int64)  # 确保是 int64 类型
         sv = hist_data.sv[valid_mask]
         
         # 构建扰动段掩码：只在扰动段内使用模型拟合
@@ -1401,11 +1401,11 @@ class ModelSelector:
             for window in tuning_windows:
                 # 支持 TuningWindow 对象或字典
                 if hasattr(window, 'start_time'):
-                    start_ts = window.start_time
-                    end_ts = window.end_time
+                    start_ts = int(window.start_time)
+                    end_ts = int(window.end_time)
                 else:
-                    start_ts = window.get('start_time', 0)
-                    end_ts = window.get('end_time', 0)
+                    start_ts = int(window.get('start_time', 0))
+                    end_ts = int(window.get('end_time', 0))
                 disturbance_mask |= (ts >= start_ts) & (ts <= end_ts)
         
         # 对全量数据进行模型仿真
