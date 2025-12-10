@@ -296,12 +296,25 @@ class PIDCalculator:
         else:
             avg_decay = 1.0
         
-        # 估算 MV 的等效继电器幅度
-        mv_amplitude = (np.max(mv) - np.min(mv)) / 2
+        # 检查MV是否也在振荡（而不是阶跃）
+        # 如果MV是阶跃后的小幅波动，不应该用全范围计算
+        mv_diff = np.diff(mv)
+        mv_sign_changes = np.sum(np.abs(np.diff(np.sign(mv_diff))) > 0)
+        mv_oscillation_ratio = mv_sign_changes / (len(mv) - 2) if len(mv) > 2 else 0
+        
+        # 计算MV的振荡幅度（排除阶跃影响）
+        if mv_oscillation_ratio > 0.2:
+            # MV确实在振荡，使用振荡幅度
+            mv_amplitude = (np.max(mv) - np.min(mv)) / 2
+        else:
+            # MV可能是阶跃，使用中位数绝对差分作为振荡幅度
+            mv_amplitude = np.median(np.abs(mv_diff)) * 2
         
         # 使用继电器反馈法估算临界增益
         if amplitude > self._epsilon:
             Ku_estimate = 4 * mv_amplitude / (np.pi * amplitude)
+            # 限制Ku的合理范围，避免极端值
+            Ku_estimate = np.clip(Ku_estimate, 0.1, 20.0)
         else:
             Ku_estimate = 1.0
         

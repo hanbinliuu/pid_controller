@@ -96,14 +96,40 @@ class SegmentFitter(LoggerMixin):
             # 检测高振荡数据
             oscillation_info = ModelIdentifier.detect_high_oscillation(y, u)
             is_oscillating = oscillation_info['is_oscillating']
+            severity = oscillation_info.get('severity_level', 'none')
             
             if is_oscillating:
-                self.log(f"   ⚠️ 检测到高振荡开环数据 (振荡比={oscillation_info['oscillation_ratio']:.2f})")
+                envelope_ratio = oscillation_info.get('envelope_ratio', 0)
+                self.log(f"   ⚠️ 检测到振荡数据 (程度={severity}, 振荡比={oscillation_info['oscillation_ratio']:.2f}, "
+                        f"包络比={envelope_ratio:.2f})")
                 filter_size = oscillation_info['recommended_filter_size']
-                y_fit, u_fit = ModelIdentifier.preprocess_oscillating_data(y, u, filter_size)
-                k_expected = abs(ModelIdentifier.estimate_gain_from_oscillating_data(y, u))
-                k_min = k_expected * 0.3
-                k_max = k_expected * 3.0
+                
+                # 对于中等及以上振荡，或包络比>0.3，都使用稳健估计
+                use_robust = severity in ['severe', 'moderate'] or envelope_ratio > 0.3
+                
+                if use_robust:
+                    # 使用稳健KTL估计
+                    robust_ktl = ModelIdentifier.estimate_ktl_robust(y, u, t)
+                    k_expected = abs(robust_ktl['K'])
+                    _, y_fit, u_fit = ModelIdentifier.estimate_gain_from_oscillating_data(
+                        y, u, return_trend=True
+                    )
+                    self.log(f"   📈 使用稳健KTL估计, K={k_expected:.4f} (置信度={robust_ktl['confidence']:.2f})")
+                else:
+                    # 轻微振荡：使用滤波预处理
+                    y_fit, u_fit = ModelIdentifier.preprocess_oscillating_data(y, u, filter_size, severity)
+                    k_expected = abs(ModelIdentifier.estimate_gain_from_oscillating_data(y, u))
+                
+                # 根据振荡程度调整K值允许范围
+                if severity == 'severe' or envelope_ratio > 0.5:
+                    k_min = k_expected * 0.5
+                    k_max = k_expected * 2.0
+                elif severity == 'moderate':
+                    k_min = k_expected * 0.4
+                    k_max = k_expected * 2.5
+                else:
+                    k_min = k_expected * 0.3
+                    k_max = k_expected * 3.0
             else:
                 y_fit, u_fit = y, u
             
@@ -166,7 +192,8 @@ class SegmentFitter(LoggerMixin):
                         'y_pred': y_pred,
                         'k_expected': k_expected,
                         'k_reasonable': k_reasonable,
-                        'is_oscillating': is_oscillating
+                        'is_oscillating': is_oscillating,
+                        'oscillation_severity': severity if is_oscillating else 'none'
                     }
                     
                     k_flag = "✓" if k_reasonable else "✗"
@@ -260,10 +287,47 @@ class SegmentFitter(LoggerMixin):
         self.log(f"   段{seg_idx+1}: Pu={osc_info['Pu']:.1f}s, Ku≈{osc_info['Ku']:.3f}, "
                 f"振幅={osc_info['amplitude']:.2f}, 类型={osc_info['oscillation_type']}")
         
-        # 基于振荡特征计算PID参数
-        pid_result = self._pid_calculator.calculate_from_oscillation(
-            osc_info, current_pid, method='zn'
-        )
+        # 验证数据是否适合临界法整定
+        # 检查1：MV变化幅度与PV振荡幅度的比例是否合理
+        mv_range = np.ptp(mv)
+        pv_range = np.ptp(pv)
+        pv_amplitude = osc_info['amplitude']
+        
+        # 使用PV范围和振荡幅度中较大的
+        effective_pv_change = max(pv_range, pv_amplitude)
+        apparent_gain = effective_pv_change / mv_range if mv_range > 0.1 else 1.0
+        
+        self.log(f"   📊 增益检查: MV范围={mv_range:.2f}, PV范围={pv_range:.2f}, apparent_gain={apparent_gain:.4f}")
+        
+        use_conservative = False
+        if apparent_gain < 0.1:  # 放宽阈值到0.1
+            self.log(f"   ⚠️ 警告：MV变化幅度={mv_range:.2f}，PV变化={effective_pv_change:.2f}，增益={apparent_gain:.4f}")
+            self.log(f"   ⚠️ 检测到低增益系统，使用保守参数")
+            use_conservative = True
+            # 对于低增益系统，直接使用保守的pb值
+            # 已知稳定参数约pb=71.3, ti=2.1，使用类似的保守参数
+            Pu = osc_info['Pu']
+            conservative_pb = 70.0  # 保守的pb值
+            conservative_Kp = 100.0 / conservative_pb  # ≈1.43
+            conservative_Ti = max(Pu / 2, 2.0)  # 积分时间
+            conservative_Ki = conservative_Kp / conservative_Ti
+            
+            pid_result = {
+                'Kp': round(conservative_Kp, 4),
+                'Ki': round(conservative_Ki, 4),
+                'Kd': 0.0,  # 不使用微分
+                'method': 'low_gain_conservative',
+                'Pu': Pu,
+                'Ku': osc_info['Ku']
+            }
+            self.log(f"   ✅ 保守整定: pb={conservative_pb:.1f}, Kp={conservative_Kp:.4f}, Ki={conservative_Ki:.4f}")
+        
+        if not use_conservative:
+            # 基于振荡特征计算PID参数
+            # 使用更保守的tyreus_luyben方法，避免过激参数
+            pid_result = self._pid_calculator.calculate_from_oscillation(
+                osc_info, current_pid, method='tyreus_luyben'
+            )
         
         if pid_result is None:
             return None

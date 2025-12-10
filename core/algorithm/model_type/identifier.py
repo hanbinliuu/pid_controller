@@ -5,6 +5,7 @@ from scipy.optimize import least_squares
 from scipy.ndimage import uniform_filter1d
 
 from .config import Config
+from scipy.signal import savgol_filter
 
 
 class ModelIdentifier:
@@ -31,10 +32,11 @@ class ModelIdentifier:
         检测是否为高振荡开环数据
         
         Returns:
-            dict: {is_oscillating, oscillation_ratio, amplitude_ratio, recommended_filter_size}
+            dict: {is_oscillating, oscillation_ratio, amplitude_ratio, 
+                   recommended_filter_size, severity_level}
         """
         if len(y) < 20:
-            return {'is_oscillating': False, 'oscillation_ratio': 0.0}
+            return {'is_oscillating': False, 'oscillation_ratio': 0.0, 'severity_level': 'none'}
         
         # 计算PV符号变化比例
         pv_diff = np.diff(y)
@@ -47,18 +49,46 @@ class ModelIdentifier:
             # 使用中位数振幅估计振荡大小
             median_amplitude = np.median(np.abs(pv_diff))
             amplitude_ratio = median_amplitude / pv_range
+            
+            # 计算包络线振荡比（上下包络线的平均差值与总范围的比值）
+            window = max(5, len(y) // 20)
+            y_upper = np.array([np.max(y[max(0,i-window):min(len(y),i+window+1)]) for i in range(len(y))])
+            y_lower = np.array([np.min(y[max(0,i-window):min(len(y),i+window+1)]) for i in range(len(y))])
+            envelope_width = np.median(y_upper - y_lower)
+            envelope_ratio = envelope_width / pv_range
         else:
             amplitude_ratio = 0.0
+            envelope_ratio = 0.0
         
-        # 判断是否为高振荡数据
-        is_oscillating = oscillation_ratio > 0.25 or amplitude_ratio > 0.1
+        # 判断振荡严重程度
+        # 综合考虑：振荡频率(oscillation_ratio) + 振荡幅度(envelope_ratio)
+        # severe: 高频+大幅 或 极大幅度 → 需要使用包络线趋势拟合
+        # moderate: 中等振荡 → 需要使用滤波预处理
+        # mild: 轻微振荡 → 正常处理带滤波
+        
+        # 计算综合振荡得分（同时考虑频率和幅度）
+        osc_score = 0.4 * oscillation_ratio + 0.6 * envelope_ratio
+        
+        if envelope_ratio > 0.7 or (oscillation_ratio > 0.5 and envelope_ratio > 0.5):
+            # 大幅度振荡，无论频率高低都用趋势拟合
+            severity_level = 'severe'
+            is_oscillating = True
+        elif osc_score > 0.4 or envelope_ratio > 0.5:
+            severity_level = 'moderate'
+            is_oscillating = True
+        elif oscillation_ratio > 0.25 or amplitude_ratio > 0.08:
+            severity_level = 'mild'
+            is_oscillating = True
+        else:
+            severity_level = 'none'
+            is_oscillating = False
         
         # 推荐滤波窗口大小
-        if oscillation_ratio > 0.4:
-            recommended_filter = 9
-        elif oscillation_ratio > 0.3:
+        if severity_level == 'severe':
+            recommended_filter = 11
+        elif severity_level == 'moderate':
             recommended_filter = 7
-        elif oscillation_ratio > 0.2:
+        elif severity_level == 'mild':
             recommended_filter = 5
         else:
             recommended_filter = 3
@@ -67,13 +97,22 @@ class ModelIdentifier:
             'is_oscillating': is_oscillating,
             'oscillation_ratio': oscillation_ratio,
             'amplitude_ratio': amplitude_ratio,
-            'recommended_filter_size': recommended_filter
+            'envelope_ratio': envelope_ratio if pv_range > Config.EPSILON else 0.0,
+            'recommended_filter_size': recommended_filter,
+            'severity_level': severity_level
         }
     
     @staticmethod
-    def preprocess_oscillating_data(y: np.ndarray, u: np.ndarray, filter_size: int = 5) -> tuple:
+    def preprocess_oscillating_data(y: np.ndarray, u: np.ndarray, filter_size: int = 5, 
+                                     severity: str = 'mild') -> tuple:
         """
-        预处理高振荡数据 - 使用自适应滤波
+        预处理高振荡数据 - 根据严重程度选择处理方法
+        
+        Args:
+            y: PV数据
+            u: MV数据  
+            filter_size: 滤波窗口大小
+            severity: 振荡严重程度 ('mild', 'moderate', 'severe')
         
         Returns:
             (y_filtered, u_filtered)
@@ -81,49 +120,271 @@ class ModelIdentifier:
         if len(y) < filter_size:
             return y.copy(), u.copy()
         
-        # 使用均值滤波平滑数据
-        y_filtered = uniform_filter1d(y, size=filter_size, mode='nearest')
-        u_filtered = uniform_filter1d(u, size=filter_size, mode='nearest')
+        if severity == 'severe':
+            # 严重振荡：使用包络线中线作为趋势
+            y_filtered = ModelIdentifier._extract_envelope_trend(y, filter_size)
+            u_filtered = uniform_filter1d(u, size=filter_size, mode='nearest')
+        elif severity == 'moderate':
+            # 中等振荡：使用Savitzky-Golay滤波保持趋势
+            window = min(filter_size * 2 + 1, len(y) - 2)
+            if window % 2 == 0:
+                window += 1
+            window = max(5, window)
+            try:
+                y_filtered = savgol_filter(y, window, min(3, window - 2))
+                u_filtered = savgol_filter(u, window, min(3, window - 2))
+            except Exception:
+                y_filtered = uniform_filter1d(y, size=filter_size, mode='nearest')
+                u_filtered = uniform_filter1d(u, size=filter_size, mode='nearest')
+        else:
+            # 轻微振荡：使用均值滤波
+            y_filtered = uniform_filter1d(y, size=filter_size, mode='nearest')
+            u_filtered = uniform_filter1d(u, size=filter_size, mode='nearest')
         
         return y_filtered, u_filtered
     
     @staticmethod
-    def estimate_gain_from_oscillating_data(y: np.ndarray, u: np.ndarray) -> float:
+    def _extract_envelope_trend(y: np.ndarray, window: int = 5) -> np.ndarray:
         """
-        从高振荡数据中估计增益K
-        使用包络线法而非直接计算
+        提取包络线中线作为趋势
+        
+        对于高振荡数据，包络线中线比简单滤波更能反映真实趋势
         """
-        if len(y) < 20:
-            return ModelIdentifier._estimate_gain_from_correlation(u, y, y[0])
+        n = len(y)
+        half_w = max(window, n // 20)
         
-        # 计算PV的上下包络线
-        window = min(10, len(y) // 5)
-        y_upper = np.zeros_like(y)
-        y_lower = np.zeros_like(y)
+        y_upper = np.zeros(n)
+        y_lower = np.zeros(n)
         
-        for i in range(len(y)):
-            start = max(0, i - window)
-            end = min(len(y), i + window + 1)
+        for i in range(n):
+            start = max(0, i - half_w)
+            end = min(n, i + half_w + 1)
             y_upper[i] = np.max(y[start:end])
             y_lower[i] = np.min(y[start:end])
         
-        # 使用包络线中线作为趋势
+        # 包络线中线
         y_trend = (y_upper + y_lower) / 2
         
-        # 计算趋势增益
+        # 再做一次平滑以消除阶梯效应
+        y_trend = uniform_filter1d(y_trend, size=max(3, window // 2), mode='nearest')
+        
+        return y_trend
+    
+    @staticmethod
+    def estimate_gain_from_oscillating_data(y: np.ndarray, u: np.ndarray, 
+                                             return_trend: bool = False) -> float:
+        """
+        从高振荡数据中估计增益K
+        使用包络线趋势法 + 分段验证
+        
+        Args:
+            y: PV数据
+            u: MV数据
+            return_trend: 是否同时返回趋势数据
+        
+        Returns:
+            K值（如果return_trend=True，返回 (K, y_trend, u_smooth)）
+        """
+        if len(y) < 20:
+            K = ModelIdentifier._estimate_gain_from_correlation(u, y, y[0])
+            if return_trend:
+                return K, y.copy(), u.copy()
+            return K
+        
+        # 提取包络线趋势
+        window = max(5, len(y) // 20)
+        y_trend = ModelIdentifier._extract_envelope_trend(y, window)
+        u_smooth = uniform_filter1d(u, size=window, mode='nearest')
+        
+        # 方法1：总体变化量比值法
         y_trend_range = np.max(y_trend) - np.min(y_trend)
-        u_range = np.max(u) - np.min(u)
+        u_range = np.max(u_smooth) - np.min(u_smooth)
         
         if u_range < Config.EPSILON:
-            return 0.5
-        
-        K_magnitude = y_trend_range / u_range
+            K = 0.5
+        else:
+            K_total = y_trend_range / u_range
+            
+            # 方法2：分段增益验证（使用多个子段计算增益，取中位数）
+            n_segments = min(4, len(y) // 30)
+            segment_gains = []
+            
+            if n_segments >= 2:
+                seg_len = len(y) // n_segments
+                for i in range(n_segments):
+                    start = i * seg_len
+                    end = start + seg_len if i < n_segments - 1 else len(y)
+                    
+                    dy = y_trend[end-1] - y_trend[start]
+                    du = u_smooth[end-1] - u_smooth[start]
+                    
+                    if abs(du) > Config.EPSILON * 10:
+                        segment_gains.append(abs(dy / du))
+                
+                if segment_gains:
+                    K_segments = np.median(segment_gains)
+                    # 如果分段结果与总体结果差异不大，使用加权平均
+                    if 0.5 <= K_segments / (K_total + Config.EPSILON) <= 2.0:
+                        K_magnitude = 0.6 * K_total + 0.4 * K_segments
+                    else:
+                        # 差异较大，优先使用分段中位数（更稳健）
+                        K_magnitude = K_segments
+                else:
+                    K_magnitude = K_total
+            else:
+                K_magnitude = K_total
+            
+            K = K_magnitude
         
         # 确定符号
-        corr = np.corrcoef(u, y_trend)[0, 1] if len(u) > 2 else 0
+        corr = np.corrcoef(u_smooth, y_trend)[0, 1] if len(u) > 2 else 0
         K_sign = 1.0 if np.isnan(corr) or corr >= 0 else -1.0
+        K = np.clip(K * K_sign, -10.0, 10.0)
         
-        return np.clip(K_magnitude * K_sign, -5.0, 5.0)
+        if return_trend:
+            return K, y_trend, u_smooth
+        return K
+    
+    @staticmethod
+    def estimate_ktl_robust(y: np.ndarray, u: np.ndarray, t: np.ndarray) -> dict:
+        """
+        稳健的KTL参数估计（专门用于高振荡数据）
+        
+        使用多种方法综合估计，取最稳健的结果：
+        1. 首尾稳态法（最可靠）
+        2. 包络线趋势法
+        3. 分段中位数法
+        
+        Returns:
+            dict: {'K': K, 'T': T, 'L': L, 'confidence': 置信度}
+        """
+        n = len(y)
+        if n < 30:
+            initial = ModelIdentifier.estimate_initial_guess_from_operational_data(t, y, u, y[0])
+            return {'K': initial['K'], 'T': initial['T'], 'L': initial['L'], 'confidence': 0.5}
+        
+        # 提取包络线趋势
+        window = max(5, n // 20)
+        y_trend = ModelIdentifier._extract_envelope_trend(y, window)
+        u_smooth = uniform_filter1d(u, size=window, mode='nearest')
+        
+        # ========== 方法1：首尾稳态法（最可靠） ==========
+        # 使用首尾各10%的数据计算稳态值
+        head_len = max(10, n // 10)
+        tail_len = max(10, n // 10)
+        
+        # 对于振荡数据，使用包络线中线的首尾值更稳定
+        y_head = np.mean(y_trend[:head_len])
+        y_tail = np.mean(y_trend[-tail_len:])
+        u_head = np.mean(u_smooth[:head_len])
+        u_tail = np.mean(u_smooth[-tail_len:])
+        
+        delta_y = y_tail - y_head
+        delta_u = u_tail - u_head
+        
+        # 同时计算原始数据的首尾差（对于高振荡可能更准确）
+        y_head_raw = np.mean(y[:head_len])
+        y_tail_raw = np.mean(y[-tail_len:])
+        delta_y_raw = y_tail_raw - y_head_raw
+        
+        if abs(delta_u) > Config.EPSILON * 10:
+            K_steady_trend = delta_y / delta_u
+            K_steady_raw = delta_y_raw / delta_u
+            # 取两者中更接近包络线范围法的那个
+            K_envelope_approx = (np.ptp(y_trend)) / (np.ptp(u_smooth) + Config.EPSILON)
+            if abs(K_steady_raw - K_envelope_approx) < abs(K_steady_trend - K_envelope_approx):
+                K_steady = K_steady_raw
+            else:
+                K_steady = K_steady_trend
+        else:
+            K_steady = None
+        
+        # ========== 方法2：包络线趋势范围法 ==========
+        y_trend_range = np.max(y_trend) - np.min(y_trend)
+        u_range = np.max(u_smooth) - np.min(u_smooth)
+        
+        if u_range > Config.EPSILON:
+            K_envelope = y_trend_range / u_range
+            # 确定符号
+            corr = np.corrcoef(u_smooth, y_trend)[0, 1] if n > 2 else 0
+            if not np.isnan(corr) and corr < 0:
+                K_envelope = -K_envelope
+        else:
+            K_envelope = None
+        
+        # ========== 方法3：分段中位数法 ==========
+        n_segments = min(4, n // 30)
+        segment_gains = []
+        if n_segments >= 2:
+            seg_len = n // n_segments
+            for i in range(n_segments):
+                start = i * seg_len
+                end = start + seg_len if i < n_segments - 1 else n
+                
+                dy = y_trend[end-1] - y_trend[start]
+                du = u_smooth[end-1] - u_smooth[start]
+                
+                if abs(du) > Config.EPSILON * 10:
+                    segment_gains.append(dy / du)
+        
+        K_segments = np.median(segment_gains) if segment_gains else None
+        
+        # ========== 综合选择最可靠的K值 ==========
+        # 优先级：首尾稳态法 > 分段中位数法 > 包络线法
+        valid_Ks = []
+        weights = []
+        
+        if K_steady is not None and abs(K_steady) > Config.EPSILON:
+            valid_Ks.append(K_steady)
+            weights.append(3.0)  # 最高权重
+        
+        if K_segments is not None and abs(K_segments) > Config.EPSILON:
+            valid_Ks.append(K_segments)
+            weights.append(2.0)
+        
+        if K_envelope is not None and abs(K_envelope) > Config.EPSILON:
+            valid_Ks.append(K_envelope)
+            weights.append(1.0)
+        
+        if not valid_Ks:
+            K = 1.0
+            confidence = 0.3
+        elif len(valid_Ks) == 1:
+            K = valid_Ks[0]
+            confidence = 0.5
+        else:
+            # 检查一致性
+            K_mean = np.average(valid_Ks, weights=weights)
+            K_std = np.std(valid_Ks)
+            cv = abs(K_std / K_mean) if abs(K_mean) > Config.EPSILON else 1.0
+            
+            if cv < 0.3:
+                # 结果一致，使用加权平均
+                K = K_mean
+                confidence = 0.9
+            elif cv < 0.5:
+                # 中等一致性，优先使用稳态法
+                K = valid_Ks[0]  # 权重最高的那个
+                confidence = 0.7
+            else:
+                # 结果差异大，使用中位数
+                K = np.median(valid_Ks)
+                confidence = 0.5
+        
+        # 使用趋势数据估计T和L
+        initial = ModelIdentifier.estimate_initial_guess_from_operational_data(
+            t, y_trend, u_smooth, y_trend[0]
+        )
+        
+        return {
+            'K': K,
+            'T': initial['T'],
+            'L': initial['L'],
+            'confidence': confidence,
+            'K_steady': K_steady,
+            'K_envelope': K_envelope,
+            'K_segments': K_segments
+        }
     
     @staticmethod
     def _compute_sampling_info(t):
@@ -368,25 +629,56 @@ class ModelIdentifier:
         """
         统一的模型辨识方法
         
-        增强：自动检测高振荡数据并进行预处理
+        增强：
+        1. 根据振荡严重程度选择不同处理策略
+        2. 严重振荡使用包络线趋势拟合
+        3. 多重验证确保KTL准确性
         """
         y0 = y[0] if len(y) > 0 else 0.0
         
         # 检测是否为高振荡数据
         oscillation_info = ModelIdentifier.detect_high_oscillation(y, u)
+        severity = oscillation_info.get('severity_level', 'none')
         
         if oscillation_info['is_oscillating']:
-            # 对高振荡数据进行预处理
             filter_size = oscillation_info['recommended_filter_size']
-            y_proc, u_proc = ModelIdentifier.preprocess_oscillating_data(y, u, filter_size)
+            envelope_ratio = oscillation_info.get('envelope_ratio', 0)
             
-            # 使用包络线法估计增益
-            K_est = ModelIdentifier.estimate_gain_from_oscillating_data(y, u)
-            initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(t, y_proc, u_proc, y0)
-            initial_guess_dict['K'] = K_est
+            # 对于中等及以上振荡，或包络比>0.3，都使用稳健估计
+            use_robust = severity in ['severe', 'moderate'] or envelope_ratio > 0.3
+            
+            if use_robust:
+                # 使用稳健的KTL估计方法
+                robust_ktl = ModelIdentifier.estimate_ktl_robust(y, u, t)
+                K_est = robust_ktl['K']
+                
+                # 提取趋势用于拟合
+                _, y_trend, u_smooth = ModelIdentifier.estimate_gain_from_oscillating_data(
+                    y, u, return_trend=True
+                )
+                y_proc, u_proc = y_trend, u_smooth
+                
+                initial_guess_dict = {
+                    'K': K_est,
+                    'T': robust_ktl['T'],
+                    'L': robust_ktl['L']
+                }
+                y0_fit = y_trend[0]
+            else:
+                # 轻微振荡：使用滤波预处理
+                y_proc, u_proc = ModelIdentifier.preprocess_oscillating_data(
+                    y, u, filter_size, severity
+                )
+                K_est = ModelIdentifier.estimate_gain_from_oscillating_data(y, u)
+                initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(
+                    t, y_proc, u_proc, y0
+                )
+                initial_guess_dict['K'] = K_est
+                y0_fit = y0
         else:
             y_proc, u_proc = y, u
             initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(t, y, u, y0)
+            y0_fit = y0
         
         formatter = ModelIdentifier.INITIAL_GUESS_FORMATS.get(
             model_type, ModelIdentifier.INITIAL_GUESS_FORMATS['FOPDT']
@@ -397,11 +689,18 @@ class ModelIdentifier:
         bounds = model_config['initial']
         
         # 第一次优化：使用预处理后的数据
+        # 对于使用稳健估计的情况，保存稳健K值用于后续校正
+        used_robust = oscillation_info['is_oscillating'] and (
+            severity in ['severe', 'moderate'] or 
+            oscillation_info.get('envelope_ratio', 0) > 0.3
+        )
+        robust_K = initial_guess_dict.get('K') if used_robust else None
+        
         try:
             result = least_squares(
                 ModelIdentifier.residuals,
                 initial_guess,
-                args=(t, u_proc, y_proc, y0, model_type),
+                args=(t, u_proc, y_proc, y0_fit, model_type),
                 kwargs=kwargs,
                 bounds=bounds,
                 method='trf',
@@ -416,24 +715,40 @@ class ModelIdentifier:
         
         # 如果是高振荡数据，进行二次验证和校正
         if oscillation_info['is_oscillating']:
-            # 使用原始数据验证结果
-            y_pred = ModelIdentifier.MODEL_SIMULATORS.get(
-                model_type, ModelIdentifier.fopdt_model
-            )(params, t, u, y0)
-            
-            # 计算幅度比例
-            pred_range = np.ptp(y_pred)
-            actual_range = np.ptp(y)
-            
-            if pred_range > Config.EPSILON and actual_range > Config.EPSILON:
-                amplitude_ratio = pred_range / actual_range
+            # 对于使用稳健估计的情况，优先使用稳健K值
+            if used_robust and robust_K is not None:
+                # 检查优化后的K与稳健K的差异
+                optimized_K = params[0]
+                if abs(robust_K) > Config.EPSILON:
+                    K_ratio = abs(optimized_K / robust_K)
+                    # 如果优化后的K与稳健K差异超过50%，使用稳健K
+                    if K_ratio > 1.5 or K_ratio < 0.67:
+                        params = list(params)
+                        params[0] = robust_K
+                        params = tuple(params)
+            else:
+                # 旧的验证逻辑
+                if severity == 'severe':
+                    y_target = y_trend if 'y_trend' in dir() else y_proc
+                    u_target = u_smooth if 'u_smooth' in dir() else u_proc
+                else:
+                    y_target = y
+                    u_target = u
                 
-                # 如果幅度比例不合理（>1.5或<0.5），调整K值
-                if amplitude_ratio > 1.5 or amplitude_ratio < 0.5:
-                    K_correction = actual_range / pred_range
-                    params = list(params)
-                    params[0] = params[0] * K_correction  # 校正K值
-                    params = tuple(params)
+                y_pred = ModelIdentifier.MODEL_SIMULATORS.get(
+                    model_type, ModelIdentifier.fopdt_model
+                )(params, t, u_target, y0_fit)
+                
+                pred_range = np.ptp(y_pred)
+                target_range = np.ptp(y_target)
+                
+                if pred_range > Config.EPSILON and target_range > Config.EPSILON:
+                    amplitude_ratio = pred_range / target_range
+                    if amplitude_ratio > 1.3 or amplitude_ratio < 0.7:
+                        K_correction = target_range / pred_range
+                        params = list(params)
+                        params[0] = params[0] * K_correction
+                        params = tuple(params)
         
         return ModelIdentifier._clip_params(params, model_type)
     
