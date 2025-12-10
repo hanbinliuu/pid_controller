@@ -482,17 +482,25 @@ class ModelSelector:
                 best_analysis = analysis
                 best_seg = segments[idx] if idx < len(segments) else None
         
-        # 检查是否是低增益系统
+        # 检查是否需要使用保守参数
         use_conservative = False
+        Ku = best_analysis['osc_info']['Ku']
+        
         if best_seg is not None:
             pv_range = np.ptp(best_seg.pv)
             mv_range = np.ptp(best_seg.mv)
             if mv_range > 0.1:
                 apparent_gain = pv_range / mv_range
-                self.log(f"   📊 增益检查: MV范围={mv_range:.2f}, PV范围={pv_range:.2f}, apparent_gain={apparent_gain:.4f}")
-                if apparent_gain < 0.1:  # 低增益系统
+                self.log(f"   📊 增益检查: MV范围={mv_range:.2f}, PV范围={pv_range:.2f}, apparent_gain={apparent_gain:.4f}, Ku={Ku:.3f}")
+                
+                # 条件1: 低增益系统
+                if apparent_gain < 0.1:
                     use_conservative = True
                     self.log(f"   ⚠️ 检测到低增益系统，使用保守参数")
+                # 条件2: Ku过大（会导致Kp过大）
+                elif Ku > 5.0:
+                    use_conservative = True
+                    self.log(f"   ⚠️ Ku={Ku:.2f}>5.0，临界增益过大，使用保守参数")
         
         if use_conservative:
             # 对于低增益系统，直接使用保守的pb值
