@@ -19,7 +19,7 @@ from api.routes.cron_task_router import router as cron_task_router
 from api.routes.home_page_route import home_page_router
 
 # 导入中间件
-from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware
+from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware, RequestLoggingMiddleware
 
 from fastapi.openapi.docs import (
     get_redoc_html,
@@ -46,6 +46,9 @@ app.add_middleware(ExceptionHandlerMiddleware)
 
 # 添加全局响应拦截中间件
 app.add_middleware(ResponseMiddleware)
+
+# 添加请求日志中间件
+app.add_middleware(RequestLoggingMiddleware)
 
 # 允许跨域
 app.add_middleware(

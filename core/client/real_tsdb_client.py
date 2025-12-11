@@ -260,7 +260,7 @@ class RealTSDBDataSource(TSDBDataSource):
             # logger.info(f"总查询页数: {page_count}")
             # logger.info(f"总数据条数: {len(all_values)}")
             over_time = datetime.now().timestamp()
-            logger.info(f"表: {table},时序查询总耗时: {(over_time)-(begin_time)}")
+            logger.info(f"表: {table},时序查询总耗时: {(over_time)-(begin_time)},时间间隔：{window}s")
 
             # 返回合并后的所有数据
             return DataPoint(
@@ -430,6 +430,8 @@ class RealTSDBDataSource(TSDBDataSource):
             logger.error(f"获取表列表时发生异常: {str(e)}")
         
         return ""
+    
+
 
 
 class TSDBClientFactory:

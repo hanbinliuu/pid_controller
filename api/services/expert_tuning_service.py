@@ -209,8 +209,10 @@ class ExpertTuningService:
                 },
                 "qualified_windows": tuning_windows
             }
+            treaning_start_time=datetime.now().timestamp()
             model_selector = model_select.run(request)
-
+            treaning_end_time=datetime.now().timestamp()
+            logger.info(f"模型整定耗时: {treaning_end_time - treaning_start_time}s")
             suggest_pid_params = model_selector.get("pid_parameters")
             tuning_details = {
                 "start_time": model_selector.get("start_time"),

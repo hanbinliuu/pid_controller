@@ -188,6 +188,8 @@ async def auto_tuning(
     """
     # user: UserInfo = get_current_user()
     try:
+        logger.info(f"开始执行自动整定, 请求参数: {request.json()}")
+        first_time=datetime.now().timestamp()
         # 调用Service层执行自动整定
         result = ExpertTuningService.liu_pid_tuning(
             mode=request.mode,
@@ -206,7 +208,8 @@ async def auto_tuning(
             operator_id=user.user_id if user else None,
             operator_name=user.user_name if user else None
         )
-
+        last_time=datetime.now().timestamp()
+        logger.info(f"自动整定完成, 用时: {last_time-first_time}秒")
         return result
 
     except HTTPException:
@@ -460,160 +463,6 @@ async def generate_all_curves(request: GenerateCurvesRequest = Body(..., descrip
         result["closed_loop_curve"] = closed_loop_result
         result["step_response_curve"] = step_response_result
 
-        # # 生成三合一图片
-        # plot_path = None
-        # try:
-        #     import matplotlib.pyplot as plt
-        #     import os
-        #     from datetime import datetime
-        #
-        #     # 配置中文字体
-        #     plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS']
-        #     plt.rcParams['axes.unicode_minus'] = False
-        #
-        #     # 创建图片保存目录
-        #     output_dir = "data/plots"
-        #     os.makedirs(output_dir, exist_ok=True)
-        #
-        #     # 创建包含3个子图的figure，尺寸参考_plot_model_comparison
-        #     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 14))
-        #
-        #     # ========== 子图1: 拟合曲线 ==========
-        #     if fitting_result.get("status") != "error":
-        #         # simulation_curve 返回：{timestamp, time, sv, pv, mv, pv_model, r_squared, rmse}
-        #         if "timestamp" in fitting_result and "pv" in fitting_result and "pv_model" in fitting_result:
-        #             # 使用真实时间戳
-        #             timestamps = fitting_result["timestamp"]
-        #             # 将毫秒时间戳转为秒级相对时间用于绘图
-        #             if len(timestamps) > 0:
-        #                 t0 = timestamps[0]
-        #                 time_for_plot = [(t - t0) / 1000.0 for t in timestamps]
-        #             else:
-        #                 time_for_plot = timestamps
-        #
-        #             # 绘制PV曲线，样式参考_plot_model_comparison
-        #             ax1.plot(time_for_plot, fitting_result["pv"], 'b-', linewidth=2, label='PV (实际值)', alpha=0.8)
-        #             ax1.plot(time_for_plot, fitting_result["pv_model"], 'r--', linewidth=2, label='PV (模型拟合)', alpha=0.8)
-        #
-        #             # 如果有SV，绘制SV曲线
-        #             if "sv" in fitting_result and len(fitting_result["sv"]) > 0:
-        #                 ax1.plot(time_for_plot, fitting_result["sv"], 'g--', linewidth=1.5, label='SV (目标值)', alpha=0.7)
-        #
-        #             ax1.set_ylabel('PV / SV', fontsize=12)
-        #             ax1.set_xlabel('时间 (秒)', fontsize=12)
-        #             ax1.grid(True, alpha=0.3)
-        #             r2 = fitting_result.get('r_squared', 0)
-        #             rmse_val = fitting_result.get('rmse', 0)
-        #             ax1.set_title(f'模式1: 拟合模式 - 实际数据 vs 模型预测 (R²={r2:.4f}, RMSE={rmse_val:.4f})',
-        #                          fontsize=12, fontweight='bold')
-        #             ax1.legend(loc='best', fontsize=10)
-        #         else:
-        #             ax1.text(0.5, 0.5, '拟合曲线数据不完整',
-        #                     ha='center', va='center', fontsize=14, transform=ax1.transAxes, color='gray')
-        #             ax1.set_title('模式1: 拟合模式', fontsize=12, fontweight='bold')
-        #     else:
-        #         ax1.text(0.5, 0.5, f"拟合曲线生成失败\n{fitting_result.get('detail', '')}",
-        #                 ha='center', va='center', fontsize=14, transform=ax1.transAxes, color='gray')
-        #         ax1.set_title('模式1: 拟合模式', fontsize=12, fontweight='bold')
-        #     ax1.grid(True, alpha=0.3)
-        #
-        #     # ========== 子图2: 闭环仿真曲线 ==========
-        #     if closed_loop_result.get("status") != "error":
-        #         # generate_closed_loop_response 返回：{time, setpoint, process_value, control_output}
-        #         if "time" in closed_loop_result and "process_value" in closed_loop_result:
-        #             ax2.plot(closed_loop_result["time"], closed_loop_result["process_value"],
-        #                     'purple', linewidth=2, label='PV (闭环仿真)', alpha=0.8)
-        #
-        #             if "control_output" in closed_loop_result:
-        #                 ax2.plot(closed_loop_result["time"], closed_loop_result["control_output"],
-        #                         'orange', linewidth=1.5, label='MV (闭环控制)', alpha=0.7, linestyle='--')
-        #
-        #             if "setpoint" in closed_loop_result:
-        #                 ax2.plot(closed_loop_result["time"], closed_loop_result["setpoint"],
-        #                         'g--', linewidth=1.5, label='SV (目标值)', alpha=0.7)
-        #
-        #             ax2.set_ylabel('PV / SV / MV', fontsize=12)
-        #             ax2.set_xlabel('时间 (秒)', fontsize=12)
-        #             ax2.set_title('模式2: 闭环仿真 - 使用推荐PID参数的控制效果',
-        #                          fontsize=12, fontweight='bold')
-        #             ax2.legend(loc='best', fontsize=10)
-        #         else:
-        #             ax2.text(0.5, 0.5, '闭环仿真数据不完整',
-        #                     ha='center', va='center', fontsize=14, transform=ax2.transAxes, color='gray')
-        #             ax2.set_title('模式2: 闭环仿真', fontsize=12, fontweight='bold')
-        #     else:
-        #         ax2.text(0.5, 0.5, f"闭环曲线生成失败\n{closed_loop_result.get('detail', '')}",
-        #                 ha='center', va='center', fontsize=14, transform=ax2.transAxes, color='gray')
-        #         ax2.set_title('模式2: 闭环仿真', fontsize=12, fontweight='bold')
-        #     ax2.grid(True, alpha=0.3)
-        #
-        #     # ========== 子图3: 阶跃响应曲线 ==========
-        #     if step_response_result.get("status") != "error":
-        #         # generate_response 返回：{time, input, output}
-        #         if "time" in step_response_result and "output" in step_response_result:
-        #             ax3.plot(step_response_result["time"], step_response_result["output"],
-        #                     'teal', linewidth=2, label='PV (阶跃响应)', alpha=0.8)
-        #
-        #             if "input" in step_response_result:
-        #                 ax3.plot(step_response_result["time"], step_response_result["input"],
-        #                         'brown', linewidth=1.5, label='MV (阶跃输入)', alpha=0.7, linestyle='--')
-        #
-        #             ax3.set_ylabel('PV / MV', fontsize=12)
-        #             ax3.set_xlabel('时间 (秒)', fontsize=12)
-        #
-        #             # 在标题中显示PID参数
-        #             pid_info = ''
-        #             if Kp is not None and Ki is not None and Kd is not None:
-        #                 pid_info = f' (PID: Kp={Kp:.3f}, Ki={Ki:.3f}, Kd={Kd:.3f})'
-        #
-        #             ax3.set_title(f'模式3: 阶跃响应 - 系统开环阶跃响应特性{pid_info}',
-        #                          fontsize=12, fontweight='bold')
-        #             ax3.legend(loc='best', fontsize=10)
-        #         else:
-        #             ax3.text(0.5, 0.5, '阶跃响应数据不完整',
-        #                     ha='center', va='center', fontsize=14, transform=ax3.transAxes, color='gray')
-        #             ax3.set_title('模式3: 阶跃响应', fontsize=12, fontweight='bold')
-        #     else:
-        #         ax3.text(0.5, 0.5, f"阶跃响应曲线生成失败\n{step_response_result.get('detail', '')}",
-        #                 ha='center', va='center', fontsize=14, transform=ax3.transAxes, color='gray')
-        #         ax3.set_title('模式3: 阶跃响应', fontsize=12, fontweight='bold')
-        #     ax3.grid(True, alpha=0.3)
-        #
-        #     # 总标题：包含模型参数和拟合指标
-        #     title = f'模型辨识结果 ({mt_str})\n'
-        #     title += f'K={K:.3f}, T1={T1:.2f}s'
-        #     if T2:
-        #         title += f', T2={T2:.2f}s'
-        #     if L:
-        #         title += f', L={L:.2f}s'
-        #
-        #     # 添加拟合指标
-        #     if fitting_result.get("status") != "error" and "r_squared" in fitting_result:
-        #         r2 = fitting_result.get('r_squared', 0)
-        #         rmse_val = fitting_result.get('rmse', 0)
-        #         title += f' | R²={r2:.4f}, RMSE={rmse_val:.4f}'
-        #
-        #     fig.suptitle(title, fontsize=14, fontweight='bold', y=0.995)
-        #
-        #     # 调整子图间距
-        #     plt.tight_layout()
-        #
-        #     # 保存图片
-        #     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        #     plot_filename = f"{mt_str}_three_curves_{timestamp}.png"
-        #     plot_path = os.path.join(output_dir, plot_filename)
-        #     plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-        #     plt.close(fig)
-        #
-        #     logger.info(f"三合一曲线图已保存: {plot_path}")
-        #
-        # except Exception as e:
-        #     logger.error(f"生成三合一曲线图失败: {str(e)}")
-        #     plot_path = None
-        #
-        # # 添加图片路径到结果
-        # result["plot_generated"] = plot_path is not None
-        # result["plot_path"] = plot_path
 
         return result
 
@@ -641,6 +490,7 @@ async def get_response_windows(
         window_sec: int = Query(1, description="插值采样间隔（秒）", examples=[1, 60]),
         is_filter: bool = Query(False, description="是否对历史数据进行优化过滤", examples=[False])
 ):
+
     # 时间默认值：最近一天
     if end_time is None:
         end_time = int(datetime.now().timestamp() * 1000)

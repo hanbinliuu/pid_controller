@@ -5,6 +5,7 @@
 """
 
 import logging
+import numpy as np
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -225,19 +226,32 @@ class LoopMonitoringService:
                 sv_values = []
                 mv_values = []
 
-                for point in data_points:
-                    if isinstance(point, dict):
-                        timestamp = point.get('timestamp')
-                        pv = point.get('pv')
-                        sv = point.get('sv')
-                        mv = point.get('mv')
-
-                        # 只有当时间戳存在时才添加数据点
-                        if timestamp is not None:
-                            timestamps.append(timestamp)
-                            pv_values.append(pv if pv is not None else None)
-                            sv_values.append(sv if sv is not None else None)
-                            mv_values.append(mv if mv is not None else None)
+                # 使用NumPy向量化操作优化数据提取
+                if data_points:
+                    # 预分配数组
+                    n_points = len(data_points)
+                    ts_array = np.zeros(n_points, dtype=np.float64)
+                    pv_array = np.zeros(n_points, dtype=np.float64)
+                    sv_array = np.zeros(n_points, dtype=np.float64)
+                    mv_array = np.zeros(n_points, dtype=np.float64)
+                    
+                    # 批量提取
+                    valid_indices = []
+                    for i, point in enumerate(data_points):
+                        ts = point.get('timestamp')
+                        if ts is not None:
+                            ts_array[i] = ts
+                            pv_array[i] = point.get('pv', 0)
+                            sv_array[i] = point.get('sv', 0)
+                            mv_array[i] = point.get('mv', 0)
+                            valid_indices.append(i)
+                    
+                    # 过滤有效数据
+                    if valid_indices:
+                        timestamps = ts_array[valid_indices].tolist()
+                        pv_values = pv_array[valid_indices].tolist()
+                        sv_values = sv_array[valid_indices].tolist()
+                        mv_values = mv_array[valid_indices].tolist()
 
                 # 检查数据是否为空
                 if not timestamps:
@@ -348,27 +362,31 @@ class LoopMonitoringService:
                 }
 
             data_points = history_data.get('data', [])
-
-            # 提取时间序列数据
-            timestamps = []
-            pv_values = []
-            sv_values = []
-            mv_values = []
-            auto_status_values = []
-
-            for point in data_points:
+            
+            # 使用NumPy向量化操作优化数据提取
+            # 预分配数组提高性能
+            n_points = len(data_points)
+            timestamps = np.zeros(n_points, dtype=np.float64)
+            pv_values = np.zeros(n_points, dtype=np.float64)
+            sv_values = np.zeros(n_points, dtype=np.float64)
+            mv_values = np.zeros(n_points, dtype=np.float64)
+            auto_status_values = np.zeros(n_points, dtype=np.float64)
+            
+            # 批量提取数据（避免逐个append）
+            for i, point in enumerate(data_points):
                 if isinstance(point, dict):
-                    ts = point.get('timestamp')
-                    pv = point.get('pv')
-                    sv = point.get('sv')
-                    mv = point.get('mv')
-                    auto_status = point.get('auto', 255)  # 默认为自动
-                    timestamps.append(ts)
-                    pv_values.append(pv)
-                    sv_values.append(sv)
-                    mv_values.append(mv)
-                    auto_status_values.append(auto_status)
-                    # if ts is not None and pv is not None and sv is not None:
+                    timestamps[i] = point.get('timestamp', 0)
+                    pv_values[i] = point.get('pv', 0)
+                    sv_values[i] = point.get('sv', 0)
+                    mv_values[i] = point.get('mv', 0)
+                    auto_status_values[i] = point.get('auto', 255)
+            
+            # 转换为列表（兼容现有算法）
+            timestamps = timestamps.tolist()
+            pv_values = pv_values.tolist()
+            sv_values = sv_values.tolist()
+            mv_values = mv_values.tolist()
+            auto_status_values = auto_status_values.tolist()
 
 
             # 检查是否有足够的数据点

@@ -1365,16 +1365,32 @@ def process_query_tsdb_data_interpolated(db: str,
                                          window: int = 1,
                                          is_filter: Optional[bool] = True
                                          ) -> List[Dict]:
-    first_time = datetime.now().timestamp()
-
     """
     查询时序数据，根据最新数据（最后一条）的pb、ti、td、sv进行过滤
     只返回与最新参数值相同的历史数据，优化性能
     
+    优化点:
+    1. 预构建列索引映射,避免重复查找
+    2. 使用NumPy向量化处理PID转换
+    3. 批量构建记录字典
+    4. 减少不必要的循环和条件判断
+    
     Args:
+        db: 数据库名称
+        table_name: 表名
         required_fields: 字段映射map，例如:
             {"mv": "ns=100;s=FIC101A_MV.In_Channel0", "pv": "ns=100;s=FIC101A_PV.In_Channel0", ...}
+        start_time: 开始时间（毫秒时间戳）
+        end_time: 结束时间（毫秒时间戳）
+        tags: 标签过滤
+        window: 插值间隔（秒）
+        is_filter: 是否过滤数据
+        
+    Returns:
+        List[Dict]: 历史数据列表
     """
+    first_time = datetime.now().timestamp()
+    
     # 使用传入的字段映射
     field_mapping = required_fields
     query_field_list = list(field_mapping.values())
@@ -1383,7 +1399,7 @@ def process_query_tsdb_data_interpolated(db: str,
     pid_fields = [field_mapping.get(key) for key in ['mv', 'pv', 'sv', 'pb', 'ti', 'td','auto'] if field_mapping.get(key)]
     query_fields = [field for field in query_field_list if field not in pid_fields]
     
-    all_records = []
+    # 查询TSDB数据
     response = query_read_interpolated(
         db=db,
         table=table_name,
@@ -1400,62 +1416,105 @@ def process_query_tsdb_data_interpolated(db: str,
     if not values:
         return []
 
+    # 数据过滤
     if (is_filter is None) or is_filter:
         filter_values = process_lists_optimized(values)[0]
     else:
         filter_values = values
     
-    # 解析当前页数据并添加到all_records
-    for value_row in filter_values:
-        record = {}
-        for i, column in enumerate(columns):
-            if i < len(value_row):
-                if column == "time":
-                    record["timestamp"] = value_row[i]
-                # 使用field_mapping进行动态匹配
-                elif column == field_mapping.get("pv"):
-                    record["pv"] = value_row[i]
-                elif column == field_mapping.get("sv"):
-                    record["sv"] = value_row[i]
-                elif column == field_mapping.get("mv"):
-                    record["mv"] = value_row[i]
-                elif column == field_mapping.get("pb"):
-                    record["pb"] = value_row[i]
-                elif column == field_mapping.get("ti"):
-                    record["ti"] = value_row[i]
-                elif column == field_mapping.get("td"):
-                    record["td"] = value_row[i]
-                elif column == field_mapping.get("auto"):
-                    record["auto"] = value_row[i]
-                else:
-                    record[column] = value_row[i]
-        all_records.append(record)
-    # 解析查询结果
-    history_data = []
-
-    # 参数转换
-    if all_records:
-        for record in all_records:
-            # 转换PID参数
-            result = pid_converter.convert_pb_to_pid(
-                record["pb"],
-                record["ti"],
-                record["td"]
-            )
+    if not filter_values:
+        return []
+    
+    # 优化1: 预构建列索引映射,避免重复查找
+    field_indices = {}
+    reverse_field_mapping = {v: k for k, v in field_mapping.items()}
+    
+    for i, column in enumerate(columns):
+        if column == "time":
+            field_indices["timestamp"] = i
+        elif column in reverse_field_mapping:
+            field_indices[reverse_field_mapping[column]] = i
+        else:
+            field_indices[column] = i
+    
+    # 优化2: 预提取PID字段索引
+    pb_idx = field_indices.get("pb")
+    ti_idx = field_indices.get("ti")
+    td_idx = field_indices.get("td")
+    has_pid_fields = pb_idx is not None and ti_idx is not None and td_idx is not None
+    
+    # 优化3: 批量构建记录
+    all_records = []
+    n_rows = len(filter_values)
+    
+    # 如果有PID字段,使用NumPy向量化处理
+    if has_pid_fields and n_rows > 0:
+        import numpy as np
+        
+        # 批量提取PID参数
+        pb_values = np.array([row[pb_idx] if pb_idx < len(row) else 0 for row in filter_values], dtype=np.float64)
+        ti_values = np.array([row[ti_idx] if ti_idx < len(row) else 0 for row in filter_values], dtype=np.float64)
+        td_values = np.array([row[td_idx] if td_idx < len(row) else 0 for row in filter_values], dtype=np.float64)
+        
+        # 向量化PID转换 (避免循环调用convert_pb_to_pid)
+        # Kp = PB / 100
+        kp_values = pb_values / 100.0
+        # Ki = Kp / Ti (避免除零)
+        ki_values = np.where(ti_values != 0, kp_values / ti_values, 0.0)
+        # Kd = Kp * Td
+        kd_values = kp_values * td_values
+        
+        # 构建记录
+        for idx, value_row in enumerate(filter_values):
+            record = {}
+            
+            # 快速填充字段
+            for field_name, col_idx in field_indices.items():
+                if col_idx < len(value_row):
+                    record[field_name] = value_row[col_idx]
+            
+            # 添加转换后的PID参数
+            record["kp"] = float(kp_values[idx])
+            record["ki"] = float(ki_values[idx])
+            record["kd"] = float(kd_values[idx])
+            
             # 确保包含查询字段的默认值
             for field in query_fields:
                 if field not in record:
                     record[field] = None
-
-            # 添加转换后的PID参数
-            record["kp"] = result["kp"]
-            record["ki"] = result["ki"]
-            record["kd"] = result["kd"]
-
-            history_data.append(record)
+            
+            all_records.append(record)
+    else:
+        # 没有PID字段或数据为空,使用简化处理
+        for value_row in filter_values:
+            record = {}
+            
+            # 快速填充字段
+            for field_name, col_idx in field_indices.items():
+                if col_idx < len(value_row):
+                    record[field_name] = value_row[col_idx]
+            
+            # 如果需要PID转换但字段缺失,使用传统方法
+            if "pb" in record and "ti" in record and "td" in record:
+                result = pid_converter.convert_pb_to_pid(
+                    record["pb"],
+                    record["ti"],
+                    record["td"]
+                )
+                record["kp"] = result["kp"]
+                record["ki"] = result["ki"]
+                record["kd"] = result["kd"]
+            
+            # 确保包含查询字段的默认值
+            for field in query_fields:
+                if field not in record:
+                    record[field] = None
+            
+            all_records.append(record)
+    
     over_time = datetime.now().timestamp()
-    logger.info(f"查询耗时：{over_time - first_time}")
-    return history_data
+    logger.info(f"查询耗时：{over_time - first_time:.3f}秒, 数据量: {len(all_records)}条")
+    return all_records
 
 
 # 固定 pid值与目标温度，实时数据查询方法

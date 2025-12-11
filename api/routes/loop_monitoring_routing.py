@@ -110,6 +110,7 @@ async def get_loop_trend_data(
     - 支持不同时间范围（1小时/4小时/12小时）
     - 返回PV/SV/MV的历史数据用于绘制趋势图
     """
+    first_time=datetime.now().timestamp()
     try:
         if time_range is not None:
             # 计算时间范围
@@ -127,7 +128,8 @@ async def get_loop_trend_data(
             end_time=end_time,
             window=window_sec
         )
-        
+        last_time=datetime.now().timestamp()
+        logger.info(f"回路{loop_uri},查询耗时{last_time - first_time:.3f},间隔：{window_sec},时间段：{start_time}--{end_time}")
         return trend_data
     except Exception as e:
         logger.error(f"查询回路趋势数据失败: {str(e)}")
