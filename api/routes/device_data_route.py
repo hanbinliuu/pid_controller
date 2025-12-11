@@ -1,5 +1,6 @@
 import logging
 import os
+import uuid
 from datetime import datetime
 from typing import Optional, List, Union, Dict, Any
 
@@ -137,7 +138,8 @@ async def get_history_zhongkong_interpolated(
 
 class DeviceCommand(BaseModel):
     """IOTDA设备指令数据模型"""
-    timeout: int = Field(..., description="单条指令超时时间（ms）", example=20000)
+    request_id:str=str(uuid.uuid4())
+    timeout: int = Field(..., description="单条指令超时时间（ms）", example=20)
     object_device_id: str = Field(..., description="设备ID", example="PID_FEP_Gateway_Device_001")
     service_id: str = Field(..., description="服务ID", example="default")
     command_name: str = Field(..., description="命令名称", example="set_property")
@@ -172,15 +174,25 @@ async def send_device_command_batch(
             headers["Authorization"] = authorization
 
         # 序列化请求体
-        payload = [cmd.model_dump() for cmd in commands]
-
+        payload = []
+        command = commands[0]
+        for k in command.paras.keys():
+            cmd = DeviceCommand(
+                timeout=timeout,
+                object_device_id=command.object_device_id,
+                service_id=command.service_id,
+                command_name=command.command_name,
+                paras={k: command.paras[k]}
+            )
+            payload.append(cmd.model_dump())
+        print(payload)
         logger.info(f"调用IOTDA设备指令批量接口: {url} params={{'retryNum': {retryNum}, 'timeout': {timeout}}}")
         logger.debug(f"请求体: {payload}")
 
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url,
-                params={"retryNum": retryNum, "timeout": timeout},
+                params={"retryNum": retryNum, "timeout": 10000},
                 json=payload,
                 headers=headers
             )
