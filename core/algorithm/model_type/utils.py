@@ -51,9 +51,11 @@ def parse_timestamp(ts: Any) -> Optional[float]:
     if isinstance(ts, (int, float)):
         return float(ts)
     if isinstance(ts, str):
+        # 去除前后空格
+        ts_clean = ts.strip().replace('Z', '').split('+')[0]
         for fmt in ['%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S']:
             try:
-                dt = datetime.strptime(ts.replace('Z', '').split('+')[0], fmt)
+                dt = datetime.strptime(ts_clean, fmt)
                 return dt.timestamp() * 1000
             except ValueError:
                 continue
