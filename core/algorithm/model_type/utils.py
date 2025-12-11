@@ -1,8 +1,11 @@
 """工具函数模块"""
 
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
+
+# 北京时区 (UTC+8)
+BEIJING_TZ = timezone(timedelta(hours=8))
 
 from .config import Config
 
@@ -45,18 +48,17 @@ def calculate_bic(rss: float, n: int, k: int) -> float:
 
 
 def parse_timestamp(ts: Any) -> Optional[float]:
-    """解析时间戳为毫秒"""
     if ts is None:
         return None
     if isinstance(ts, (int, float)):
         return float(ts)
     if isinstance(ts, str):
-        # 去除前后空格
         ts_clean = ts.strip().replace('Z', '').split('+')[0]
         for fmt in ['%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S']:
             try:
-                dt = datetime.strptime(ts_clean, fmt)
-                return dt.timestamp() * 1000
+                dt_naive = datetime.strptime(ts_clean, fmt)
+                dt_aware = dt_naive.replace(tzinfo=BEIJING_TZ)
+                return dt_aware.timestamp() * 1000
             except ValueError:
                 continue
         return None
