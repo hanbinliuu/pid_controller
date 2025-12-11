@@ -107,7 +107,8 @@ class Config:
     TSDB_MAX_RETRIES: int = _get_config('tsdb.max_retries', '3', int)
     TSDB_AUTH_TOKEN: Optional[str] = _get_config('tsdb.auth_token', None)
     DEFAULT_TSDB_DATABASE: str = _get_config('tsdb.database', 'platform')
-    
+
+
     # ==================== 模拟数据配置 ====================
     SIMULATION_DATA_DIR: str = _get_config('simulation.data_dir', 'data/simulated')
     

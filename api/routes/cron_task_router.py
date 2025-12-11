@@ -426,7 +426,7 @@ async def trigger_performance_evaluation(
     description="立即执行一次装置性能统计任务，按天统计各装置的自控率、平稳率等指标"
 )
 async def trigger_device_statistics(
-    statistics_date: str = Query(None, description="统计日期（YYYY-MM-DD格式），默认为今天", example="2025-12-01")
+    statistics_date: str = Query(None, description="统计日期（YYYY-MM-DD格式），默认为今天")
 ) -> Dict[str, Any]:
     """
     手动触发装置统计任务

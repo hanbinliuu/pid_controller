@@ -10,6 +10,12 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
 from sqlmodel import Session
 
+from api.response.loop_response import LoopInfoResponse
+from api.routes.device_data_route import DeviceCommand
+from api.services.bff_service import BFFService
+from api.services.device_data_service import DeviceDataService
+from api.services.loop_service import LoopService
+from core.client.bff_model_client import BFFModelClient
 from core.database.database import get_db
 from api.services.tuning_record_service import TuningRecordService
 from api.bean.tuning_record import TuningRecord
@@ -20,6 +26,66 @@ logger = logging.getLogger(__name__)
 
 
 # SQLModel已在models.py中定义TuningRecord，可直接用作请求和响应模型
+
+@router.post(
+    "/send-device-command",
+    summary="整定下发",
+    operation_id="整定下发",
+    description="常规整定或大模型整定的参数下发及记录保存",
+    response_model=TuningRecord
+)
+async def send_device_command(
+    loop_uri: str  = Body(..., description="URI列表"),
+    tuning_method: str = Body(..., description="整定方法", example=["常规整定", "大模型整定"]),
+    tuning_type: str = Body(..., description="整定类型", example=["PID", "PI"]),
+    before_params: str = Body(None, description="整定前参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
+    after_params: str = Body(None, description="整定后参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
+    status: str = Body(..., description="整定状态", example=["成功", "失败"]),
+    remark: Optional[str] = Body(..., description="描述", example="参数已下发"),
+    user: UserInfo = Depends(get_current_user)
+) -> TuningRecord:
+    """
+    创建整定记录 - 优化版本
+
+    功能说明：
+    - 创建整定记录
+    - 使用SQLModel自动验证和序列化
+
+    返回格式：直接返回TuningRecord对象（自动序列化为JSON）
+    """
+    logger.info(f"整定下发: {loop_uri}")
+    # 获取回路信息
+
+    loop_info:LoopInfoResponse = LoopService.query_loop_info(loop_uri)
+
+    #获取测点信息
+    # with BFFModelClient(loop_uri=loop_uri) as client:
+    #     table, field_mapping = client.query_table_and_points_by_loop_uri(loop_uri=loop_uri)
+    #     for key in field_mapping.values():
+    #
+    #
+    #
+    # commands = DeviceCommand
+    # #参数下发
+    # result = DeviceDataService.send_device_command_batch(
+    #     commands=commands,
+    # )
+
+
+
+    record = TuningRecordService.create_record(
+        loop_uri=loop_uri,
+        loop_status=loop_info.auto_control_status,
+        tuning_method=tuning_method,
+        operator=user.user_name,
+        operator_id=user.user_id,
+        before_params=before_params,
+        after_params=after_params,
+        description=loop_info.description,
+        status=status,
+        remark=remark
+    )
+    return record
 
 
 @router.post(
@@ -32,7 +98,7 @@ logger = logging.getLogger(__name__)
 async def create_tuning_record(
     loop_uri: str  = Body(..., description="URI列表"),
     loop_status: str = Body(..., description="回路状态", example=["自动", "手动"]),
-    tuning_type: datetime = Body(..., description="整定类型"),
+    tuning_type: str = Body(..., description="整定类型"),
     tuning_method: str = Body(..., description="整定方法", example=["常规整定", "大模型整定"]),
     before_params: str = Body(None, description="整定前参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
     after_params: str = Body(None, description="整定后参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),

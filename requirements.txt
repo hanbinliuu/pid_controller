@@ -13,7 +13,7 @@ scipy==1.15.3
 matplotlib==3.10.7
 zipp==3.23.0
 
-# Êı¾İ¿âÏà¹Ø
+# æ•°æ®åº“ç›¸å…³
 sqlmodel==0.0.14
 psycopg2-binary==2.9.9
 alembic==1.13.1
@@ -22,5 +22,5 @@ greenlet==3.0.3
 
 python-jose==3.3.0
 
-# ¶¨Ê±ÈÎÎñµ÷¶È
+# å®šæ—¶ä»»åŠ¡è°ƒåº¦
 croniter==2.0.5
