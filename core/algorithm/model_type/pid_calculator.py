@@ -123,12 +123,12 @@ class PIDCalculator:
         
         Returns:
             (conservative_level, pb_min)
-            - conservative_level: 保守因子 (3.0~8.0)，越大越保守
-            - pb_min: pb最小值 (50~100)
+            - conservative_level: 保守因子 (2.0~5.0)，越大越保守
+            - pb_min: pb最小值 (40~80)
         """
         if quality_info is None:
             # 无质量信息时使用默认保守参数
-            return 4.0, 60
+            return 3.0, 50
         
         # 计算综合质量得分
         q_score = quality_info.quality_score
@@ -158,12 +158,12 @@ class PIDCalculator:
         
         # 映射到保守等级
         # conservativeness: 0 (最优) -> 1 (最差)
-        # conservative_level: 3.0 (标准) -> 8.0 (极保守)
-        conservative_level = 3.0 + conservativeness * 5.0
+        # conservative_level: 2.0 (快速) -> 5.0 (保守)
+        conservative_level = 2.0 + conservativeness * 3.0
         
         # 映射到pb最小值
-        # pb_min: 50 (标准) -> 100 (极保守)
-        pb_min = 50 + conservativeness * 50
+        # pb_min: 40 (快速) -> 80 (保守)
+        pb_min = 40 + conservativeness * 40
         
         return conservative_level, pb_min
     
