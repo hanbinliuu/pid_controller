@@ -41,7 +41,7 @@ class Config:
         'correlation_threshold': 0.3,        # 相关性阈值
         'nonlinearity_threshold': 0.5,       # 非线性阈值
         'oscillation_warning_threshold': 0.3,  # 振荡警告阈值
-        'min_data_points': 20,               # 最小数据点数
+        'min_data_points': 30,               # 最小数据点数
     }
     
     # ============================================================
@@ -72,7 +72,7 @@ class Config:
     # 段处理配置
     # ============================================================
     SEGMENT_PROCESSING = {
-        'min_data_points': 20,           # 最小数据点数
+        'min_data_points': 30,           # 最小数据点数（小于30点的扰动段会被过滤）
         'min_pv_range': 0.5,             # 最小PV变化范围
         'min_mv_range': 0.1,             # 最小MV变化范围
         'correlation_threshold': 0.1,    # 相关性阈值（阶跃响应检测）

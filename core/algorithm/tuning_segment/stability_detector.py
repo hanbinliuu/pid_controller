@@ -610,8 +610,8 @@ class StabilityDetector:
         
         return False
     
-    def detect_non_steady_segments(self, pv_data, sv_array, min_segment_len=20):
-        """检测数据中的非稳态段（扰动段）"""
+    def detect_non_steady_segments(self, pv_data, sv_array, min_segment_len=30):
+        """检测数据中的非稳态段（扰动段），小于30个点的段会被过滤"""
         n = len(pv_data)
         if n < min_segment_len * 2:
             return []
@@ -870,79 +870,71 @@ class StabilityDetector:
         # for idx, (s, e, sp) in enumerate(filtered_segments):
         #     print(f"  段{idx+1}: [{s}, {e}], setpoint={sp:.2f}")
         
+        # 合并阈值设置
+        MERGE_GAP_DIRECT = 300       # 直接合并的间隔阈值（约5分钟，采样1Hz时）
+        MERGE_GAP_CHECK = 600        # 需要检查才合并的间隔阈值（约10分钟）
+        MERGE_GAP_MAX = 1200         # 最大合并间隔（约20分钟）
+        
         for i in range(1, len(filtered_segments)):
             last_start, last_end, last_sp = merged_segments[-1]
             cur_start, cur_end, cur_sp = filtered_segments[i]
             gap_length = cur_start - last_end
             sp_diff = abs(cur_sp - last_sp)
             
-            # 调试：打印合并决策
+            # 调试：打印合并决策（正常运行时注释掉）
             # print(f"[DEBUG] 检查合并: [{last_start},{last_end}](sp={last_sp:.1f}) vs [{cur_start},{cur_end}](sp={cur_sp:.1f})")
             # print(f"        gap={gap_length}, sp_diff={sp_diff:.2f}")
             
             if cur_start <= last_end:
-                # 完全相邻或重叠的段，无论设定值是否相同都合并
-                if gap_length <= 1 or sp_diff < 0.5:
-                    merged_segments[-1] = (min(last_start, cur_start), max(last_end, cur_end), last_sp)
-                else:
-                    merged_segments.append((cur_start, cur_end, cur_sp))
-            elif gap_length < 50:
-                # 较短的间隔直接合并（约50秒内）
+                # 完全相邻或重叠的段，直接合并
+                merged_segments[-1] = (min(last_start, cur_start), max(last_end, cur_end), last_sp)
+            elif gap_length <= MERGE_GAP_DIRECT:
+                # 较短间隔（≤5分钟）直接合并，不做额外检查
                 merged_segments[-1] = (last_start, cur_end, last_sp)
-            elif gap_length < 100 and sp_diff < 0.5:
-                # 较短间隔且设定值相同，检查间隔区域是否为稳态
+            elif gap_length <= MERGE_GAP_CHECK:
+                # 中等间隔（5-10分钟），检查间隔区域是否有明显稳态
                 gap_pv = pv_data[last_end:cur_start]
                 gap_sv_val = np.median(sv_array[last_end:cur_start]) if last_end < len(sv_array) else last_sp
-                is_gap_steady = self._is_region_steady(pv_data, sv_array, last_end, cur_start, gap_sv_val)
-                if is_gap_steady:
-                    # 间隔区域是稳态的，不应该合并
+                
+                # 简化稳态判断：只有间隔区域足够长且非常稳定才不合并
+                is_gap_clearly_steady = False
+                if len(gap_pv) >= 60:  # 至少1分钟的数据
+                    pv_std = np.std(gap_pv)
+                    pv_range = np.ptp(gap_pv)
+                    # 非常稳定：标准差小且范围小
+                    if pv_std < 0.5 and pv_range < 2.0:
+                        is_gap_clearly_steady = True
+                
+                if is_gap_clearly_steady and sp_diff < 0.5:
+                    # 间隔区域非常稳定且SV相同，不合并
+                    merged_segments.append((cur_start, cur_end, cur_sp))
+                else:
+                    merged_segments[-1] = (last_start, cur_end, last_sp)
+            elif gap_length <= MERGE_GAP_MAX:
+                # 较长间隔（10-20分钟），更严格检查
+                gap_start = last_end
+                gap_end = cur_start
+                gap_pv = pv_data[gap_start:gap_end]
+                gap_sv = sv_array[gap_start:gap_end] if gap_start < len(sv_array) and gap_end <= len(sv_array) else None
+                
+                # 检查间隔区域是否有明显的稳态特征
+                is_gap_stable = False
+                if len(gap_pv) >= 120:  # 至少2分钟
+                    pv_std = np.std(gap_pv)
+                    pv_range = np.ptp(gap_pv)
+                    # SV是否稳定
+                    sv_stable = gap_sv is None or np.ptp(gap_sv) < 1.0
+                    # 非常稳定：标准差小、范围小、SV稳定
+                    if pv_std < 1.0 and pv_range < 3.0 and sv_stable:
+                        is_gap_stable = True
+                
+                if is_gap_stable:
                     merged_segments.append((cur_start, cur_end, cur_sp))
                 else:
                     merged_segments[-1] = (last_start, cur_end, last_sp)
             else:
-                # 对于任意长度的间隔，检查是否应该合并
-                gap_start = last_end
-                gap_end = cur_start
-                gap_sv = sv_array[gap_start:gap_end] if gap_start < len(sv_array) and gap_end <= len(sv_array) else None
-                
-                # 检查间隔区域内是否包含稳态的SV段
-                has_stable_sv_segment = False
-                if gap_sv is not None and len(gap_sv) > 0:
-                    sv_range_in_gap = np.max(gap_sv) - np.min(gap_sv)
-                    if sv_range_in_gap > 1.0:
-                        # SV在间隔内有明显变化，检查是否有稳态的子区间
-                        # 找到SV稳定的子区间，检查PV是否稳态
-                        unique_svs = np.unique(np.round(gap_sv, 1))
-                        for sv_val in unique_svs:
-                            if abs(sv_val - last_sp) > 1.0:  # SV与前段不同
-                                # 找到该SV值的区间
-                                sv_mask = np.abs(gap_sv - sv_val) < 0.5
-                                if np.sum(sv_mask) >= 20:  # 至少有20个点
-                                    sv_indices = np.where(sv_mask)[0]
-                                    sv_pv = pv_data[gap_start + sv_indices[0]:gap_start + sv_indices[-1] + 1]
-                                    if len(sv_pv) >= 20 and self.is_steady_state(sv_pv, sv_val):
-                                        has_stable_sv_segment = True
-                                        break
-                
-                # 检查间隔区域的特征
-                has_non_steady_features = self._has_non_steady_features(pv_data[gap_start:gap_end], last_sp) if gap_end > gap_start else False
-                
-                # 如果间隔区域包含稳态的SV段，则不合并
-                if has_stable_sv_segment:
-                    merged_segments.append((cur_start, cur_end, cur_sp))
-                # 如果间隔区域也有非稳态特征且设定值相同，则合并
-                elif has_non_steady_features and sp_diff < 0.5:
-                    merged_segments[-1] = (min(last_start, cur_start), max(last_end, cur_end), last_sp)
-                elif gap_length < min_segment_len * 10:
-                    # 较短间隔额外检查稳态
-                    is_gap_steady = self._check_gap_steady_state(pv_data, sv_array, gap_start, gap_end, gap_sv, last_sp)
-                    should_merge = (not is_gap_steady and has_non_steady_features and sp_diff < 15.0)
-                    if should_merge:
-                        merged_segments[-1] = (min(last_start, cur_start), max(last_end, cur_end), last_sp)
-                    else:
-                        merged_segments.append((cur_start, cur_end, cur_sp))
-                else:
-                    merged_segments.append((cur_start, cur_end, cur_sp))
+                # 超长间隔（>20分钟），不合并
+                merged_segments.append((cur_start, cur_end, cur_sp))
         
         # 后处理：分割过长的非稳态段（内部可能包含平稳区域）
         final_segments = self._split_long_segments(merged_segments, pv_data, sv_array, min_segment_len)
@@ -1058,7 +1050,7 @@ class StabilityDetector:
         
         return is_low_variation and has_no_trend
     
-    def _split_long_segments(self, segments, pv_data, sv_array, min_segment_len=20):
+    def _split_long_segments(self, segments, pv_data, sv_array, min_segment_len=30):
         """
         分割过长的非稳态段
         
