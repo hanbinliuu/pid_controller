@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 from datetime import datetime
@@ -8,8 +7,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from fastapi import HTTPException
 
-from api.routes.analysis_router import process_query_tsdb_data_interpolated
-from api.routes.time_util import parse_time_to_milliseconds
+from core.agent.tools import process_query_tsdb_data_interpolated
+
+from api.commond.time_util import parse_time_to_milliseconds
 from core.algorithm.detector import StabilityDetector
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

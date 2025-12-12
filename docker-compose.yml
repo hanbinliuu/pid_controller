@@ -22,7 +22,6 @@ services:
       # 日志配置
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # TSDB配置
-      - USE_REAL_TSDB=${USE_REAL_TSDB:-false}
       - TSDB_BASE_URL=${TSDB_BASE_URL:-http://tsdb-select-infra-system.sit-cloud.ieccloud.hollicube.com}
     volumes:
       - ./data:/app/data

@@ -8,11 +8,11 @@ import os
 from datetime import datetime
 
 import requests
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 from dataclasses import dataclass
 import logging
 
-from api.routes.time_util import format_time_to_string
+from api.commond.time_util import format_time_to_string
 from core.client.tsdb_data_source import DataPoint, TSDBDataSource
 from core.config import Config
 
@@ -164,7 +164,7 @@ class RealTSDBDataSource(TSDBDataSource):
         tags: Optional[Dict[str, str]] = None,
         start_time: Optional[int] = None,
         end_time: Optional[int] = None,
-        limit: int = 3000,
+        limit: int = 5000,
         window: int= 1,
         continuation_point: Optional[str] = None
     ) -> DataPoint:
@@ -526,8 +526,6 @@ def query_raw_data(
         start_time: 开始时间（毫秒时间戳）
         end_time: 结束时间（毫秒时间戳）
         limit: 数据条数限制
-        use_real_tsdb: 是否使用真实TSDB
-        
     Returns:
         DataPoint: 查询结果
     """

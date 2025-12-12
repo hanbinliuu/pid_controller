@@ -98,7 +98,6 @@ class Config:
     )
     
     # ==================== TSDB配置 ====================
-    USE_REAL_TSDB: bool = _get_config('tsdb.use_real', 'false', bool)
     TSDB_BASE_URL: str = _get_config(
         'tsdb.base_url',
         'http://tsdb-select-infra-system.sit-cloud.ieccloud.hollicube.com'
@@ -239,7 +238,7 @@ class Config:
         f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
     )
     # 是否打印SQL语句（调试用）
-    SQL_ECHO: bool = _get_config('db.echo', 'False', bool)
+    SQL_ECHO: bool = _get_config('db.sql.echo', 'False', bool)
     # 数据库连接池大小
     DB_POOL_SIZE: int = _get_config('db.pool_size', '10', int)
     # 数据库连接池最大溢出连接数
@@ -299,7 +298,6 @@ class Config:
         print("当前配置:")
         print("=" * 60)
         print(f"LOG_LEVEL: {cls.LOG_LEVEL}")
-        print(f"USE_REAL_TSDB: {cls.USE_REAL_TSDB}")
         print(f"TSDB_BASE_URL: {cls.TSDB_BASE_URL}")
         print(f"BFF_MODEL_BASE_URL: {cls.BFF_MODEL_BASE_URL}")
         print(f"BFF_MODEL_LOOP_URI: {cls.BFF_MODEL_DEFULT_LOOP_URI}")

@@ -1,7 +1,6 @@
 import logging
 import os
 import uuid
-from datetime import datetime
 from typing import Optional, List, Union, Dict, Any
 
 import httpx
@@ -9,9 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Header
 from pydantic import Field,BaseModel
 
 from api.middleware.exceptions import RuntimeException
-from api.routes.time_util import parse_time_to_milliseconds
 from api.services.device_data_service import DeviceDataService
-from core.client.bff_model_client import BFFModelClient
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

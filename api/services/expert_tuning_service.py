@@ -11,13 +11,11 @@ from datetime import datetime
 
 import pandas as pd
 import numpy as np
-from sqlmodel import Session
 
-from api.middleware.exceptions import RuntimeException, DataProcessException
+from api.middleware.exceptions import DataProcessException
 from api.services.loop_service import LoopService
-from api.services.tuning_record_service import TuningRecordService
 from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
-    process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
+    process_query_tsdb_data_interpolated
 from core.algorithm import tuning_segment_selector
 from core.algorithm.model_type import ModelSelector
 from core.utils import PIDConverter
@@ -25,9 +23,7 @@ from core.utils.model_type import ModelType
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
 from core.database.database import get_db_session
-from api.routes.time_util import parse_time_to_milliseconds, format_time_to_string
-from core.algorithm.find_high_variability_periods import find_high_variability_periods
-from core.algorithm.ktl_simulator import KTLSimulator
+from api.commond.time_util import parse_time_to_milliseconds, format_time_to_string
 from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
 from api.dao.tuning_record_dao import TuningRecordDAO
 from api.dao.loop_info_dao import LoopInfoDAO
@@ -209,8 +205,11 @@ class ExpertTuningService:
                 },
                 "qualified_windows": tuning_windows
             }
+
             treaning_start_time=datetime.now().timestamp()
+            #调用整定方法
             model_selector = model_select.run(request)
+
             treaning_end_time=datetime.now().timestamp()
             logger.info(f"模型整定耗时: {treaning_end_time - treaning_start_time}s")
             suggest_pid_params = model_selector.get("pid_parameters")
@@ -220,12 +219,7 @@ class ExpertTuningService:
                 "model_type": model_type.value,
                 "turning_type": turning_type,
                 "model_rating": model_selector.get("model_rating"),
-                "model_parameters": {
-                    "K": model_selector.get("model_parameters.K"),
-                    "L": model_selector.get("model_parameters.L"),
-                    "T1": model_selector.get("model_parameters.T1"),
-                    "T2": model_selector.get("model_parameters.T2")
-                },
+                "model_parameters": model_selector.get("model_parameters"),
                 "pid_parameters": {
                     "kd": f"{model_selector.get('pid_parameters.kd', 0):.2f}" ,
                     "ki": f"{model_selector.get('pid_parameters.ki', 0):.2f}" ,

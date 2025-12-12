@@ -9,8 +9,6 @@ log.level=INFO
 log.format=%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 # ==================== TSDB时序数据库配置 ====================
-# 是否使用真实TSDB（true/false）
-tsdb.use_real=false
 # TSDB服务地址
 tsdb.base_url=http://tsdb-select-infra-system.sit-cloud.ieccloud.hollicube.com
 # 请求超时时间（秒）

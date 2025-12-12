@@ -3,21 +3,19 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from typing import Dict, List, Optional, Union, Any
 from datetime import datetime
-import json
 import logging
 
 from pydantic import BaseModel, Field
-from sqlmodel import Session
 
 from api.bean.generate_curves_request import GenerateCurvesRequest
-from api.routes.time_util import parse_time_to_milliseconds
+from api.commond.time_util import parse_time_to_milliseconds
+from api.commond.utils import result_to_serializable
 from core.agent.tools import process_query_tsdb_data_interpolated, detect_and_visualize
 from core.algorithm.ktl_simulator import KTLSimulator
 from api.services.expert_tuning_service import ExpertTuningService
 from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
 from core.client.bff_model_client import BFFModelClient
-from core.client.real_tsdb_client import get_default_database, query_raw_data
-from core.database import get_db
+from core.client.real_tsdb_client import get_default_database
 from core.utils.idass import UserInfo, get_current_user
 from core.utils.model_type import ModelType
 
@@ -164,7 +162,7 @@ async def auto_tuning(
         # db: Session = Depends(get_db),
         request: AutoTuningRequest ,
         user: UserInfo = Depends(get_current_user)
-    ):
+    )-> Dict[str, Any]:
     """
     **智能PID参数整定接口**
 
@@ -209,8 +207,8 @@ async def auto_tuning(
             operator_name=user.user_name if user else None
         )
         last_time=datetime.now().timestamp()
-        logger.info(f"自动整定完成, 用时: {last_time-first_time}秒")
-        return result
+        logger.info(f"自动整定完成, 用时: {last_time-first_time:.3f}秒")
+        return result_to_serializable(result)
 
     except HTTPException:
         raise

@@ -1,5 +1,5 @@
 import logging
-from typing import Optional, Dict, List, cast, Union, Any
+from typing import Optional, Dict, List, Union, Any
 import json  # 移到全局导入
 import traceback  # 添加traceback导入
 import sys
@@ -9,7 +9,7 @@ from datetime import datetime
 import numpy as np
 import matplotlib
 
-from api.routes.time_util import parse_time_to_milliseconds
+from api.commond.time_util import parse_time_to_milliseconds
 from core.algorithm.detector import StabilityDetector
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import query_raw_data, query_read_interpolated
@@ -1421,7 +1421,7 @@ def process_query_tsdb_data_interpolated(db: str,
         filter_values = process_lists_optimized(values)[0]
     else:
         filter_values = values
-    
+
     if not filter_values:
         return []
     
@@ -1513,7 +1513,7 @@ def process_query_tsdb_data_interpolated(db: str,
             all_records.append(record)
     
     over_time = datetime.now().timestamp()
-    logger.info(f"查询耗时：{over_time - first_time:.3f}秒, 数据量: {len(all_records)}条")
+    logger.info(f"历史插值数据查询耗时：{over_time - first_time:.3f}秒, 数据量: {len(all_records)}条")
     return all_records
 
 
