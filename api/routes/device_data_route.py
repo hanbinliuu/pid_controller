@@ -1,14 +1,10 @@
 import logging
-import os
-import uuid
 from typing import Optional, List, Union, Dict, Any
 
-import httpx
 from fastapi import APIRouter, HTTPException, Query, Header
-from pydantic import Field,BaseModel
 
 from api.middleware.exceptions import RuntimeException
-from api.services.device_data_service import DeviceDataService
+from api.services.device_data_service import DeviceDataService, DeviceCommand
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -22,11 +18,6 @@ DEFAULT_FIELD_MAPPING = {
     "ti": "ns=100;s=FIC101A_TI.In_Channel0",
     "td": "ns=100;s=FIC101A_TD.In_Channel0"
 }
-# IOTDA设备指令批量下发基础URL
-IOTDA_BASE_URL = os.getenv(
-    "IOTDA_BASE_URL",
-    "http://data-engine-iotda-infra-system.sit-cloud.ieccloud.hollicube.com"
-)
 
 @router.get("/point_history_data_iotda",
             summary="iotda-测点数据查询接口",
@@ -134,14 +125,6 @@ async def get_history_zhongkong_interpolated(
             detail=f"获取历史数据失败: {str(e)}"
         )
 
-class DeviceCommand(BaseModel):
-    """IOTDA设备指令数据模型"""
-    request_id:str=str(uuid.uuid4())
-    timeout: int = Field(..., description="单条指令超时时间（ms）", example=20)
-    object_device_id: str = Field(..., description="设备ID", example="PID_FEP_Gateway_Device_001")
-    service_id: str = Field(..., description="服务ID", example="default")
-    command_name: str = Field(..., description="命令名称", example="set_property")
-    paras: Dict[str, Any] = Field(..., description="命令参数字典", example={"ns=100;s=FIC101A_TD.In_Channel0": 10})
 
 @router.post(
     "/iotda/command/batch",
@@ -165,68 +148,16 @@ async def send_device_command_batch(
     请求体：设备指令数组
     """
     try:
-        url = f"{IOTDA_BASE_URL}/iotda-data-engine/device/command/batch"
-
-        headers = {"Content-Type": "application/json"}
-        if authorization:
-            headers["Authorization"] = authorization
-
-        # 序列化请求体
-        payload = []
-        command = commands[0]
-        for k in command.paras.keys():
-            cmd = DeviceCommand(
-                timeout=timeout,
-                object_device_id=command.object_device_id,
-                service_id=command.service_id,
-                command_name=command.command_name,
-                paras={k: command.paras[k]}
-            )
-            payload.append(cmd.model_dump())
-        print(payload)
-        logger.info(f"调用IOTDA设备指令批量接口: {url} params={{'retryNum': {retryNum}, 'timeout': {timeout}}}")
-        logger.debug(f"请求体: {payload}")
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                params={"retryNum": retryNum, "timeout": 10000},
-                json=payload,
-                headers=headers
-            )
-
-        logger.info(f"IOTDA接口响应状态: {response.status_code}")
-
-        if response.status_code == 200:
-            result = response.json()
-            logger.debug(f"响应体: {result}")
-            if result.get("result_code")==0:
-                return {
-                    "message": "指令批量下发成功",
-                    "data": {"message": result.get("message")}
-                }
-            else:
-                logger.error(f"IOTDA接口调用失败: {response.status_code} - {response.text}")
-                raise RuntimeException(
-                    message=f"IOTDA指令下发失败: {result.get('message')}",
-                    data=result.get("data")
-                )
-        else:
-            logger.error(f"IOTDA接口调用失败: {response.status_code} - {response.text}")
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"IOTDA调用失败: {response.text}"
-            )
-
-    except httpx.TimeoutException:
-        logger.error("IOTDA接口调用超时")
-        raise HTTPException(status_code=408, detail="IOTDA接口调用超时")
-    except httpx.ConnectError:
-        logger.error("无法连接到IOTDA接口")
-        raise HTTPException(status_code=503, detail="无法连接到IOTDA服务")
+        result = await DeviceDataService.send_device_command_batch(
+            commands=commands,
+            retryNum=retryNum,
+            timeout=timeout,
+            authorization=authorization
+        )
+        return result
     except Exception as e:
         logger.error(f"设备指令代理错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"代理服务内部错误: {str(e)}")
+        raise RuntimeException( detail=f"代理服务内部错误: {str(e)}")
 
 
 

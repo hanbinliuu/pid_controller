@@ -5,15 +5,37 @@
 """
 
 import logging
+import os
+import uuid
 from typing import Optional, List, Union, Dict, Any
 from datetime import datetime
+
+import httpx
+from pydantic import Field, BaseModel
 
 from core.agent.tools import process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import query_raw_data, get_default_database
 from api.commond.time_util import parse_time_to_milliseconds
+from api.middleware.exceptions import RuntimeException
 
 logger = logging.getLogger(__name__)
+
+# IOTDA设备指令批量下发基础URL
+IOTDA_BASE_URL = os.getenv(
+    "IOTDA_BASE_URL",
+    "http://data-engine-iotda-infra-system.sit-cloud.ieccloud.hollicube.com"
+)
+
+
+class DeviceCommand(BaseModel):
+    """IOTDA设备指令数据模型"""
+    request_id: str = str(uuid.uuid4())
+    timeout: int = Field(20000, description="单条指令超时时间（ms）", example=20)
+    object_device_id: str = Field(..., description="设备ID", example="PID_FEP_Gateway_Device_001")
+    service_id: str = Field("default", description="服务ID", example="default")
+    command_name: str = Field("set_property", description="命令名称", example="set_property")
+    paras: Dict[str, Any] = Field(..., description="命令参数字典", example={"ns=100;s=FIC101A_TD.In_Channel0": 10})
 
 
 class DeviceDataService:
@@ -229,4 +251,86 @@ class DeviceDataService:
 
         except Exception as e:
             logger.error(f"获取历史数据失败: {str(e)}")
+            raise
+
+    @staticmethod
+    async def send_device_command_batch(
+        commands: List[DeviceCommand],
+        retryNum: int = 0,
+        timeout: int = 20000,
+        authorization: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        代理下发设备指令到 IOTDA 系统（批量）。
+
+        Args:
+            commands: 设备指令数组
+            retryNum: 重试次数（默认0）
+            timeout: 请求整体超时（毫秒，默认20000）
+            authorization: IOTDA鉴权令牌（可选）
+
+        Returns:
+            Dict[str, Any]: 返回响应结果
+        """
+        try:
+            url = f"{IOTDA_BASE_URL}/iotda-data-engine/device/command/batch"
+
+            headers = {"Content-Type": "application/json"}
+            if authorization:
+                headers["Authorization"] = authorization
+
+            # 序列化请求体
+            payload = []
+            command = commands[0]
+            for k in command.paras.keys():
+                cmd = DeviceCommand(
+                    timeout=timeout,
+                    object_device_id=command.object_device_id,
+                    service_id=command.service_id,
+                    command_name=command.command_name,
+                    paras={k: command.paras[k]}
+                )
+                payload.append(cmd.model_dump())
+            
+            logger.info(f"调用IOTDA设备指令批量接口: {url} params={{'retryNum': {retryNum}, 'timeout': {timeout}}}")
+            logger.debug(f"请求体: {payload}")
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    params={"retryNum": retryNum, "timeout": 10000},
+                    json=payload,
+                    headers=headers
+                )
+
+            logger.info(f"IOTDA接口响应状态: {response.status_code}")
+
+            if response.status_code == 200:
+                result = response.json()
+                logger.debug(f"响应体: {result}")
+                if result.get("result_code") == 0:
+                    return {
+                        "message": "指令批量下发成功",
+                        "data": {"message": result.get("message")}
+                    }
+                else:
+                    logger.error(f"IOTDA接口调用失败: {response.status_code} - {response.text}")
+                    raise RuntimeException(
+                        message=f"IOTDA指令下发失败: {result.get('message')}",
+                        data=result.get("data")
+                    )
+            else:
+                logger.error(f"IOTDA接口调用失败: {response.status_code} - {response.text}")
+                raise Exception(
+                    f"IOTDA调用失败: {response.text}"
+                )
+
+        except httpx.TimeoutException:
+            logger.error("IOTDA接口调用超时")
+            raise Exception("IOTDA接口调用超时")
+        except httpx.ConnectError:
+            logger.error("无法连接到IOTDA接口")
+            raise Exception("无法连接到IOTDA服务")
+        except Exception as e:
+            logger.error(f"设备指令代理错误: {str(e)}")
             raise

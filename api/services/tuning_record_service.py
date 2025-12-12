@@ -68,7 +68,9 @@ class TuningRecordService:
                     after_params=after_params,
                     status=status,
                     remark=remark,
-                    tuning_details=tuning_details
+                    tuning_details=tuning_details,
+                    created_time=datetime.now(),
+                    updated_time=datetime.now()
                 )
 
                 # 保存到数据库

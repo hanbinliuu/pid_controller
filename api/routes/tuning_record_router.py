@@ -3,13 +3,14 @@
 整定记录管理路由 - 使用SQLModel
 用于保存和查询PID整定记录
 """
-
+import json
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
 from sqlmodel import Session
 
+from api.middleware.exceptions import RuntimeException
 from api.response.loop_response import LoopInfoResponse
 from api.routes.device_data_route import DeviceCommand
 from api.services.bff_service import BFFService
@@ -57,36 +58,62 @@ async def send_device_command(
     # 获取回路信息
 
     loop_info:LoopInfoResponse = LoopService.query_loop_info(loop_uri)
-
+    json_data = json.loads(after_params)
     #获取测点信息
-    # with BFFModelClient(loop_uri=loop_uri) as client:
-    #     table, field_mapping = client.query_table_and_points_by_loop_uri(loop_uri=loop_uri)
-    #     for key in field_mapping.values():
-    #
-    #
-    #
+    commands = []
+    with BFFModelClient(loop_uri=loop_uri) as client:
+        table, field_mapping = client.query_table_and_points_by_loop_uri(loop_uri=loop_uri)
+        # 查询常用字段
+        query_result = client.query_common_fields(field_mapping.values())
+
+        # 提取table名称和测点列表
+        table_and_points = BFFModelClient.extract_table_and_points_from_paths(query_result)
+
+        table_name = table_and_points.get('table_name').split("default")[0]
+
+        points = table_and_points.get('points', {})
+        send_points = ["pb", "ti", "td"]
+        for point_name in send_points:
+            if point_name in points:
+                value = json_data.get(point_name)
+                iot_point_name = points.get(point_name)
+                param = {
+                    iot_point_name: value
+                }
+                command = DeviceCommand(
+                    object_device_id=table_name,
+                    paras=param
+                )
+                commands.append(command)
+
     # commands = DeviceCommand
     # #参数下发
-    # result = DeviceDataService.send_device_command_batch(
-    #     commands=commands,
-    # )
+    try:
+        await DeviceDataService.send_device_command_batch(commands=commands)
+        user_id= None
+        user_name = None
+        if user:
+            user_id = user.user_id
+            user_name = user.user_name
 
-
-
-    record = TuningRecordService.create_record(
-        loop_uri=loop_uri,
-        loop_status=loop_info.auto_control_status,
-        tuning_method=tuning_method,
-        operator=user.user_name,
-        operator_id=user.user_id,
-        before_params=before_params,
-        after_params=after_params,
-        description=loop_info.description,
-        status=status,
-        remark=remark
-    )
-    return record
-
+        record = TuningRecordService.create_record(
+            loop_uri=loop_uri,
+            loop_status=loop_info.auto_control_status,
+            tuning_method=tuning_method,
+            operator=user_name,
+            operator_id=user_id,
+            before_params=before_params,
+            after_params=after_params,
+            description=loop_info.description,
+            status=status,
+            remark=remark
+        )
+        return record
+    except Exception as e:
+        logger.error(f"参数下发异常: {str(e)}")
+        raise RuntimeException(
+            f"参数下发异常: {str(e)}"
+        )
 
 @router.post(
     "/",
