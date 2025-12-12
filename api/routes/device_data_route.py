@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Header
 from pydantic import Field,BaseModel
 
+from api.middleware.exceptions import RuntimeException
 from api.routes.time_util import parse_time_to_milliseconds
 from api.services.device_data_service import DeviceDataService
 from core.client.bff_model_client import BFFModelClient
@@ -201,10 +202,18 @@ async def send_device_command_batch(
 
         if response.status_code == 200:
             result = response.json()
-            return {
-                "message": "指令批量下发成功",
-                "data": result
-            }
+            logger.debug(f"响应体: {result}")
+            if result.get("result_code")==0:
+                return {
+                    "message": "指令批量下发成功",
+                    "data": {"message": result.get("message")}
+                }
+            else:
+                logger.error(f"IOTDA接口调用失败: {response.status_code} - {response.text}")
+                raise RuntimeException(
+                    message=f"IOTDA指令下发失败: {result.get('message')}",
+                    data=result.get("data")
+                )
         else:
             logger.error(f"IOTDA接口调用失败: {response.status_code} - {response.text}")
             raise HTTPException(
