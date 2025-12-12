@@ -159,7 +159,7 @@ class ModelSelector:
             },
             'fitting_result': fitting_result,
             'fusion_info': result.get('fusion_info', {}),
-            'closed_loop_verification': result.get('closed_loop_verification', {}),
+            # 'closed_loop_verification': result.get('closed_loop_verification', {}),
             'rating_details': result.get('rating_details', {})
         }
     

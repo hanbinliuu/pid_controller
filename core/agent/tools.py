@@ -1457,8 +1457,8 @@ def process_query_tsdb_data_interpolated(db: str,
         td_values = np.array([row[td_idx] if td_idx < len(row) else 0 for row in filter_values], dtype=np.float64)
         
         # 向量化PID转换 (避免循环调用convert_pb_to_pid)
-        # Kp = PB / 100
-        kp_values = pb_values / 100.0
+        # Kp = 100 / PB
+        kp_values = 100 / pb_values
         # Ki = Kp / Ti (避免除零)
         ki_values = np.where(ti_values != 0, kp_values / ti_values, 0.0)
         # Kd = Kp * Td

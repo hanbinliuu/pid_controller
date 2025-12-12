@@ -61,12 +61,19 @@ async def get_evaluation_by_device_uri(
 async def get_this_child_evaluation_now_by_device_uri(
         device_uri: Optional[str] = Query(None, description="装置URI"),
         db: Session = Depends(get_db)
-):
+)->List[DeviceEvaluation]:
     # 获取最新的装置评估数据
-    if device_uri is None:
-        device_uri = Config.BFF_MODEL_ROOT_URI
-    results = DeviceEvaluationService.get_this_child_by_device_uri_and_date_now(db, device_uri)
-    return results
+    # if device_uri is None:
+    #     device_uri = Config.BFF_MODEL_ROOT_URI
+    # results = DeviceEvaluationService.get_this_child_by_device_uri_and_date_now(db, device_uri)
+
+    device_list:List[DeviceEvaluation] = []
+    parient_result = DeviceEvaluationService.get_evaluation_by_device_uri_now(db, device_uri)
+    child_result = DeviceEvaluationService.get_evaluation_by_parent_device_uri_now(db, device_uri)
+    device_list.append(parient_result)
+    device_list.extend(child for child in child_result)
+
+    return device_list
 
 @router.get("/device-evaluation/history-data",
             summary="装置历史统计",

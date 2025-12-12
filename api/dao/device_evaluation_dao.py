@@ -87,7 +87,7 @@ class DeviceEvaluationDAO:
             device_uri: 装置URI（可选，为空则查询所有装置）
 
         Returns:
-            List[DeviceEvaluation]: 评估记录列表，按统计时间倒序排列
+            List[DeviceEvaluation]: 评估记录列表
         """
         try:
             # 构建查询语句
@@ -100,9 +100,10 @@ class DeviceEvaluationDAO:
             statement = statement.where(DeviceEvaluation.statistics_time == datetime.now().date())
 
             # 按统计时间倒序排列
-            statement = statement.order_by(desc(DeviceEvaluation.statistics_time))
+            statement = statement.order_by(desc(DeviceEvaluation.device_uri))
 
             results = db.exec(statement).all()
+
 
             logger.info(
                 f"查询装置评估记录成功 - device_uri: {device_uri or '全部'}, "

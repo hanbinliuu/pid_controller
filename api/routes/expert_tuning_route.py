@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from api.bean.generate_curves_request import GenerateCurvesRequest
 from api.commond.time_util import parse_time_to_milliseconds
 from api.commond.utils import result_to_serializable
+from api.middleware.exceptions import RuntimeException
 from core.agent.tools import process_query_tsdb_data_interpolated, detect_and_visualize
 from core.algorithm.ktl_simulator import KTLSimulator
 from api.services.expert_tuning_service import ExpertTuningService
@@ -208,13 +209,16 @@ async def auto_tuning(
         )
         last_time=datetime.now().timestamp()
         logger.info(f"自动整定完成, 用时: {last_time-first_time:.3f}秒")
+        if result.get("success")==False:
+            logger.error(f"参数整定失败: {result}")
+            raise RuntimeException(f"整定失败，请手动选取时间范围进行整定")
         return result_to_serializable(result)
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"自动整定失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"参数整定失败: {str(e)}")
+        logger.error(f"整定异常: {str(e)}", exc_info=True)
+        raise RuntimeException(f"整定异常: {str(e)}")
 
 @router.get("/detect_and_visualize",
             summary="设备状态识别",

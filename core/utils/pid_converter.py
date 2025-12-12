@@ -23,7 +23,7 @@ class PIDConverter:
     """PID参数与比例带转换工具类"""
     
     @staticmethod
-    def kp_to_proportional_band(kp: float) -> float:
+    def kp_to_pb(kp: float) -> float:
         """
         将比例增益Kp转换为比例带PB
         
@@ -41,7 +41,7 @@ class PIDConverter:
         return 100.0 / kp
     
     @staticmethod
-    def proportional_band_to_kp(pb: float) -> float:
+    def pb_to_kp(pb: float) -> float:
         """
         将比例带PB转换为比例增益Kp
         
@@ -98,7 +98,7 @@ class PIDConverter:
         return kp / ti
     
     @staticmethod
-    def kd_to_derivative_time(kp: float, kd: float) -> float:
+    def kd_to_td(kp: float, kd: float) -> float:
         """
         将微分增益Kd转换为微分时间Td
         
@@ -117,7 +117,7 @@ class PIDConverter:
         return kd / kp
     
     @staticmethod
-    def derivative_time_to_kd(kp: float, td: float) -> float:
+    def td_to_kd(kp: float, td: float) -> float:
         """
         将微分时间Td转换为微分增益Kd
         
@@ -150,7 +150,7 @@ class PIDConverter:
         
         # 比例带转换
         if kp > 0:
-            result['proportional_band'] = PIDConverter.kp_to_proportional_band(kp)
+            result['proportional_band'] = PIDConverter.kp_to_pb(kp)
         else:
             result['proportional_band'] = float('inf')
         
@@ -162,7 +162,7 @@ class PIDConverter:
         
         # 微分时间转换
         if kp > 0:
-            result['derivative_time'] = PIDConverter.kd_to_derivative_time(kp, kd)
+            result['derivative_time'] = PIDConverter.kd_to_td(kp, kd)
         else:
             result['derivative_time'] = 0
         
@@ -190,7 +190,7 @@ class PIDConverter:
         
         # 比例增益转换
         if pb > 0:
-            result['kp'] = PIDConverter.proportional_band_to_kp(pb)
+            result['kp'] = PIDConverter.pb_to_kp(pb)
         else:
             result['kp'] = 0.0
         
@@ -202,7 +202,7 @@ class PIDConverter:
         
         # 微分增益转换
         if td is not None:
-            result['kd'] = PIDConverter.derivative_time_to_kd(result['kp'], td)
+            result['kd'] = PIDConverter.td_to_kd(result['kp'], td)
         else:
             result['kd'] = 0.0
         
