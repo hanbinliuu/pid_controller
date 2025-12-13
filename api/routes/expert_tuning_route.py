@@ -7,7 +7,7 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from api.bean.generate_curves_request import GenerateCurvesRequest
+from api.bean.generate_curves_request import GenerateCurvesRequest, KTLSimulatorRequest
 from api.commond.time_util import parse_time_to_milliseconds
 from api.commond.utils import result_to_serializable
 from api.middleware.exceptions import RuntimeException
@@ -142,11 +142,11 @@ async def get_model_types():
     try:
         # 获取所有模型类型列表
         model_types = ModelType.get_model_map()
-        
+
         return {
             "model_types": model_types
         }
-        
+
     except Exception as e:
         logger.error(f"获取模型类型失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"获取模型类型失败: {str(e)}")
@@ -1091,34 +1091,17 @@ async def get_history_data(
         )
 
 
-# @router.get("/ktl-simulation",
-#             summary="基于KTL参数生成仿真模型曲线",
-#             operation_id="KTL仿真曲线生成",
-#             description="根据K(增益)、T(时间常数)、L(纯滞后)参数生成模型的阶跃响应曲线")
-async def generate_ktl_simulation(
-        model_type: ModelType = Query(ModelType.FOPDT, description="模型类型",
-                                      examples=ModelType.get_model_type()),
-        K: float = Query(..., description="增益系数 K", examples=[0.5, 1.0, 2.0]),
-        T1: float = Query(..., description="时间常数 T1 (秒)", examples=[10.0, 30.0, 50.0]),
-        T2: Optional[float] = Query(None, description="二阶时间常数 T2 (秒，仅二阶模型需要)", examples=[10.0, 20.0]),
-        L: Optional[float] = Query(0, description="滞后时间 L (秒)", examples=[0, 1.0, 5.0]),
-        Kp: Optional[float] = Query(None, description="PID比例系数", examples=[1.0]),
-        Ki: Optional[float] = Query(None, description="PID积分系数", examples=[0.1]),
-        Kd: Optional[float] = Query(None, description="PID微分系数", examples=[0.01]),
-        step_value: float = Query(1.0, description="阶跃输入幅值", examples=[1.0, 10.0]),
-        duration: float = Query(600.0, description="仿真时长(秒)", examples=[300.0, 600.0]),
-        dt: float = Query(1.0, description="采样时间间隔(秒)", examples=[0.1, 1.0]),
-        initial_output: float = Query(0.0, description="初始输出值", examples=[0.0]),
-        with_pid: bool = Query(False, description="是否生成PID闭环响应", examples=[False]),
-        setpoint: Optional[float] = Query(None, description="PID设定值", examples=[100.0]),
-        save_plot: bool = Query(True, description="是否保存图片", examples=[True])
-):
+@router.post("/ktl-simulation",
+            summary="基于KTL参数生成仿真模型曲线",
+            operation_id="KTL仿真曲线生成",
+            description="根据K(增益)、T(时间常数)、L(纯滞后)参数生成模型的阶跃响应曲线")
+async def generate_ktl_simulation(request: KTLSimulatorRequest):
     """
     基于KTL参数生成模型仿真曲线
 
     **功能说明:**
     - 生成一阶惯性加纯滞后(FOPDT)模型的阶跃响应曲线
-    - 支持开环阶跃响应和PID闭环响应
+    - 同时生成开环阶跃响应和PID闭环响应两种曲线
     - 自动计算性能指标（上升时间、调节时间、超调量等）
 
     **FOPDT模型:**
@@ -1128,73 +1111,77 @@ async def generate_ktl_simulation(
     - L: 纯滞后时间（输入到输出的延迟）
     """
     try:
-        plot_path = None
+        result = {}
+        
+        # ==================== 1. 生成开环阶跃响应 ====================
+        open_loop_result = KTLSimulator.generate_response(
+            model_type=request.model_type.value,
+            parameters={'K': request.K, 'T1': request.T1, 'T2': request.T2, 'L': request.L},
+            step_value=request.step_value,
+            duration=request.duration,
+            dt=request.dt,
+            initial_output=request.initial_output
+        )
 
-        if with_pid:
-            # 生成PID闭环响应
-            if Kp is None or Ki is None or Kd is None or setpoint is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="生成PID闭环响应时必须提供Kp, Ki, Kd和setpoint参数"
-                )
+        # 计算模型性能指标
+        open_loop_metrics = KTLSimulator.calculate_performance_metrics(
+            simulation_data=open_loop_result,
+            initial_output=request.initial_output
+        )
 
-            result = KTLSimulator.generate_closed_loop_response(
-                model_type=model_type.value,
-                parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
-                Kp=Kp,
-                Ki=Ki,
-                Kd=Kd,
-                setpoint=setpoint,
-                duration=duration,
-                dt=dt
+        # 保存开环图片
+        open_loop_plot_path = None
+        if request.save_plot:
+            open_loop_plot_path = KTLSimulator.save_plot(
+                data=open_loop_result,
+                simulation_type="open_loop"
             )
 
-            # 保存图片
-            if save_plot:
-                plot_path = KTLSimulator.save_plot(
-                    data=result,
+        result["open_loop"] = {
+            "simulation_type": "open_loop_step",
+            "data": open_loop_result,
+            "performance_metrics": open_loop_metrics,
+            "plot_saved": open_loop_plot_path is not None,
+            "plot_path": open_loop_plot_path
+        }
+
+        # ==================== 2. 生成PID闭环响应 ====================
+        closed_loop_result = None
+        closed_loop_plot_path = None
+        
+        if request.Kp is not None and request.Ki is not None and request.Kd is not None and request.setpoint is not None:
+            # 如果提供了PID参数，生成闭环响应
+            closed_loop_result = KTLSimulator.generate_closed_loop_response(
+                model_type=request.model_type.value,
+                parameters={'K': request.K, 'T1': request.T1, 'T2': request.T2, 'L': request.L},
+                Kp=request.Kp,
+                Ki=request.Ki,
+                Kd=request.Kd,
+                setpoint=request.setpoint,
+                duration=request.duration,
+                dt=request.dt
+            )
+
+            # 保存闭环图片
+            if request.save_plot:
+                closed_loop_plot_path = KTLSimulator.save_plot(
+                    data=closed_loop_result,
                     simulation_type="closed_loop"
                 )
 
-            return {
+            result["closed_loop"] = {
                 "simulation_type": "pid_closed_loop",
-                "data": result,
-                "plot_saved": plot_path is not None,
-                "plot_path": plot_path
+                "data": closed_loop_result,
+                "plot_saved": closed_loop_plot_path is not None,
+                "plot_path": closed_loop_plot_path
             }
         else:
-            # 生成开环阶跃响应
-            result = KTLSimulator.generate_response(
-                model_type=ModelType.FOPDT.value,
-                parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
-                step_value=step_value,
-                duration=duration,
-                dt=dt,
-                initial_output=initial_output
-            )
-
-            # 计算性能指标
-            metrics = KTLSimulator.calculate_performance_metrics(
-                t=result["time"],
-                y=result["output"],
-                step_value=step_value,
-                K=K
-            )
-
-            # 保存图片
-            if save_plot:
-                plot_path = KTLSimulator.save_plot(
-                    data=result,
-                    simulation_type="open_loop"
-                )
-
-            return {
-                "simulation_type": "open_loop_step",
-                "data": result,
-                "performance_metrics": metrics,
-                "plot_saved": plot_path is not None,
-                "plot_path": plot_path
+            result["closed_loop"] = {
+                "status": "skipped",
+                "message": "PID闭环响应未生成，需要提供Kp, Ki, Kd和setpoint参数"
             }
+
+        return result
 
     except HTTPException:
         raise

@@ -456,10 +456,7 @@ async def trigger_device_statistics(
         logger.info(f"手动触发装置统计任务，统计日期: {stats_date}")
         result = calc_device_statistics(statistics_date=stats_date)
         
-        return {
-            "status": "success",
-            "data": result
-        }
+        return result
         
     except HTTPException:
         raise

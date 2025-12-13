@@ -11,7 +11,8 @@ from core.utils.model_type import ModelType
 
 class GenerateCurvesRequest(BaseModel):
     """generate_all_curves 接口请求体"""
-    
+    model_type: ModelType = Field(ModelType.FOPDT, description="模型类型")
+
     # 时间参数
     start_time: Optional[int] = Field(None, description="开始时间(毫秒时间戳)")
     end_time: Optional[int] = Field(None, description="结束时间(毫秒时间戳)")
@@ -21,8 +22,7 @@ class GenerateCurvesRequest(BaseModel):
     T1: float = Field(..., description="时间常数(秒)", examples=[30.0, 45.0, 60.0])
     T2: Optional[float] = Field(None, description="二阶时间常数(秒)",  examples=[20.0, 30.0])
     L: float = Field(0.0, description="滞后时间(秒)", examples=[0.0, 1.0, 2.0])
-    model_type: ModelType = Field(ModelType.FOPDT, description="模型类型")
-    
+
     # PID参数
     Kp: Optional[float] = Field(None, description="PID比例系数", examples=[1.0, 1.2, 1.5])
     Ki: Optional[float] = Field(None, description="PID积分系数", examples=[0.05, 0.1, 0.15])
@@ -75,6 +75,44 @@ class GenerateCurvesRequest(BaseModel):
     def to_dict(self):
         """转换为字典，用于传递给内部函数"""
         return self.model_dump(exclude_none=True)
+
+class KTLSimulatorRequest(BaseModel):
+    """KTL模型仿真曲线生成器请求体"""
+    model_type: ModelType = Field(ModelType.FOPDT, description="模型类型", examples=ModelType.get_model_type())
+    K: float = Field(..., description="增益系数 K", examples=[0.5, 1.0, 2.0])
+    T1: float = Field(..., description="时间常数 T1 (秒)", examples=[10.0, 30.0, 50.0])
+    T2: Optional[float] = Field(None, description="二阶时间常数 T2 (秒，仅二阶模型需要)", examples=[10.0, 20.0])
+    L: Optional[float] = Field(0, description="滞后时间 L (秒)", examples=[0, 1.0, 5.0])
+    Kp: Optional[float] = Field(None, description="PID比例系数", examples=[1.0])
+    Ki: Optional[float] = Field(None, description="PID积分系数", examples=[0.1])
+    Kd: Optional[float] = Field(None, description="PID微分系数", examples=[0.01])
+    step_value: float = Field(1.0, description="阶跃输入幅值", examples=[1.0, 10.0])
+    duration: float = Field(600.0, description="仿真时长(秒)", examples=[300.0, 600.0])
+    dt: float = Field(1.0, description="采样时间间隔(秒)", examples=[0.1, 1.0])
+    initial_output: float = Field(0.0, description="初始输出值", examples=[0.0])
+    setpoint: Optional[float] = Field(None, description="PID设定值", examples=[100.0])
+    save_plot: bool = Field(False, description="是否保存图片", examples=[True])
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "model_type": "FOPDT",
+                "K": 1.0,
+                "T1": 30.0,
+                "T2": None,
+                "L": 1.0,
+                "Kp": 1.0,
+                "Ki": 0.1,
+                "Kd": 0.01,
+                "step_value": 1.0,
+                "duration": 600.0,
+                "dt": 1.0,
+                "initial_output": 0.0,
+                "with_pid": False,
+                "setpoint": 100.0,
+                "save_plot": True
+            }
+        }
 
 
 class FOPDTRequest(BaseModel):

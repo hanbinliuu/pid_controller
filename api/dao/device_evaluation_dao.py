@@ -376,6 +376,7 @@ class DeviceEvaluationDAO:
             raise
     
     @staticmethod
+
     def batch_upsert_by_device_uri_and_date(
         db: Session,
         items: List[Dict[str, Any]]
@@ -385,16 +386,12 @@ class DeviceEvaluationDAO:
         
         Args:
             db: 数据库会话
-            upsert_data_list: upsert数据列表，每项需包含device_uri, statistics_date和其他评估数据
+            items: upsert数据列表，每项需包含device_uri, statistics_time和其他评估数据
         
         Returns:
             List[DeviceEvaluation]: 创建或更新的评估对象列表
         """
         try:
-            """
-               批量 UPSERT （设备评估）
-               items: List[Dict]，每条数据包含 device_uri + statistics_time + 其他字段
-               """
             # 设置 created/updated 时间
             now = datetime.now()
             for item in items:
@@ -412,10 +409,17 @@ class DeviceEvaluationDAO:
             upsert_stmt = stmt.on_conflict_do_update(
                 index_elements=["device_uri", "statistics_time"],
                 set_=update_columns
-            )
+            ).returning(DeviceEvaluation)
 
-            db.execute(upsert_stmt)
+            result = db.execute(upsert_stmt)
             db.commit()
+            
+            # 获取返回的记录
+            inserted_records = result.scalars().all()
+            
+            logger.info(f"批量upsert装置评估记录成功，共处理 {len(inserted_records)} 条记录")
+            
+            return list(inserted_records)
 
         except Exception as e:
             db.rollback()

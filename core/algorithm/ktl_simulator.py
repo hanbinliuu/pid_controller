@@ -249,74 +249,176 @@ class KTLSimulator:
             }
             
         except Exception as e:
-            logger.error(f"生成{model_type}响应曲线失败: {str(e)}")
+            logger.error(f"生成{model_type}开环响应曲线失败: {str(e)}")
             raise
 
     @staticmethod
     def calculate_performance_metrics(
-        t: List[float],
-        y: List[float],
-        step_value: float,
-        K: float
+        simulation_data: Dict[str, Any] = None,
+        t: List[float] = None,
+        y: List[float] = None,
+        step_value: float = None,
+        K: float = None,
+        initial_output: float = 0.0,
+        model_type: str = None
     ) -> Dict[str, Any]:
         """
         计算阶跃响应的性能指标
         
         参数:
-            t: 时间序列
-            y: 输出序列(pv)
+            simulation_data: 仿真数据字典（包含time, output, parameters, model_type）
+            t: 时间序列（如果simulation_data未提供）
+            y: 输出序列(pv)（如果simulation_data未提供）
             step_value: 阶跃输入幅值
-            K: 系统增益
+            K: 系统增益（可选，用于计算理论稳态值）
+            initial_output: 初始输出值
+            model_type: 模型类型（可选）
             
         返回:
-            性能指标字典
+            性能指标字典，包含:
+            - steady_state: 稳态值（理论值或实际值）
+            - rise_time: 上升时间 (10% -> 90%)
+            - settling_time: 调节时间 (±2%误差带)
+            - settling_time_5: 调节时间 (±5%误差带)
+            - overshoot_percent: 超调量百分比
+            - peak_time: 峰值时间
+            - peak_value: 峰值
+            - delay_time: 延迟时间 (达到50%稳态值的时间)
+            - time_constant: 时间常数估计 (63.2%稳态值)
+            - steady_state_error: 稳态误差
+            - final_value: 最终值
         """
         try:
+            # 如果提供了simulation_data，从中提取所需数据
+            if simulation_data:
+                t = simulation_data.get('time', t)
+                y = simulation_data.get('output', y)
+                model_type = simulation_data.get('model_type', model_type)
+                params = simulation_data.get('parameters', {})
+                if K is None:
+                    K = params.get('K')
+                if step_value is None:
+                    step_value = params.get('step_value', 1.0)
+            
+            # 验证必要参数
+            if t is None or y is None:
+                raise ValueError("必须提供simulation_data或者t和y参数")
+            
             y_arr = np.array(y)
             t_arr = np.array(t)
             
-            # 稳态值
-            steady_state = K * step_value
+            # 实际最终值（取最后10%数据的平均值）
+            final_portion_size = max(int(len(y_arr) * 0.1), 10)
+            final_value = float(np.mean(y_arr[-final_portion_size:]))
+            
+            # 稳态值：优先使用实际最终值，除非提供了K值且是非积分模型
+            if K is not None and model_type and 'INTEGRATOR' not in model_type.upper():
+                # 对于非积分模型，使用K值计算理论稳态值
+                theoretical_steady_state = K * step_value + initial_output
+            else:
+                # 对于积分模型或未提供K值时，使用实际最终值作为稳态值
+                theoretical_steady_state = final_value
+            
+            steady_state = theoretical_steady_state
+            
+            # 稳态误差（实际值与理论值的差异）
+            steady_state_error = abs(final_value - steady_state)
+            steady_state_error_percent = (steady_state_error / abs(steady_state)) * 100 if steady_state != 0 else 0.0
+            
+            # 响应幅度（从初始值到稳态值的变化）
+            response_amplitude = steady_state - initial_output
+            
+            # 如果响应幅度太小，使用实际响应幅度
+            if abs(response_amplitude) < 1e-6:
+                response_amplitude = final_value - initial_output
+                steady_state = final_value
+            
+            # 延迟时间 (达到50%稳态值的时间)
+            y_50 = initial_output + 0.5 * response_amplitude
+            if response_amplitude > 0:
+                idx_50 = np.where(y_arr >= y_50)[0]
+            else:
+                idx_50 = np.where(y_arr <= y_50)[0]
+            delay_time = float(t_arr[idx_50[0]]) if len(idx_50) > 0 else None
             
             # 上升时间 (10% -> 90%)
-            y_10 = 0.1 * steady_state
-            y_90 = 0.9 * steady_state
+            y_10 = initial_output + 0.1 * response_amplitude
+            y_90 = initial_output + 0.9 * response_amplitude
             
-            idx_10 = np.where(y_arr >= y_10)[0]
-            idx_90 = np.where(y_arr >= y_90)[0]
+            if response_amplitude > 0:
+                idx_10 = np.where(y_arr >= y_10)[0]
+                idx_90 = np.where(y_arr >= y_90)[0]
+            else:
+                idx_10 = np.where(y_arr <= y_10)[0]
+                idx_90 = np.where(y_arr <= y_90)[0]
             
             if len(idx_10) > 0 and len(idx_90) > 0:
-                rise_time = t_arr[idx_90[0]] - t_arr[idx_10[0]]
+                rise_time = float(t_arr[idx_90[0]] - t_arr[idx_10[0]])
             else:
                 rise_time = None
             
-            # 调节时间 (进入±2%稳态误差带)
-            tolerance = 0.02 * steady_state
-            settling_idx = np.where(np.abs(y_arr - steady_state) <= tolerance)[0]
-            
-            if len(settling_idx) > 0:
-                settling_time = t_arr[settling_idx[0]]
+            # 时间常数估计 (达到63.2%稳态值的时间)
+            y_63 = initial_output + 0.632 * response_amplitude
+            if response_amplitude > 0:
+                idx_63 = np.where(y_arr >= y_63)[0]
             else:
-                settling_time = None
+                idx_63 = np.where(y_arr <= y_63)[0]
+            time_constant = float(t_arr[idx_63[0]] - t_arr[0]) if len(idx_63) > 0 else None
+            
+            # 调节时间 (进入±2%稳态误差带且不再离开)
+            tolerance_2 = 0.02 * abs(response_amplitude)
+            settling_time_2 = None
+            for i in range(len(y_arr)):
+                if all(abs(y_arr[j] - steady_state) <= tolerance_2 for j in range(i, len(y_arr))):
+                    settling_time_2 = float(t_arr[i])
+                    break
+            
+            # 调节时间 (进入±5%稳态误差带且不再离开)
+            tolerance_5 = 0.05 * abs(response_amplitude)
+            settling_time_5 = None
+            for i in range(len(y_arr)):
+                if all(abs(y_arr[j] - steady_state) <= tolerance_5 for j in range(i, len(y_arr))):
+                    settling_time_5 = float(t_arr[i])
+                    break
             
             # 超调量
-            max_value = np.max(y_arr)
-            if steady_state > 0:
-                overshoot = ((max_value - steady_state) / steady_state) * 100
-            else:
-                overshoot = 0.0
+            max_value = float(np.max(y_arr))
+            min_value = float(np.min(y_arr))
+            
+            if response_amplitude > 0:  # 正向阶跃
+                overshoot = max_value - steady_state
+                overshoot_percent = (overshoot / abs(response_amplitude)) * 100 if response_amplitude != 0 else 0.0
+            else:  # 负向阶跃
+                overshoot = steady_state - min_value
+                overshoot_percent = (overshoot / abs(response_amplitude)) * 100 if response_amplitude != 0 else 0.0
             
             # 峰值时间
-            peak_idx = np.argmax(y_arr)
-            peak_time = t_arr[peak_idx]
+            if response_amplitude > 0:
+                peak_idx = np.argmax(y_arr)
+            else:
+                peak_idx = np.argmin(y_arr)
+            peak_time = float(t_arr[peak_idx])
+            peak_value = float(y_arr[peak_idx])
             
             return {
                 "steady_state": float(steady_state),
-                "rise_time": float(rise_time) if rise_time is not None else None,
-                "settling_time": float(settling_time) if settling_time is not None else None,
-                "overshoot_percent": float(overshoot),
-                "peak_time": float(peak_time),
-                "peak_value": float(max_value)
+                "final_value": final_value,
+                "steady_state_error": float(steady_state_error),
+                "steady_state_error_percent": float(steady_state_error_percent),
+                "initial_value": float(initial_output),
+                "response_amplitude": float(response_amplitude),
+                "delay_time": delay_time,
+                "rise_time": rise_time,
+                "time_constant": time_constant,
+                "settling_time": settling_time_2,
+                "settling_time_2_percent": settling_time_2,
+                "settling_time_5_percent": settling_time_5,
+                "overshoot": float(overshoot),
+                "overshoot_percent": float(overshoot_percent),
+                "peak_time": peak_time,
+                "peak_value": peak_value,
+                "max_value": max_value,
+                "min_value": min_value
             }
             
         except Exception as e:

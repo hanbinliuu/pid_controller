@@ -240,7 +240,7 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
             failed_count = len(upsert_data_list)
         
         result = {
-            "status": "成功" if failed_count == 0 else "部分失败",
+            "status": f"成功" if failed_count == 0 else f"部分失败：失败数{failed_count}",
             "message": "装置性能统计完成",
             "statistics_date": statistics_date.isoformat(),
             "summary": {

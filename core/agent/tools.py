@@ -1024,8 +1024,9 @@ class PIDOptimizationTool():
                 # 开环仿真：阶跃输入
                 print(f"生成开环阶跃响应...")
                 step_value = float(np.mean(u_hist[-30:])) if len(u_hist) > 30 else float(np.mean(u_hist))
-                sim_data = KTLSimulator.generate_fopdt_response(
-                    K=K, T1=T1, L=L,
+                sim_data = KTLSimulator.generate_response(
+                    model_type=model_type.value,
+                    parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
                     step_value=step_value,
                     duration=duration,
                     dt=dt,
@@ -1087,7 +1088,7 @@ class PIDOptimizationTool():
                 "simulation_data": sim_data,
                 "plot_saved": plot_path is not None,
                 "plot_path": plot_path,
-                "note": f"基于FOPDT模型的{simulation_type}仿真结果"
+                "note": f"基于{model_type.value}模型的{simulation_type}仿真结果"
             }
 
         except Exception as e:

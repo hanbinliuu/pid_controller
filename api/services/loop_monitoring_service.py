@@ -637,7 +637,7 @@ class LoopMonitoringService:
                         })
 
             # 计算汇总统计
-            successful_results = [r for r in results if r.get('status') in ['优', '良', '中', '差']]
+            successful_results = [r for r in results if r.get('status') in ['优', '良', '中', '差','开环']]
 
             summary = {
                 "total_loops": len(loop_uris),
@@ -649,7 +649,8 @@ class LoopMonitoringService:
                     "优": 0,
                     "良": 0,
                     "中": 0,
-                    "差": 0
+                    "差": 0,
+                    "开环": 0
                 }
             }
 
