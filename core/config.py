@@ -48,8 +48,21 @@ class PropertiesLoader:
 
 # 加载配置文件（模块级别）
 _project_root = Path(__file__).parent.parent
-_config_file = _project_root / 'config' / 'application.properties'
-_properties = PropertiesLoader.load_properties(str(_config_file))
+
+# 优先从 /app/config 目录加载配置（Docker环境），其次从项目config目录加载
+_config_paths = [
+    Path('/app/config/application.properties'),  # Docker环境配置路径
+    _project_root / 'config' / 'application.properties'  # 本地开发环境配置路径
+]
+
+_properties = {}
+for _config_file in _config_paths:
+    if _config_file.exists():
+        _properties = PropertiesLoader.load_properties(str(_config_file))
+        print(f"成功加载配置文件: {_config_file}")
+        break
+else:
+    print("警告: 未找到配置文件，将使用默认配置")
 
 
 def _get_config(key: str, default: Any = None, value_type: type = str) -> Any:
@@ -243,6 +256,16 @@ class Config:
     DB_POOL_SIZE: int = _get_config('db.pool_size', '10', int)
     # 数据库连接池最大溢出连接数
     DB_MAX_OVERFLOW: int = _get_config('db.max_overflow', '20', int)
+    
+    # ==================== 回路优化阈值配置 ====================
+    # 性能分数阈值（低于此值认为需要优化）
+    LOOP_PERFORMANCE_THRESHOLD: float = _get_config('loop.performance.threshold', '80.0', float)
+    # 稳定率阈值（低于此值认为需要优化）
+    LOOP_STABILITY_THRESHOLD: float = _get_config('loop.stability.threshold', '90.0', float)
+    # 自控率阈值（高于此值认为是自控回路）
+    LOOP_AUTO_CONTROL_THRESHOLD: float = _get_config('loop.auto_control.threshold', '0.8', float)
+    # 平稳率阈值（高于此值认为是平稳回路）
+    LOOP_STABLE_THRESHOLD: float = _get_config('loop.stable.threshold', '0.8', float)
     
     @classmethod
     def get_bff_model_config(cls) -> dict:

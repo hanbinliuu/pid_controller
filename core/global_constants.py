@@ -102,13 +102,23 @@ VALVE_CHANGE_THRESHOLD = 25
 # 相关性阈值
 CORRELATION_THRESHOLD = 0.3
 
-# ==================== 滤波器参数 ====================
-# 滤波器阶数
+# ==================== 滞波器参数 ====================
+# 滞波器阶数
 FILTER_ORDER = 3
 # 截止频率（相对于采样频率的比例）
 FILTER_CUTOFF_FREQ = 0.05
-# 是否对输入信号也应用滤波
+# 是否对输入信号也应用滞波
 FILTER_APPLY_TO_INPUT = True
+
+# ==================== 回路优化阈值配置 ====================
+# 性能分数阈值（低于此值认为需要优化）
+LOOP_PERFORMANCE_THRESHOLD = Config.LOOP_PERFORMANCE_THRESHOLD
+# 稳定率阈值（低于此值认为需要优化）
+LOOP_STABILITY_THRESHOLD = Config.LOOP_STABILITY_THRESHOLD
+# 自控率阈值（高于此值认为是自控回路）
+LOOP_AUTO_CONTROL_THRESHOLD = Config.LOOP_AUTO_CONTROL_THRESHOLD
+# 平稳率阈值（高于此值认为是平稳回路）
+LOOP_STABLE_THRESHOLD = Config.LOOP_STABLE_THRESHOLD
 
 # ==================== 仿真参数 ====================
 # 仿真总时长（秒）
@@ -194,10 +204,16 @@ __all__ = [
     'VALVE_CHANGE_THRESHOLD',
     'CORRELATION_THRESHOLD',
     
-    # 滤波器参数
+    # 滞波器参数
     'FILTER_ORDER',
     'FILTER_CUTOFF_FREQ',
     'FILTER_APPLY_TO_INPUT',
+        
+    # 回路优化阈值
+    'LOOP_PERFORMANCE_THRESHOLD',
+    'LOOP_STABILITY_THRESHOLD',
+    'LOOP_AUTO_CONTROL_THRESHOLD',
+    'LOOP_STABLE_THRESHOLD',
     
     # 仿真参数
     'SIMULATION_DURATION',

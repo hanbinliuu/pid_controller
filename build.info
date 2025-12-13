@@ -1,0 +1,8 @@
+[
+  {
+	  "BuildPath": "",
+		"ImageName": "holli-pid-agent-api",
+		"DockerfilePath": "",
+      "ChartName": "holli-pid-agent-api"
+  }
+]

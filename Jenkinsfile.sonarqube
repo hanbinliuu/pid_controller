@@ -1,0 +1,13 @@
+@Library('devopslib3.0.0') _
+import com.hollysys.Global
+podTemplate(yaml: Global.node_pod_deploy) {
+    node(POD_LABEL) {
+        stage('1.代码扫描') {
+            container('jenkins-node') {
+                stage('代码扫描') {
+                        DSonarQube(env)
+                }
+            }
+        }
+    }
+}

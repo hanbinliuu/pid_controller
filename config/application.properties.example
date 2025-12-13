@@ -102,6 +102,16 @@ db.pool_size=10
 # 连接池最大溢出数
 db.max_overflow=20
 
+# ==================== 回路优化阈值配置 ====================
+# 性能分数阈值（低于此值认为需要优化，默认80.0）
+loop.performance.threshold=80.0
+# 稳定率阈值（低于此值认为需要优化，默认90.0）
+loop.stability.threshold=95.0
+# 自控率阈值（高于此值认为是自控回路，默认0.8）
+loop.auto_control.threshold=0.8
+# 平稳率阈值（高于此值认为是平稳回路，默认0.8）
+loop.stable.threshold=0.85
+
 # 数据库连接URL（可选，如果设置则优先使用此URL）
 # 支持 PostgreSQL 和 SQLite
 # PostgreSQL: postgresql://user:password@host:port/dbname

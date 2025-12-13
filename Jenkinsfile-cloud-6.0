@@ -1,0 +1,38 @@
+@Library('devopslib4.0.0') _
+import com.hollysys.Global
+properties([
+    parameters([
+        [$class: 'ChoiceParameter',choiceType: 'PT_CHECKBOX',description: '选择要构建的步骤',filterLength: 1,filterable: false,name: 'stage_choice',script: [$class: 'GroovyScript',script: [classpath: [],sandbox: false,script: """return ['1.编译源码:selected','2.制作镜像并且推送:selected','3.更新Chart包信息:selected','4.拷贝Chart到Harbor:selected','5.更新环境中服务:selected']"""]]]])
+])
+podTemplate(yaml: Global.node_pod_deploy) {
+    node(POD_LABEL) {
+        stage('1.编译源码') {
+            container('jenkins-node') {
+                stage('编译源码') {
+                    if (Global.isContinue(this)){
+                        DComplieSourceCode(this)
+                    }
+                }
+            }
+        }
+        stage('2.制作镜像并且推送') {
+            container('jenkins-node') {
+                stage('制作镜像并且推送') {
+                    if (Global.isContinue(this)){
+                        DBuildAndPushImages(this)
+                    }
+                }
+            }
+        }
+        stage('3.更新Chart包信息') {
+            container('jenkins-node') {
+                stage('更新Chart包信息') {
+                    if (Global.isContinue(this)){
+                        DUpdateChartInfo(this)
+                    }
+                }
+            }
+        }
+    }
+}
+

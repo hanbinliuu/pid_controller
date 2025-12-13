@@ -1,79 +1,61 @@
-# Git相关
+# Git 相关
 .git
 .gitignore
 .gitattributes
 
-# Python相关
-__pycache__/
+# Python 缓存
+__pycache__
 *.py[cod]
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 
 # 虚拟环境
 venv/
 env/
 ENV/
 .venv
-.env
 
-# IDE相关
+# IDE 相关
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.DS_Store
 
-# 测试相关
+# 测试和覆盖率
 .pytest_cache/
 .coverage
-.tox/
-.nox/
 htmlcov/
+*.cover
 
 # 文档
 *.md
-doc/
 docs/
 
 # 日志文件
 *.log
-logs/
+
+# 本地数据库文件
+*.db
+*.sqlite
+*.sqlite3
 
 # 临时文件
+tmp/
+temp/
 *.tmp
-*.temp
-.DS_Store
-Thumbs.db
 
-# 开发工具
-Makefile
-docker-compose.override.yml
+# Docker 相关
+Dockerfile*
+docker-compose*.yml
 .dockerignore
 
-# 测试文件
-test_*.py
-*_test.py
-tests/
+# CI/CD
+.github/
+.gitlab-ci.yml
 
-# 配置文件（可选）
+# 其他
+*.bak
 .env.local
-.env.development

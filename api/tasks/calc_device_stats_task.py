@@ -15,6 +15,7 @@ from api.dao.loop_evaluation_dao import LoopEvaluationDAO
 from api.dao.device_evaluation_dao import DeviceEvaluationDAO
 from api.services.bff_service import BFFService
 from core.config import Config
+from core.global_constants import LOOP_AUTO_CONTROL_THRESHOLD, LOOP_STABLE_THRESHOLD
 from sqlmodel import select, or_
 
 logger = logging.getLogger(__name__)
@@ -173,12 +174,12 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                     if evaluation.status == '开环':
                         open_loops += 1
 
-                    # 自控率判断：auto_control_rate >= 80%
-                    if evaluation.auto_control_rate and evaluation.auto_control_rate >= 0.8:
+                    # 自控率判断：auto_control_rate >= LOOP_AUTO_CONTROL_THRESHOLD
+                    if evaluation.auto_control_rate and evaluation.auto_control_rate >= LOOP_AUTO_CONTROL_THRESHOLD:
                         auto_control_loops += 1
 
-                    # 平稳率判断：stability_rate >= 80%
-                    if evaluation.stability_rate and evaluation.stability_rate >= 0.8:
+                    # 平稳率判断：stability_rate >= LOOP_STABLE_THRESHOLD
+                    if evaluation.stability_rate and evaluation.stability_rate >= LOOP_STABLE_THRESHOLD:
                         stable_loops += 1
 
                 # 计算比率

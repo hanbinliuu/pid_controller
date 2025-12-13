@@ -8,6 +8,7 @@ from sqlmodel import Session, select, func
 from api.bean.loop_evaluation import LoopEvaluation
 from api.bean.loop_info import LoopInfo
 from api.response.loop_response import OptimizableLoop, PerfReductionLoop
+from core.global_constants import LOOP_PERFORMANCE_THRESHOLD, LOOP_STABILITY_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +125,8 @@ class HomePageDAO:
             LoopEvaluation.status != "条件剔除"
         ).where(
             or_(
-                LoopEvaluation.performance_score < 80,
-                LoopEvaluation.stability_rate < 90
+                LoopEvaluation.performance_score < LOOP_PERFORMANCE_THRESHOLD,
+                LoopEvaluation.stability_rate < LOOP_STABILITY_THRESHOLD
             )
         )
         total = session.exec(stmt).one()
@@ -133,7 +134,6 @@ class HomePageDAO:
             return [], total
 
         # 查询需要整定的回路
-        # todo: 80, 90 这两个阈值需要从配置文件中获取
         stmt = select(
             LoopEvaluation.loop_uri,
             LoopEvaluation.loop_name,
@@ -147,8 +147,8 @@ class HomePageDAO:
             LoopEvaluation.status != "条件剔除"
         ).where(
             or_(
-                LoopEvaluation.performance_score < 80,
-                LoopEvaluation.stability_rate < 90
+                LoopEvaluation.performance_score < LOOP_PERFORMANCE_THRESHOLD,
+                LoopEvaluation.stability_rate < LOOP_STABILITY_THRESHOLD
             )
         ).offset(offset).limit(limit).order_by(LoopEvaluation.id)
 
