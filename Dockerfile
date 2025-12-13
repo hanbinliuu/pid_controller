@@ -30,14 +30,6 @@ RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://dow
 # 复制项目文件
 COPY . .
 
-# 创建数据目录和配置目录
-RUN mkdir -p /app/data/simulated /app/config
-
-# 复制配置文件到 /app/config 目录（如果配置文件存在）
-RUN if [ -f config/application.properties ]; then \
-        cp config/application.properties /app/config/application.properties; \
-    fi
-
 # 设置启动脚本权限
 RUN chmod +x run_server.py start.sh
 
