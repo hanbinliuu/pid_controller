@@ -1,4 +1,33 @@
-"""仿真模块"""
+"""
+模型仿真模块 (Model Simulator Module)
+=====================================
+
+本模块实现模型仿真功能，用于验证辨识结果和生成pv_model曲线。
+
+核心功能
+--------
+1. **分段仿真**: 在SV变化点自动重置，段内连续仿真
+2. **幅度校准**: 确保仿真幅度与实测匹配
+3. **平滑过渡**: 消除扰动段与稳态段的跳变
+4. **偏移校正**: 防止pv_model飘在实测上方/下方
+5. **振荡叠加**: 使模型能跟随实测的振荡特征
+
+仿真增强选项
+------------
+- enable_smooth: 启用平滑过渡
+- enable_amplitude_calibration: 启用幅度校准
+- enable_offset_correction: 启用偏移校正
+- enable_oscillation_overlay: 启用振荡叠加
+
+使用示例
+--------
+>>> simulator = ModelSimulator()
+>>> pv_model = simulator.simulate_segmented(
+...     params, model_type, y, u, sv=sv,
+...     enable_smooth=True,
+...     enable_amplitude_calibration=True
+... )
+"""
 
 import numpy as np
 from typing import Dict, Optional, Tuple

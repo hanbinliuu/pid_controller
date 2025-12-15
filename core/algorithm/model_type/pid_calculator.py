@@ -1,4 +1,31 @@
-"""PID参数计算模块"""
+"""
+PID参数计算模块 (PID Calculator Module)
+=======================================
+
+本模块基于辨识的模型参数计算最优PID整定参数。
+
+核心功能
+--------
+1. **多种整定方法**: Lambda/IMC法、Cohen-Coon法、Ziegler-Nichols临界法
+2. **自适应保守调整**: 根据数据质量自动调整保守程度
+3. **振荡分析整定**: 对高振荡数据使用临界法整定
+4. **闭环稳定性验证**: 仿真验证PID参数的闭环性能
+
+整定方法说明
+------------
+- **lambda**: Lambda/IMC法，适用于所有模型，平衡响应速度和稳定性
+- **cohen_coon**: Cohen-Coon法，适用于FOPDT，当L/T较大时使用
+- **imc_aggressive**: IMC激进模式，响应更快但可能振荡
+
+闭环性能指标
+------------
+- settling_time: 调节时间 (进入±2%误差带)
+- overshoot: 超调量 (%)
+- rise_time: 上升时间 (10%到90%)
+- steady_state_error: 稳态误差
+- oscillation_count: 振荡次数
+- decay_ratio: 衰减比
+"""
 
 import numpy as np
 from typing import Dict, Tuple, Optional
@@ -123,12 +150,12 @@ class PIDCalculator:
         
         Returns:
             (conservative_level, pb_min)
-            - conservative_level: 保守因子 (2.0~5.0)，越大越保守
-            - pb_min: pb最小值 (40~80)
+            - conservative_level: 保守因子 (2.0~4.0)，越大越保守
+            - pb_min: pb最小值 (30~60)
         """
         if quality_info is None:
             # 无质量信息时使用默认保守参数
-            return 3.0, 50
+            return 2.5, 40
         
         # 计算综合质量得分
         q_score = quality_info.quality_score
@@ -139,31 +166,40 @@ class PIDCalculator:
         # 质量因子：越差越保守
         quality_factor = 1.0 - q_score  # 0~1，质量越差越高
         
-        # 振荡因子：振荡越大越保守
-        osc_factor = osc_ratio  # 0~1
+        # 振荡因子：振荡越大越保守，但适度降低权重
+        osc_factor = osc_ratio * 0.8  # 降低振荡的惩罚
         
         # 拟合因子：R²越低越保守
         r2_factor = max(0, 1.0 - r2)  # 0~1
         
-        # 一致性因子：一致性越低越保守
-        consist_factor = max(0, 1.0 - consistency)  # 0~1
+        # 一致性因子：一致性越低越保守，但当R²很高时降低惩罚
+        if r2 > 0.9:
+            consist_factor = max(0, 1.0 - consistency) * 0.5  # R²高时降低一致性惩罚
+        else:
+            consist_factor = max(0, 1.0 - consistency)
         
-        # 综合保守度：加权平均
+        # 综合保守度：加权平均，增加R²权重
         conservativeness = (
-            0.3 * quality_factor +
-            0.3 * osc_factor +
-            0.2 * r2_factor +
-            0.2 * consist_factor
+            0.25 * quality_factor +
+            0.25 * osc_factor +
+            0.35 * r2_factor +  # 增加R²权重
+            0.15 * consist_factor  # 降低一致性权重
         )
+        
+        # 当R²很高时，额外降低保守度
+        if r2 > 0.9:
+            conservativeness *= 0.7
+        elif r2 > 0.8:
+            conservativeness *= 0.85
         
         # 映射到保守等级
         # conservativeness: 0 (最优) -> 1 (最差)
-        # conservative_level: 2.0 (快速) -> 5.0 (保守)
-        conservative_level = 2.0 + conservativeness * 3.0
+        # conservative_level: 2.0 (快速) -> 4.0 (保守)
+        conservative_level = 2.0 + conservativeness * 2.0
         
         # 映射到pb最小值
-        # pb_min: 40 (快速) -> 80 (保守)
-        pb_min = 40 + conservativeness * 40
+        # pb_min: 30 (快速) -> 60 (保守)
+        pb_min = 30 + conservativeness * 30
         
         return conservative_level, pb_min
     

@@ -1,4 +1,25 @@
-"""模型配置模块 - 模型类型和参数边界定义"""
+"""
+模型配置模块 (Model Configuration Module)
+=========================================
+
+本模块定义了模型辨识所需的全局配置参数，包括：
+
+1. **模型类型枚举**: 支持的过程模型类型定义
+2. **参数边界**: 各模型参数的优化边界和约束
+3. **阈值配置**: 数据质量、拟合评估等阈值参数
+4. **整定配置**: 振荡整定、闭环验证等配置
+
+配置分组
+--------
+- OSCILLATION_TUNING: 振荡整定相关配置
+- DATA_QUALITY: 数据质量评估阈值
+- MODEL_FITTING: 模型拟合质量阈值
+- CLOSED_LOOP: 闭环稳定性验证配置
+- SEGMENT_PROCESSING: 扰动段处理配置
+- OPTIMIZATION: 优化算法配置
+- PARAMETER_CONSTRAINTS: 参数约束配置
+- MODEL_BOUNDS: 各模型的参数边界
+"""
 
 
 class ModelType:

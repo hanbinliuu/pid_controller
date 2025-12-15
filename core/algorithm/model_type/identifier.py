@@ -1,4 +1,30 @@
-"""模型辨识器模块 - 各种系统模型的参数辨识"""
+"""
+模型辨识器模块 (Model Identifier Module)
+========================================
+
+本模块实现各种过程模型的参数辨识算法。
+
+支持的模型类型
+--------------
+- **FOPDT**: 一阶加纯滞后模型 G(s) = K/(Ts+1)*e^(-Ls)
+- **FO**: 纯一阶模型 G(s) = K/(Ts+1)
+- **SO**: 纯二阶模型 G(s) = K/((T1s+1)(T2s+1))
+- **SOPDT**: 二阶加纯滞后模型 G(s) = K/((T1s+1)(T2s+1))*e^(-Ls)
+- **FOPI**: 一阶积分模型 G(s) = K/s * 1/(Ts+1)
+
+核心功能
+--------
+1. **高振荡数据处理**: 检测振荡严重程度，使用包络线法估计参数
+2. **稳健KTL估计**: 综合首尾稳态法、包络线法、分段中位数法
+3. **增量形式仿真**: 所有模型使用增量形式，适应实际工况数据
+4. **参数边界约束**: 基于Config配置的参数边界进行优化
+
+主要方法
+--------
+- detect_high_oscillation: 检测高振荡数据
+- estimate_ktl_robust: 稳健的KTL参数估计
+- identify_fopdt/identify_first_order/...: 各模型的辨识方法
+"""
 
 import numpy as np
 from scipy.optimize import least_squares
