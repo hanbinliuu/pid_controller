@@ -66,7 +66,11 @@ class HomePageDAO:
         stmt = select(
             LoopEvaluation.loop_uri,
             LoopEvaluation.performance_score,
-        ).where(LoopEvaluation.assessment_time == query_date)
+        ).where(
+            LoopEvaluation.assessment_time == query_date,
+            LoopEvaluation.status != "开环",
+            LoopEvaluation.status != "条件剔除"
+        )
         results = session.exec(stmt).all()
 
         scores = []
