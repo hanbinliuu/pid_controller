@@ -1,9 +1,44 @@
 """
-稳定性检测器
-优化后的非稳态（扰动）检测算法
+稳定性检测器模块 (Stability Detector Module)
+============================================
 
-输入：Pandas Series with datetime index (pv_series, sv_series)
-输出：包含table, start_time, end_time, params, total_windows, std_max_window的字典
+本模块实现非稳态（扰动）段的自动检测算法，用于从历史数据中
+识别适合进行模型辨识的扰动时间段。
+
+核心功能
+--------
+1. **非稳态检测**: 检测数据中的非稳态段（扰动段）
+2. **稳态判断**: 判断一段数据是否处于稳态
+3. **SV变化检测**: 检测设定值变化点和响应缓冲期
+4. **扰动起始定位**: 精确定位扰动的起始点
+5. **段合并与分割**: 合并相邻扰动段，分割过长的段
+
+检测逻辑
+--------
+1. 检测SV变化区间及其响应缓冲期
+2. 在SV稳定区间内检测大幅振荡
+3. 使用滑动窗口检测非稳态特征
+4. 回溯查找真正的扰动起始点
+5. 过滤收敛过程（正常响应）
+6. 合并相邻的扰动段
+
+阈值配置
+--------
+- tol: 容差（PV与设定值的允许偏差）
+- std_tol: 标准差阈值
+- min_len: 最小数据长度
+
+输入输出
+--------
+输入: pv_data (np.ndarray), sv_array (np.ndarray)
+输出: 非稳态段列表 [(start_idx, end_idx, setpoint), ...]
+
+使用示例
+--------
+>>> detector = StabilityDetector(tol=0.5, std_tol=0.2)
+>>> segments = detector.detect_non_steady_segments(pv_data, sv_array)
+>>> for start, end, sp in segments:
+...     print(f"扰动段: [{start}, {end}], 设定值={sp}")
 """
 
 import numpy as np
@@ -34,8 +69,12 @@ class StabilityDetector:
         self.std_tol = std_tol
         self.min_len = min_len
     
+    # ============================================================
+    # 基础统计方法
+    # ============================================================
+    
     def _calculate_sign_changes(self, data):
-        """计算数据的方向改变次数"""
+        """计算数据的方向改变次数（用于振荡检测）"""
         if len(data) < 2:
             return 0
         diff = np.diff(data)
@@ -43,11 +82,23 @@ class StabilityDetector:
             return 0
         return np.sum(np.diff(np.sign(diff)) != 0)
     
+    # ============================================================
+    # 振荡与稳态检测方法
+    # ============================================================
+    
     def _check_large_oscillation(self, pv_data, setpoint, include_sign_changes=True, strict=False, during_sv_change=False):
-        """检查是否存在大幅振荡
+        """
+        检查是否存在大幅振荡
         
         Args:
-            during_sv_change: 是否在SV变化期间，如果是则使用更高的阈值避免误识别正常响应
+            pv_data: PV数据数组
+            setpoint: 设定值
+            include_sign_changes: 是否考虑符号变化次数
+            strict: 是否使用严格阈值
+            during_sv_change: 是否在SV变化期间（使用更高阈值避免误识别）
+        
+        Returns:
+            bool: 是否存在大幅振荡
         """
         if len(pv_data) < 10:
             return False
@@ -60,11 +111,11 @@ class StabilityDetector:
             abs_range, abs_std = 7.0, 3.5
             sign_ratio, sign_std_ratio = 0.2, 0.25
         elif during_sv_change:
-            # SV变化期间使用更高的阈值，避免将正常响应误识别为扰动
-            if pv_range > 15.0 or pv_std > 8.0:
+            # SV变化期间使用适度的阈值，避免将正常响应误识别为扰动，但也要能检测明显的异常
+            if pv_range > 10.0 or pv_std > 5.0:
                 return True
-            range_ratio, std_ratio = 0.5, 0.3
-            abs_range, abs_std = 5.0, 2.5
+            range_ratio, std_ratio = 0.45, 0.28
+            abs_range, abs_std = 3.0, 1.0  # 降低阈值，便于检测小幅度但明显的扰动
             sign_ratio = 0.15 if len(pv_data) > 100 else 0.2
             sign_std_ratio = 0.2
         else:
@@ -268,8 +319,29 @@ class StabilityDetector:
         
         return min(dynamic_buffer, 200)
     
+    # ============================================================
+    # 稳态判断方法
+    # ============================================================
+    
     def is_steady_state(self, pv_data, setpoint, for_level=False):
-        """判断一段数据是否处于稳态"""
+        """
+        判断一段数据是否处于稳态
+        
+        综合考虑以下因素：
+        - 均值与设定值的偏差
+        - 标准差是否在阈值内
+        - 是否存在明显趋势
+        - 数据范围是否过大
+        - 振荡频率是否过高
+        
+        Args:
+            pv_data: PV数据数组
+            setpoint: 设定值
+            for_level: 是否用于液位等积分过程（使用不同判据）
+        
+        Returns:
+            bool: 是否处于稳态
+        """
         if len(pv_data) < self.min_len:
             return False
         
@@ -332,8 +404,23 @@ class StabilityDetector:
                         return False
             return True
     
+    # ============================================================
+    # 设定值变化检测方法
+    # ============================================================
+    
     def is_setpoint_changing(self, sv_array, start_idx, end_idx, threshold=0.1):
-        """检测指定区间内设定值是否正在变化"""
+        """
+        检测指定区间内设定值是否正在变化
+        
+        Args:
+            sv_array: SV数据数组
+            start_idx: 起始索引
+            end_idx: 结束索引
+            threshold: 变化阈值
+        
+        Returns:
+            bool: 是否正在变化
+        """
         if sv_array is None or len(sv_array) == 0:
             return False
         if end_idx - start_idx < 3:
@@ -610,8 +697,29 @@ class StabilityDetector:
         
         return False
     
+    # ============================================================
+    # 核心检测方法
+    # ============================================================
+    
     def detect_non_steady_segments(self, pv_data, sv_array, min_segment_len=30):
-        """检测数据中的非稳态段（扰动段），小于30个点的段会被过滤"""
+        """
+        检测数据中的非稳态段（扰动段）
+        
+        这是本模块的核心方法，综合使用多种策略检测非稳态段：
+        1. 检测SV变化区间内的大幅振荡
+        2. 在SV稳定区间使用滑动窗口检测
+        3. 回溯查找真正的扰动起始点
+        4. 过滤正常收敛过程
+        5. 合并相邻扰动段
+        
+        Args:
+            pv_data: PV数据数组
+            sv_array: SV数据数组
+            min_segment_len: 最小段长度（小于此值的段会被过滤）
+        
+        Returns:
+            list: 非稳态段列表 [(start_idx, end_idx, setpoint), ...]
+        """
         n = len(pv_data)
         if n < min_segment_len * 2:
             return []
@@ -635,8 +743,13 @@ class StabilityDetector:
                         # SV变化幅度小时，使用更高阈值检测
                         if self._check_large_oscillation(change_pv, current_sv, during_sv_change=True):
                             non_steady_segments.append((change_start, change_end, current_sv))
+                    elif sv_change_magnitude > 5.0:
+                        # SV变化幅度很大时，直接识别为扰动（即使PV还未响应）
+                        non_steady_segments.append((change_start, change_end, current_sv))
                     else:
-                        if self._check_abnormal_oscillation_during_sv_change(change_pv, change_sv, sv_change_magnitude):
+                        # SV变化幅度中等时，检测异常振荡或大幅振荡
+                        if self._check_abnormal_oscillation_during_sv_change(change_pv, change_sv, sv_change_magnitude) or \
+                           self._check_large_oscillation(change_pv, current_sv, during_sv_change=True):
                             non_steady_segments.append((change_start, change_end, current_sv))
         
         sv_segments = self.detect_setpoint_segments(sv_array, min_change=0.5, min_stable_points=20)
@@ -1050,12 +1163,21 @@ class StabilityDetector:
         
         return is_low_variation and has_no_trend
     
+    # ============================================================
+    # 段分割与合并方法
+    # ============================================================
+    
     def _split_long_segments(self, segments, pv_data, sv_array, min_segment_len=30):
         """
         分割过长的非稳态段
         
-        对于较长的非稳态段，检查其内部是否存在连续的平稳区域，
+        对于较长的非稳态段（>30分钟），检查其内部是否存在连续的平稳区域，
         如果存在则将其分割为多个独立的扰动段。
+        
+        分割阈值:
+        - MIN_SPLIT_LENGTH = 1800: 段长度超过1800点才考虑分割
+        - MIN_STEADY_LENGTH = 600: 平稳区域至少600点才作为分割点
+        - SCAN_WINDOW = 120: 扫描窗口大小
         
         Args:
             segments: 非稳态段列表 [(start, end, setpoint), ...]
@@ -1207,8 +1329,22 @@ class StabilityDetector:
         
         return std_ok and range_ok and error_ok and has_no_trend
     
+    # ============================================================
+    # 扰动起始点检测方法
+    # ============================================================
+    
     def detect_all_disturbances(self, pv_data, sv_array, non_steady_segments=None):
-        """检测所有扰动（非稳态）的起始点"""
+        """
+        检测所有扰动（非稳态）的起始点
+        
+        Args:
+            pv_data: PV数据数组
+            sv_array: SV数据数组
+            non_steady_segments: 已检测的非稳态段列表（可选）
+        
+        Returns:
+            list: 扰动起始点列表 [(start_idx, setpoint), ...]
+        """
         n = len(pv_data)
         if n < 50:
             return []
@@ -1256,7 +1392,36 @@ class StabilityDetector:
         return disturbance_starts
 
 
+# ============================================================
+# 模块级便捷函数
+# ============================================================
+
 def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    从历史数据中查找高波动（非稳态）时间段
+    
+    这是一个便捷函数，封装了StabilityDetector的主要功能，
+    接受标准格式的历史数据并返回检测到的扰动窗口。
+    
+    Args:
+        history_data: 历史数据字典，格式为:
+            {
+                "history_data": [
+                    {"timestamp": ..., "pv": ..., "sv": ...},
+                    ...
+                ]
+            }
+    
+    Returns:
+        dict: {
+            "start_time": 数据起始时间戳,
+            "end_time": 数据结束时间戳,
+            "qualified_windows": [
+                {"start_time": ..., "end_time": ...},
+                ...
+            ]
+        }
+    """
     try:
         # 解析输入数据
         data_list = history_data.get("history_data", [])
@@ -1342,10 +1507,18 @@ def merge_adjacent_periods(
 ) -> List[Dict[str, Any]]:
     """
     合并相邻的高波动时间段
+    
+    当两个高波动时间段之间的间隔小于max_gap时，将它们合并为一个。
 
     Args:
-        periods: 高波动时间段列表
-        max_gap: 最大允许的间隔（索引点数）
+        periods: 高波动时间段列表，每个元素包含:
+            - start_time: 起始时间
+            - end_time: 结束时间
+            - start_idx: 起始索引
+            - end_idx: 结束索引
+            - setpoint: 设定值
+            - variance/std/mean/range: 统计指标
+        max_gap: 最大允许的间隔（索引点数），默认100
 
     Returns:
         list: 合并后的时间段列表

@@ -1,4 +1,32 @@
-"""统一日志模块 - 提供模块级日志功能"""
+"""
+统一日志模块 (Unified Logging Module)
+=====================================
+
+本模块提供模型辨识过程中的统一日志功能。
+
+主要组件
+--------
+- **get_logger**: 获取配置好的日志器实例
+- **LoggerMixin**: 日志混入类，为其他类提供统一的日志方法
+
+使用方式
+--------
+1. 函数式使用::
+
+    logger = get_logger(__name__, verbose=True)
+    logger.info("处理中...")
+
+2. 类混入使用::
+
+    class MyClass(LoggerMixin):
+        def __init__(self, verbose=False):
+            self._init_logger(verbose)
+        
+        def process(self):
+            self.log("开始处理")
+            self.log_debug("调试信息")
+            self.log_warning("警告信息")
+"""
 
 import logging
 import sys

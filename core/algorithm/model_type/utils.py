@@ -1,4 +1,23 @@
-"""工具函数模块"""
+"""
+工具函数模块 (Utility Functions Module)
+=======================================
+
+本模块提供模型辨识过程中常用的工具函数。
+
+统计指标计算
+------------
+- calculate_r2: 计算决定系数 R²
+- calculate_rmse: 计算均方根误差 RMSE
+- calculate_rss: 计算残差平方和 RSS
+- calculate_aic: 计算 AIC (赤池信息准则)
+- calculate_bic: 计算 BIC (贝叶斯信息准则)
+
+其他工具
+--------
+- parse_timestamp: 解析各种格式的时间戳
+- get_recommendation: 根据评分获取推荐等级
+- determine_turning_type: 根据PID参数确定整定类型 (P/PI/PID)
+"""
 
 import numpy as np
 from datetime import datetime, timezone, timedelta

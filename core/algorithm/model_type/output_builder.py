@@ -1,4 +1,29 @@
-"""输出构建模块 - 负责构建最终整定结果"""
+"""
+输出构建模块 (Output Builder Module)
+====================================
+
+本模块负责构建最终的整定结果输出。
+
+核心功能
+--------
+1. **常规整定输出**: 基于模型辨识结果构建完整输出
+2. **振荡整定输出**: 基于振荡临界法构建输出
+3. **空结果生成**: 当辨识失败时生成默认输出
+4. **闭环验证**: 对PID参数进行闭环稳定性验证
+5. **评分计算**: 计算模型综合评分 (model_rating)
+
+输出结构
+--------
+- success: 是否成功
+- model_type: 模型类型
+- model_rating: 综合评分 (0-10)
+- model_parameters: 模型参数 {K, T1, T2, L}
+- pid_parameters: PID参数 {Kp, Ki, Kd}
+- fitting_result: 拟合结果 {timestamp, sv, pv, mv, pv_model, r_squared, rmse}
+- fusion_info: 融合信息
+- closed_loop_verification: 闭环验证结果
+- rating_details: 评分详情
+"""
 
 import numpy as np
 from typing import List, Dict, Any, Optional

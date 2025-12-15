@@ -87,7 +87,7 @@ class ModelSelector:
     def verbose(self) -> bool:
         return self._verbose
     
-    def log(self, msg: str):
+    def log(self, msg: str) -> None:
         if self._verbose:
             print(msg)
     
@@ -258,9 +258,10 @@ class ModelSelector:
         3. 拟合R² - 模型拟合质量
         4. 参数一致性 - 多段参数一致程度
         """
-        # 计算平均振荡比
+        # 计算平均振荡比和质量评分（一次遍历，避免重复调用 analyze_quality）
         oscillation_ratios = []
         quality_scores = []
+        is_noisy = False
         
         for seg in valid_segments:
             y = seg.pv
@@ -269,19 +270,16 @@ class ModelSelector:
             osc_ratio = sign_changes / (len(y) - 2) if len(y) > 2 else 0
             oscillation_ratios.append(osc_ratio)
             
-            # 使用预处理器分析质量
+            # 使用预处理器分析质量（只调用一次）
             quality = self._preprocessor.analyze_quality(y, seg.mv)
             quality_scores.append(quality.quality_score if hasattr(quality, 'quality_score') else 0.5)
+            
+            # 检查是否有高噪声段
+            if hasattr(quality, 'is_noisy') and quality.is_noisy:
+                is_noisy = True
         
         avg_oscillation = np.mean(oscillation_ratios) if oscillation_ratios else 0.0
         avg_quality = np.mean(quality_scores) if quality_scores else 0.5
-        
-        # 检查是否有高噪声段
-        is_noisy = any(
-            hasattr(self._preprocessor.analyze_quality(seg.pv, seg.mv), 'is_noisy') and 
-            self._preprocessor.analyze_quality(seg.pv, seg.mv).is_noisy 
-            for seg in valid_segments
-        )
         
         quality_info = DataQualityInfo(
             quality_score=avg_quality,
@@ -448,7 +446,7 @@ class ModelSelector:
         
         return segment_results
     
-    def _select_segment_best_model(self, result: SegmentResult, idx: int):
+    def _select_segment_best_model(self, result: SegmentResult, idx: int) -> None:
         """选择该段的最佳模型"""
         if not result.model_results:
             return
@@ -476,6 +474,43 @@ class ModelSelector:
     # ============================================================
     # Step 2.5: 振荡分析与临界法整定
     # ============================================================
+    
+    def _get_conservative_pid_params(self, Pu: float, Ku: float, 
+                                      K_approx: float = 1.0,
+                                      reason: str = 'generic') -> Dict[str, Any]:
+        """
+        获取保守PID参数
+        
+        Args:
+            Pu: 临界周期
+            Ku: 临界增益
+            K_approx: 估计的过程增益
+            reason: 使用保守参数的原因
+        
+        Returns:
+            保守PID参数字典
+        """
+        # 根据过程增益选择保守pb值
+        if reason == 'low_gain' or K_approx < 0.1:
+            pb_safe = 70.0
+        elif K_approx < 1.0:
+            pb_safe = 45.0
+        else:
+            pb_safe = 35.0
+        
+        conservative_Kp = 100.0 / pb_safe
+        conservative_Ti = max(Pu / 2, 2.0) if Pu > 0 else 2.0
+        conservative_Ki = conservative_Kp / conservative_Ti
+        
+        return {
+            'Kp': round(conservative_Kp, 4),
+            'Ki': round(conservative_Ki, 4),
+            'Kd': 0.0,
+            'method': f'{reason}_conservative',
+            'Pu': Pu,
+            'Ku': Ku,
+            'pb': pb_safe
+        }
     
     def _try_oscillation_tuning(self, segments: List[HistoricalData], 
                                 segment_results: List[SegmentResult],
@@ -580,21 +615,13 @@ class ModelSelector:
                     self.log(f"   ⚠️ Ku={Ku:.3f}<0.5，临界增益过小，使用保守参数")
         
         if use_conservative:
-            # 对于低增益系统，直接使用保守的pb值
+            # 使用保守PID参数
             Pu = best_analysis['osc_info']['Pu']
-            conservative_pb = 70.0  # 保守的pb值（接近用户的71.3）
-            conservative_Kp = 100.0 / conservative_pb  # ≈1.43
-            conservative_Ti = max(Pu / 2, 2.0)  # 积分时间
-            conservative_Ki = conservative_Kp / conservative_Ti
-            
-            pid_params = {
-                'Kp': round(conservative_Kp, 4),
-                'Ki': round(conservative_Ki, 4),
-                'Kd': 0.0,  # 不使用微分
-                'method': 'low_gain_conservative',
-                'Pu': Pu,
-                'Ku': best_analysis['osc_info']['Ku']
-            }
+            pid_params = self._get_conservative_pid_params(
+                Pu, best_analysis['osc_info']['Ku'], 
+                K_approx=apparent_gain if best_seg is not None else 1.0,
+                reason='low_gain'
+            )
         else:
             # 使用临界法计算 PID 参数
             pid_params = self._pid_calculator.calculate_from_oscillation(
@@ -712,48 +739,26 @@ class ModelSelector:
         if not is_stable:
             self.log("   ⚠️ 闭环不稳定，尝试更保守的参数...")
             
-            # 策略1: 基于数据范围的保守估计
-            # 对于这种高振荡+低质量数据，使用经验公式
-            # 参考：对于大多数过程，pb在50-200之间是安全的
+            # 基于数据范围估计过程增益
             pv_range = np.ptp(y)
             mv_range = np.ptp(u)
+            K_approx = pv_range / mv_range if mv_range > 0.1 and pv_range > 0.01 else 1.0
             
-            if mv_range > 0.1 and pv_range > 0.01:
-                # 估计过程增益 K = delta_PV / delta_MV
-                K_approx = pv_range / mv_range
-                
-                # 对于小增益系统，使用保守的pb值（大pb = 小Kp）
-                # pb ≈ 100 / (K * 安全系数)，安全系数取2-3
-                if K_approx < 0.1:
-                    # 非常小的增益，使用pb=50-100
-                    pb_safe = 80.0
-                elif K_approx < 1.0:
-                    pb_safe = 60.0
-                else:
-                    pb_safe = 40.0
-                
-                fallback_Kp = 100.0 / pb_safe
-                fallback_Ti = max(Pu * 2, 2.0)  # 积分时间至少2秒
-                fallback_Ki = fallback_Kp / fallback_Ti
-                
-                fallback_pid = {
-                    'Kp': round(fallback_Kp, 4),
-                    'Ki': round(fallback_Ki, 4),
-                    'Kd': 0.0,  # 对于振荡数据不使用微分
-                    'method': 'data_range_conservative',
-                    'Pu': Pu,
-                    'Ku': osc_info['Ku']
-                }
-                
-                self.log(f"   ⚠️ 数据质量差，使用保守参数: pb={pb_safe:.1f}, Kp={fallback_Kp:.4f}, Ki={fallback_Ki:.4f}")
-                pid_params = fallback_pid
-                
-                # 重新验证
-                is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
-                    temp_fusion, fallback_pid,
-                    sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
-                    verbose=self._verbose
-                )
+            # 使用保守PID参数
+            fallback_pid = self._get_conservative_pid_params(
+                Pu, osc_info['Ku'], K_approx=K_approx, reason='data_range'
+            )
+            
+            self.log(f"   ⚠️ 数据质量差，使用保守参数: pb={fallback_pid['pb']:.1f}, "
+                    f"Kp={fallback_pid['Kp']:.4f}, Ki={fallback_pid['Ki']:.4f}")
+            pid_params = fallback_pid
+            
+            # 重新验证
+            is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
+                temp_fusion, fallback_pid,
+                sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
+                verbose=self._verbose
+            )
         
         # 计算评分（振荡整定的评分规则，使用配置阈值）
         stability_score = 10.0 if is_stable else 5.0
@@ -1074,9 +1079,10 @@ class ModelSelector:
             fusion.consistency_score = best_window.r2
             fusion.n_segments_used = 1
         
-        # 模型参数合理性约束（避免参数过于极端导致闭环响应过慢）
-        T1_max = 30.0  # 最大时间常数 30 秒
-        L_max = 10.0   # 最大死区时间 10 秒
+        # 模型参数合理性约束（从配置获取阈值）
+        param_constraints = Config.PARAMETER_CONSTRAINTS
+        T1_max = param_constraints['T1_max']
+        L_max = param_constraints['L_max']
         
         if fusion.T1 > T1_max:
             self.log(f"   ⚠️ T1={fusion.T1:.2f}s 过大，限制为 {T1_max}s")
@@ -1097,6 +1103,58 @@ class ModelSelector:
     # ============================================================
     # Step 5: 验证与优化
     # ============================================================
+    
+    def _compute_segment_metrics(self, segments: List[HistoricalData], params: tuple,
+                                  model_type: str, enhanced: bool = False
+                                  ) -> Tuple[List[float], List[float], List[int]]:
+        """
+        计算扰动段的R²和RMSE指标
+        
+        Args:
+            segments: 扰动段数据列表
+            params: 模型参数
+            model_type: 模型类型
+            enhanced: 是否使用增强仿真（幅度校准+偏移校正+振荡叠加）
+        
+        Returns:
+            (r2_list, rmse_list, points_list)
+        """
+        r2_list = []
+        rmse_list = []
+        points_list = []
+        
+        for seg in segments:
+            seg_valid = seg.pv != 0
+            y = seg.pv[seg_valid]
+            u = seg.mv[seg_valid]
+            sv = seg.sv[seg_valid] if hasattr(seg, 'sv') and seg.sv is not None else None
+            if len(y) < 5:
+                continue
+            
+            y_pred = self._simulator.simulate_segmented(
+                params, model_type, y, u,
+                reset_on_sv_change=True, sv=sv,
+                enable_smooth=True,
+                enable_amplitude_calibration=enhanced,
+                enable_offset_correction=enhanced,
+                enable_oscillation_overlay=enhanced
+            )
+            
+            r2_list.append(calculate_r2(y, y_pred))
+            rmse_list.append(calculate_rmse(y, y_pred))
+            points_list.append(len(y))
+        
+        return r2_list, rmse_list, points_list
+    
+    def _compute_weighted_metrics(self, r2_list: List[float], rmse_list: List[float],
+                                   points_list: List[int]) -> Tuple[float, float]:
+        """计算加权平均R²和RMSE"""
+        if not r2_list:
+            return 0.0, 0.0
+        total_pts = sum(points_list)
+        weighted_r2 = sum(r2 * pts for r2, pts in zip(r2_list, points_list)) / total_pts
+        weighted_rmse = sum(rmse * pts for rmse, pts in zip(rmse_list, points_list)) / total_pts
+        return weighted_r2, weighted_rmse
     
     def _validate_and_refine(self, fusion: FusionResult,
                               segments: List[HistoricalData],
@@ -1127,75 +1185,29 @@ class ModelSelector:
             enable_smooth=True,
             enable_amplitude_calibration=True,
             enable_offset_correction=True,
-            enable_oscillation_overlay=False  # 验证时不叠加振荡
+            enable_oscillation_overlay=False
         )
         global_r2 = calculate_r2(y_full, y_pred_full)
         global_rmse = calculate_rmse(y_full, y_pred_full)
         
         self.log(f"   全量数据R²: {global_r2:.4f}, RMSE: {global_rmse:.4f}")
         
-        # 计算扰动段的综合R²和RMSE
-        # 分两种：纯模型R²（用于评分）和增强R²（用于参考）
-        segment_r2s_pure = []      # 纯模型R²（评分用）
-        segment_r2s_enhanced = []  # 增强R²（参考用）
-        segment_rmses = []
-        segment_points = []
-        segment_pv_all = []
-        segment_pv_pred_all = []
+        # 计算扰动段指标（纯模型用于评分，增强用于参考）
+        segment_r2s_pure, segment_rmses, segment_points = self._compute_segment_metrics(
+            segments, params, model_type, enhanced=False
+        )
+        segment_r2s_enhanced, _, _ = self._compute_segment_metrics(
+            segments, params, model_type, enhanced=True
+        )
         
-        for seg in segments:
-            seg_valid = seg.pv != 0
-            y = seg.pv[seg_valid]
-            u = seg.mv[seg_valid]
-            sv = seg.sv[seg_valid] if hasattr(seg, 'sv') and seg.sv is not None else None
-            if len(y) < 5:
-                continue
-            
-            # 纯模型仿真（关闭所有增强，用于真实评分）
-            y_pred_pure = self._simulator.simulate_segmented(
-                params, model_type, y, u,
-                reset_on_sv_change=True, sv=sv,
-                enable_smooth=True,
-                enable_amplitude_calibration=False,  # 关闭幅度校准！
-                enable_offset_correction=False,      # 关闭偏移校正！
-                enable_oscillation_overlay=False     # 关闭振荡叠加！
-            )
-            
-            # 增强仿真（用于可视化参考）
-            y_pred_enhanced = self._simulator.simulate_segmented(
-                params, model_type, y, u,
-                reset_on_sv_change=True, sv=sv,
-                enable_smooth=True,
-                enable_amplitude_calibration=True,
-                enable_offset_correction=True,
-                enable_oscillation_overlay=True
-            )
-            
-            r2_pure = calculate_r2(y, y_pred_pure)
-            r2_enhanced = calculate_r2(y, y_pred_enhanced)
-            rmse = calculate_rmse(y, y_pred_pure)
-            
-            segment_r2s_pure.append(r2_pure)
-            segment_r2s_enhanced.append(r2_enhanced)
-            segment_rmses.append(rmse)
-            segment_points.append(len(y))
-            segment_pv_all.extend(y.tolist())
-            segment_pv_pred_all.extend(y_pred_enhanced.tolist())
+        # 计算加权平均
+        weighted_r2, weighted_rmse = self._compute_weighted_metrics(
+            segment_r2s_pure, segment_rmses, segment_points
+        )
+        weighted_r2_enhanced, _ = self._compute_weighted_metrics(
+            segment_r2s_enhanced, segment_rmses, segment_points
+        )
         
-        # 计算扰动段加权平均R²（使用纯模型R²评分）
-        if segment_r2s_pure:
-            total_points = sum(segment_points)
-            weighted_r2 = sum(r2 * pts for r2, pts in zip(segment_r2s_pure, segment_points)) / total_points
-            weighted_r2_enhanced = sum(r2 * pts for r2, pts in zip(segment_r2s_enhanced, segment_points)) / total_points
-            weighted_rmse = sum(rmse * pts for rmse, pts in zip(segment_rmses, segment_points)) / total_points
-            segment_pv_arr = np.array(segment_pv_all)
-        else:
-            weighted_r2 = 0.0
-            weighted_r2_enhanced = 0.0
-            weighted_rmse = 0.0
-            segment_pv_arr = np.array([])
-        
-        # 使用纯模型R²列表（用于后续逻辑）
         segment_r2s = segment_r2s_pure
         
         if segment_r2s:
@@ -1279,41 +1291,15 @@ class ModelSelector:
         # 使用扰动段加权平均R²作为最终评估指标（更能反映模型在整定数据上的拟合质量）
         # 如果优化后全量R²更高，也重新计算扰动段R²（使用纯模型，不叠加振荡）
         if segment_r2s:
-            # 重新计算扰动段R²（使用可能优化后的参数，纯模型仿真）
-            new_segment_r2s = []
-            new_segment_rmses = []
-            new_segment_points = []
-            
-            for seg in segments:
-                seg_valid = seg.pv != 0
-                y = seg.pv[seg_valid]
-                u = seg.mv[seg_valid]
-                sv = seg.sv[seg_valid] if hasattr(seg, 'sv') and seg.sv is not None else None
-                if len(y) < 5:
-                    continue
-                
-                # 使用纯模型仿真（关闭所有增强，用于真实评分）
-                # 注意：使用可能已优化的融合参数
-                current_params = self._simulator.fusion_to_params(fusion)
-                y_pred = self._simulator.simulate_segmented(
-                    current_params, model_type, y, u,
-                    reset_on_sv_change=True, sv=sv,
-                    enable_smooth=True,
-                    enable_amplitude_calibration=False,  # 关闭幅度校准！
-                    enable_offset_correction=False,      # 关闭偏移校正！
-                    enable_oscillation_overlay=False     # 关闭振荡叠加！
-                )
-                r2 = calculate_r2(y, y_pred)
-                rmse = calculate_rmse(y, y_pred)
-                new_segment_r2s.append(r2)
-                new_segment_rmses.append(rmse)
-                new_segment_points.append(len(y))
-            
+            # 重新计算扰动段R²（使用可能优化后的参数）
+            current_params = self._simulator.fusion_to_params(fusion)
+            new_segment_r2s, new_segment_rmses, new_segment_points = self._compute_segment_metrics(
+                segments, current_params, model_type, enhanced=False
+            )
             if new_segment_r2s:
-                # 使用加权平均 R²
-                total_pts = sum(new_segment_points)
-                weighted_r2 = sum(r2 * pts for r2, pts in zip(new_segment_r2s, new_segment_points)) / total_pts
-                weighted_rmse = sum(rmse * pts for rmse, pts in zip(new_segment_rmses, new_segment_points)) / total_pts
+                weighted_r2, weighted_rmse = self._compute_weighted_metrics(
+                    new_segment_r2s, new_segment_rmses, new_segment_points
+                )
         
         # 输出使用扰动段加权平均R²（更准确反映模型质量）
         fusion.global_r2 = weighted_r2 if segment_r2s else global_r2

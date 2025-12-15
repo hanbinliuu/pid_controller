@@ -1,4 +1,30 @@
-"""数据预处理模块 - 滤波、去噪、质量分析"""
+"""
+数据预处理模块 (Data Preprocessing Module)
+==========================================
+
+本模块提供模型辨识前的数据预处理功能，确保输入数据质量。
+
+核心功能
+--------
+1. **滤波去噪**: 移动平均滤波、中值滤波
+2. **异常值处理**: 基于IQR方法检测和处理异常值
+3. **数据质量分析**: 评估噪声、相关性、非线性程度等
+4. **数据变换**: 归一化、标准化
+5. **变化点检测**: 检测MV变化点，用于数据分段
+
+主要类
+------
+- **DataQuality**: 数据质量评估结果数据类
+- **DataPreprocessor**: 数据预处理器主类
+
+质量指标说明
+------------
+- noise_ratio: 噪声比例 (噪声标准差/数据范围)
+- correlation: PV-MV相关系数
+- nonlinearity_score: 非线性程度 (0-1)
+- step_response_score: 阶跃响应特征评分 (0-1)
+- oscillation_ratio: 振荡比例
+"""
 
 import numpy as np
 from typing import Dict, Any, Tuple, Optional

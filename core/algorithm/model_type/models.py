@@ -1,4 +1,17 @@
-"""数据模型定义模块"""
+"""
+数据模型定义模块 (Data Models Module)
+=====================================
+
+本模块定义了模型辨识过程中使用的核心数据结构。
+
+数据类
+------
+- **SegmentResult**: 单个扰动段的拟合结果，包含各模型的拟合参数和质量指标
+- **FusionResult**: 多段参数融合结果，包含最终模型参数和统计信息
+- **TuningWindow**: 整定窗口定义，指定扰动段的时间范围
+- **TuningInput**: 整定输入参数，包含时间范围和窗口列表
+- **HistoricalData**: 历史数据容器，存储timestamp/pv/sv/mv时间序列
+"""
 
 import numpy as np
 from dataclasses import dataclass, field
