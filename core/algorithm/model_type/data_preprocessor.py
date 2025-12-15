@@ -632,6 +632,290 @@ class DataPreprocessor:
         return segments
     
     # ============================================================
+    # 智能降采样
+    # ============================================================
+    
+    def smart_downsample(self, y: np.ndarray, u: np.ndarray, 
+                         sv: np.ndarray = None, t: np.ndarray = None,
+                         target_points: int = 500,
+                         min_points: int = 100,
+                         preserve_features: bool = True) -> Tuple[np.ndarray, ...]:
+        """
+        智能降采样 - 保留关键特征的同时减少数据量
+        
+        策略：
+        1. 保留SV变化点及其前后数据
+        2. 保留PV/MV的峰谷值点
+        3. 保留响应起始和结束区域
+        4. 平稳区域稀疏采样
+        
+        Args:
+            y: PV数据
+            u: MV数据
+            sv: SV数据（可选）
+            t: 时间戳（可选）
+            target_points: 目标采样点数
+            min_points: 最小采样点数
+            preserve_features: 是否保留特征点
+        
+        Returns:
+            降采样后的数据元组 (y, u) 或 (y, u, sv) 或 (y, u, sv, t)
+        """
+        n = len(y)
+        
+        # 如果数据量小于目标，不需要降采样
+        if n <= target_points:
+            if t is not None and sv is not None:
+                return y, u, sv, t
+            elif sv is not None:
+                return y, u, sv
+            else:
+                return y, u
+        
+        # 计算降采样比例
+        downsample_ratio = n / target_points
+        
+        if not preserve_features:
+            # 简单均匀降采样
+            indices = np.linspace(0, n - 1, target_points, dtype=int)
+        else:
+            # 智能降采样：保留关键点
+            indices = self._get_smart_sample_indices(y, u, sv, n, target_points, min_points)
+        
+        # 确保索引有序且唯一
+        indices = np.unique(indices)
+        indices = np.clip(indices, 0, n - 1)
+        
+        # 提取降采样数据
+        y_down = y[indices]
+        u_down = u[indices]
+        
+        if t is not None and sv is not None:
+            return y_down, u_down, sv[indices], t[indices]
+        elif sv is not None:
+            return y_down, u_down, sv[indices]
+        else:
+            return y_down, u_down
+    
+    def _get_smart_sample_indices(self, y: np.ndarray, u: np.ndarray,
+                                  sv: np.ndarray, n: int,
+                                  target_points: int, min_points: int) -> np.ndarray:
+        """
+        获取智能采样索引
+        
+        保留关键特征点，平稳区域稀疏采样
+        """
+        indices_set = set()
+        
+        # 1. 始终保留首尾点
+        indices_set.add(0)
+        indices_set.add(n - 1)
+        
+        # 计算各类关键点的配额
+        feature_budget = int(target_points * 0.6)  # 60%给特征点
+        uniform_budget = target_points - feature_budget  # 40%均匀分布
+        
+        # 2. SV变化点及其响应区域（高优先级）
+        if sv is not None:
+            sv_change_indices = self._detect_sv_changes(sv, n)
+            # 每个SV变化点保留前后各10个点
+            for idx in sv_change_indices:
+                for offset in range(-10, 20):  # 变化前10点，变化后20点
+                    if 0 <= idx + offset < n:
+                        indices_set.add(idx + offset)
+        
+        # 3. PV峰谷值点
+        pv_extrema = self._detect_extrema(y, min_distance=max(5, n // 100))
+        indices_set.update(pv_extrema[:feature_budget // 4])  # 最多用25%预算
+        
+        # 4. MV变化点
+        mv_change_indices = self._detect_mv_changes(u, n)
+        for idx in mv_change_indices[:feature_budget // 6]:
+            for offset in range(-3, 5):
+                if 0 <= idx + offset < n:
+                    indices_set.add(idx + offset)
+        
+        # 5. 响应起始和结束区域
+        # 保留前5%和后5%的区域
+        head_end = max(10, int(n * 0.05))
+        tail_start = min(n - 10, int(n * 0.95))
+        indices_set.update(range(0, head_end))
+        indices_set.update(range(tail_start, n))
+        
+        # 6. 均匀分布补充剩余点
+        current_count = len(indices_set)
+        remaining = max(0, target_points - current_count)
+        
+        if remaining > 0:
+            # 在未选择的区域均匀采样
+            all_indices = set(range(n))
+            available = sorted(all_indices - indices_set)
+            
+            if len(available) > remaining:
+                step = len(available) / remaining
+                uniform_indices = [available[int(i * step)] for i in range(remaining)]
+                indices_set.update(uniform_indices)
+            else:
+                indices_set.update(available)
+        
+        # 确保不少于最小点数
+        if len(indices_set) < min_points:
+            step = n / min_points
+            additional = [int(i * step) for i in range(min_points)]
+            indices_set.update(additional)
+        
+        return np.array(sorted(indices_set), dtype=int)
+    
+    def _detect_sv_changes(self, sv: np.ndarray, n: int) -> list:
+        """检测SV变化点"""
+        if sv is None or len(sv) < 2:
+            return []
+        
+        sv_diff = np.abs(np.diff(sv))
+        sv_range = np.ptp(sv)
+        
+        if sv_range < self._epsilon:
+            return []
+        
+        # SV变化超过范围的2%认为是变化点
+        threshold = max(0.02 * sv_range, 0.1)
+        change_indices = np.where(sv_diff > threshold)[0]
+        
+        return list(change_indices)
+    
+    def _detect_mv_changes(self, u: np.ndarray, n: int) -> list:
+        """检测MV显著变化点"""
+        if len(u) < 2:
+            return []
+        
+        u_diff = np.abs(np.diff(u))
+        u_range = np.ptp(u)
+        
+        if u_range < self._epsilon:
+            return []
+        
+        # MV变化超过范围的5%认为是显著变化
+        threshold = max(0.05 * u_range, 0.1)
+        change_indices = np.where(u_diff > threshold)[0]
+        
+        return list(change_indices)
+    
+    def _detect_extrema(self, data: np.ndarray, min_distance: int = 5) -> list:
+        """检测峰谷值点"""
+        if len(data) < 3:
+            return []
+        
+        extrema = []
+        
+        for i in range(1, len(data) - 1):
+            # 峰值
+            if data[i] > data[i-1] and data[i] > data[i+1]:
+                extrema.append(i)
+            # 谷值
+            elif data[i] < data[i-1] and data[i] < data[i+1]:
+                extrema.append(i)
+        
+        # 按重要性排序（与邻近点的差异越大越重要）
+        if extrema:
+            importance = []
+            for idx in extrema:
+                diff = abs(data[idx] - data[max(0, idx-min_distance)]) + \
+                       abs(data[idx] - data[min(len(data)-1, idx+min_distance)])
+                importance.append((idx, diff))
+            
+            importance.sort(key=lambda x: x[1], reverse=True)
+            extrema = [x[0] for x in importance]
+        
+        return extrema
+    
+    def estimate_optimal_target_points(self, n: int, complexity: str = 'auto',
+                                         pv: np.ndarray = None, sv: np.ndarray = None) -> int:
+        """
+        估计最佳目标采样点数（自适应版本）
+        
+        Args:
+            n: 原始数据点数
+            complexity: 复杂度级别 ('low', 'medium', 'high', 'auto')
+            pv: PV数据（用于特征分析）
+            sv: SV数据（用于特征分析）
+        
+        Returns:
+            建议的目标采样点数
+        """
+        if complexity == 'low':
+            return min(n, 200)
+        elif complexity == 'medium':
+            return min(n, 500)
+        elif complexity == 'high':
+            return min(n, 1000)
+        
+        # auto模式：根据数据特征自适应
+        base_target = self._get_base_target(n)
+        
+        # 如果提供了PV/SV数据，根据特征调整
+        if pv is not None and len(pv) > 100:
+            feature_multiplier = self._analyze_complexity_features(pv, sv)
+            adjusted_target = int(base_target * feature_multiplier)
+            return min(n, max(200, adjusted_target))
+        
+        return min(n, base_target)
+    
+    def _get_base_target(self, n: int) -> int:
+        """根据数据量获取基础目标点数"""
+        if n <= 500:
+            return n
+        elif n <= 2000:
+            return 500
+        elif n <= 10000:
+            return 800
+        elif n <= 50000:
+            return 1000
+        else:
+            return 1500
+    
+    def _analyze_complexity_features(self, pv: np.ndarray, sv: np.ndarray = None) -> float:
+        """
+        分析数据复杂度特征，返回调整系数
+        
+        Returns:
+            multiplier: 1.0表示标准复杂度，>1表示需要更多点，<1表示可以更少点
+        """
+        multiplier = 1.0
+        
+        # 1. SV变化次数 - 多次变化需要更多点
+        if sv is not None and len(sv) > 0:
+            sv_changes = self._detect_sv_changes(sv, len(pv))
+            if len(sv_changes) > 5:
+                multiplier *= 1.3
+            elif len(sv_changes) > 2:
+                multiplier *= 1.1
+        
+        # 2. PV振荡程度 - 高振荡需要更多点
+        pv_range = np.ptp(pv)
+        if pv_range > self._epsilon:
+            pv_diff = np.abs(np.diff(pv))
+            oscillation_ratio = np.sum(pv_diff) / pv_range
+            normalized_osc = oscillation_ratio / len(pv)
+            if normalized_osc > 0.1:
+                multiplier *= 1.4
+            elif normalized_osc > 0.05:
+                multiplier *= 1.2
+        
+        # 3. 峰谷数量 - 多峰谷需要更多点
+        try:
+            extrema = self._detect_extrema(pv)
+            extrema_density = len(extrema) / len(pv)
+            if extrema_density > 0.05:
+                multiplier *= 1.3
+            elif extrema_density > 0.02:
+                multiplier *= 1.1
+        except:
+            pass
+        
+        # 限制在合理范围
+        return min(2.0, max(0.5, multiplier))
+    
+    # ============================================================
     # 高级质量分析
     # ============================================================
     

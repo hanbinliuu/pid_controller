@@ -191,7 +191,9 @@ class ModelSelector:
     def fit(self, tuning_input: Union[Dict, TuningInput],
             raw_data: List[Dict],
             lambda_factor: float = 0.8,
-            current_pid: Dict = None) -> Dict[str, Any]:
+            current_pid: Dict = None,
+            enable_downsample: bool = True,
+            downsample_target: int = 1000) -> Dict[str, Any]:
         """模型整定主入口
         
         Args:
@@ -199,6 +201,8 @@ class ModelSelector:
             raw_data: 原始数据
             lambda_factor: Lambda整定系数
             current_pid: 当前PID参数 {'Kp': ..., 'Ki': ..., 'Kd': ...}，用于振荡分析
+            enable_downsample: 是否启用智能降采样
+            downsample_target: 降采样目标点数
         """
         input_data = self._parse_input(tuning_input)
         if input_data is None or not input_data.tuning_window or not raw_data:
@@ -212,6 +216,10 @@ class ModelSelector:
         # Step 1: 剔除无效扰动段
         segments = self._segment_processor.extract_segments(hist_data, input_data.tuning_window)
         valid_segments, segment_results = self._segment_processor.filter_invalid_segments(segments)
+        
+        # Step 1.5: 智能降采样（加速整定）
+        if enable_downsample and valid_segments:
+            valid_segments = self._apply_smart_downsample(valid_segments, downsample_target)
         
         if not valid_segments:
             self.log("⚠️ 无有效扰动段")
@@ -296,6 +304,69 @@ class ModelSelector:
         self.log(f"   → 保守等级={conservative_level:.1f}, pb最小值={pb_min:.0f}")
         
         return quality_info
+    
+    # ============================================================
+    # Step 1.5: 智能降采样
+    # ============================================================
+    
+    def _apply_smart_downsample(self, segments: List[HistoricalData], 
+                                 target_points: int = 1000) -> List[HistoricalData]:
+        """
+        对每个扰动段应用智能降采样
+        
+        Args:
+            segments: 有效扰动段列表
+            target_points: 每段目标点数
+        
+        Returns:
+            降采样后的扰动段列表
+        """
+        downsampled = []
+        total_original = 0
+        total_downsampled = 0
+        
+        for i, seg in enumerate(segments):
+            n = len(seg.pv)
+            total_original += n
+            
+            # 自动估计目标点数（根据数据特征自适应）
+            auto_target = self._preprocessor.estimate_optimal_target_points(
+                n, pv=seg.pv, sv=seg.sv
+            )
+            actual_target = min(target_points, auto_target)
+            
+            if n <= actual_target:
+                # 数据量小，不需要降采样
+                downsampled.append(seg)
+                total_downsampled += n
+            else:
+                # 执行智能降采样
+                result = self._preprocessor.smart_downsample(
+                    seg.pv, seg.mv, seg.sv, seg.timestamp,
+                    target_points=actual_target,
+                    min_points=100,
+                    preserve_features=True
+                )
+                
+                pv_down, mv_down, sv_down, ts_down = result
+                
+                # 创建新的 HistoricalData
+                new_seg = HistoricalData(
+                    timestamp=ts_down,
+                    pv=pv_down,
+                    sv=sv_down,
+                    mv=mv_down
+                )
+                downsampled.append(new_seg)
+                total_downsampled += len(pv_down)
+                
+                self.log(f"   📉 段{i+1}: {n} → {len(pv_down)} 点 (降采样率 {len(pv_down)/n*100:.1f}%)")
+        
+        if total_original > total_downsampled:
+            reduction = (1 - total_downsampled / total_original) * 100
+            self.log(f"📉 智能降采样: {total_original} → {total_downsampled} 点 (减少 {reduction:.1f}%)")
+        
+        return downsampled
     
     # ============================================================
     # Step 2: 多模型拟合

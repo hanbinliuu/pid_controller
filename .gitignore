@@ -37,6 +37,8 @@ config/application.properties
 # Text files
 *.txt
 
+*.log
+
 # Exception: include exp folder
 !exp/
 !exp/**/*.md

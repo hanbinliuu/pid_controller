@@ -109,7 +109,7 @@ class Config:
         'r2_threshold': 0.85,            # 触发优化的R²阈值
         'min_segment_r2': 0.3,           # 最小段R²阈值
         'segment_r2_std_max': 0.25,      # 段R²标准差上限
-        'k_magnitude_ratio_max': 10.0,   # K值变化幅度上限（倍）
+        'k_magnitude_ratio_max': 3.0,    # K值变化幅度上限（倍）- 防止优化后K值偏离过大
         'k_sign_check': True,            # 是否检查K值符号反转
         'amplitude_ratio_min': 0.3,      # 幅度比下限
         'amplitude_ratio_max': 3.0,      # 幅度比上限
