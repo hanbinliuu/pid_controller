@@ -41,7 +41,7 @@ async def send_device_command(
     tuning_type: str = Body(..., description="整定类型", example=["PID", "PI"]),
     before_params: str = Body(None, description="整定前参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
     after_params: str = Body(None, description="整定后参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
-    status: str = Body(..., description="整定状态", example=["成功", "失败"]),
+    # status: str = Body(..., description="整定状态", example=["成功", "失败"]),
     remark: Optional[str] = Body(..., description="描述", example="参数已下发"),
     user: UserInfo = Depends(get_current_user)
 ) -> TuningRecord:
@@ -105,12 +105,27 @@ async def send_device_command(
             before_params=before_params,
             after_params=after_params,
             description=loop_info.description,
-            status=status,
-            remark=remark
+            status='成功',
+            remark=remark,
+            tuning_details=f"整定方法：{tuning_method},整定类型：{tuning_type}"
         )
         return record
     except Exception as e:
         logger.error(f"参数下发异常: {str(e)}")
+        record = TuningRecordService.create_record(
+            loop_uri=loop_uri,
+            loop_status=loop_info.auto_control_status,
+            tuning_method=tuning_method,
+            operator=user_name,
+            operator_id=user_id,
+            before_params=before_params,
+            after_params=after_params,
+            description=loop_info.description,
+            status='失败',
+            remark='参数下发失败',
+            tuning_details=f"参数下发异常: {str(e)}"
+        )
+        # return record
         raise RuntimeException(
             f"参数下发异常: {str(e)}"
         )

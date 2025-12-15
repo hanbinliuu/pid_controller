@@ -99,6 +99,7 @@ if __name__ == "__main__":
         "run_server:app",
         host="0.0.0.0", 
         port=8001, 
-        reload=True,
+        reload=False,
+        workers=4,
         log_level=log_level
     )

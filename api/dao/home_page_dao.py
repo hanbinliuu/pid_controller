@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from operator import or_
 from typing import List
 
-from sqlmodel import Session, select, func
+from sqlmodel import Session, select, func,desc
 
 from api.bean.loop_evaluation import LoopEvaluation
 from api.bean.loop_info import LoopInfo
@@ -47,7 +47,7 @@ class HomePageDAO:
         """
         # 查询回路过去 days_limit 天的综合评分平均值
         start_date = query_date - timedelta(days=days_limit)
-        stmt = select(
+        stmt = (select(
             LoopEvaluation.loop_uri,
             func.avg(LoopEvaluation.performance_score).label("avg_perf_score")
         ).where(
@@ -56,7 +56,7 @@ class HomePageDAO:
             LoopEvaluation.status != "开环",
             LoopEvaluation.status != "条件剔除"
         ).group_by(LoopEvaluation.loop_uri)
-
+                .order_by(desc('avg_perf_score')))
         results = session.exec(stmt).all()
         prev_avg_scores = {}
         for item in results:

@@ -425,7 +425,7 @@ async def generate_all_curves(request: GenerateCurvesRequest = Body(..., descrip
         closed_loop_result = {}
         try:
             closed_loop_result = KTLSimulator.generate_closed_loop_response(
-                model_type=ModelType.FOPDT.value,
+                model_type=model_type.value,
                 parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
                 Kp=Kp,
                 Ki=Ki,
@@ -442,7 +442,7 @@ async def generate_all_curves(request: GenerateCurvesRequest = Body(..., descrip
         try:
             # 生成开环阶跃响应
             step_response_result = KTLSimulator.generate_response(
-                model_type=ModelType.FOPDT.value,
+                model_type=model_type.value,
                 parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
                 step_value=step_value,
                 duration=duration,

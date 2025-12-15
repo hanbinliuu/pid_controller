@@ -110,9 +110,9 @@ class KTLSimulator:
     def generate_response(
         model_type: str,
         parameters: Dict[str, float],
-        step_value: float = 1.0,
+        step_value: float = 10,
         duration: float = 600.0,
-        dt: float = 1.0,
+        dt: float = 0.1,
         initial_output: float = 0.0
     ) -> Dict[str, Any]:
         """
@@ -432,9 +432,9 @@ class KTLSimulator:
         Kp: float,
         Ki: float,
         Kd: float,
-        setpoint: float = 100.0,
+        setpoint: float = 10.0,
         duration: float = 600.0,
-        dt: float = 1.0
+        dt: float = 0.1
     ) -> Dict[str, Any]:
         """
         生成PID控制下的闭环响应曲线（支持多种模型类型）
@@ -522,7 +522,8 @@ class KTLSimulator:
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
-                delay_steps = int(L / dt)
+
+                delay_steps = float(round(L / dt, 3))
                 u_buffer = np.zeros(max(delay_steps, 1))
                 pv1 = 0.0  # 第一阶环节输出
                 
@@ -619,7 +620,7 @@ class KTLSimulator:
                 'dt': float(dt)
             })
             
-            logger.info(f"生成{model_type}模型PID闭环响应: Kp={Kp}, Ki={Ki}, Kd={Kd}, 数据点数={n}")
+            logger.info(f"生成 {model_type} 模型PID闭环响应: Kp={Kp}, Ki={Ki}, Kd={Kd}, 数据点数={n}")
             
             return {
                 "time": t.tolist(),

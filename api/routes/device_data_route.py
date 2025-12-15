@@ -1,7 +1,11 @@
 import logging
 from typing import Optional, List, Union, Dict, Any
+from io import StringIO
+import csv
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, Header
+from fastapi.responses import StreamingResponse
 
 from api.middleware.exceptions import RuntimeException
 from api.services.device_data_service import DeviceDataService, DeviceCommand
@@ -126,6 +130,103 @@ async def get_history_zhongkong_interpolated(
         )
 
 
+@router.get("/export-history-data-csv",
+            summary="导出历史数据为CSV",
+            description="导出指定设备在指定时间范围内的历史数据为CSV格式文件")
+async def export_history_data_csv(
+        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+                              examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
+        start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式",
+                                            examples=[1761357384979, "2025-01-01 12:00:00", "2025-01-01T12:00:00",
+                                                      "2025-01-01"]),
+        end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式",
+                                          examples=[1761457384979, "2025-01-02 12:00:00", "2025-01-02T12:00:00",
+                                                    "2025-01-02"]),
+        data_type: str = Query("interpolated", description="数据类型: raw(原始数据) 或 interpolated(插值数据)",
+                               examples=["raw", "interpolated"])
+):
+    """
+    导出历史数据为CSV格式文件
+    
+    参数:
+    - loop_uri: 回路URI
+    - start_time: 开始时间
+    - end_time: 结束时间
+    - data_type: 数据类型 (raw 或 interpolated)
+    """
+    try:
+        # 根据数据类型调用不同的Service方法
+        if data_type == "raw":
+            result = DeviceDataService.query_history_data_raw(
+                loop_uri=loop_uri,
+                start_time=start_time,
+                end_time=end_time
+            )
+        else:  # 默认为插值数据
+            result = DeviceDataService.query_history_data_interpolated(
+                loop_uri=loop_uri,
+                start_time=start_time,
+                end_time=end_time,
+                window=1,
+                is_filter=False
+            )
+
+        # 获取数据
+        data = result.get("data", [])
+        if not data:
+            raise HTTPException(status_code=404, detail="没有找到数据")
+        
+        # 添加偏差列(PV-SV)处理逻辑
+        for record in data:
+            if isinstance(record, dict) and 'pv' in record and 'sv' in record:
+                try:
+                    pv_val = float(record['pv'])
+                    sv_val = float(record['sv'])
+                    record['err_value'] = pv_val - sv_val  # PV-SV
+                except (ValueError, TypeError):
+                    record['err_value'] = None
+
+        # 创建CSV内容
+        output = StringIO()
+        writer = csv.writer(output)
+        
+        # 写入表头（使用数据中的第一个对象的键作为列名）
+        if data and isinstance(data[0], dict):
+            headers = list(data[0].keys())
+            writer.writerow(headers)
+            
+            # 写入数据行
+            for row in data:
+                writer.writerow([row.get(header, "") for header in headers])
+        else:
+            # 如果数据格式不是预期的字典列表，则写入简单格式
+            writer.writerow(["data"])
+            for item in data:
+                writer.writerow([str(item)])
+
+        # 重置指针到开头
+        output.seek(0)
+        
+        # 设置响应头，指定文件名
+        table_name = result.get("table", "history_data")
+        filename = f"{table_name}_{data_type}_{int(datetime.now().timestamp())}.csv"
+        
+        # 返回StreamingResponse
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"导出CSV文件失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"导出CSV文件失败: {str(e)}"
+        )
+
 @router.post(
     "/iotda/command/batch",
     operation_id="iotda设备指令批量下发",
@@ -158,7 +259,3 @@ async def send_device_command_batch(
     except Exception as e:
         logger.error(f"设备指令代理错误: {str(e)}")
         raise RuntimeException( detail=f"代理服务内部错误: {str(e)}")
-
-
-
-

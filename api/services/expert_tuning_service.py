@@ -159,14 +159,11 @@ class ExpertTuningService:
             if start_time_ms >= end_time_ms:
                 raise ValueError("开始时间必须小于结束时间")
 
-            # 固定设备与字段配置
-            table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
 
-            db = get_default_database()
 
             # 初始化变量
 
-            # 获取整定前设备参数
+            # 获取整定回路最新设备状态参数
             before_pid= LoopService.query_loop_values(["PB", "TI", "TD"], loop_uri)
             pid_convert=PIDConverter.classical_to_pid(before_pid.get("PB"), before_pid.get("TI"), before_pid.get("TD"))
             before_pid_params = {
@@ -177,11 +174,12 @@ class ExpertTuningService:
                 "ti": f"{before_pid.get('TI', 0):.2f}",
                 "td": f"{before_pid.get('TD', 0):.2f}"
             }
-            # 根据模式执行不同逻辑
-            # 自动筛选模式
-            logger.info(f"执行自动整定，时间范围：{start_time} - {end_time}")
-
+            logger.info(f"执行常规整定，时间范围：{start_time} - {end_time}")
+            # todo 异步
             # 获取历史数据
+            # 固定设备与字段配置
+            table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
+            db = get_default_database()
             history_data = process_query_tsdb_data_interpolated(
                     db=db,
                     table_name=table,
@@ -212,60 +210,10 @@ class ExpertTuningService:
 
             treaning_end_time=datetime.now().timestamp()
             logger.info(f"模型整定耗时: {treaning_end_time - treaning_start_time}s")
-            suggest_pid_params = model_selector.get("pid_parameters")
-            tuning_details = {
-                "start_time": model_selector.get("start_time"),
-                "end_time": model_selector.get("end_time"),
-                "model_type": model_type.value,
-                "turning_type": turning_type,
-                "model_rating": model_selector.get("model_rating"),
-                "model_parameters": model_selector.get("model_parameters"),
-                "pid_parameters": {
-                    "kd": f"{model_selector.get('pid_parameters.kd', 0):.2f}" ,
-                    "ki": f"{model_selector.get('pid_parameters.ki', 0):.2f}" ,
-                    "kp": f"{model_selector.get('pid_parameters.kp', 0):.2f}" ,
-                    "pb": f"{model_selector.get('pid_parameters.pb', 0):.2f}" ,
-                    "td": f"{model_selector.get('pid_parameters.td', 0):.2f}" ,
-                    "ti": f"{model_selector.get('pid_parameters.ti', 0):.2f}"
-                },
-            }
-
-            # #写入整定记录
-            # try:
-            #     if model_selector.get("success")==False:
-            #         logger.error("整定失败，请选择合适时间区间进行整定分析。")
-            #         raise RuntimeException("整定失败，请选择合适时间区间进行整定分析。")
-            #     _save_tuning_record_liu(
-            #         loop_uri=loop_uri,
-            #         current_params=before_pid_params,
-            #         suggested_params=suggest_pid_params,
-            #         mode=mode,
-            #         operator=operator_name,
-            #         operator_id=operator_id,
-            #         model_type=model_type,
-            #         tuning_type=turning_type,
-            #         status=True,
-            #         tuning_details=tuning_details,
-            #     )
-            # except Exception as e:
-            #     logger.error(f"写入整定记录失败: {str(e)}")
-            #     raise RuntimeException("写入整定记录失败")
 
             return model_selector
         except Exception as e:
-            logger.error(f"整定失败: {str(e)}")
-            # _save_tuning_record_liu(
-            #     loop_uri=loop_uri,
-            #     current_params=before_pid_params,
-            #     suggested_params={},
-            #     mode=mode,
-            #     operator=operator_name,
-            #     operator_id=operator_id,
-            #     model_type=model_type,
-            #     tuning_type=turning_type,
-            #     status=False,
-            #     error_message=f"整定异常:{str(e)}",
-            # )
+            logger.error(f"常规整定异常: {str(e)}")
             raise
 
     @staticmethod

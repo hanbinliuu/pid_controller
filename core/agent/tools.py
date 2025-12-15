@@ -1375,7 +1375,7 @@ def process_query_tsdb_data_interpolated(db: str,
     2. 使用NumPy向量化处理PID转换
     3. 批量构建记录字典
     4. 减少不必要的循环和条件判断
-    
+
     Args:
         db: 数据库名称
         table_name: 表名
@@ -1399,7 +1399,7 @@ def process_query_tsdb_data_interpolated(db: str,
     # 定义仅查询必要的字段
     pid_fields = [field_mapping.get(key) for key in ['mv', 'pv', 'sv', 'pb', 'ti', 'td','auto'] if field_mapping.get(key)]
     query_fields = [field for field in query_field_list if field not in pid_fields]
-    
+    query_field_list.extend(query_fields)
     # 查询TSDB数据
     response = query_read_interpolated(
         db=db,
@@ -1483,7 +1483,7 @@ def process_query_tsdb_data_interpolated(db: str,
             for field in query_fields:
                 if field not in record:
                     record[field] = None
-            
+
             all_records.append(record)
     else:
         # 没有PID字段或数据为空,使用简化处理
@@ -1510,6 +1510,7 @@ def process_query_tsdb_data_interpolated(db: str,
             for field in query_fields:
                 if field not in record:
                     record[field] = None
+
             
             all_records.append(record)
     
@@ -1537,7 +1538,7 @@ def process_query_tsdb_data_raw(db: str,
     query_field_list = list(field_mapping.values())
     
     # 定义仅查询必要的字段（不包括PID参数）
-    pid_fields = [field_mapping.get(key) for key in ['mv', 'pv', 'sv', 'pb', 'ti', 'td'] if field_mapping.get(key)]
+    pid_fields = [field_mapping.get(key) for key in ['mv', 'pv', 'sv', 'pb', 'ti', 'td','auto'] if field_mapping.get(key)]
     query_fields = [field for field in query_field_list if field not in pid_fields]
     
     begin_time = datetime.now().timestamp()
@@ -1580,6 +1581,8 @@ def process_query_tsdb_data_raw(db: str,
                         record["ti"] = value_row[i]
                     elif column == field_mapping.get("td"):
                         record["td"] = value_row[i]
+                    elif column == field_mapping.get("auto"):
+                        record["auto"] = value_row[i]
                     else:
                         record[column] = value_row[i]
 
