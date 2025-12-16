@@ -73,23 +73,21 @@ async def send_device_command(
 
         points = table_and_points.get('points', {})
         send_points = ["pb", "ti", "td"]
+        param = {}
         for point_name in send_points:
             if point_name in points:
                 value = json_data.get(point_name)
                 iot_point_name = points.get(point_name)
-                param = {
-                    iot_point_name: value
-                }
-                command = DeviceCommand(
-                    object_device_id=table_name,
-                    paras=param
-                )
-                commands.append(command)
-
-    # commands = DeviceCommand
+                param[iot_point_name] = value
+        command = DeviceCommand(
+            object_device_id=table_name,
+            paras=param
+        )
+        commands.append(command)
     # #参数下发
     try:
-        await DeviceDataService.send_device_command_batch(commands=commands)
+        send_result = await DeviceDataService.send_device_command_batch(commands=commands)
+        logger.info(f"参数下发结果: {send_result}")
         user_id= None
         user_name = None
         if user:

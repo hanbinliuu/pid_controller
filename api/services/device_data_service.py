@@ -291,7 +291,7 @@ class DeviceDataService:
                     paras={k: command.paras[k]}
                 )
                 payload.append(cmd.model_dump())
-            
+
             logger.info(f"调用IOTDA设备指令批量接口: {url} params={{'retryNum': {retryNum}, 'timeout': {timeout}}}")
             logger.debug(f"请求体: {payload}")
 
@@ -309,6 +309,7 @@ class DeviceDataService:
                 result = response.json()
                 logger.debug(f"响应体: {result}")
                 if result.get("result_code") == 0:
+                    logger.info(f"IOTDA接口调用成功: {result.get('message')}")
                     return {
                         "message": "指令批量下发成功",
                         "data": {"message": result.get("message")}
