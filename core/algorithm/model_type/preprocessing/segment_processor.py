@@ -191,6 +191,8 @@ class SegmentProcessor:
         """
         检查是否具有阶跃响应的基本形状特征
         
+        增强：支持延迟相关性检查，避免因过程延迟导致的误杀
+        
         Returns:
             (is_valid, reason)
         """
@@ -198,29 +200,51 @@ class SegmentProcessor:
         if n < 20:
             return False, "数据太短"
         
-        # 计算相关系数
-        try:
-            corr = np.corrcoef(u, y)[0, 1]
-            if np.isnan(corr):
-                corr = 0.0
-        except:
-            corr = 0.0
+        corr_threshold = 0.1  # 相关性阈值
+        
+        def _safe_corr(a: np.ndarray, b: np.ndarray) -> float:
+            """安全计算相关系数"""
+            try:
+                if len(a) < 5 or len(b) < 5:
+                    return 0.0
+                c = np.corrcoef(a, b)[0, 1]
+                return 0.0 if np.isnan(c) else float(c)
+            except Exception:
+                return 0.0
+        
+        # 1. 同时刻相关性
+        corr = _safe_corr(u, y)
         
         # 允许正相关或负相关（正向/反向作用系统）
-        if abs(corr) < 0.1:
-            # 检查是否是积分过程（累积效应）
-            y_cumsum = np.cumsum(u - np.mean(u))
-            try:
-                corr_cumsum = np.corrcoef(y_cumsum, y)[0, 1]
-                if np.isnan(corr_cumsum):
-                    corr_cumsum = 0.0
-            except:
-                corr_cumsum = 0.0
-            
-            if abs(corr_cumsum) < 0.2:
-                return False, f"无明显响应(corr={corr:.2f})"
+        if abs(corr) >= corr_threshold:
+            return True, ""
         
-        return True, ""
+        # 2. 延迟相关性检查（考虑过程延迟）
+        max_lag = int(min(max(10, n * 0.2), 200))
+        max_lag = min(max_lag, n - 5)
+        best_corr = corr
+        best_lag = 0
+        
+        for lag in range(1, max_lag + 1):
+            c = _safe_corr(u[:-lag], y[lag:])
+            if abs(c) > abs(best_corr):
+                best_corr = c
+                best_lag = lag
+        
+        if abs(best_corr) >= corr_threshold:
+            return True, ""
+        
+        # 3. 检查是否是积分过程（累积效应）
+        y_cumsum = np.cumsum(u - np.mean(u))
+        corr_cumsum = _safe_corr(y_cumsum, y)
+        
+        if abs(corr_cumsum) >= max(0.2, corr_threshold * 2):
+            return True, ""
+        
+        # 所有检查都未通过
+        if best_lag > 0 and abs(best_corr) > abs(corr):
+            return False, f"无明显响应(corr={corr:.2f}, best_corr={best_corr:.2f}@lag={best_lag})"
+        return False, f"无明显响应(corr={corr:.2f})"
     
     def _mark_invalid(self, result: SegmentResult, reason: str, idx: int, 
                       results_list: List[SegmentResult]) -> None:

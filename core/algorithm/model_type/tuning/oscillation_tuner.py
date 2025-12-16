@@ -77,8 +77,19 @@ class OscillationTuner:
             is_oscillating = result.oscillation_ratio > osc_ratio_threshold
             fit_failed = result.best_r2 < r2_failure_threshold
             
+            # 检查是否有模型参数被推到边界（说明拟合不可靠）
+            params_at_boundary = False
+            if result.best_model and result.model_results:
+                best_params = result.model_results.get(result.best_model, {})
+                T1 = best_params.get('T1', None)
+                # T1 被推到下限（1.0s 或 0.5s）说明拟合可能不可靠
+                if T1 is not None and T1 <= 1.5:  # 放宽检测阈值
+                    params_at_boundary = True
+                    fit_failed = True  # 参数在边界也认为是拟合失败
+                    self.log(f"   ⚠️ 段{i+1}: T1={T1:.2f}s 过小，认为拟合不可靠")
+            
             if not fit_failed and result.best_r2 >= r2_failure_threshold:
-                # 有成功拟合的段
+                # 有成功拟合的段（且参数不在边界）
                 successful_segments.append((i, seg, result))
             
             if is_oscillating and fit_failed:

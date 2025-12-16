@@ -279,8 +279,19 @@ class SegmentFitter(LoggerMixin):
             oscillation_ratio = result.oscillation_ratio or 0
             best_r2 = result.best_r2 or 0
             
-            if (oscillation_ratio > osc_config['oscillation_ratio_threshold'] and 
-                best_r2 < osc_config['r2_failure_threshold']):
+            # 检查是否有模型参数被推到边界（说明拟合不可靠）
+            params_at_boundary = False
+            if result.best_model and result.model_results:
+                best_params = result.model_results.get(result.best_model, {})
+                T1 = best_params.get('T1', 0)
+                # T1 被推到下限（1.0s）说明拟合可能不可靠
+                if T1 is not None and abs(T1 - 1.0) < 0.1:
+                    params_at_boundary = True
+            
+            # 触发条件：高振荡 + (R²低 或 参数被推到边界)
+            fit_unreliable = best_r2 < osc_config['r2_failure_threshold'] or params_at_boundary
+            
+            if (oscillation_ratio > osc_config['oscillation_ratio_threshold'] and fit_unreliable):
                 high_osc_failed_segments.append((i, result, segments[i] if i < len(segments) else None))
         
         if not high_osc_failed_segments:
