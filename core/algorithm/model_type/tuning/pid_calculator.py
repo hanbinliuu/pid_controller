@@ -31,8 +31,8 @@ import numpy as np
 from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
 
-from .config import Config, ModelType
-from .models import FusionResult
+from ..config import Config, ModelType
+from ..data_models import FusionResult
 
 
 @dataclass

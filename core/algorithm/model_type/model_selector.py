@@ -4,20 +4,23 @@ from scipy.optimize import least_squares
 
 from api.commond.time_util import parse_time_to_milliseconds
 from .config import Config, ModelType
-from .models import SegmentResult, FusionResult, TuningInput, HistoricalData
-from .identifier import ModelIdentifier
-from .fusion_strategy import PIDFusionStrategy, WindowResult as FusionWindowResult
-from .data_preprocessor import DataPreprocessor
-from .segment_processor import SegmentProcessor
-from .simulator import ModelSimulator
-from .pid_calculator import PIDCalculator, DataQualityInfo
-from .unified_model_selector import UnifiedModelSelector, SegmentModelFit
-from .segment_fitter import SegmentFitter
-from .output_builder import OutputBuilder
+from .data_models import SegmentResult, FusionResult, TuningInput, HistoricalData
 from .utils import (
     calculate_r2, calculate_rmse, calculate_rss, calculate_aic, calculate_bic,
     get_recommendation, determine_turning_type
 )
+
+# 子模块导入
+from .preprocessing import DataPreprocessor, SegmentProcessor
+from .fitting import (
+    ModelIdentifier, SegmentFitter, PIDFusionStrategy, 
+    WindowResult as FusionWindowResult, UnifiedModelSelector, SegmentModelFit
+)
+from .tuning import PIDCalculator, DataQualityInfo, OscillationTuner
+from .simulation import ModelSimulator
+
+# 其他模块
+from .output_builder import OutputBuilder
 
 
 class ModelSelector:
@@ -81,6 +84,9 @@ class ModelSelector:
         )
         self._output_builder = OutputBuilder(
             self._simulator, self._pid_calculator, verbose
+        )
+        self._oscillation_tuner = OscillationTuner(
+            self._pid_calculator, self._simulator, verbose
         )
     
     @property
@@ -159,7 +165,7 @@ class ModelSelector:
             },
             'fitting_result': fitting_result,
             'fusion_info': result.get('fusion_info', {}),
-            # 'closed_loop_verification': result.get('closed_loop_verification', {}),
+            'closed_loop_verification': result.get('closed_loop_verification', {}),
             'rating_details': result.get('rating_details', {})
         }
     
@@ -230,12 +236,15 @@ class ModelSelector:
         # Step 2: 对每个有效段尝试多种模型拟合
         segment_results = self._fit_all_segments(valid_segments, segment_results)
         
-        # Step 2.5: 检查是否所有段都是高振荡且拟合失败
-        oscillation_result = self._try_oscillation_tuning(valid_segments, segment_results, current_pid)
+        # Step 2.5: 检查是否所有段都是高振荡且拟合失败（使用独立模块）
+        oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
+            valid_segments, segment_results, current_pid
+        )
         if oscillation_result is not None:
             # 使用振荡分析结果，跳过后续的模型融合
-            return self._build_oscillation_output(oscillation_result, hist_data, time_range, 
-                                                  input_data.tuning_window)
+            return self._oscillation_tuner.build_oscillation_output(
+                oscillation_result, hist_data, time_range, input_data.tuning_window
+            )
         
         # Step 3: 基于AIC/RSS/形状特征选择最优模型结构（支持全量数据验证）
         best_model_type = self._select_best_model_type(segment_results, hist_data)
@@ -382,7 +391,7 @@ class ModelSelector:
         2. 使用包络线法估计增益
         3. 添加幅度验证和校正
         """
-        from .identifier import ModelIdentifier
+        from .fitting import ModelIdentifier
         
         self.log(f"\n{'='*60}")
         self.log("📊 Step 2: 多模型拟合")
@@ -543,349 +552,27 @@ class ModelSelector:
                 self.log(f"   ⚠️ 段{idx+1}所有模型R²<0.4或K值异常")
     
     # ============================================================
-    # Step 2.5: 振荡分析与临界法整定
+    # Step 2.5: 振荡分析与临界法整定（已移至 oscillation_tuner.py）
     # ============================================================
+    
+    # 以下方法已移至 OscillationTuner 类，保留为代理调用以保持向后兼容
     
     def _get_conservative_pid_params(self, Pu: float, Ku: float, 
                                       K_approx: float = 1.0,
                                       reason: str = 'generic') -> Dict[str, Any]:
-        """
-        获取保守PID参数
-        
-        Args:
-            Pu: 临界周期
-            Ku: 临界增益
-            K_approx: 估计的过程增益
-            reason: 使用保守参数的原因
-        
-        Returns:
-            保守PID参数字典
-        """
-        # 根据过程增益选择保守pb值
-        if reason == 'low_gain' or K_approx < 0.1:
-            pb_safe = 70.0
-        elif K_approx < 1.0:
-            pb_safe = 45.0
-        else:
-            pb_safe = 35.0
-        
-        conservative_Kp = 100.0 / pb_safe
-        conservative_Ti = max(Pu / 2, 2.0) if Pu > 0 else 2.0
-        conservative_Ki = conservative_Kp / conservative_Ti
-        
-        return {
-            'Kp': round(conservative_Kp, 4),
-            'Ki': round(conservative_Ki, 4),
-            'Kd': 0.0,
-            'method': f'{reason}_conservative',
-            'Pu': Pu,
-            'Ku': Ku,
-            'pb': pb_safe
-        }
+        """获取保守PID参数（代理到 OscillationTuner）"""
+        return self._oscillation_tuner.get_conservative_pid_params(Pu, Ku, K_approx, reason)
     
     def _try_oscillation_tuning(self, segments: List[HistoricalData], 
                                 segment_results: List[SegmentResult],
                                 current_pid: Dict = None) -> Optional[Dict]:
-        """
-        尝试使用振荡分析进行临界法整定
-        
-        当检测到高振荡数据且常规模型拟合失败时，使用振荡特征进行PID整定
-        
-        Returns:
-            振荡整定结果，如果不适用则返回 None
-        """
-        # 检查是否有高振荡段且拟合失败（使用配置阈值）
-        osc_config = Config.OSCILLATION_TUNING
-        osc_ratio_threshold = osc_config['oscillation_ratio_threshold']
-        r2_failure_threshold = osc_config['r2_failure_threshold']
-        
-        # 首先检查是否有任何段拟合成功
-        successful_segments = []
-        oscillating_segments = []
-        for i, (seg, result) in enumerate(zip(segments, segment_results)):
-            is_oscillating = result.oscillation_ratio > osc_ratio_threshold
-            fit_failed = result.best_r2 < r2_failure_threshold
-            
-            if not fit_failed and result.best_r2 >= r2_failure_threshold:
-                # 有成功拟合的段
-                successful_segments.append((i, seg, result))
-            
-            if is_oscillating and fit_failed:
-                oscillating_segments.append((i, seg, result))
-        
-        # 如果有成功拟合的段，优先使用常规流程，不使用临界法
-        if successful_segments:
-            self.log(f"\n📊 有 {len(successful_segments)} 个段拟合成功，使用常规模型融合流程")
-            return None
-        
-        if not oscillating_segments:
-            return None  # 没有符合条件的振荡段
-        
-        self.log(f"\n🔄 检测到 {len(oscillating_segments)} 个高振荡拟合失败段，尝试临界法整定")
-        
-        # 分析每个振荡段
-        oscillation_analyses = []
-        for idx, seg, result in oscillating_segments:
-            dt = 1.0  # 假设采样周期为1秒
-            if len(seg.timestamp) > 1:
-                dt = (seg.timestamp[1] - seg.timestamp[0]) / 1000  # 转换为秒
-            
-            osc_info = self._pid_calculator.analyze_oscillation(seg.pv, seg.mv, dt)
-            
-            if osc_info and osc_info.get('is_valid', False):
-                oscillation_analyses.append({
-                    'segment_idx': idx,
-                    'osc_info': osc_info,
-                    'data_points': len(seg.pv)
-                })
-                self.log(f"   段{idx+1}: Pu={osc_info['Pu']:.1f}s, Ku≈{osc_info['Ku']:.3f}, "
-                        f"振幅={osc_info['amplitude']:.2f}, 类型={osc_info['oscillation_type']}")
-        
-        if not oscillation_analyses:
-            self.log("   ⚠️ 无法从振荡数据中提取有效特征")
-            return None
-        
-        # 选择最佳振荡分析结果（优先使用持续振荡，数据点数最多的段）
-        best_analysis = None
-        best_seg = None
-        for analysis in oscillation_analyses:
-            osc_type = analysis['osc_info']['oscillation_type']
-            idx = analysis['segment_idx']
-            if best_analysis is None:
-                best_analysis = analysis
-                best_seg = segments[idx] if idx < len(segments) else None
-            elif osc_type == 'sustained' and best_analysis['osc_info']['oscillation_type'] != 'sustained':
-                best_analysis = analysis
-                best_seg = segments[idx] if idx < len(segments) else None
-            elif analysis['data_points'] > best_analysis['data_points']:
-                best_analysis = analysis
-                best_seg = segments[idx] if idx < len(segments) else None
-        
-        # 检查是否需要使用保守参数
-        use_conservative = False
-        Ku = best_analysis['osc_info']['Ku']
-        
-        if best_seg is not None:
-            pv_range = np.ptp(best_seg.pv)
-            mv_range = np.ptp(best_seg.mv)
-            if mv_range > 0.1:
-                apparent_gain = pv_range / mv_range
-                self.log(f"   📊 增益检查: MV范围={mv_range:.2f}, PV范围={pv_range:.2f}, apparent_gain={apparent_gain:.4f}, Ku={Ku:.3f}")
-                
-                # 条件1: 低增益系统
-                if apparent_gain < 0.1:
-                    use_conservative = True
-                    self.log(f"   ⚠️ 检测到低增益系统，使用保守参数")
-                # 条件2: Ku过大（会导致Kp过大）
-                elif Ku > 5.0:
-                    use_conservative = True
-                    self.log(f"   ⚠️ Ku={Ku:.2f}>5.0，临界增益过大，使用保守参数")
-                # 条件3: Ku过小（估计不可靠，会导致Kp过小、pb过大）
-                elif Ku < 0.5:
-                    use_conservative = True
-                    self.log(f"   ⚠️ Ku={Ku:.3f}<0.5，临界增益过小，使用保守参数")
-        
-        if use_conservative:
-            # 使用保守PID参数
-            Pu = best_analysis['osc_info']['Pu']
-            pid_params = self._get_conservative_pid_params(
-                Pu, best_analysis['osc_info']['Ku'], 
-                K_approx=apparent_gain if best_seg is not None else 1.0,
-                reason='low_gain'
-            )
-        else:
-            # 使用临界法计算 PID 参数
-            pid_params = self._pid_calculator.calculate_from_oscillation(
-                best_analysis['osc_info'], 
-                current_pid=current_pid,
-                method='tyreus_luyben'  # 使用更稳定的Tyreus-Luyben法
-            )
-        
-        if pid_params is None:
-            self.log("   ⚠️ 临界法整定失败")
-            return None
-        
-        self.log(f"   ✅ 临界法整定成功:")
-        self.log(f"      Pu={best_analysis['osc_info']['Pu']:.1f}s, Ku={pid_params['Ku']:.3f}")
-        self.log(f"      Kp={pid_params['Kp']:.4f}, Ki={pid_params['Ki']:.4f}, Kd={pid_params['Kd']:.4f}")
-        self.log(f"      方法: {pid_params['method']}")
-        
-        return {
-            'pid_params': pid_params,
-            'oscillation_info': best_analysis['osc_info'],
-            'segment_idx': best_analysis['segment_idx'],
-            'method': 'oscillation_critical'
-        }
+        """尝试振荡分析整定（代理到 OscillationTuner）"""
+        return self._oscillation_tuner.try_oscillation_tuning(segments, segment_results, current_pid)
     
     def _build_oscillation_output(self, osc_result: Dict, hist_data: HistoricalData,
                                   time_range: Dict, tuning_windows: List) -> Dict[str, Any]:
-        """构建振荡分析整定的输出结果"""
-        pid_params = osc_result['pid_params']
-        osc_info = osc_result['oscillation_info']
-        
-        valid_mask = hist_data.pv != 0
-        y = hist_data.pv[valid_mask]
-        u = hist_data.mv[valid_mask]
-        ts = hist_data.timestamp[valid_mask]
-        sv = hist_data.sv[valid_mask]
-        
-        # 先估算模型参数（用于闭环验证和输出，保持一致）
-        Pu = osc_info['Pu']
-        Ku = pid_params['Ku']
-        
-        # 使用数据整体范围估算过程增益 K（而不是振荡幅度）
-        # 对于高振荡数据，振荡幅度比不能代表真实的过程增益
-        pv_range = np.ptp(y)  # PV整体范围
-        mv_range = np.ptp(u)  # MV整体范围
-        
-        if mv_range > 0.1 and pv_range > 0.01:
-            # 使用整体范围估计K，这更接近真实的过程增益
-            K_from_range = pv_range / mv_range
-            
-            # 同时考虑振荡幅度估计的K
-            pv_amplitude = osc_info.get('amplitude', 1.0)
-            mv_amplitude = osc_info.get('mv_amplitude', 1.0)
-            if mv_amplitude > 0.01:
-                K_from_osc = pv_amplitude / mv_amplitude
-            else:
-                K_from_osc = K_from_range
-            
-            # 取两者中较大的（更保守，避免低估增益导致仿真不稳定）
-            K_from_data = max(K_from_range, K_from_osc)
-            
-            # 确保K值在合理范围内
-            K_from_data = np.clip(K_from_data, 0.1, 10.0)
-        else:
-            K_from_data = 1.0 / Ku if Ku > 0.01 else 1.0
-        
-        K_est = round(K_from_data, 4)
-        self.log(f"   📊 K值估计: 范围法={pv_range/mv_range:.4f}, 最终K={K_est}")
-        T1_est = round(Pu, 4)
-        L_est = round(Pu / 4, 4)
-        
-        # 使用估算的模型参数生成 pv_model（振荡整定也需要可视化）
-        # 注意：这里使用顶层已导入的 ModelType
-        temp_params = (K_est, T1_est, L_est)
-        pv_model = self._simulator.simulate_segmented(
-            temp_params, 'FOPDT', y, u,  # 直接使用字符串避免导入顺序问题
-            reset_on_sv_change=True, sv=sv,
-            enable_smooth=True,
-            enable_amplitude_calibration=True,
-            enable_offset_correction=True,
-            enable_oscillation_overlay=True  # 振荡数据叠加振荡分量
-        )
-        
-        # 创建 FusionResult 用于闭环验证（与可视化使用相同参数）
-        from .models import FusionResult
-        temp_fusion = FusionResult(
-            model_type=ModelType.FOPDT,
-            K=K_est, T1=T1_est, T2=0.0, L=L_est
-        )
-        
-        # 闭环验证（使用实际数据的初值，而不是固定值）
-        # 这样仿真更接近实际系统行为
-        osc_config = Config.OSCILLATION_TUNING
-        cl_config = Config.CLOSED_LOOP
-        
-        # 使用实际数据的SV和PV初值
-        sv_mean = float(np.mean(sv))
-        pv_mean = float(np.mean(y))
-        pv_std = float(np.std(y))
-        
-        # 仿真设定值：从当前均值变化一个合理的量（不超过2倍标准差）
-        sp_initial = sv_mean
-        sp_step = max(pv_std * 2, 1.0)  # 至少变化1单位
-        sp_final = sv_mean + sp_step
-        pv_initial = pv_mean
-        
-        self.log(f"   📊 闭环仿真: SP={sp_initial:.2f}→{sp_final:.2f}, PV初值={pv_initial:.2f}")
-        
-        is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
-            temp_fusion, pid_params,
-            sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
-            verbose=self._verbose
-        )
-        
-        # 如果闭环不稳定，尝试更保守的参数
-        if not is_stable:
-            self.log("   ⚠️ 闭环不稳定，尝试更保守的参数...")
-            
-            # 基于数据范围估计过程增益
-            pv_range = np.ptp(y)
-            mv_range = np.ptp(u)
-            K_approx = pv_range / mv_range if mv_range > 0.1 and pv_range > 0.01 else 1.0
-            
-            # 使用保守PID参数
-            fallback_pid = self._get_conservative_pid_params(
-                Pu, osc_info['Ku'], K_approx=K_approx, reason='data_range'
-            )
-            
-            self.log(f"   ⚠️ 数据质量差，使用保守参数: pb={fallback_pid['pb']:.1f}, "
-                    f"Kp={fallback_pid['Kp']:.4f}, Ki={fallback_pid['Ki']:.4f}")
-            pid_params = fallback_pid
-            
-            # 重新验证
-            is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
-                temp_fusion, fallback_pid,
-                sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
-                verbose=self._verbose
-            )
-        
-        # 计算评分（振荡整定的评分规则，使用配置阈值）
-        stability_score = 10.0 if is_stable else 5.0
-        if cl_metrics.overshoot > cl_config['overshoot_acceptable']:
-            stability_score -= 2.0
-        if cl_metrics.oscillation_count > cl_config['oscillation_count_ideal']:
-            stability_score -= 1.0
-        
-        # 综合评分（振荡整定的基础分较低，因为没有模型拟合验证）
-        model_rating = round(min(10.0, max(0.0, stability_score * 0.6 + 2.0)), 2)
-        
-        closed_loop_info = {
-            'is_stable': is_stable,
-            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
-            'overshoot': cl_metrics.overshoot,
-            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
-            'steady_state_error': cl_metrics.steady_state_error,
-            'oscillation_count': cl_metrics.oscillation_count,
-            'decay_ratio': cl_metrics.decay_ratio
-        }
-        
-        return {
-            'success': True,
-            'model_type': 'FOPDT',  # 使用 FOPDT 作为模型类型
-            'model_rating': model_rating,
-            'start_time': time_range.get('start_time'),
-            'end_time': time_range.get('end_time'),
-            'model_parameters': {
-                'K': K_est,
-                'T1': T1_est,
-                'T2': 0.0,
-                'L': L_est
-            },
-            'pid_parameters': pid_params,
-            'fitting_result': {
-                'timestamp': ts.tolist(),
-                'sv': sv.tolist(),
-                'pv': y.tolist(),
-                'mv': u.tolist(),
-                'pv_model': pv_model.tolist(),  # 使用估算模型生成的pv_model
-                'r_squared': calculate_r2(y, pv_model),
-                'rmse': calculate_rmse(y, pv_model)
-            },
-            'fusion_info': {
-                'method': 'oscillation_critical',
-                'n_segments': 1,
-                'consistency_score': 0.0,
-                'oscillation_type': osc_info['oscillation_type'],
-                'oscillation_amplitude': osc_info['amplitude']
-            },
-            'closed_loop_verification': closed_loop_info,
-            'rating_details': {
-                'stability_score': stability_score,
-                'method': 'oscillation_critical'
-            }
-        }
+        """构建振荡整定输出（代理到 OscillationTuner）"""
+        return self._oscillation_tuner.build_oscillation_output(osc_result, hist_data, time_range, tuning_windows)
     
     # ============================================================
     # Step 3: 模型选择（使用统一模型选择器）
@@ -1416,7 +1103,7 @@ class ModelSelector:
         3. 多起点优化提高鲁棒性
         """
         try:
-            from .identifier import ModelIdentifier
+            from .fitting import ModelIdentifier
             
             # 检测是否为高振荡数据
             oscillation_info = ModelIdentifier.detect_high_oscillation(y_full, u_full)

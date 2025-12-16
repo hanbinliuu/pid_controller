@@ -30,7 +30,7 @@ import numpy as np
 from scipy.optimize import least_squares
 from scipy.ndimage import uniform_filter1d
 
-from .config import Config
+from ..config import Config
 from scipy.signal import savgol_filter
 
 

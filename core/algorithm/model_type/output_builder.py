@@ -29,7 +29,7 @@ import numpy as np
 from typing import List, Dict, Any, Optional
 
 from .config import Config, ModelType
-from .models import FusionResult, HistoricalData, TuningInput
+from .data_models import FusionResult, HistoricalData, TuningInput
 from .logger import LoggerMixin
 from .utils import calculate_r2, calculate_rmse
 
@@ -244,7 +244,7 @@ class OutputBuilder(LoggerMixin):
         )
         
         # 创建 FusionResult 用于闭环验证
-        from .models import FusionResult
+        from .data_models import FusionResult
         temp_fusion = FusionResult(
             model_type=ModelType.FOPDT,
             K=K_est, T1=T1_est, T2=0.0, L=L_est

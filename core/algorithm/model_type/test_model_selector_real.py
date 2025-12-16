@@ -24,7 +24,7 @@ from core.algorithm.model_type.model_selector import ModelSelector
 def get_history_data(start_time: int, end_time: int, loop_uri: str = None) -> List[Dict]:
     """获取历史数据"""
     if loop_uri is None:
-        loop_uri = '/pid_zd/0b521c82a96d4107a564e4c2678bdeca'
+        loop_uri = '/pid_zd/b352328ec0cd4a9c958b32815e67a96a'
     
     table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
     db = get_default_database()
@@ -292,6 +292,7 @@ def test_model_selector_new_format(data: List[Dict], qualified_windows: List[Dic
                 print(f"      {k}: {v}")
     
     # 构造新格式输入
+    # response_mode: 'fast' (快速响应，允许超调), 'balanced' (默认), 'conservative' (保守，无超调)
     input_data = {
         'history_data': data,
         'params': {
@@ -299,7 +300,8 @@ def test_model_selector_new_format(data: List[Dict], qualified_windows: List[Dic
             'turning_type': None,
             'analyst_column': 'pv'
         },
-        'qualified_windows': qualified_windows
+        'qualified_windows': qualified_windows,
+        'response_mode': 'conservative'  # 使用保守模式，适合真实系统
     }
     
     print(f"\n📥 输入参数:")
@@ -469,8 +471,8 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         ax4 = fig.add_subplot(n_plots, 1, 4)
         
         # 重新进行闭环仿真以获取曲线数据
-        from core.algorithm.model_type.pid_calculator import PIDCalculator
-        from core.algorithm.model_type.models import FusionResult
+        from core.algorithm.model_type.tuning.pid_calculator import PIDCalculator
+        from core.algorithm.model_type.data_models import FusionResult
         
         model_params = fitting_result.get('model_parameters', {})
         pid_params = fitting_result.get('pid_parameters', {})
@@ -738,23 +740,7 @@ if __name__ == "__main__":
     
     # 测试场景
     test_scenarios =  [
-        {'start_time': '2025-11-06 16:41:58', 'end_time': '2025-11-06 16:48:58'},
-        {'start_time': '2025-11-05 10:55:58', 'end_time': '2025-11-05 13:14:58'},
-        {'start_time': '2025-11-11 18:50:58', 'end_time': '2025-11-11 20:08:58'},
-        {'start_time': '2025-11-10 09:12:58', 'end_time': '2025-11-10 10:25:58'},
-        {'start_time': '2025-11-05 09:33:58', 'end_time': '2025-11-05 17:24:58'},
-        {'start_time': '2025-11-04 16:58:58', 'end_time': '2025-11-04 18:30:58'},  
-        {'start_time': '2025-11-04 17:53:58', 'end_time': '2025-11-04 18:30:58'},
-        {'start_time': '2025-11-05 11:05:58', 'end_time': '2025-11-05 15:38:58'},
-        {'start_time': '2025-11-07 17:45:58', 'end_time': '2025-11-07 19:42:58'},
-        {'start_time': '2025-11-05 09:51:22', 'end_time': '2025-11-05 17:50:58'},
-        # 1
-        {'start_time': '2025-12-04 10:00:58', 'end_time': '2025-12-04 12:42:58'}, 
-        {'start_time': '2025-12-07 05:00:58', 'end_time': '2025-12-07 12:42:58'},
-        # 1
-        {'start_time': '2025-12-01 05:00:58', 'end_time': '2025-12-01 12:42:58'},
-        {'start_time': '2025-12-07 21:27:58', 'end_time': '2025-12-08 21:42:58'},
-        {'start_time': '2025-12-10 12:24:03', 'end_time': '2025-12-10 18:24:03'}, 
+        {'start_time': '2025-12-16 05:50:52', 'end_time': '2025-12-16 11:50:52'}, 
     ]
     
     for idx, scenario in enumerate(test_scenarios, 1):

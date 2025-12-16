@@ -17,6 +17,7 @@
 - **SegmentProcessor**: 扰动段提取和预处理
 - **SegmentFitter**: 多模型拟合
 - **UnifiedModelSelector**: 统一模型类型选择
+- **OscillationTuner**: 振荡数据临界法整定
 - **PIDCalculator**: PID参数计算
 - **ModelSimulator**: 模型仿真验证
 - **OutputBuilder**: 结果输出构建
@@ -30,15 +31,16 @@
 """
 
 from .config import Config, ModelType
-from .models import SegmentResult, FusionResult, TuningInput, TuningWindow, HistoricalData
+from .data_models import SegmentResult, FusionResult, TuningInput, TuningWindow, HistoricalData
 from .model_selector import ModelSelector
-from .simulator import ModelSimulator
-from .pid_calculator import PIDCalculator
-from .segment_processor import SegmentProcessor
-from .segment_fitter import SegmentFitter
 from .output_builder import OutputBuilder
-from .unified_model_selector import UnifiedModelSelector, SegmentModelFit
 from .logger import LoggerMixin, get_logger
+
+# 子模块导入
+from .preprocessing import DataPreprocessor, SegmentProcessor
+from .fitting import ModelIdentifier, SegmentFitter, PIDFusionStrategy, UnifiedModelSelector, SegmentModelFit
+from .tuning import PIDCalculator, DataQualityInfo, OscillationTuner
+from .simulation import ModelSimulator
 
 __all__ = [
     # ============================================================
@@ -70,6 +72,7 @@ __all__ = [
     'SegmentFitter',      # 多模型拟合器
     'OutputBuilder',      # 输出构建器
     'UnifiedModelSelector',  # 统一模型选择器
+    'OscillationTuner',   # 振荡数据整定器
     'SegmentModelFit',    # 单段多模型拟合结果
     
     # ============================================================

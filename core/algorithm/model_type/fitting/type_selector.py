@@ -30,8 +30,8 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass, field
 
-from .config import Config, ModelType
-from .models import SegmentResult, FusionResult
+from ..config import Config, ModelType
+from ..data_models import SegmentResult, FusionResult
 
 
 @dataclass

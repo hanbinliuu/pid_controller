@@ -25,10 +25,10 @@
 import numpy as np
 from typing import List, Tuple
 
-from .config import Config
-from .models import SegmentResult, HistoricalData, TuningWindow
+from ..config import Config
+from ..data_models import SegmentResult, HistoricalData, TuningWindow
 from .data_preprocessor import DataPreprocessor
-from .utils import parse_timestamp
+from ..utils import parse_timestamp
 
 
 class SegmentProcessor:

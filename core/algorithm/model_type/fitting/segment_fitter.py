@@ -30,11 +30,11 @@ import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from scipy.optimize import least_squares
 
-from .config import Config, ModelType
-from .models import SegmentResult, HistoricalData
-from .identifier import ModelIdentifier
-from .logger import LoggerMixin
-from .utils import calculate_r2, calculate_rmse, calculate_rss, calculate_aic, calculate_bic
+from ..config import Config, ModelType
+from ..data_models import SegmentResult, HistoricalData
+from .model_identifier import ModelIdentifier
+from ..logger import LoggerMixin
+from ..utils import calculate_r2, calculate_rmse, calculate_rss, calculate_aic, calculate_bic
 
 
 class SegmentFitter(LoggerMixin):

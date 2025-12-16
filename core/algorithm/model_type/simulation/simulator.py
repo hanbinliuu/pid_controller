@@ -33,9 +33,9 @@ import numpy as np
 from typing import Dict, Optional, Tuple
 from scipy.ndimage import uniform_filter1d
 
-from .config import Config, ModelType
-from .identifier import ModelIdentifier
-from .models import FusionResult
+from ..config import Config, ModelType
+from ..fitting.model_identifier import ModelIdentifier
+from ..data_models import FusionResult
 
 
 class ModelSimulator:
