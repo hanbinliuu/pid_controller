@@ -7,7 +7,7 @@ from datetime import datetime, date
 from typing import Optional, Dict, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Text, func
+from sqlalchemy import Text, func, UniqueConstraint
 from sqlmodel import SQLModel, Field, Column, JSON
 
 
@@ -20,7 +20,10 @@ class LoopEvaluation(SQLModel, table=True):
     用途: 存储回路性能评估记录，包括整定前后的参数对比、性能评分等信息
     """
     __tablename__ = "loop_evaluation"  # 数据库表名
-    __table_args__ = {"comment": "回路评估明细表"}
+    __table_args__ = (
+        UniqueConstraint('loop_uri', 'assessment_time', name='uq_loop_date_index'),
+        {"comment": "回路评估明细表"}
+    )
 
     # 主键
     id: Optional[str] = Field(
