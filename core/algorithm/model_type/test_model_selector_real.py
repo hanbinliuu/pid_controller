@@ -1,14 +1,18 @@
+"""ModelSelector 整定测试脚本
+
+使用方法:
+    1. 修改 CONFIG 配置区域的参数
+    2. 运行: python test_model_selector_real.py
+"""
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
-import io
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime
 from typing import List, Dict
-import pandas as pd
 
 from core.agent.tools import process_query_tsdb_data_interpolated
 from core.client.bff_model_client import BFFModelClient
@@ -18,13 +22,37 @@ from core.algorithm.model_type.model_selector import ModelSelector
 
 
 # ============================================================
+# 配置区域 - 修改这里的参数进行测试
+# ============================================================
+
+CONFIG = {
+    # 回路 URI
+    'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951",
+    # 'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
+    
+    # 测试场景列表 (可添加多个场景)
+    'scenarios': [
+        {'start_time': '2025-12-16 08:50:52', 'end_time': '2025-12-16 23:50:52'},
+    ],
+    
+    # 响应模式: 'fast' | 'balanced' | 'conservative'
+    'response_mode': 'conservative',
+    
+    # 是否输出详细日志
+    'verbose': True,
+    
+    # 日志保存目录
+    'log_dir': '/Users/lhb/Documents/pycharmProject/hollicube/pid-agent-mvp/test',
+}
+
+
+# ============================================================
 # 数据获取
 # ============================================================
 
 def get_history_data(start_time: int, end_time: int, loop_uri: str = None) -> List[Dict]:
     """获取历史数据"""
-    if loop_uri is None:
-        loop_uri = '/pid_zd/b352328ec0cd4a9c958b32815e67a96a'
+    loop_uri = loop_uri or CONFIG['loop_uri']
     
     table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
     db = get_default_database()
@@ -151,120 +179,8 @@ def analyze_data_quality(data: List[Dict]) -> Dict:
 # ModelSelector 测试
 # ============================================================
 
-def test_model_selector(data: List[Dict], tuning_input: Dict, verbose: bool = True) -> Dict:
-    """
-    测试 ModelSelector
-    
-    Args:
-        data: 原始历史数据
-        tuning_input: 整定输入（来自 StabilityDetector）
-        verbose: 是否输出详细日志
-        
-    Returns:
-        整定结果
-    """
-    print("\n" + "=" * 60)
-    print("ModelSelector 整定测试")
-    print("=" * 60)
-    
-    # 数据质量分析
-    if verbose:
-        print("\n📊 数据质量分析:")
-        quality_report = analyze_data_quality(data)
-        print(f"   质量评级: {quality_report['quality']}")
-        
-        if quality_report['stats']:
-            print("   统计信息:")
-            for k, v in quality_report['stats'].items():
-                print(f"      {k}: {v}")
-        
-        if quality_report['warnings']:
-            print("   ⚠️  警告:")
-            for w in quality_report['warnings']:
-                print(f"      - {w}")
-    
-    # 打印输入信息
-    print(f"\n📥 输入参数:")
-    print(f"   start_time: {tuning_input.get('start_time')}")
-    print(f"   end_time: {tuning_input.get('end_time')}")
-    print(f"   total_windows: {tuning_input.get('total_windows')}")
-    
-    tuning_windows = tuning_input.get('tuning_window', [])
-    print(f"   tuning_window ({len(tuning_windows)} 个扰动段):")
-    for i, w in enumerate(tuning_windows):
-        start_str = w.get('start_time_str', w.get('start_time'))
-        end_str = w.get('end_time_str', w.get('end_time'))
-        print(f"      [{i+1}] {start_str} ~ {end_str}")
-    
-    # 调用 ModelSelector
-    selector = ModelSelector(verbose=verbose)
-    result = selector.fit(
-        tuning_input=tuning_input,
-        raw_data=data,
-        lambda_factor=0.8
-    )
-    
-    # 打印输出结果
-    print(f"\n📤 输出结果:")
-    print(f"   model_type: {result.get('model_type')}")
-    print(f"   model_rating: {result.get('model_rating')}")
-    print(f"   start_time: {result.get('start_time')}")
-    print(f"   end_time: {result.get('end_time')}")
-    
-    model_params = result.get('model_parameters', {})
-    print(f"\n   model_parameters:")
-    print(f"      K  = {model_params.get('K')}")
-    print(f"      T1 = {model_params.get('T1')}")
-    print(f"      T2 = {model_params.get('T2')}")
-    print(f"      L  = {model_params.get('L')}")
-    
-    pid_params = result.get('pid_parameters', {})
-    print(f"\n   pid_parameters:")
-    print(f"      Kp = {pid_params.get('Kp')}")
-    print(f"      Ki = {pid_params.get('Ki')}")
-    print(f"      Kd = {pid_params.get('Kd')}")
-    
-    fitting = result.get('fitting_result', {})
-    r2 = fitting.get('r_squared', 0)
-    print(f"\n   fitting_result:")
-    print(f"      r_squared = {r2}")
-    print(f"      rmse = {fitting.get('rmse')}")
-    print(f"      数据点数 = {len(fitting.get('pv', []))}")
-    
-    # 新增: fusion_info
-    fusion_info = result.get('fusion_info', {})
-    print(f"\n   fusion_info:")
-    print(f"      method = {fusion_info.get('method')}")
-    print(f"      n_segments = {fusion_info.get('n_segments')}")
-    print(f"      consistency_score = {fusion_info.get('consistency_score')}")
-    print(f"      K_std = {fusion_info.get('K_std')}")
-    print(f"      T1_std = {fusion_info.get('T1_std')}")
-    
-    # 新增: rating_details (综合评分详情)
-    rating_details = result.get('rating_details', {})
-    print(f"\n   rating_details (综合评分):")
-    print(f"      r2_score = {rating_details.get('r2_score')} (权重40%)")
-    print(f"      consistency_score = {rating_details.get('consistency_score')} (权重25%)")
-    print(f"      validity_score = {rating_details.get('validity_score')} (权重20%)")
-    print(f"      coverage_score = {rating_details.get('coverage_score')} (权重15%)")
-    
-    # 拟合质量评估
-    if r2 >= 0.9:
-        quality = "优秀 ✅"
-    elif r2 >= 0.8:
-        quality = "良好 ✅"
-    elif r2 >= 0.7:
-        quality = "可接受 ⚠️"
-    elif r2 >= 0.5:
-        quality = "较差 ⚠️"
-    else:
-        quality = "不可用 ❌"
-    print(f"\n   拟合质量: {quality}")
-    
-    return result
-
-
-def test_model_selector_new_format(data: List[Dict], qualified_windows: List[Dict], verbose: bool = True) -> Dict:
+def run_model_selector(data: List[Dict], qualified_windows: List[Dict], 
+                       verbose: bool = True, response_mode: str = 'conservative') -> Dict:
     """
     测试 ModelSelector 新接口（run 方法）
     
@@ -301,7 +217,7 @@ def test_model_selector_new_format(data: List[Dict], qualified_windows: List[Dic
             'analyst_column': 'pv'
         },
         'qualified_windows': qualified_windows,
-        'response_mode': 'conservative'  # 使用保守模式，适合真实系统
+        'response_mode': response_mode
     }
     
     print(f"\n📥 输入参数:")
@@ -728,8 +644,13 @@ class TeeOutput:
 
 if __name__ == "__main__":
     
+    # 从 CONFIG 读取配置
+    log_dir = CONFIG['log_dir']
+    verbose = CONFIG['verbose']
+    response_mode = CONFIG['response_mode']
+    scenarios = CONFIG['scenarios']
+    
     # 设置日志文件
-    log_dir = '/Users/lhb/Documents/pycharmProject/hollicube/pid-agent-mvp/test'
     os.makedirs(log_dir, exist_ok=True)
     log_filename = os.path.join(log_dir, f'model_selector_test_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
     
@@ -738,12 +659,7 @@ if __name__ == "__main__":
     sys.stdout = tee
     print(f"📝 日志保存至: {log_filename}\n")
     
-    # 测试场景
-    test_scenarios =  [
-        {'start_time': '2025-12-16 10:50:52', 'end_time': '2025-12-16 21:50:52'}, 
-    ]
-    
-    for idx, scenario in enumerate(test_scenarios, 1):
+    for idx, scenario in enumerate(scenarios, 1):
         start_time_str = scenario['start_time']
         end_time_str = scenario['end_time']
         
@@ -760,18 +676,17 @@ if __name__ == "__main__":
         if not data:
             continue
         
-        # Step 2: 检测扰动段（获取 tuning_input）
+        # Step 2: 检测扰动段
         tuning_input = detect_tuning_windows(data)
-        
         qualified_windows = tuning_input.get('qualified_windows', [])
-        if len(qualified_windows) == 0:
+        if not qualified_windows:
             print("⚠️ 未检测到扰动段，跳过")
             continue
         
-        # Step 3: 执行模型拟合（使用新格式 run 方法）
-        result = test_model_selector_new_format(data, qualified_windows, verbose=True)
+        # Step 3: 执行模型拟合
+        result = run_model_selector(data, qualified_windows, verbose=verbose, response_mode=response_mode)
         
-        # Step 4: 打印 JSON 格式验证
+        # Step 4: 打印 JSON 格式
         print_result_json(result)
         
         # Step 5: 可视化
