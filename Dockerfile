@@ -1,5 +1,5 @@
 # 使用Python 3.10.8官方镜像作为基础镜像
-FROM python:3.10.8-slim
+FROM python:3.11-slim-bullseye
 
 # 设置工作目录
 WORKDIR /app
