@@ -164,7 +164,7 @@ class KTLSimulator:
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
-                delay_steps = float(round(L / dt, 3))
+                delay_steps = round(L / dt)  # 改为整数
                 for i in range(1, n):
                     u_delayed = u[i - delay_steps] if i > delay_steps else 0.0
                     dy = (K * u_delayed - y[i-1]) / T1 * dt
@@ -182,7 +182,7 @@ class KTLSimulator:
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
-                delay_steps = float(round(L / dt, 3))
+                delay_steps = round(L / dt)  # 改为整数
                 y1 = np.ones(n) * initial_output  # 第一阶环节输出
                 
                 for i in range(1, n):
@@ -488,7 +488,7 @@ class KTLSimulator:
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
-                delay_steps = float(round(L / dt, 3))
+                delay_steps = round(L / dt)  # 改为整数
                 u_buffer = np.zeros(max(delay_steps, 1))
                 
                 for i in range(1, n):
@@ -522,8 +522,7 @@ class KTLSimulator:
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
-
-                delay_steps = float(round(L / dt, 3))
+                delay_steps = round(L / dt)  # 改为整数
                 u_buffer = np.zeros(max(delay_steps, 1))
                 pv1 = 0.0  # 第一阶环节输出
                 
