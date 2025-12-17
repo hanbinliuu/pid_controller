@@ -47,7 +47,7 @@ async def get_point_paths(
     project_path: Optional[str] = Query(
         None,
         description="项目路径前缀，默认从BFF_MODEL_LOOP_URI读取",
-        example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
+        examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]
     )
 ) -> PointPathsResponse:
     """
@@ -91,17 +91,17 @@ async def query_current_raw_values(
         point_names: List[str]=Query(
             None,
             description="测点列表",
-            example=["PV","MV","SV","PB","TI","TD","AUTO"]
+            examples=[["PV","MV","SV","PB","TI","TD","AUTO"]]
         ),
         loop_uri: Optional[str] = Query(
             None,
             description="实例 URI，默认从 BFF_MODEL_LOOP_URI 读取",
-            example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
+            examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]
         ),
         point_path: Optional[str] = Query(
             None,
             description="测点路径，默认从环境变量 BFF_MODEL_POINT_PATH 读取",
-            example="/loop_state_parameters"
+            examples=["/loop_state_parameters"]
         )
 ) -> Dict[str, Any]:
     """
@@ -157,12 +157,12 @@ async def get_table_and_points(
     project_path: Optional[str] = Query(
         None,
         description="项目路径前缀，默认从BFF_MODEL_LOOP_URI读取",
-        example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
+        examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]
     ),
     point_path: Optional[str] = Query(
         'loop_state_parameters',
         description="测点路径，默认从环境变量BFF_MODEL_POINT_PATH读取",
-        example="/loop_state_parameters"
+        examples=["/loop_state_parameters"]
     )
 ) -> Dict[str, Any]:
     """
@@ -244,7 +244,7 @@ async def get_next_level_submodel(
     identifier: str = Query(
         ...,
         description="模型标识符，URI路径",
-        example="/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"
+        examples=["/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"]
     )
 ) -> Dict[str, Any]:
     """
@@ -294,12 +294,12 @@ async def list_instances_under_tree(
     model_identifier_list: List[str] = Query(
         ...,
         description="模型标识符列表",
-        example=["/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"]
+        examples=[["/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"]]
     ),
     start_identifier_list: List[str] = Query(
         ...,
         description="起始标识符列表",
-        example=["/pid_zd/053f3c45413b48bbafacec609d142e57"]
+        examples=[["/pid_zd/053f3c45413b48bbafacec609d142e57"]]
     ),
     contain_sub_model: bool = Query(
         True,
@@ -381,7 +381,7 @@ async def query_nodes_detail(
         uris: List[str] = Query(
             ...,
             description="节点URI列表",
-            example=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]
+            examples=[["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]]
         )
 ) -> Dict[str, Any]:
     """

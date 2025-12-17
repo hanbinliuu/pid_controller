@@ -28,15 +28,15 @@ DEFAULT_FIELD_MAPPING = {
             # operation_id="时序测点数据查询接口",
             description="查询指定设备在指定时间范围内的测点原始数据，支持多种时间格式")
 async def get_point_history_data_tsdb(
-        table_name: str = Query(..., description="设备名（表名）", example="PID_FEP_Gateway_Device_001default"),
-        fields: Optional[List[str]] = Query(..., description="测点名", example=[
+        table_name: str = Query(..., description="设备名（表名）", examples=["PID_FEP_Gateway_Device_001default"]),
+        fields: Optional[List[str]] = Query(..., description="测点名", examples=[[
             "ns=100;s=FIC101A_MV.In_Channel0",
             "ns=100;s=FIC101A_PV.In_Channel0",
             "ns=100;s=FIC101A_SV.In_Channel0",
             "ns=100;s=FIC101A_PB.In_Channel0",
             "ns=100;s=FIC101A_TI.In_Channel0",
             "ns=100;s=FIC101A_TD.In_Channel0"
-        ]),
+        ]]),
         start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
                                                       "2022-01-01"]),

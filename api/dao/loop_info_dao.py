@@ -333,7 +333,7 @@ class LoopInfoDAO:
             db.commit()
             db.refresh(mapping)
             
-            logger.info(f"更新回路信息记录成功: ID={mapping_id}")
+            # logger.info(f"更新回路信息记录成功: ID={mapping_id}")
             return mapping
             
         except Exception as e:
@@ -374,7 +374,7 @@ class LoopInfoDAO:
             db.commit()
             db.refresh(mapping)
             
-            logger.info(f"更新回路信息记录成功: loop_uri={loop_uri}")
+            # logger.info(f"更新回路信息记录成功: loop_uri={loop_uri}")
             return mapping
             
         except Exception as e:

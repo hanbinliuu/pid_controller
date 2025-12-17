@@ -46,13 +46,15 @@ def test_cron_task():
         task = CronTask(
             task_id="test_task",
             cron_expression="*/30 * * * * ",  # 每30秒
-            task_func=test_task_1
+            task_func=test_task_1,
+            enable_multi_worker=True  # 启用多worker支持
         )
         
         print(f"\n✓ 创建定时任务成功")
         print(f"  - 任务ID: {task.task_id}")
         print(f"  - Cron表达式: {task.cron_expression}")
         print(f"  - 是否运行: {task.is_running}")
+        print(f"  - 多Worker支持: {task.enable_multi_worker}")
         
         # 启动任务
         print("\n启动任务...")
@@ -70,6 +72,7 @@ def test_cron_task():
         print(f"  - 执行次数: {status['execution_count']}")
         print(f"  - 最后执行时间: {status['last_execution_time']}")
         print(f"  - 下次执行时间: {status['next_execution_time']}")
+        print(f"  - 进程ID: {status['process_id']}")
         
         # 停止任务
         print("\n停止任务...")
@@ -98,13 +101,15 @@ def test_cron_task_manager():
         manager.register_task(
             task_id="task_1",
             cron_expression="0 * * * *",  # 每小时
-            task_func=test_task_1
+            task_func=test_task_1,
+            enable_multi_worker=True  # 启用多worker支持
         )
         manager.register_task(
             task_id="task_2",
             cron_expression="*/30 * * * *",  # 每30分钟
             task_func=test_task_2,
-            task_args={"param": "test"}
+            task_args={"param": "test"},
+            enable_multi_worker=False  # 禁用多worker支持
         )
         print(f"✓ 已注册2个定时任务")
         
@@ -124,6 +129,8 @@ def test_cron_task_manager():
             print(f"    - Cron: {status['cron_expression']}")
             print(f"    - 运行状态: {'运行中' if status['is_running'] else '已停止'}")
             print(f"    - 执行次数: {status['execution_count']}")
+            print(f"    - 进程ID: {status['process_id']}")
+            print(f"    - 多Worker支持: {status['enable_multi_worker']}")
         
         # 停止所有任务
         print("\n停止所有任务...")
@@ -230,7 +237,8 @@ def my_task():
 task = CronTask(
     task_id='my_daily_task',
     cron_expression='0 2 * * *',
-    task_func=my_task
+    task_func=my_task,
+    enable_multi_worker=True  # 在多worker环境下启用
 )
 
 # 启动任务
@@ -250,6 +258,20 @@ task.stop()
 ENABLE_LOOP_PERFORMANCE_TASK=true
 LOOP_PERFORMANCE_CRON=0 2 * * *      # 每天02:00执行
 TASK_MAX_WORKERS=5                    # 5个并行线程
+    """)
+    
+    print("\n【示例6】多Worker环境配置:")
+    print("""
+# 在多Worker环境下运行时，只有第一个Worker会执行定时任务
+# 通过UVICORN_WORKER_ID环境变量来识别主Worker
+uvicorn.run(
+    "run_server:app",
+    host="0.0.0.0", 
+    port=8001, 
+    reload=False,
+    workers=4,  # 多个Worker进程
+    log_level=log_level
+)
     """)
 
 
@@ -294,6 +316,7 @@ def main():
         print("  ✓ REST API接口支持")
         print("  ✓ 环境变量配置支持")
         print("  ✓ 详细的执行日志和状态追踪")
+        print("  ✓ 多Worker环境兼容支持")
         print("\n📚 更多信息请参考 API 文档: http://localhost:8001/docs\n")
         return 0
     else:

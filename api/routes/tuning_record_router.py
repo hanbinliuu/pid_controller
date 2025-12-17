@@ -37,12 +37,12 @@ logger = logging.getLogger(__name__)
 )
 async def send_device_command(
     loop_uri: str  = Body(..., description="URI列表"),
-    tuning_method: str = Body(..., description="整定方法", example=["常规整定", "大模型整定"]),
-    tuning_type: str = Body(..., description="整定类型", example=["PID", "PI"]),
-    before_params: str = Body(None, description="整定前参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
-    after_params: str = Body(None, description="整定后参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
-    # status: str = Body(..., description="整定状态", example=["成功", "失败"]),
-    remark: Optional[str] = Body(..., description="描述", example="参数已下发"),
+    tuning_method: str = Body(..., description="整定方法", examples=["常规整定", "大模型整定"]),
+    tuning_type: str = Body(..., description="整定类型", examples=["PID", "PI"]),
+    before_params: Optional[str] = Body(None, description="整定前参数(描述：PID参数JSON字符串)"),
+    after_params: Optional[str] = Body(None, description="整定后参数(描述：PID参数JSON字符串)"),
+    # status: str = Body(..., description="整定状态", examples=["成功", "失败"]),
+    remark: Optional[str] = Body(None, description="描述", examples=["参数已下发"]),
     user: UserInfo = Depends(get_current_user)
 ) -> TuningRecord:
     """
@@ -137,14 +137,14 @@ async def send_device_command(
 )
 async def create_tuning_record(
     loop_uri: str  = Body(..., description="URI列表"),
-    loop_status: str = Body(..., description="回路状态", example=["自动", "手动"]),
+    loop_status: str = Body(..., description="回路状态", examples=["自动", "手动"]),
     tuning_type: str = Body(..., description="整定类型"),
-    tuning_method: str = Body(..., description="整定方法", example=["常规整定", "大模型整定"]),
-    before_params: str = Body(None, description="整定前参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
-    after_params: str = Body(None, description="整定后参数", example={"pb": 18.5443, "ti": 1.0431, "td": 0.0, "kp": 5.3925, "ki": 5.1699, "kd": 0.0}),
+    tuning_method: str = Body(..., description="整定方法", examples=["常规整定", "大模型整定"]),
+    before_params: Optional[str] = Body(None, description="整定前参数(描述：PID参数JSON字符串)"),
+    after_params: Optional[str] = Body(None, description="整定后参数(描述：PID参数JSON字符串)"),
     description: Optional[str]  = Body(None, description="整定描述"),
-    status: str = Body(..., description="整定状态", example=["成功", "失败"]),
-    remark: Optional[str] = Body(..., description="描述", example="参数已下发"),
+    status: str = Body(..., description="整定状态", examples=["成功", "失败"]),
+    remark: Optional[str] = Body(None, description="描述", examples=["参数已下发"]),
     tuning_details: str = Body(..., description="整定详情"),
     user: UserInfo = Depends(get_current_user)
 ) -> TuningRecord:
@@ -207,18 +207,18 @@ async def query_tuning_records(
     tuning_method: Optional[str] = Query(
         None,
         description="整定方法筛选（预整定/常规整定/大模型整定）",
-        example="常规整定"
+        examples="常规整定"
     ),
 
     start_time: Optional[str] = Query(
         None,
         description="开始时间",
-        example="2025-01-01"
+        examples="2025-01-01"
     ),
     end_time: Optional[str] = Query(
         None,
         description="结束时间",
-        example="2025-12-31"
+        examples="2025-12-31"
     ),
     page_no: int = Query(
         1,

@@ -9,6 +9,8 @@ services:
     environment:
       # 日志配置
       - LOG_LEVEL=INFO
+      # Worker数量 - 建议在容器中使用单进程（默认1）
+      - WORKERS=1
       
       # 数据库配置（示例 - 请根据实际情况修改）
       - DB_HOST=postgres

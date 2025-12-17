@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Query
 
-from api.tasks.cron_tasks import task_manager, CronTask
+from api.tasks.cron_tasks import task_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -20,8 +20,9 @@ logger = logging.getLogger(__name__)
 )
 async def register_cron_task(
     task_id: str = Query(..., description="任务ID"),
-    cron_expression: str = Query(..., description="Cron表达式 (分 小时 天 月 周)", example="0 * * * *"),
-    auto_start: bool = Query(True, description="注册后是否自动启动")
+    cron_expression: str = Query(..., description="Cron表达式 (分 小时 天 月 周)", examples=["0 * * * *"]),
+    auto_start: bool = Query(True, description="注册后是否自动启动"),
+    enable_multi_worker: bool = Query(True, description="是否在多worker环境下启用任务执行")
 ) -> Dict[str, Any]:
     """
     注册定时任务
@@ -63,7 +64,8 @@ async def register_cron_task(
             task_id=task_id,
             cron_expression=cron_expression,
             task_func=task_function_map[task_id],
-            task_args=task_args_map.get(task_id, {})
+            task_args=task_args_map.get(task_id, {}),
+            enable_multi_worker=enable_multi_worker
         )
         
         if not success:
@@ -82,6 +84,7 @@ async def register_cron_task(
                 "task_id": task_id,
                 "cron_expression": cron_expression,
                 "is_running": auto_start,
+                "enable_multi_worker": enable_multi_worker,
                 "message": f"任务已注册{'并启动' if auto_start else ''}"
             }
         }
@@ -256,7 +259,7 @@ async def get_cron_task_status(
     "/cron-task-result",
     summary="获取任务执行结果",
     operation_id="获取任务执行结果",
-    description="获取定时任务的最后执行结果"
+    description="获取指定任务的最后一次执行结果"
 )
 async def get_cron_task_result(
     task_id: str = Query(..., description="任务ID")
@@ -266,22 +269,9 @@ async def get_cron_task_result(
         result = task_manager.get_last_result(task_id)
         
         if result is None:
-            status = task_manager.get_task_status(task_id)
-            if status is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"任务不存在"
-                )
-            
-            if status['execution_count'] == 0:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"任务尚未执行过"
-                )
-            
             raise HTTPException(
-                status_code=500,
-                detail=f"无法获取任务执行结果"
+                status_code=404,
+                detail=f"任务不存在或无执行结果"
             )
         
         return {
@@ -295,7 +285,7 @@ async def get_cron_task_result(
         logger.error(f"获取任务执行结果失败: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"获取失败: {str(e)}"
+            detail=f"获取结果失败: {str(e)}"
         )
 
 
@@ -365,15 +355,15 @@ async def trigger_load_model_tree() -> Dict[str, Any]:
     """手动触发加载回路列表任务"""
     try:
         from api.tasks.load_loop_info import load_loop_list_and_sync
-        
+
         logger.info("手动触发回路列表加载任务")
         result = load_loop_list_and_sync()
-        
+
         return {
             "status": "success",
             "data": result
         }
-        
+
     except Exception as e:
         logger.error(f"手动触发回路列表加载失败: {str(e)}")
         raise HTTPException(
@@ -393,24 +383,24 @@ async def trigger_performance_evaluation(
 ) -> Dict[str, Any]:
     """
     手动触发性能评估任务
-    
+
     Args:
         max_workers: 并行计算的最大线程数，默认5，范围1-20
-    
+
     Returns:
         计算结果，包含成功、失败的回路数量等信息
     """
     try:
         from api.tasks.loop_perf_stats_task import calc_loop_performance
-        
+
         logger.info(f"手动触发性能评估任务，线程数: {max_workers}")
         result = calc_loop_performance(max_workers=max_workers)
-        
+
         return {
             "status": "success",
             "data": result
         }
-        
+
     except Exception as e:
         logger.error(f"手动触发性能评估失败: {str(e)}")
         raise HTTPException(
@@ -430,17 +420,17 @@ async def trigger_device_statistics(
 ) -> Dict[str, Any]:
     """
     手动触发装置统计任务
-    
+
     Args:
         statistics_date: 统计日期，默认为今天
-    
+
     Returns:
         统计结果，包含装置数、回路数、成功/失败数量等信息
     """
     try:
         from api.tasks.calc_device_stats_task import calc_device_statistics
         from datetime import datetime, date
-        
+
         # 解析统计日期
         if statistics_date:
             try:
@@ -452,12 +442,12 @@ async def trigger_device_statistics(
                 )
         else:
             stats_date = date.today()
-        
+
         logger.info(f"手动触发装置统计任务，统计日期: {stats_date}")
         result = calc_device_statistics(statistics_date=stats_date)
-        
+
         return result
-        
+
     except HTTPException:
         raise
     except Exception as e:

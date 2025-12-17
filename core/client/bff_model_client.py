@@ -210,9 +210,9 @@ class BFFModelClient:
         url = f"{self.base_url}{self.DEFAULT_QUERY_PATH_VALUE_PATH}"
 
         try:
-            logger.info(f"查询BFF模型值，路径数量: {len(browse_paths)}")
-            logger.debug(f"请求URL: {url}")
-            logger.debug(f"浏览路径: {browse_paths[:3]}..." if len(browse_paths) > 3 else f"浏览路径: {browse_paths}")
+            # logger.info(f"查询BFF模型值，路径数量: {len(browse_paths)}")
+            # logger.debug(f"请求URL: {url}")
+            # logger.debug(f"浏览路径: {browse_paths[:3]}..." if len(browse_paths) > 3 else f"浏览路径: {browse_paths}")
             # 调用bff接口查询模型测点值
             response = self.session.post(
                 url,
@@ -794,10 +794,10 @@ class BFFModelClient:
         }
 
         try:
-            logger.info(f"查询BFF实例树，模型标识符: {model_identifier_list}, 起始标识符: {start_identifier_list}")
-            logger.debug(f"请求URL: {url}")
-            logger.debug(f"请求参数: {params}")
-            logger.debug(f"请求体: {payload}")
+            # logger.info(f"查询BFF实例树，模型标识符: {model_identifier_list}, 起始标识符: {start_identifier_list}")
+            # logger.debug(f"请求URL: {url}")
+            # logger.debug(f"请求参数: {params}")
+            # logger.debug(f"请求体: {payload}")
 
             response = self.session.post(
                 url,
@@ -1151,9 +1151,9 @@ class BFFModelClient:
         url = f"{self.base_url}{self.DEFAULT_QUERY_CURRENT_RAW_VALUE_PATH}"
 
         try:
-            logger.info(f"查询测点当前原始值，路径数量: {len(browse_paths)}")
-            logger.debug(f"请求URL: {url}")
-            logger.debug(f"浏览路径: {browse_paths[:3]}..." if len(browse_paths) > 3 else f"浏览路径: {browse_paths}")
+            # logger.info(f"查询测点当前原始值，路径数量: {len(browse_paths)}")
+            # logger.debug(f"请求URL: {url}")
+            # logger.debug(f"浏览路径: {browse_paths[:3]}..." if len(browse_paths) > 3 else f"浏览路径: {browse_paths}")
 
             response = self.session.post(
                 url,

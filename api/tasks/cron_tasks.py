@@ -2,10 +2,13 @@
 """
 基于Cron表达式的定时任务
 直接使用croniter定时执行任务，无需复杂的调度器框架
+支持多worker环境下的任务去重执行
 """
 import logging
 import threading
 import time
+import os
+import fcntl
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, List
 
@@ -44,7 +47,8 @@ class CronTask:
                  task_id: str,
                  cron_expression: str,
                  task_func: Callable,
-                 task_args: Optional[Dict[str, Any]] = None):
+                 task_args: Optional[Dict[str, Any]] = None,
+                 enable_multi_worker: bool = True):
         """
         初始化定时任务
         
@@ -53,6 +57,7 @@ class CronTask:
             cron_expression: Cron表达式
             task_func: 要执行的函数
             task_args: 函数参数字典
+            enable_multi_worker: 是否在多worker环境下启用任务执行（启用多进程锁）
             
         Raises:
             ValueError: 如果Cron表达式无效
@@ -67,6 +72,7 @@ class CronTask:
         self.cron_expression = cron_expression
         self.task_func = task_func
         self.task_args = task_args or {}
+        self.enable_multi_worker = enable_multi_worker
         
         self.is_running = False
         self.thread = None
@@ -75,6 +81,77 @@ class CronTask:
         self.last_error = None
         self.execution_count = 0
         self.next_execution_time = None
+        # 添加线程锁以确保线程安全
+        self._lock = threading.Lock()
+        # 获取当前进程ID
+        self.process_id = os.getpid()
+        # 多进程文件锁（用于多worker环境）
+        self._lock_fd = None
+    
+    def _acquire_multiprocess_lock(self) -> bool:
+        """
+        在多worker环境下获取分布式文件锁
+        
+        Returns:
+            bool: 是否成功获取锁
+        """
+        if not self.enable_multi_worker:
+            return True
+        
+        try:
+            # 创建锁文件目录
+            lock_dir = "./lock"
+            if not os.path.exists(lock_dir):
+                os.makedirs(lock_dir, exist_ok=True)
+            
+            # 创建锁文件路径
+            lock_file_path = os.path.join(lock_dir, f"cron_task_{self.task_id}.lock")
+            
+            # 打开锁文件
+            self._lock_fd = open(lock_file_path, 'w')
+            
+            # 尝试获取文件锁（非阻塞）
+            fcntl.flock(self._lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            # 写入进程ID
+            self._lock_fd.truncate(0)
+            self._lock_fd.write(str(self.process_id))
+            self._lock_fd.flush()
+            
+            logger.debug(f"任务 [{self.task_id}] 成功获取分布式锁 (PID: {self.process_id})")
+            return True
+            
+        except IOError:
+            # 无法获取锁，说明其他进程正在执行此任务
+            if self._lock_fd:
+                self._lock_fd.close()
+                self._lock_fd = None
+            logger.debug(f"任务 [{self.task_id}] 无法获取分布式锁，跳过执行 (PID: {self.process_id})")
+            return False
+        except Exception as e:
+            # 其他异常，记录日志但继续执行
+            if self._lock_fd:
+                self._lock_fd.close()
+                self._lock_fd = None
+            logger.warning(f"任务 [{self.task_id}] 获取分布式锁时发生异常: {str(e)}")
+            return True  # 出现异常时仍允许执行，避免任务完全无法运行
+    
+    def _release_multiprocess_lock(self):
+        """
+        释放分布式文件锁
+        """
+        if not self.enable_multi_worker or not self._lock_fd:
+            return
+        
+        try:
+            # 释放文件锁
+            fcntl.flock(self._lock_fd.fileno(), fcntl.LOCK_UN)
+            # 关闭文件
+            self._lock_fd.close()
+            self._lock_fd = None
+            logger.debug(f"任务 [{self.task_id}] 成功释放分布式锁 (PID: {self.process_id})")
+        except Exception as e:
+            logger.warning(f"任务 [{self.task_id}] 释放分布式锁时发生异常: {str(e)}")
     
     def _calculate_next_run_time(self) -> datetime:
         """计算下次执行时间"""
@@ -87,7 +164,7 @@ class CronTask:
     
     def _run_task(self):
         """执行任务的主函数"""
-        logger.info(f"定时任务启动 [{self.task_id}] - Cron: {self.cron_expression}")
+        logger.info(f"定时任务启动 [{self.task_id}] - Cron: {self.cron_expression} (PID: {self.process_id})")
         
         while self.is_running:
             try:
@@ -104,7 +181,7 @@ class CronTask:
                 wait_seconds = (self.next_execution_time - datetime.now()).total_seconds()
                 
                 if wait_seconds > 0:
-                    logger.debug(f"任务 [{self.task_id}] 将在 {wait_seconds:.1f} 秒后执行")
+                    logger.debug(f"任务 [{self.task_id}] 将在 {wait_seconds:.1f} 秒后执行 (PID: {self.process_id})")
                     
                     # 使用小步长睡眠，以便能及时响应停止信号
                     steps = int(wait_seconds)
@@ -120,8 +197,12 @@ class CronTask:
                 
                 # 执行任务
                 if self.is_running:
+                    # 在多worker环境下尝试获取分布式锁
+                    if not self._acquire_multiprocess_lock():
+                        continue  # 无法获取锁，跳过本次执行
+                    
                     try:
-                        logger.info(f"执行定时任务 [{self.task_id}]")
+                        logger.info(f"执行定时任务 [{self.task_id}] (PID: {self.process_id})")
                         start_time = time.time()
                         
                         # 执行任务函数
@@ -129,72 +210,89 @@ class CronTask:
                         
                         elapsed_time = time.time() - start_time
                         
-                        # 更新执行状态
-                        self.execution_count += 1
-                        self.last_execution_time = datetime.now()
-                        self.last_execution_result = result
-                        self.last_error = None
+                        # 更新执行状态（使用锁保护）
+                        with self._lock:
+                            self.execution_count += 1
+                            self.last_execution_time = datetime.now()
+                            self.last_execution_result = result
+                            self.last_error = None
                         
                         logger.info(f"定时任务完成 [{self.task_id}], 耗时: {elapsed_time:.2f}秒, "
-                                  f"执行次数: {self.execution_count}")
+                                  f"执行次数: {self.execution_count} (PID: {self.process_id})")
                         
                     except Exception as e:
-                        logger.error(f"定时任务执行失败 [{self.task_id}]: {str(e)}")
-                        self.execution_count += 1
-                        self.last_execution_time = datetime.now()
-                        self.last_error = str(e)
-                        self.last_execution_result = None
+                        logger.error(f"定时任务执行失败 [{self.task_id}]: {str(e)} (PID: {self.process_id})")
+                        # 更新错误状态（使用锁保护）
+                        with self._lock:
+                            self.execution_count += 1
+                            self.last_execution_time = datetime.now()
+                            self.last_error = str(e)
+                            self.last_execution_result = None
+                    finally:
+                        # 释放分布式锁
+                        self._release_multiprocess_lock()
                 
             except Exception as e:
-                logger.error(f"定时任务循环异常 [{self.task_id}]: {str(e)}")
-                self.last_error = str(e)
+                logger.error(f"定时任务循环异常 [{self.task_id}]: {str(e)} (PID: {self.process_id})")
+                # 更新错误状态（使用锁保护）
+                with self._lock:
+                    self.last_error = str(e)
                 
                 if self.is_running:
                     time.sleep(60)  # 异常后等待60秒重试
     
     def start(self) -> bool:
         """启动定时任务"""
-        if self.is_running:
-            logger.warning(f"定时任务已在运行 [{self.task_id}]")
-            return False
+        # 使用锁保护状态检查和更新
+        with self._lock:
+            if self.is_running:
+                logger.warning(f"定时任务已在运行 [{self.task_id}] (PID: {self.process_id})")
+                return False
+            
+            self.is_running = True
         
-        self.is_running = True
         self.thread = threading.Thread(
             target=self._run_task,
             daemon=True,
-            name=f"CronTask-{self.task_id}"
+            name=f"CronTask-{self.task_id}-{self.process_id}"
         )
         self.thread.start()
         
-        logger.info(f"定时任务已启动 [{self.task_id}]")
+        logger.info(f"定时任务已启动 [{self.task_id}] (PID: {self.process_id})")
         return True
     
     def stop(self) -> bool:
         """停止定时任务"""
-        if not self.is_running:
-            logger.warning(f"定时任务未在运行 [{self.task_id}]")
-            return False
-        
-        self.is_running = False
+        # 使用锁保护状态检查和更新
+        with self._lock:
+            if not self.is_running:
+                logger.warning(f"定时任务未在运行 [{self.task_id}] (PID: {self.process_id})")
+                return False
+            
+            self.is_running = False
         
         if self.thread:
             self.thread.join(timeout=5)
         
-        logger.info(f"定时任务已停止 [{self.task_id}]")
+        logger.info(f"定时任务已停止 [{self.task_id}] (PID: {self.process_id})")
         return True
     
     def get_status(self) -> Dict[str, Any]:
         """获取任务状态"""
-        return {
-            "task_id": self.task_id,
-            "cron_expression": self.cron_expression,
-            "is_running": self.is_running,
-            "execution_count": self.execution_count,
-            "last_execution_time": self.last_execution_time.isoformat() if self.last_execution_time else None,
-            "next_execution_time": self.next_execution_time.isoformat() if self.next_execution_time else None,
-            "last_error": self.last_error,
-            "last_execution_result": self.last_execution_result
-        }
+        # 使用锁保护状态读取
+        with self._lock:
+            return {
+                "task_id": self.task_id,
+                "cron_expression": self.cron_expression,
+                "is_running": self.is_running,
+                "execution_count": self.execution_count,
+                "last_execution_time": self.last_execution_time.isoformat() if self.last_execution_time else None,
+                "next_execution_time": self.next_execution_time.isoformat() if self.next_execution_time else None,
+                "last_error": self.last_error,
+                "last_execution_result": self.last_execution_result,
+                "process_id": self.process_id,
+                "enable_multi_worker": self.enable_multi_worker
+            }
 
 
 class CronTaskManager:
@@ -212,7 +310,8 @@ class CronTaskManager:
                      task_id: str,
                      cron_expression: str,
                      task_func: Callable,
-                     task_args: Optional[Dict[str, Any]] = None) -> bool:
+                     task_args: Optional[Dict[str, Any]] = None,
+                     enable_multi_worker: bool = True) -> bool:
         """
         注册一个定时任务
         
@@ -221,6 +320,7 @@ class CronTaskManager:
             cron_expression: Cron表达式
             task_func: 要执行的函数
             task_args: 函数参数
+            enable_multi_worker: 是否在多worker环境下启用任务执行
             
         Returns:
             是否注册成功
@@ -231,7 +331,7 @@ class CronTaskManager:
                 return False
             
             try:
-                task = CronTask(task_id, cron_expression, task_func, task_args)
+                task = CronTask(task_id, cron_expression, task_func, task_args, enable_multi_worker)
                 self.tasks[task_id] = task
                 logger.info(f"定时任务已注册 [{task_id}], Cron: {cron_expression}")
                 return True

@@ -16,7 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi.testclient import TestClient
 
 # 导入主应用
-from api.main import app
+from run_server import app
 from api.bean.generate_curves_request import KTLSimulatorRequest
 from core.utils.model_type import ModelType
 

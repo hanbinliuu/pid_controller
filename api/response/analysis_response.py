@@ -164,11 +164,11 @@ class PIDOptimizationResponse(BaseModel):
 
 class WorkflowRequestModel(BaseModel):
     """工作流请求模型"""
-    start_time: str = Field(..., description="开始时间", example="2025-10-08 17:30:37")
-    end_time: str = Field(..., description="结束时间", example="2025-10-08 18:00:37")
-    loop_type: str = Field(..., description="回路类型", example="流量")
-    loop_uri: Optional[str] = Field(None, description="回路URI", example="/pid_zd/xxx")
-    response_mode: str = Field("blocking", description="响应模式（blocking/streaming）", example="blocking")
+    start_time: str = Field(..., description="开始时间", examples=["2025-10-08 17:30:37"])
+    end_time: str = Field(..., description="结束时间", examples=["2025-10-08 18:00:37"])
+    loop_type: str = Field(..., description="回路类型", examples=["流量"])
+    loop_uri: Optional[str] = Field(None, description="回路 URI", examples=["/pid_zd/xxx"])
+    response_mode: str = Field("blocking", description="响应模式（blocking/streaming）", examples=["blocking"])
     
     class Config:
         json_schema_extra = {
