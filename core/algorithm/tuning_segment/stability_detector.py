@@ -931,6 +931,22 @@ class StabilityDetector:
         # 过滤和合并
         filtered_segments = []
         for seg_start, seg_end, seg_setpoint in non_steady_segments:
+            # 检查PV和SV是否处于同一水平线
+            seg_pv_check = pv_data[seg_start:seg_end]
+            seg_sv_check = sv_array[seg_start:min(seg_end, len(sv_array))]
+            if len(seg_pv_check) > 0 and len(seg_sv_check) > 0:
+                pv_mean = np.mean(seg_pv_check)
+                sv_mean = np.mean(seg_sv_check)
+                pv_sv_deviation = abs(pv_mean - sv_mean)
+                
+                # 计算相对偏差和绝对偏差阈值
+                sv_range = max(abs(sv_mean), 1.0)  # 避免除零
+                relative_deviation = pv_sv_deviation / sv_range
+                
+                # 如果PV和SV偏差过大（相对偏差>50%或绝对偏差>30），跳过该段
+                # 这种情况通常表示系统未收敛到设定值附近
+                if relative_deviation > 0.5 and pv_sv_deviation > 30:
+                    continue
             has_overlap = False
             for change_start, change_end in sv_change_intervals:
                 if not (seg_end <= change_start or seg_start >= change_end):
