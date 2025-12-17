@@ -43,74 +43,90 @@ class HomePageDAO:
             query_date: date,
             days_limit: int = 1) -> List[PerfReductionLoop]:
         """
-        Get top 10 performance reduction loops
+        Get top 10 performance reduction loops sorted by reduction rate using single SQL query with join
         """
-        # 查询回路过去 days_limit 天的综合评分平均值
+        # 计算开始日期
         start_date = query_date - timedelta(days=days_limit)
-        stmt = (select(
-            LoopEvaluation.loop_uri,
-            func.avg(LoopEvaluation.performance_score).label("avg_perf_score")
-        ).where(
-            LoopEvaluation.assessment_time >= start_date,
-            LoopEvaluation.assessment_time < query_date,
-            LoopEvaluation.status != "开环",
-            LoopEvaluation.status != "条件剔除"
-        ).group_by(LoopEvaluation.loop_uri)
-                .order_by(desc('avg_perf_score')))
-        results = session.exec(stmt).all()
-        prev_avg_scores = {}
-        for item in results:
-            prev_avg_scores[item[0]] = item[1]
-
-        # 查询回路当天的综合评分
-        stmt = select(
-            LoopEvaluation.loop_uri,
-            LoopEvaluation.performance_score,
-        ).where(
-            LoopEvaluation.assessment_time == query_date,
-            LoopEvaluation.status != "开环",
-            LoopEvaluation.status != "条件剔除"
+        
+        # 构建子查询：获取过去几天的平均性能分数
+        prev_avg_subquery = (
+            select(
+                LoopEvaluation.loop_uri,
+                func.avg(LoopEvaluation.performance_score).label("prev_avg_score")
+            )
+            .where(
+                LoopEvaluation.assessment_time >= start_date,
+                LoopEvaluation.assessment_time < query_date,
+                LoopEvaluation.status != "开环",
+                LoopEvaluation.status != "条件剔除"
+            )
+            .group_by(LoopEvaluation.loop_uri)
+            .subquery()
         )
+        
+        # 主查询：连接当天数据、历史平均数据和回路信息，计算下降率
+        stmt = (
+            select(
+                LoopEvaluation.loop_uri,
+                LoopEvaluation.performance_score.label("current_score"),
+                prev_avg_subquery.c.prev_avg_score,
+                LoopInfo.loop_name,
+                LoopInfo.description.label("loop_desc"),
+                LoopInfo.loop_type
+            )
+            .join(
+                prev_avg_subquery,
+                LoopEvaluation.loop_uri == prev_avg_subquery.c.loop_uri
+            )
+            .join(
+                LoopInfo,
+                LoopEvaluation.loop_uri == LoopInfo.loop_uri
+            )
+            .where(
+                LoopEvaluation.assessment_time == query_date,
+                LoopEvaluation.status != "开环",
+                LoopEvaluation.status != "条件剔除",
+                prev_avg_subquery.c.prev_avg_score > LoopEvaluation.performance_score  # 只选择性能下降的回路
+            )
+        )
+        
         results = session.exec(stmt).all()
-
+        
+        # 计算下降率并排序
         scores = []
         for item in results:
-            if item[0] not in prev_avg_scores:
-                continue
-            prev_score = prev_avg_scores[item[0]]
-            if not prev_score:
-                continue
-            delta = prev_score - item[1]
-            if delta > 0:
-                scores.append((item[0], round(delta / item[1] * 100, 2), item[1]))
-
+            # 计算下降率：(前一天平均分 - 当天分数) / 前一天平均分 * 100%
+            reduction_rate = round(
+                (item.prev_avg_score - item.current_score) / item.prev_avg_score * 100, 2
+            )
+            scores.append((
+                item.loop_uri, 
+                reduction_rate, 
+                item.current_score,
+                item.loop_name,
+                item.loop_desc,
+                item.loop_type
+            ))
+        
         if len(scores) == 0:
             return []
-
-        new_scores = sorted(scores, key=lambda x: x[1], reverse=True)[:10]
-        pert_reduction_loops = {}
-        for item in new_scores:
-            pert_reduction_loops[item[0]] = PerfReductionLoop(
+        
+        # 按照下降率降序排序，取前10个
+        top_scores = sorted(scores, key=lambda x: x[1], reverse=True)[:10]
+        
+        # 构建返回对象
+        results = []
+        for item in top_scores:
+            perf_reduction_loop = PerfReductionLoop(
                 loop_uri=item[0],
                 performance_score=item[2],
-                reduction_rate=item[1]
+                reduction_rate=item[1],
+                loop_name=item[3],
+                loop_desc=item[4],
+                loop_type=item[5]
             )
-        # 查询回路信息
-        stmt = select(LoopInfo).where(LoopInfo.loop_uri.in_([item[0] for item in new_scores]))
-        loop_infos = session.exec(stmt).all()
-
-        results = []
-        for loop_info in loop_infos:
-            loop_uri = loop_info.loop_uri
-            if loop_uri not in pert_reduction_loops:
-                continue
-            pert_reduction_loop = pert_reduction_loops[loop_uri]
-            if pert_reduction_loop is None:
-                continue
-            pert_reduction_loop.loop_name = loop_info.loop_name
-            pert_reduction_loop.loop_desc = loop_info.description
-            pert_reduction_loop.loop_type = loop_info.loop_type
-            results.append(pert_reduction_loop)
+            results.append(perf_reduction_loop)
+            
         return results
 
     @staticmethod

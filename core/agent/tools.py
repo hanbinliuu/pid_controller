@@ -1426,9 +1426,9 @@ def process_query_tsdb_data_interpolated(db: str,
         ti = np.asarray([row[ti_idx] for row in values], dtype=np.float64)
         td = np.asarray([row[td_idx] for row in values], dtype=np.float64)
 
-        kp = 100.0 / pb
+        kp = np.where(pb != 0, 100.0 / pb, 0.0)
         ki = np.where(ti != 0, kp / ti, 0.0)
-        kd = kp * td
+        kd = np.where(td != 0, kp / td, 0.0)
 
     # ---------- 构建最终结果 ----------
     result = []
