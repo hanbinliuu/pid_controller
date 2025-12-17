@@ -128,6 +128,12 @@ class PIDCalculator:
             # ========== 积分过程 (FOPI) ==========
             Kp, Ti, Td = self._tune_integrator(K_abs, T1, lambda_factor,
                                                 conservative_level, pb_min)
+        
+        elif model_type in [ModelType.HAMMERSTEIN, ModelType.DEADBAND_FOPDT, ModelType.SATURATION_FOPDT]:
+            # ========== 非线性模型 ==========
+            # 使用等效线性化参数，按FOPDT整定，并增加保守度
+            Kp, Ti, Td = self._tune_nonlinear(K_abs, T1, L, lambda_factor, method,
+                                               conservative_level, pb_min, model_type)
             
         else:
             # 默认保守参数
@@ -376,6 +382,52 @@ class PIDCalculator:
         max_Kp = 100.0 / pb_min
         if Kp > max_Kp:
             Kp = max_Kp
+        
+        return Kp, Ti, Td
+    
+    def _tune_nonlinear(self, K: float, T1: float, L: float,
+                        lambda_factor: float, method: str,
+                        conservative_level: float, pb_min: float,
+                        model_type: str) -> Tuple[float, float, float]:
+        """
+        非线性模型整定（使用等效线性化参数）
+        
+        非线性模型使用等效线性化后的FOPDT参数整定，
+        但增加额外的保守度以补偿非线性带来的不确定性。
+        
+        Args:
+            K: 等效线性增益
+            T1: 等效时间常数
+            L: 等效滞后时间
+            lambda_factor: Lambda系数
+            method: 整定方法
+            conservative_level: 基础保守等级
+            pb_min: 基础pb最小值
+            model_type: 非线性模型类型
+        """
+        # 非线性模型需要额外的保守度
+        nonlinear_factor = 1.3  # 基础非线性补偿因子
+        
+        if model_type == ModelType.HAMMERSTEIN:
+            # Hammerstein模型：增益随工作点变化
+            nonlinear_factor = 1.4
+        elif model_type == ModelType.DEADBAND_FOPDT:
+            # 死区模型：小信号时控制效果差
+            nonlinear_factor = 1.5
+        elif model_type == ModelType.SATURATION_FOPDT:
+            # 饱和模型：大信号时增益下降
+            nonlinear_factor = 1.3
+        
+        # 应用非线性补偿到保守等级
+        adjusted_conservative = conservative_level * nonlinear_factor
+        adjusted_pb_min = pb_min * nonlinear_factor
+        
+        # 使用FOPDT整定公式
+        Kp, Ti, Td = self._tune_fopdt(K, T1, L, lambda_factor, method,
+                                       adjusted_conservative, adjusted_pb_min)
+        
+        # 非线性模型一般不使用微分（避免放大噪声）
+        Td = Td * 0.5
         
         return Kp, Ti, Td
     

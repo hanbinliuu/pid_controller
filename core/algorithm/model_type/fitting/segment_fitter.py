@@ -33,6 +33,7 @@ from scipy.optimize import least_squares
 from ..config import Config, ModelType
 from ..data_models import SegmentResult, HistoricalData
 from .model_identifier import ModelIdentifier
+from .nonlinear_fitter import NonlinearFitter, NonlinearFitResult
 from ..logger import LoggerMixin
 from ..utils import calculate_r2, calculate_rmse, calculate_rss, calculate_aic, calculate_bic
 
@@ -81,6 +82,7 @@ class SegmentFitter(LoggerMixin):
         self._simulator = simulator
         self._preprocessor = preprocessor
         self._pid_calculator = pid_calculator
+        self._nonlinear_fitter = NonlinearFitter(verbose=verbose)
     
     def fit_all_segments(self, segments: List[HistoricalData],
                          segment_results: List[SegmentResult]) -> List[SegmentResult]:
@@ -234,8 +236,91 @@ class SegmentFitter(LoggerMixin):
                     }
             
             self._select_segment_best_model(result, i)
+            
+            # 非线性模型拟合（当检测到非线性特征时）
+            if Config.NONLINEAR_FITTING.get('enable', True):
+                self._try_nonlinear_fitting(result, y, u, i)
         
         return segment_results
+    
+    def _try_nonlinear_fitting(self, result: SegmentResult, y: np.ndarray, 
+                               u: np.ndarray, idx: int):
+        """
+        尝试非线性模型拟合
+        
+        当检测到非线性特征且线性模型拟合不佳时，尝试非线性模型
+        """
+        # 检测非线性特征
+        try:
+            detection = self._nonlinear_fitter.detect_nonlinearity(y, u)
+        except Exception as e:
+            self.log(f"   ⚠️ 非线性检测异常: {e}")
+            return
+        
+        # 记录非线性检测结果
+        result.nonlinearity_score = detection.nonlinearity_score
+        nonlinear_threshold = Config.NONLINEAR_FITTING.get('nonlinearity_threshold', 0.4)
+        result.is_nonlinear = detection.nonlinearity_score > nonlinear_threshold
+        
+        # 判断是否需要尝试非线性模型
+        should_try_nonlinear = (
+            detection.nonlinearity_score > nonlinear_threshold or
+            detection.has_deadband or
+            detection.has_saturation or
+            (result.best_r2 < 0.6 and detection.nonlinearity_score > 0.2)
+        )
+        
+        self.log(f"   📊 非线性检测: score={detection.nonlinearity_score:.3f}, "
+                f"死区={detection.has_deadband}, 饱和={detection.has_saturation}, "
+                f"阈值={nonlinear_threshold}, 触发={should_try_nonlinear}")
+        
+        if not should_try_nonlinear:
+            return
+        
+        self.log(f"   🔍 检测到非线性特征: 非线性度={detection.nonlinearity_score:.2f}, "
+                f"死区={detection.has_deadband}, 饱和={detection.has_saturation}")
+        
+        # 获取线性模型的R²作为基准
+        linear_r2 = result.best_r2 or 0
+        
+        # 拟合非线性模型
+        nonlinear_results = self._nonlinear_fitter.fit_nonlinear_models(
+            y, u, detection, linear_r2
+        )
+        
+        # 选择最佳模型
+        if nonlinear_results:
+            best_nonlinear = max(nonlinear_results, key=lambda r: r.r2)
+            
+            # 如果非线性模型显著优于线性模型，更新结果
+            improvement_threshold = Config.NONLINEAR_FITTING['r2_improvement_threshold']
+            if best_nonlinear.improvement_over_linear > improvement_threshold:
+                self.log(f"   ✅ 非线性模型 {best_nonlinear.model_type} 更优: "
+                        f"R²={best_nonlinear.r2:.4f} (提升{best_nonlinear.improvement_over_linear:.4f})")
+                
+                # 将非线性模型结果添加到 model_results
+                result.model_results[best_nonlinear.model_type] = {
+                    'K': best_nonlinear.params.get('K', best_nonlinear.linear_equivalent.get('K', 1.0)),
+                    'T1': best_nonlinear.params.get('T1', best_nonlinear.linear_equivalent.get('T1', 10.0)),
+                    'T2': 0.0,
+                    'L': best_nonlinear.params.get('L', best_nonlinear.linear_equivalent.get('L', 0.0)),
+                    'params_raw': tuple(best_nonlinear.params.values()),
+                    'r2': best_nonlinear.r2,
+                    'r2_adjusted': best_nonlinear.r2,
+                    'rmse': best_nonlinear.rmse,
+                    'rss': best_nonlinear.rmse ** 2 * len(y),
+                    'aic': float('inf'),  # 非线性模型不计算AIC
+                    'k_reasonable': True,
+                    'is_nonlinear': True,
+                    'nonlinear_params': best_nonlinear.params,
+                    'linear_equivalent': best_nonlinear.linear_equivalent,
+                }
+                
+                # 更新最佳模型
+                result.best_model = best_nonlinear.model_type
+                result.best_r2 = best_nonlinear.r2
+            else:
+                self.log(f"   📊 非线性模型提升不足 ({best_nonlinear.improvement_over_linear:.4f}), 保持线性模型")
     
     def _select_segment_best_model(self, result: SegmentResult, idx: int):
         """选择该段的最佳模型"""
