@@ -6,14 +6,12 @@
 import json
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
 from sqlmodel import Session
 
 from api.middleware.exceptions import RuntimeException
 from api.response.loop_response import LoopInfoResponse
 from api.routes.device_data_route import DeviceCommand
-from api.services.bff_service import BFFService
 from api.services.device_data_service import DeviceDataService
 from api.services.loop_service import LoopService
 from core.client.bff_model_client import BFFModelClient
@@ -207,18 +205,18 @@ async def query_tuning_records(
     tuning_method: Optional[str] = Query(
         None,
         description="整定方法筛选（预整定/常规整定/大模型整定）",
-        examples="常规整定"
+        examples=["常规整定","大模型整定"]
     ),
 
     start_time: Optional[str] = Query(
         None,
         description="开始时间",
-        examples="2025-01-01"
+        examples=["2025-01-01"]
     ),
     end_time: Optional[str] = Query(
         None,
         description="结束时间",
-        examples="2025-12-31"
+        examples=["2025-12-31"]
     ),
     page_no: int = Query(
         1,

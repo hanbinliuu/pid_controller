@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import func
+from sqlalchemy import func, UniqueConstraint
 from sqlmodel import SQLModel, Field
 
 
@@ -20,8 +20,11 @@ class LoopInfo(SQLModel, table=True):
     用途: 存储回路的基本信息，包括路径、名称、测点映射等
     """
     __tablename__ = "loop_info"  # 数据库表名
-    __table_args__ = {"comment": "回路信息表"}
+    __table_args__ = (
+        UniqueConstraint('loop_uri', 'loop_path', name='uq_uri_path'),
 
+        {"comment": "回路信息表"}
+    )
 
     # 主键
     id: Optional[str] = Field(
@@ -42,6 +45,8 @@ class LoopInfo(SQLModel, table=True):
     
     loop_path: Optional[str] = Field(
         default=None,
+        index=True,
+        unique=True,
         max_length=500,
         sa_column_kwargs={"comment": "PID相关参数的相对路径"}
     )
