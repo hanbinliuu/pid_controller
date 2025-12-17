@@ -1460,8 +1460,11 @@ class ModelSelector:
             'decay_ratio': cl_metrics.decay_ratio
         }
         
+        # success条件：拟合成功 且 闭环稳定
+        success = (not fitting_failed) and is_stable
+        
         return {
-            'success': not fitting_failed,
+            'success': success,
             'model_type': fusion.model_type,
             'model_rating': model_rating,
             'start_time': time_range.get('start_time'),

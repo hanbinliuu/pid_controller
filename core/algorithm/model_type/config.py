@@ -24,12 +24,18 @@
 
 class ModelType:
     """模型类型枚举"""
+    # 线性模型
     FOPDT = "FOPDT"           # 一阶加纯滞后模型 (First Order Plus Dead Time)
     FO = "FO"                 # 纯一阶模型 (First Order)
     SOPDT = "SOPDT"           # 二阶加纯滞后模型 (Second Order Plus Dead Time)
     SO = "SO"                 # 纯二阶模型 (Second Order, 无滞后)
     FOPI = "FO_INTEGRATOR"    # 一阶积分模型 (First Order Plus Integrator)
     SOPI = "SO_INTEGRATOR"    # 二阶积分模型 (Second Order Integrator)
+    
+    # 非线性模型
+    HAMMERSTEIN = "HAMMERSTEIN"       # Hammerstein模型 (静态非线性 + 线性动态)
+    DEADBAND_FOPDT = "DEADBAND_FOPDT" # 死区 + FOPDT模型
+    SATURATION_FOPDT = "SAT_FOPDT"    # 饱和 + FOPDT模型
 
 
 class Config:
@@ -164,5 +170,38 @@ class Config:
             'initial': ([-10.0, 0.5, 0.5], [10.0, 500.0, 500.0]),
             'retry': ([-20.0, 0.1, 0.1], [20.0, 1000.0, 1000.0]),
             'clip': [(-10.0, 10.0), (0.5, 500.0), (0.5, 500.0)]
+        },
+        # HAMMERSTEIN: f(u) -> FOPDT - Hammerstein模型（多项式非线性）
+        # 参数: [K, T1, L, a1, a2, a3] 其中 f(u) = a1*u + a2*u^2 + a3*u^3
+        'HAMMERSTEIN': {
+            'initial': ([-10.0, 1.0, 0.0, 0.5, -0.5, 0.0], [10.0, 500.0, 50.0, 2.0, 0.5, 0.5]),
+            'retry': ([-20.0, 0.5, 0.0, 0.1, -1.0, -0.5], [20.0, 1000.0, 100.0, 5.0, 1.0, 1.0]),
+            'clip': [(-10.0, 10.0), (1.0, 500.0), (0.0, 50.0), (0.1, 5.0), (-1.0, 1.0), (-0.5, 0.5)]
+        },
+        # DEADBAND_FOPDT: 死区 + FOPDT
+        # 参数: [K, T1, L, deadband] 其中 deadband 是死区宽度
+        'DEADBAND_FOPDT': {
+            'initial': ([-10.0, 1.0, 0.0, 0.5], [10.0, 500.0, 50.0, 20.0]),
+            'retry': ([-20.0, 0.5, 0.0, 0.1], [20.0, 1000.0, 100.0, 50.0]),
+            'clip': [(-10.0, 10.0), (1.0, 500.0), (0.0, 50.0), (0.1, 50.0)]
+        },
+        # SAT_FOPDT: 饱和 + FOPDT
+        # 参数: [K, T1, L, sat_low, sat_high] 其中 sat_low/sat_high 是饱和限幅
+        'SAT_FOPDT': {
+            'initial': ([-10.0, 1.0, 0.0, 0.0, 100.0], [10.0, 500.0, 50.0, 50.0, 100.0]),
+            'retry': ([-20.0, 0.5, 0.0, 0.0, 50.0], [20.0, 1000.0, 100.0, 100.0, 150.0]),
+            'clip': [(-10.0, 10.0), (1.0, 500.0), (0.0, 50.0), (0.0, 100.0), (0.0, 150.0)]
         }
+    }
+    
+    # ============================================================
+    # 非线性模型配置
+    # ============================================================
+    NONLINEAR_FITTING = {
+        'enable': True,                      # 是否启用非线性模型拟合
+        'nonlinearity_threshold': 0.4,       # 非线性度阈值，超过此值尝试非线性模型
+        'r2_improvement_threshold': 0.1,     # R²提升阈值，非线性模型需比线性提升这么多才选用
+        'deadband_detection_threshold': 0.3, # 死区检测阈值
+        'saturation_detection_threshold': 0.2, # 饱和检测阈值
+        'max_polynomial_order': 3,           # Hammerstein多项式最高阶数
     }
