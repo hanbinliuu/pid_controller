@@ -46,7 +46,7 @@ def _acquire_init_lock() -> bool:
         _init_lock_fd.write(str(os.getpid()))
         _init_lock_fd.flush()
         
-        logger.debug(f"成功获取定时任务初始化锁 (PID: {os.getpid()})")
+        logger.info(f"成功获取定时任务初始化锁 (PID: {os.getpid()})")
         return True
         
     except IOError:
@@ -54,7 +54,7 @@ def _acquire_init_lock() -> bool:
         if _init_lock_fd:
             _init_lock_fd.close()
             _init_lock_fd = None
-        logger.debug(f"无法获取定时任务初始化锁，不执行初始化 (PID: {os.getpid()})")
+        logger.info(f"无法获取定时任务初始化锁，不执行初始化 (PID: {os.getpid()})")
         return False
     except Exception as e:
         logger.warning(f"获取定时任务初始化锁時發生異常: {str(e)}")
@@ -77,7 +77,7 @@ def _release_init_lock():
         fcntl.flock(_init_lock_fd.fileno(), fcntl.LOCK_UN)
         _init_lock_fd.close()
         _init_lock_fd = None
-        logger.debug(f"成功释放定时任务初始化锁 (PID: {os.getpid()})")
+        logger.info(f"成功释放定时任务初始化锁 (PID: {os.getpid()})")
     except Exception as e:
         logger.warning(f"释放定时任务初始化锁時發生異常: {str(e)}")
 

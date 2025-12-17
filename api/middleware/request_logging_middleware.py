@@ -85,6 +85,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 f"| 错误: {str(exc)} "
                 f"| 耗时: {process_time:.3f}s"
             )
+            # 重新抛出异常，让上层处理
             raise
     
     def _should_skip(self, request: Request) -> bool:

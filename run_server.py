@@ -229,8 +229,14 @@ if __name__ == "__main__":
     # 是否启用热加载（开发环境可设置为True，生产环境应为False）
     enable_reload = os.getenv('ENABLE_RELOAD', 'False').lower() == 'true'
     # 获取worker数量，默认为1（单进程），在生产环境中可以设置为CPU核心数
-    # 注意：不建议在容器中使用多worker（容易导致重启问题），使用异步单进程效率更高
-    workers = int(os.getenv('WORKERS', '5')) if not enable_reload else 1
+    # 注意：在调试器环境中强制使用单worker以避免进程重启问题
+    workers_env = os.getenv('WORKERS', '3')
+    workers = int(workers_env) if not enable_reload else 1
+    
+    # 在调试器环境中强制使用单worker
+    # if os.getenv('PYCHARM_HOSTED') or os.getenv('VSCODE_PID'):
+    #     logger.info("检测到调试器环境，强制使用单worker模式")
+    #     workers = 1
     
     logger.info("启动PID整定软件 API服务器...")
     logger.info("API文档地址: http://localhost:8001/docs")
@@ -239,6 +245,14 @@ if __name__ == "__main__":
     logger.info(f"Worker数量: {workers}")
     
     # 在多worker环境下，使用分布式锁确保定时任务只被一个worker执行
+    
+    # 设置anyio的后端选项以提高稳定性
+    import anyio
+    anyio.BACKEND_OPTIONS = {
+        'asyncio': {
+            'use_uvloop': False  # 在某些环境下禁用uvloop可以提高稳定性
+        }
+    }
     
     uvicorn.run(
         "run_server:app",

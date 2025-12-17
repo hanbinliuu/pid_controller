@@ -116,7 +116,7 @@ class ExceptionHandlerMiddleware(BaseHTTPMiddleware):
             # 通用异常处理 - 兜底处理所有未捕获的异常
             error_trace = traceback.format_exc()
             logger.error(
-                f"通用异常 - Path: {request.url.path}, Error: {str(exc)}"
+                f"通用异常 - Path: {request.url.path}, Error: {str(exc)}\nTraceback: {error_trace}"
             )
             return JSONResponse(
                 status_code=status.HTTP_200_OK,

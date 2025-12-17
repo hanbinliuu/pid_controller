@@ -138,8 +138,8 @@ class TemperatureAnalysisTool():
         """计算标准差"""
         if len(data_list) <= 1:
             return 0.0
-        mean = sum(data_list) / len(data_list)
-        variance = sum((x - mean) ** 2 for x in data_list) / len(data_list)
+        mean = sum(data_list) / len(data_list) if len(data_list) > 0 else 0.0
+        variance = sum((x - mean) ** 2 for x in data_list) / len(data_list) if len(data_list) > 0 else 0.0
         return variance ** 0.5
 
 class PIDOptimizationTool():
@@ -571,9 +571,9 @@ class PIDOptimizationTool():
             result = {
                 "params": {
                     "Kp": float(Kp),
-                    "ki": float(Kp / Ti) if Ti > 1e-6 else 0.0,
+                    "ki": float(Kp / Ti) if Ti > 1e-6 and np.isfinite(Ti) else 0.0,
                     "kd": float(Kp * Td),
-                    "Pb": float(1/Kp* 100),
+                    "Pb": float(1/Kp* 100) if Kp > 1e-6 and np.isfinite(Kp) else 0.0,
                     "Ti": float(Ti),
                     "Td": float(Td)
                 },
@@ -734,7 +734,7 @@ class PIDOptimizationTool():
             dt = float(t[1] - t[0]) if len(t) > 1 else 1.0
             pid = PIDController(Kp=Kp, Ti=Ti, Td=Td, dt=dt, u_min=0, u_max=100)
             # 引入纯滞后步数
-            delay_steps = int(max(0, np.round(L / dt)))
+            delay_steps = int(max(0, np.round(L / dt))) if dt > 1e-6 and np.isfinite(dt) else 0
             # 模拟闭环控制过程
             for i in range(1, len(t)):
                 # PID计算控制输出
@@ -745,12 +745,12 @@ class PIDOptimizationTool():
                 if model_type == 'FO_INTEGRATOR' or model_type == 'SO_INTEGRATOR':
                     # 积分模型：输出随时间积分
                     delta_pv = K * mv_closed[i] * dt
-                    pv_closed[i] = pv_closed[i-1] + delta_pv / T1 if T1 > 0 else pv_closed[i-1]
+                    pv_closed[i] = pv_closed[i-1] + delta_pv / T1 if T1 > 0 and np.isfinite(T1) else pv_closed[i-1]
                 else:
                     # 一阶或二阶模型
                     steady_state = y0 + K * mv_closed[i]
-                    tau = T1 if T1 > 0 else 1.0
-                    pv_closed[i] = pv_closed[i-1] + (steady_state - pv_closed[i-1]) * dt / tau
+                    tau = T1 if T1 > 0 and np.isfinite(T1) else 1.0
+                    pv_closed[i] = pv_closed[i-1] + (steady_state - pv_closed[i-1]) * dt / tau if tau > 1e-6 and np.isfinite(tau) else pv_closed[i-1]
 
             return pv_closed, mv_closed
 
@@ -1014,7 +1014,7 @@ class PIDOptimizationTool():
             # 3. Lambda整定
             lambda_val = max(T1 * 0.4, 0.1)
             Kp, Ti, Td = SystemIdentifier.lambda_tuning_for_flow(K, T1, L, lambda_val, mode="flow_control")
-            Ki = Kp / Ti if Ti > 1e-6 else 0.0
+            Ki = Kp / Ti if Ti > 1e-6 and np.isfinite(Ti) else 0.0
             Kd = Kp * Td
             print(f"Lambda整定: Kp={Kp:.3f}, Ki={Ki:.4f}, Kd={Kd:.4f}")
 
@@ -1425,10 +1425,16 @@ def process_query_tsdb_data_interpolated(db: str,
         pb = np.asarray([row[pb_idx] for row in values], dtype=np.float64)
         ti = np.asarray([row[ti_idx] for row in values], dtype=np.float64)
         td = np.asarray([row[td_idx] for row in values], dtype=np.float64)
-
-        kp = np.where(pb != 0, 100.0 / pb, 0.0)
-        ki = np.where(ti != 0, kp / ti, 0.0)
-        kd = np.where(td != 0, kp / td, 0.0)
+        
+        # 处理NaN值，将其替换为0以避免计算错误
+        pb = np.nan_to_num(pb, nan=0.0, posinf=0.0, neginf=0.0)
+        ti = np.nan_to_num(ti, nan=0.0, posinf=0.0, neginf=0.0)
+        td = np.nan_to_num(td, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # 安全计算PID参数，避免除零和无效值
+        kp = np.where((pb != 0) & np.isfinite(pb), 100.0 / pb, 0.0)
+        ki = np.where((ti != 0) & np.isfinite(ti) & np.isfinite(kp), kp / ti, 0.0)
+        kd = np.where((td != 0) & np.isfinite(td) & np.isfinite(kp), kp / td, 0.0)
 
     # ---------- 构建最终结果 ----------
     result = []

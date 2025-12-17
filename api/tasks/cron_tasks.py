@@ -4,6 +4,7 @@
 直接使用croniter定时执行任务，无需复杂的调度器框架
 支持多worker环境下的任务去重执行
 """
+import asyncio
 import logging
 import threading
 import time
@@ -164,6 +165,114 @@ class CronTask:
     
     def _run_task(self):
         """执行任务的主函数"""
+        import asyncio
+        import sys
+        import inspect
+        
+        # 检查任务函数是否是异步的
+        if inspect.iscoroutinefunction(self.task_func):
+            # 异步任务函数，需要在事件循环中运行
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                # 如果没有事件循环，创建一个新的
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # 运行异步任务
+            loop.run_until_complete(self._run_task_async_wrapper())
+        else:
+            # 同步任务函数，使用原始实现
+            self._run_task_sync()
+    
+    async def _run_task_async_wrapper(self):
+        """异步任务的包装器"""
+        try:
+            await self._run_task_async()
+        except Exception as e:
+            logger.error(f"异步任务执行异常 [{self.task_id}]: {str(e)} (PID: {self.process_id})")
+    
+    async def _run_task_async(self):
+        """异步执行任务的主函数"""
+        logger.info(f"定时任务启动 [{self.task_id}] - Cron: {self.cron_expression} (PID: {self.process_id})")
+        
+        while self.is_running:
+            try:
+                # 计算下次执行时间
+                self.next_execution_time = self._calculate_next_run_time()
+                
+                if not self.next_execution_time:
+                    logger.error(f"任务 [{self.task_id}] 无法计算下次执行时间")
+                    if self.is_running:
+                        await asyncio.sleep(60)
+                    continue
+                
+                # 计算等待时间
+                wait_seconds = (self.next_execution_time - datetime.now()).total_seconds()
+                
+                if wait_seconds > 0:
+                    logger.debug(f"任务 [{self.task_id}] 将在 {wait_seconds:.1f} 秒后执行 (PID: {self.process_id})")
+                    
+                    # 使用小步长睡眠，以便能及时响应停止信号
+                    steps = int(wait_seconds)
+                    remaining = wait_seconds - steps
+                    
+                    for _ in range(steps):
+                        if not self.is_running:
+                            break
+                        await asyncio.sleep(1)
+                    
+                    if remaining > 0 and self.is_running:
+                        await asyncio.sleep(remaining)
+                
+                # 执行任务
+                if self.is_running:
+                    # 在多worker环境下尝试获取分布式锁
+                    if not self._acquire_multiprocess_lock():
+                        continue  # 无法获取锁，跳过本次执行
+                    
+                    try:
+                        logger.info(f"执行定时任务 [{self.task_id}] (PID: {self.process_id})")
+                        start_time = time.time()
+                        
+                        # 执行任务函数
+                        result = await self.task_func(**self.task_args)
+                        
+                        elapsed_time = time.time() - start_time
+                        
+                        # 更新执行状态（使用锁保护）
+                        with self._lock:
+                            self.execution_count += 1
+                            self.last_execution_time = datetime.now()
+                            self.last_execution_result = result
+                            self.last_error = None
+                        
+                        logger.info(f"定时任务完成 [{self.task_id}], 耗时: {elapsed_time:.2f}秒, "
+                                  f"执行次数: {self.execution_count} (PID: {self.process_id})")
+                        
+                    except Exception as e:
+                        logger.error(f"定时任务执行失败 [{self.task_id}]: {str(e)} (PID: {self.process_id})")
+                        # 更新错误状态（使用锁保护）
+                        with self._lock:
+                            self.execution_count += 1
+                            self.last_execution_time = datetime.now()
+                            self.last_error = str(e)
+                            self.last_execution_result = None
+                    finally:
+                        # 释放分布式锁
+                        self._release_multiprocess_lock()
+                
+            except Exception as e:
+                logger.error(f"定时任务循环异常 [{self.task_id}]: {str(e)} (PID: {self.process_id})")
+                # 更新错误状态（使用锁保护）
+                with self._lock:
+                    self.last_error = str(e)
+                
+                if self.is_running:
+                    await asyncio.sleep(60)  # 异常后等待60秒重试
+    
+    def _run_task_sync(self):
+        """同步执行任务的主函数"""
         logger.info(f"定时任务启动 [{self.task_id}] - Cron: {self.cron_expression} (PID: {self.process_id})")
         
         while self.is_running:

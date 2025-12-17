@@ -61,14 +61,27 @@ class ResponseMiddleware(BaseHTTPMiddleware):
             return response
         
         try:
-            # 读取响应体
-            response_body = b""
-            async for chunk in response.body_iterator:
-                response_body += chunk
+            # 对于流式响应，直接返回
+            if hasattr(response, 'body_iterator'):
+                # 尝试读取响应体
+                try:
+                    response_body = b""
+                    async for chunk in response.body_iterator:
+                        response_body += chunk
+                except:
+                    # 如果无法读取流式响应，直接返回原响应
+                    return response
+            else:
+                # 非流式响应
+                response_body = getattr(response, 'body', b'')
             
             # 解析JSON
             if response_body:
                 try:
+                    # 确保response_body是bytes类型
+                    if isinstance(response_body, str):
+                        response_body = response_body.encode('utf-8')
+                    
                     data = json.loads(response_body.decode())
                     
                     # 检查是否已经是全局标准格式(由异常处理器包装过)
