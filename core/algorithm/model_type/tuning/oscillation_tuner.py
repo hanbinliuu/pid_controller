@@ -209,37 +209,27 @@ class OscillationTuner:
         best_seg_result = segment_results[best_seg_idx] if best_seg_idx < len(segment_results) else None
         oscillation_ratio = best_seg_result.oscillation_ratio if best_seg_result else 0.0
         
-        # ========== 新增：高振荡时强制使用保守参数（借鉴大模型经验） ==========
+        # ========== 改进：临界法整定统一使用保守参数（对齐大模型建议） ==========
+        # 原因：Tyreus-Luyben等经典方法对于实际振荡系统往往过于激进
+        # 大模型建议：PB应在180-220%范围，而非经典法的50%左右
         osc_config = Config.OSCILLATION_TUNING
-        high_osc_threshold = osc_config.get('high_oscillation_threshold', 0.7)
-        if oscillation_ratio > high_osc_threshold:
-            use_conservative = True
-            self.log(f"   ⚠️ 振荡比={oscillation_ratio:.2f}>{high_osc_threshold}，强制使用保守参数")
         
+        # 统一使用保守PID参数计算
+        Pu = best_analysis['osc_info']['Pu']
+        Ku = best_analysis['osc_info']['Ku']
+        
+        # 根据use_conservative标志选择保守程度
         if use_conservative:
-            # 使用保守PID参数（借鉴大模型调参经验）
-            Pu = best_analysis['osc_info']['Pu']
-            pid_params = self._get_conservative_pid_params(
-                Pu, best_analysis['osc_info']['Ku'], 
-                K_approx=apparent_gain,
-                reason='low_gain',
-                oscillation_ratio=oscillation_ratio
-            )
+            reason = 'low_gain'
         else:
-            # 使用临界法计算 PID 参数
-            pid_params = self._pid_calculator.calculate_from_oscillation(
-                best_analysis['osc_info'], 
-                current_pid=current_pid,
-                method='tyreus_luyben'  # 使用更稳定的Tyreus-Luyben法
-            )
-            # 对非保守参数也应用自适应微分（如果振荡比较高）
-            if oscillation_ratio > osc_config.get('derivative_oscillation_threshold', 0.5):
-                if osc_config.get('enable_adaptive_derivative', True) and pid_params:
-                    Pu = best_analysis['osc_info']['Pu']
-                    derivative_factor = osc_config.get('derivative_factor', 0.3)
-                    adaptive_Kd = abs(pid_params['Kp']) * Pu * derivative_factor
-                    pid_params['Kd'] = round(adaptive_Kd, 2)
-                    self.log(f"   📊 添加自适应微分: Kd={adaptive_Kd:.2f}")
+            reason = 'oscillation'
+        
+        pid_params = self._get_conservative_pid_params(
+            Pu, Ku, 
+            K_approx=apparent_gain,
+            reason=reason,
+            oscillation_ratio=oscillation_ratio
+        )
         
         if pid_params is None:
             self.log("   ⚠️ 临界法整定失败")

@@ -158,12 +158,14 @@ class SegmentProcessor:
                 self._mark_invalid(result, f"严重非线性(非线性={quality.nonlinearity_score:.2f}, 阶跃特征={quality.step_response_score:.2f})", i, segment_results)
                 continue
             
-            # 检查7: 严重振荡过滤
+            # 检查7: 严重振荡 - 不再拒绝，而是标记用于振荡整定
+            # 高振荡数据可以使用临界法整定，不应直接拒绝
             severe_osc = self._seg_config['severe_oscillation']
             low_quality = self._seg_config['low_quality_threshold']
             if quality.oscillation_ratio > severe_osc and quality.quality_score < low_quality:
-                self._mark_invalid(result, f"严重振荡(振荡={quality.oscillation_ratio:.2f}, 质量分={quality.quality_score:.2f})", i, segment_results)
-                continue
+                # 标记为高振荡段，但仍然认为有效，让后续流程尝试振荡整定
+                result.is_high_oscillation = True
+                self.log(f"   段{i+1}: ⚠️ 高振荡数据(振荡={quality.oscillation_ratio:.2f}, 质量分={quality.quality_score:.2f})，将尝试临界法整定")
             
             # 有效段
             result.is_valid = True

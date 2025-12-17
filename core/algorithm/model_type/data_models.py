@@ -43,6 +43,7 @@ class SegmentResult:
     step_response_score: float = 0.0    # 阶跃响应特征评分
     oscillation_ratio: float = 0.0      # 振荡比例
     is_nonlinear: bool = False          # 是否为非线性
+    is_high_oscillation: bool = False   # 是否为高振荡（用于临界法整定）
 
 
 @dataclass

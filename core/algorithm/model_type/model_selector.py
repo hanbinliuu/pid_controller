@@ -140,7 +140,12 @@ class ModelSelector:
         # 处理反向作用系统（Kp/Ki/Kd可能为负）
         Ti = Kp / Ki if abs(Ki) > self._epsilon else 0.0
         Td = Kd / Kp if abs(Kp) > self._epsilon else 0.0
-        Pb = 100.0 / abs(Kp) if abs(Kp) > self._epsilon else 100.0
+        
+        # 优先使用pid_params中已计算的pb（避免四舍五入误差）
+        if 'pb' in pid_params and pid_params['pb'] > 0:
+            Pb = pid_params['pb']
+        else:
+            Pb = 100.0 / abs(Kp) if abs(Kp) > self._epsilon else 100.0
         
         turning_type = params.get('turning_type') or determine_turning_type(Kp, Ti, Td)
         
