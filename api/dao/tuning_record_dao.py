@@ -131,7 +131,22 @@ class TuningRecordDAO:
                 count_statement = count_statement.where(LoopInfo.loop_path .like(f"%{device_uri}%"))
             if tuning_method:
                 count_statement = count_statement.where(TuningRecord.tuning_method == tuning_method)
-            
+            # 时间范围筛选
+            if start_time and start_time.strip():
+                try:
+                    start_dt = datetime.strptime(start_time, "%Y-%m-%d")
+                    count_statement = count_statement.where(TuningRecord.tuning_time >= start_dt)
+                except ValueError:
+                    logger.warning(f"开始时间格式错误: {start_time}")
+
+
+            if end_time and end_time.strip():
+                try:
+                    # 结束时间包含当天的23:59:59
+                    end_dt = datetime.strptime(end_time + " 23:59:59", "%Y-%m-%d %H:%M:%S")
+                    count_statement = count_statement.where(TuningRecord.tuning_time <= end_dt)
+                except ValueError:
+                    logger.warning(f"结束时间格式错误: {end_time}")
             total = db.exec(count_statement).one()
             
             # 分页
