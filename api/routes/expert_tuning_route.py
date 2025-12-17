@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field
 
 from api.bean.generate_curves_request import GenerateCurvesRequest, KTLSimulatorRequest
 from api.commond.time_util import parse_time_to_milliseconds
-from api.commond.utils import result_to_serializable
 from api.middleware.exceptions import RuntimeException
+from api.response.tuning_response import AutoTuningResponse
 from core.agent.tools import process_query_tsdb_data_interpolated, detect_and_visualize
 from core.algorithm.ktl_simulator import KTLSimulator
 from api.services.expert_tuning_service import ExpertTuningService
@@ -163,7 +163,7 @@ async def auto_tuning(
         # db: Session = Depends(get_db),
         request: AutoTuningRequest ,
         user: UserInfo = Depends(get_current_user)
-    )-> Dict[str, Any]:
+    )-> AutoTuningResponse:
     """
     **智能PID参数整定接口**
 
@@ -211,8 +211,24 @@ async def auto_tuning(
         logger.info(f"自动整定完成, 用时: {last_time-first_time:.3f}秒")
         if result.get("success")==False:
             logger.error(f"参数整定失败: {result}")
-            raise RuntimeException(f"整定失败，请手动选取时间范围进行整定")
-        return result_to_serializable(result)
+            raise RuntimeException(f"整定失败，请手动重新选取时间范围进行整定")
+        
+        # 确保返回的数据符合AutoTuningResponse模型的要求
+        response_data = {
+            "success": result.get("success", True),
+            "message": result.get("message", "整定成功"),
+            "model_type": result.get("model_type", "FOPDT"),
+            "turning_type": result.get("turning_type", "PID"),
+            "model_rating": result.get("model_rating"),
+            "start_time": result.get("start_time"),
+            "end_time": result.get("end_time"),
+            "model_parameters": result.get("model_parameters"),
+            "pid_parameters": result.get("pid_parameters"),
+            "fitting_result": result.get("fitting_result"),
+            "execution_time": result.get("execution_time")
+        }
+        
+        return AutoTuningResponse(**response_data)
 
     except HTTPException:
         raise

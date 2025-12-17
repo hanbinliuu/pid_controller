@@ -12,6 +12,7 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 
+from api.commond.utils import result_to_serializable
 from api.middleware.exceptions import DataProcessException
 from api.services.loop_service import LoopService
 from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
@@ -158,11 +159,6 @@ class ExpertTuningService:
 
             if start_time_ms >= end_time_ms:
                 raise ValueError("开始时间必须小于结束时间")
-
-
-
-            # 初始化变量
-
             # 获取整定回路最新设备状态参数
             before_pid= LoopService.query_loop_values(["PB", "TI", "TD"], loop_uri)
             pid_convert=PIDConverter.classical_to_pid(before_pid.get("PB"), before_pid.get("TI"), before_pid.get("TD"))
@@ -175,7 +171,6 @@ class ExpertTuningService:
                 "td": f"{before_pid.get('TD', 0):.2f}"
             }
             logger.info(f"执行常规整定，时间范围：{start_time} - {end_time}")
-            # todo 异步
             # 获取历史数据
             # 固定设备与字段配置
             table, required_fields = BFFModelClient.query_table_and_points_by_loop_uri(loop_uri)
@@ -211,7 +206,36 @@ class ExpertTuningService:
             treaning_end_time=datetime.now().timestamp()
             logger.info(f"模型整定耗时: {treaning_end_time - treaning_start_time}s")
 
-            return model_selector
+            # 确保返回的数据包含所有AutoTuningResponse模型必需的字段
+            if isinstance(model_selector, dict):
+                # 如果model_selector是字典，确保包含message字段
+                if "message" not in model_selector:
+                    if model_selector.get("success", False):
+                        model_selector["message"] = "整定成功"
+                    else:
+                        model_selector["message"] = "整定失败"
+                
+                # 确保包含所有必需字段
+                required_fields = ["success", "message", "model_type", "turning_type"]
+                for field in required_fields:
+                    if field not in model_selector:
+                        model_selector[field] = "未知" if field != "success" else False
+                        
+                # 添加execution_time字段
+                if "execution_time" not in model_selector:
+                    model_selector["execution_time"] = round(treaning_end_time - treaning_start_time, 3)
+            else:
+                # 如果model_selector不是字典，创建一个新的字典格式
+                model_selector = {
+                    "success": True,
+                    "message": "整定成功",
+                    "model_type": "FOPDT",
+                    "turning_type": "PID",
+                    "execution_time": round(treaning_end_time - treaning_start_time, 3),
+                    "result": model_selector
+                }
+
+            return result_to_serializable(model_selector)
         except Exception as e:
             logger.error(f"常规整定异常: {str(e)}")
             raise

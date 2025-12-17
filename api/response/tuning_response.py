@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 
 class ModelParameters(BaseModel):
@@ -10,15 +10,20 @@ class ModelParameters(BaseModel):
 
 class PIDParameters(BaseModel):
     """PID参数"""
-    kp: float = Field(..., description="比例系数")
-    ki: float = Field(..., description="积分系数")
-    kd: float = Field(..., description="微分系数")
+    kp: Optional[float] = Field(None, description="比例系数")
+    ki: Optional[float] = Field(None, description="积分系数")
+    kd: Optional[float] = Field(None, description="微分系数")
     pb: Optional[float] = Field(None, description="比例带")
     ti: Optional[float] = Field(None, description="积分时间")
     td: Optional[float] = Field(None, description="微分时间")
 
 class FittingResult(BaseModel):
     """拟合效果评估"""
+    timestamp: List[int] = Field(None, description="时间戳")
+    mv: List[float] = Field(None, description="阈值")
+    sv: List[float] = Field(None, description="设定值")
+    pv: List[float] = Field(None, description="输出值")
+    pv_model: List[float] = Field(None, description="模型模拟值")
     r_squared: Optional[float] = Field(None, description="R²拟合度（越接近1越好）")
     rmse: Optional[float] = Field(None, description="均方根误差")
     recommendation: Optional[str] = Field(None, description="拟合质量建议")
@@ -26,7 +31,7 @@ class FittingResult(BaseModel):
 class AutoTuningResponse(BaseModel):
     """自动整定接口响应模型"""
     success: bool = Field(..., description="整定是否成功")
-    message: str = Field(..., description="操作信息")
+    message: str = Field(None, description="操作信息")
     model_type: str = Field(..., description="使用的模型类型（FOPDT/FO/SOPDT等）")
     turning_type: str = Field(..., description="整定类型（PID/PI等）")
     model_rating: Optional[float] = Field(None, description="模型评分（0-1）")
@@ -62,6 +67,11 @@ class AutoTuningResponse(BaseModel):
                     "td": 5.0
                 },
                 "fitting_result": {
+                    "timestamp": [1670000000000, 1670000100000, 1670000200000, 1670000300000, 1670000400000],
+                    "mv": [0.0, 0.0, 0.0, 0.0, 0.0],
+                    "sv": [0.0, 0.0, 0.0, 0.0, 0.0],
+                    "pv": [0.0, 0.0, 0.0, 0.0, 0.0],
+                    "pv_model": [0.0, 0.0, 0.0, 0.0, 0.0],
                     "r_squared": 0.98,
                     "rmse": 0.5,
                     "recommendation": "拟合优秀，可以应用"
