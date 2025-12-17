@@ -58,6 +58,24 @@ class Config:
         'sp_initial': 50.0,                  # 设定值初始值
         'sp_final': 60.0,                    # 设定值最终值
         'pv_initial': 50.0,                  # 过程值初始值
+        
+        # ========== 自适应整定参数（渐进式策略，更通用） ==========
+        # 渐进式pb调整：pb_final = pb_base * (1 + oscillation_ratio * pb_gradient)
+        # 例如：振荡比=0.68 → pb乘以 1 + 0.68*3 = 3.04
+        'pb_gradient': 3.0,                   # pb渐进系数，振荡比每增加0.1，pb增加30%
+        'pb_oscillation_start': 0.3,          # 开始应用渐进调整的振荡比阈值
+        
+        # 自适应微分作用
+        'enable_adaptive_derivative': True,   # 是否启用自适应微分
+        'derivative_factor': 0.4,             # Kd = Kp * Pu * derivative_factor (增大以更好抑制振荡)
+        'derivative_oscillation_threshold': 0.3,  # 振荡比超过此值才加微分（降低阈值）
+        
+        # pb范围扩展（更保守）
+        'pb_min': 80.0,                       # pb下限（提高以确保保守）
+        'pb_max': 500.0,                      # pb上限（允许更保守）
+        
+        # 额外保守因子（针对临界法整定）
+        'critical_method_safety_factor': 1.5, # 临界法额外安全系数
     }
     
     # ============================================================

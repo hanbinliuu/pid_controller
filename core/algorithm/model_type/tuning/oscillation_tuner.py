@@ -168,13 +168,26 @@ class OscillationTuner:
                     use_conservative = True
                     self.log(f"   ⚠️ Ku={Ku:.3f}<0.5，临界增益过小，使用保守参数")
         
+        # 获取最佳段的振荡比（用于自适应调整）
+        best_seg_idx = best_analysis['segment_idx']
+        best_seg_result = segment_results[best_seg_idx] if best_seg_idx < len(segment_results) else None
+        oscillation_ratio = best_seg_result.oscillation_ratio if best_seg_result else 0.0
+        
+        # ========== 新增：高振荡时强制使用保守参数（借鉴大模型经验） ==========
+        osc_config = Config.OSCILLATION_TUNING
+        high_osc_threshold = osc_config.get('high_oscillation_threshold', 0.7)
+        if oscillation_ratio > high_osc_threshold:
+            use_conservative = True
+            self.log(f"   ⚠️ 振荡比={oscillation_ratio:.2f}>{high_osc_threshold}，强制使用保守参数")
+        
         if use_conservative:
-            # 使用保守PID参数
+            # 使用保守PID参数（借鉴大模型调参经验）
             Pu = best_analysis['osc_info']['Pu']
             pid_params = self._get_conservative_pid_params(
                 Pu, best_analysis['osc_info']['Ku'], 
                 K_approx=apparent_gain,
-                reason='low_gain'
+                reason='low_gain',
+                oscillation_ratio=oscillation_ratio
             )
         else:
             # 使用临界法计算 PID 参数
@@ -183,6 +196,14 @@ class OscillationTuner:
                 current_pid=current_pid,
                 method='tyreus_luyben'  # 使用更稳定的Tyreus-Luyben法
             )
+            # 对非保守参数也应用自适应微分（如果振荡比较高）
+            if oscillation_ratio > osc_config.get('derivative_oscillation_threshold', 0.5):
+                if osc_config.get('enable_adaptive_derivative', True) and pid_params:
+                    Pu = best_analysis['osc_info']['Pu']
+                    derivative_factor = osc_config.get('derivative_factor', 0.3)
+                    adaptive_Kd = abs(pid_params['Kp']) * Pu * derivative_factor
+                    pid_params['Kd'] = round(adaptive_Kd, 2)
+                    self.log(f"   📊 添加自适应微分: Kd={adaptive_Kd:.2f}")
         
         if pid_params is None:
             self.log("   ⚠️ 临界法整定失败")
@@ -202,20 +223,29 @@ class OscillationTuner:
     
     def _get_conservative_pid_params(self, Pu: float, Ku: float, 
                                       K_approx: float = 1.0,
-                                      reason: str = 'generic') -> Dict[str, Any]:
+                                      reason: str = 'generic',
+                                      oscillation_ratio: float = 0.0) -> Dict[str, Any]:
         """
-        获取保守PID参数（动态计算pb）
+        获取保守PID参数（动态计算pb，借鉴大模型调参经验）
+        
+        改进点（基于大模型调参经验）：
+        1. 严重振荡时使用更保守的pb
+        2. 自适应添加微分作用抑制振荡
+        3. pb范围扩展，允许更保守的参数
         
         Args:
             Pu: 临界周期
             Ku: 临界增益
             K_approx: 估计的过程增益
             reason: 使用保守参数的原因
+            oscillation_ratio: 振荡比（用于自适应调整）
         
         Returns:
             保守PID参数字典
         """
-        # ========== 动态计算 pb ==========
+        osc_config = Config.OSCILLATION_TUNING
+        
+        # ========== 动态计算 pb（渐进式策略，更通用） ==========
         # 1. 基于过程增益的基础 pb
         if K_approx > 0.01:
             # pb = 100/Kp, 对于单位反馈系统 Kp ≈ 1/K 时响应较好
@@ -226,8 +256,8 @@ class OscillationTuner:
         
         # 2. 基于临界参数的 pb（Ziegler-Nichols 变体）
         if Ku > 0.1:
-            # ZN法: Kp = 0.45*Ku (PI), 但我们更保守: Kp = 0.3*Ku
-            Kp_from_Ku = 0.3 * Ku
+            # ZN法: Kp = 0.45*Ku (PI), 但我们更保守: Kp = 0.2*Ku
+            Kp_from_Ku = 0.2 * Ku
             pb_from_Ku = 100.0 / max(Kp_from_Ku, 0.1)
         else:
             pb_from_Ku = 100.0  # Ku 不可靠时的默认值
@@ -248,10 +278,31 @@ class OscillationTuner:
         if reason == 'high_gain':
             pb_base *= 1.2  # Ku过大，额外保守
         elif reason == 'low_gain' and K_approx < 0.3:
-            pb_base = max(pb_base, 50.0)  # 低增益系统确保最小pb
+            pb_base = max(pb_base, osc_config.get('pb_min', 80.0))
         
-        # 6. 限制在合理范围 [20, 150]
-        pb_safe = np.clip(pb_base, 20.0, 150.0)
+        # ========== 渐进式振荡保守调整（核心改进，更通用） ==========
+        # pb_final = pb_base * (1 + (osc_ratio - start) * gradient)
+        # 这样振荡越严重，pb越大（Kp越小），实现平滑过渡
+        pb_gradient = osc_config.get('pb_gradient', 3.0)
+        pb_osc_start = osc_config.get('pb_oscillation_start', 0.3)
+        safety_factor = osc_config.get('critical_method_safety_factor', 1.5)
+        
+        if oscillation_ratio > pb_osc_start:
+            # 渐进式乘数：振荡比越高，pb越大
+            effective_osc = oscillation_ratio - pb_osc_start
+            gradual_multiplier = 1.0 + effective_osc * pb_gradient
+            pb_base *= gradual_multiplier
+            self.log(f"   📊 渐进式保守调整: 振荡比={oscillation_ratio:.2f}, "
+                    f"pb乘数={gradual_multiplier:.2f}")
+        
+        # 临界法额外安全系数
+        pb_base *= safety_factor
+        self.log(f"   📊 临界法安全系数: ×{safety_factor}")
+        
+        # 6. 限制在合理范围（使用配置的范围）
+        pb_min = osc_config.get('pb_min', 80.0)
+        pb_max = osc_config.get('pb_max', 500.0)
+        pb_safe = np.clip(pb_base, pb_min, pb_max)
         
         self.log(f"   📊 动态pb计算: K={K_approx:.3f}→pb={pb_from_K:.1f}, "
                 f"Ku={Ku:.3f}→pb={pb_from_Ku:.1f}, Pu={Pu:.1f}s(×{slow_factor}), "
@@ -261,13 +312,25 @@ class OscillationTuner:
         conservative_Ti = max(Pu / 2, 2.0) if Pu > 0 else 2.0
         conservative_Ki = conservative_Kp / conservative_Ti
         
+        # ========== 新增：自适应微分作用（借鉴大模型经验） ==========
+        conservative_Kd = 0.0
+        enable_derivative = osc_config.get('enable_adaptive_derivative', True)
+        derivative_threshold = osc_config.get('derivative_oscillation_threshold', 0.5)
+        
+        if enable_derivative and oscillation_ratio > derivative_threshold:
+            # 微分作用帮助抑制振荡
+            derivative_factor = osc_config.get('derivative_factor', 0.3)
+            conservative_Kd = conservative_Kp * Pu * derivative_factor
+            self.log(f"   📊 添加微分作用: Kd={conservative_Kd:.4f} "
+                    f"(Kp×Pu×{derivative_factor}，用于抑制振荡)")
+        
         return {
-            'Kp': round(conservative_Kp, 4),
-            'Ki': round(conservative_Ki, 4),
-            'Kd': 0.0,
-            'method': f'{reason}_dynamic',
-            'Pu': Pu,
-            'Ku': Ku,
+            'Kp': round(conservative_Kp, 2),
+            'Ki': round(conservative_Ki, 2),
+            'Kd': round(conservative_Kd, 2),
+            'method': f'{reason}_adaptive',
+            'Pu': round(Pu, 2),
+            'Ku': round(Ku, 2),
             'pb': round(pb_safe, 2)
         }
     

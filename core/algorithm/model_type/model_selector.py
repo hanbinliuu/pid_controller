@@ -159,9 +159,9 @@ class ModelSelector:
                 'pb': round(float(Pb), 4),
                 'ti': round(float(Ti), 4),
                 'td': round(float(Td), 4),
-                'kp': round(float(Kp), 4),
-                'ki': round(float(Ki), 4),
-                'kd': round(float(Kd), 4)
+                'kp': round(float(Kp), 2),
+                'ki': round(float(Ki), 2),
+                'kd': round(float(Kd), 2)
             },
             'fitting_result': fitting_result,
             'fusion_info': result.get('fusion_info', {}),

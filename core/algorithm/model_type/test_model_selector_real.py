@@ -28,11 +28,12 @@ from core.algorithm.model_type.model_selector import ModelSelector
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951",
-    'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",
+    # 'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
+    'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        {'start_time': '2025-12-16 00:00:00', 'end_time': '2025-12-16 20:00:00'},
+        {'start_time': '2025-12-15 15:06:12', 'end_time': '2025-12-15 23:06:12'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
