@@ -31,6 +31,8 @@ from typing import Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 from scipy.ndimage import uniform_filter1d
 
+from ..config import Config
+
 
 @dataclass
 class DataQuality:
@@ -52,25 +54,27 @@ class DataQuality:
     @property
     def quality_score(self) -> float:
         """综合质量评分 (0-1)"""
+        weights = Config.PREPROCESSING.get('quality_weights', {})
         score = 0.0
         if self.is_correlated:
-            score += 0.25 * min(abs(self.correlation), 1.0)
+            score += weights.get('correlation', 0.25) * min(abs(self.correlation), 1.0)
         if not self.is_noisy:
-            score += 0.2 * (1 - min(self.noise_ratio, 1.0))
-        score += 0.2 * self.trend_consistency
+            score += weights.get('noise', 0.20) * (1 - min(self.noise_ratio, 1.0))
+        score += weights.get('trend', 0.20) * self.trend_consistency
         # 非线性惩罚
-        score += 0.2 * (1 - self.nonlinearity_score)
+        score += weights.get('nonlinearity', 0.20) * (1 - self.nonlinearity_score)
         # 阶跃响应奖励
-        score += 0.15 * self.step_response_score
+        score += weights.get('step_response', 0.15) * self.step_response_score
         return score
     
     @property
     def quality_level(self) -> str:
         """质量等级"""
+        cfg = Config.PREPROCESSING
         score = self.quality_score
-        if score >= 0.7:
+        if score >= cfg.get('quality_good_threshold', 0.7):
             return 'good'
-        elif score >= 0.4:
+        elif score >= cfg.get('quality_medium_threshold', 0.4):
             return 'medium'
         else:
             return 'poor'
@@ -92,17 +96,18 @@ class DataPreprocessor:
         quality = preprocessor.analyze_quality(y, u)
     """
     
-    # 默认配置
-    DEFAULT_FILTER_WINDOW = 5       # 滤波窗口大小
-    DEFAULT_NOISE_THRESHOLD = 0.02  # 噪声阈值
-    DEFAULT_MIN_CORRELATION = 0.15  # 最小相关系数
-    DEFAULT_OUTLIER_FACTOR = 2.0    # 异常值因子（IQR倍数）
+    # 默认配置 (从 Config 读取)
+    _PREPROCESSING_CFG = Config.PREPROCESSING
+    DEFAULT_FILTER_WINDOW = _PREPROCESSING_CFG['filter_window']
+    DEFAULT_NOISE_THRESHOLD = _PREPROCESSING_CFG['noise_threshold']
+    DEFAULT_MIN_CORRELATION = _PREPROCESSING_CFG['min_correlation']
+    DEFAULT_OUTLIER_FACTOR = _PREPROCESSING_CFG['outlier_factor']
     
     def __init__(self, 
-                 filter_window: int = DEFAULT_FILTER_WINDOW,
-                 noise_threshold: float = DEFAULT_NOISE_THRESHOLD,
-                 min_correlation: float = DEFAULT_MIN_CORRELATION,
-                 outlier_factor: float = DEFAULT_OUTLIER_FACTOR,
+                 filter_window: int = None,
+                 noise_threshold: float = None,
+                 min_correlation: float = None,
+                 outlier_factor: float = None,
                  verbose: bool = False):
         """
         Args:
@@ -112,12 +117,13 @@ class DataPreprocessor:
             outlier_factor: IQR异常值因子
             verbose: 是否输出日志
         """
-        self.filter_window = filter_window
-        self.noise_threshold = noise_threshold
-        self.min_correlation = min_correlation
-        self.outlier_factor = outlier_factor
+        cfg = Config.PREPROCESSING
+        self.filter_window = filter_window if filter_window is not None else cfg['filter_window']
+        self.noise_threshold = noise_threshold if noise_threshold is not None else cfg['noise_threshold']
+        self.min_correlation = min_correlation if min_correlation is not None else cfg['min_correlation']
+        self.outlier_factor = outlier_factor if outlier_factor is not None else cfg['outlier_factor']
         self.verbose = verbose
-        self._epsilon = 1e-9
+        self._epsilon = Config.EPSILON
     
     def log(self, msg: str):
         if self.verbose:

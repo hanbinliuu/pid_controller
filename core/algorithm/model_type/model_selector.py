@@ -62,10 +62,10 @@ class ModelSelector:
         ModelType.FOPI: ModelIdentifier.identify_integral_delay,
     }
     
-    # 验证阈值常量
-    MIN_R2_FOR_VOTE = 0.3
-    MIN_R2_FOR_QUALITY = 0.4
-    R2_THRESHOLDS = [0.5, 0.3, 0.15, 0.0]
+    # 验证阈值常量 (从配置读取)
+    MIN_R2_FOR_VOTE = Config.MODEL_SELECTOR['min_r2_for_vote']
+    MIN_R2_FOR_QUALITY = Config.MODEL_SELECTOR['min_r2_for_quality']
+    R2_THRESHOLDS = Config.MODEL_SELECTOR['r2_thresholds']
     
     def __init__(self, verbose: bool = False):
         self._verbose = verbose
@@ -196,10 +196,10 @@ class ModelSelector:
     
     def fit(self, tuning_input: Union[Dict, TuningInput],
             raw_data: List[Dict],
-            lambda_factor: float = 0.8,
+            lambda_factor: float = None,
             current_pid: Dict = None,
-            enable_downsample: bool = True,
-            downsample_target: int = 1000) -> Dict[str, Any]:
+            enable_downsample: bool = None,
+            downsample_target: int = None) -> Dict[str, Any]:
         """模型整定主入口
         
         Args:
@@ -210,6 +210,15 @@ class ModelSelector:
             enable_downsample: 是否启用智能降采样
             downsample_target: 降采样目标点数
         """
+        # 使用配置默认值
+        tuning_defaults = Config.TUNING_DEFAULTS
+        if lambda_factor is None:
+            lambda_factor = tuning_defaults['lambda_factor']
+        if enable_downsample is None:
+            enable_downsample = tuning_defaults['enable_downsample']
+        if downsample_target is None:
+            downsample_target = tuning_defaults['downsample_target']
+        
         input_data = self._parse_input(tuning_input)
         if input_data is None or not input_data.tuning_window or not raw_data:
             return self._empty_result(input_data)
@@ -1388,36 +1397,41 @@ class ModelSelector:
         self.log(f"   pv_model检查: sim_R²={sim_r2:.3f}, 振荡={oscillation_ratio:.2f}, "
                 f"PV范围={pv_range:.2f}, 模型范围={model_range:.2f}, 幅度比={amplitude_ratio:.2f}")
         
+        # 从配置读取阈值
+        ms_cfg = Config.MODEL_SELECTOR
+        
         sim_quality_poor = (
-            sim_r2 < 0.5 or
-            fusion.global_r2 < 0.3 or
-            oscillation_ratio > 0.4 or
-            amplitude_ratio < 0.5 or amplitude_ratio > 2.0
+            sim_r2 < ms_cfg['sim_r2_poor_threshold'] or
+            fusion.global_r2 < Config.MODEL_FITTING['r2_poor_threshold'] or
+            oscillation_ratio > ms_cfg['oscillation_poor_threshold'] or
+            amplitude_ratio < ms_cfg['amplitude_ratio_min'] or 
+            amplitude_ratio > ms_cfg['amplitude_ratio_max']
         )
         
         fitting_failed = (
             fusion.n_segments_used == 0 or
-            sim_r2 < 0.1 or
-            amplitude_ratio < 0.3 or amplitude_ratio > 3.0
+            sim_r2 < ms_cfg['sim_r2_fail_threshold'] or
+            amplitude_ratio < ms_cfg['amplitude_ratio_fail_min'] or 
+            amplitude_ratio > ms_cfg['amplitude_ratio_fail_max']
         )
         
         if fitting_failed:
             self.log(f"   ❌ 拟合完全失败，保留原始pv_model用于诊断分析")
         elif sim_quality_poor:
             reason = []
-            if sim_r2 < 0.5:
+            if sim_r2 < ms_cfg['sim_r2_poor_threshold']:
                 reason.append(f"R²={sim_r2:.3f}")
-            if oscillation_ratio > 0.4:
+            if oscillation_ratio > ms_cfg['oscillation_poor_threshold']:
                 reason.append(f"振荡={oscillation_ratio:.2f}")
-            if amplitude_ratio < 0.5 or amplitude_ratio > 2.0:
+            if amplitude_ratio < ms_cfg['amplitude_ratio_min'] or amplitude_ratio > ms_cfg['amplitude_ratio_max']:
                 reason.append(f"幅度比={amplitude_ratio:.2f}")
             self.log(f"   ⚠️ 模型仿真质量较差({', '.join(reason)})")
         
         total_data_points = int(np.sum(valid_mask))
         
         # 先进行闭环稳定性验证（使用实际数据的初值）
-        sp_initial = float(sv[0]) if len(sv) > 0 else 50.0
-        sp_final = float(sv[-1]) if len(sv) > 0 else 60.0
+        sp_initial = float(sv[0]) if len(sv) > 0 else ms_cfg['default_sp_initial']
+        sp_final = float(sv[-1]) if len(sv) > 0 else ms_cfg['default_sp_final']
         pv_initial = float(y[0]) if len(y) > 0 else sp_initial
         
         # 确保有足够的阶跃幅度，并且初值合理
@@ -1425,10 +1439,10 @@ class ModelSelector:
         pv_sp_diff = abs(pv_initial - sp_initial)
         
         # 如果 SP 阶跃幅度太小，或者 PV 初值与 SP 初值差距太大，使用默认阶跃测试
-        if sp_change < 5.0 or pv_sp_diff > sp_change * 2:
-            sp_initial = 50.0
-            sp_final = 60.0
-            pv_initial = 50.0  # 假设稳态开始
+        if sp_change < ms_cfg['min_sp_change'] or pv_sp_diff > sp_change * 2:
+            sp_initial = ms_cfg['default_sp_initial']
+            sp_final = ms_cfg['default_sp_final']
+            pv_initial = ms_cfg['default_pv_initial']
         
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
             fusion, pid_params, 
