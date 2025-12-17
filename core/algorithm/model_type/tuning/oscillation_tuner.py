@@ -95,10 +95,46 @@ class OscillationTuner:
             if is_oscillating and fit_failed:
                 oscillating_segments.append((i, seg, result))
         
-        # 如果有成功拟合的段，优先使用常规流程，不使用临界法
-        if successful_segments:
+        # 判断是否应该强制使用临界法整定
+        # 条件1: 成功段太少（失败率>50%）且有振荡段
+        # 条件2: 成功段数据量太小（<1000点）
+        # 条件3: 平均振荡比过高（>0.7）
+        total_segments = len(segment_results)
+        failed_segments = len(oscillating_segments)
+        avg_osc_ratio = np.mean([r.oscillation_ratio for r in segment_results]) if segment_results else 0
+        
+        force_oscillation_tuning = False
+        force_reason = ""
+        
+        if successful_segments and oscillating_segments:
+            # 计算成功段的总数据量
+            success_total_points = sum(len(seg.pv) for _, seg, _ in successful_segments)
+            failed_total_points = sum(len(seg.pv) for _, seg, _ in oscillating_segments)
+            
+            # 条件1: 失败段数据量占比超过80%
+            if failed_total_points > 0 and success_total_points > 0:
+                failure_ratio = failed_total_points / (success_total_points + failed_total_points)
+                if failure_ratio > 0.8:
+                    force_oscillation_tuning = True
+                    force_reason = f"失败段数据量占比{failure_ratio:.0%}>80%"
+            
+            # 条件2: 成功段数据量太小（<1000点）
+            if success_total_points < 1000:
+                force_oscillation_tuning = True
+                force_reason = f"成功段数据量仅{success_total_points}点<1000"
+            
+            # 条件3: 平均振荡比过高且有多个失败段
+            if avg_osc_ratio > 0.7 and failed_segments >= total_segments // 2:
+                force_oscillation_tuning = True
+                force_reason = f"平均振荡比{avg_osc_ratio:.2f}>0.7且{failed_segments}/{total_segments}段失败"
+        
+        # 如果有成功拟合的段且不需要强制临界法，使用常规流程
+        if successful_segments and not force_oscillation_tuning:
             self.log(f"\n📊 有 {len(successful_segments)} 个段拟合成功，使用常规模型融合流程")
             return None
+        
+        if force_oscillation_tuning:
+            self.log(f"\n⚠️ 强制使用临界法整定: {force_reason}")
         
         if not oscillating_segments:
             return None  # 没有符合条件的振荡段
