@@ -495,7 +495,7 @@ class ExpertTuningService:
 
             except json.JSONDecodeError as json_err:
                 # JSON解析失败，记录失败状态
-                error_msg = f"参数整定失败: {optimization_result}"
+                error_msg = f"参数整定失败: {json_err}"
 
                 # 写入整定失败记录
                 # try:
