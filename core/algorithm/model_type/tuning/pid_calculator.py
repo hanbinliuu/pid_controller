@@ -150,9 +150,9 @@ class PIDCalculator:
         Kd = Kp * Td
         
         return {
-            'Kp': round(float(Kp), 4),
-            'Ki': round(float(Ki), 4),
-            'Kd': round(float(Kd), 4)
+            'Kp': round(float(Kp), 2),
+            'Ki': round(float(Ki), 2),
+            'Kd': round(float(Kd), 2)
         }
     
     def _calculate_conservative_level(self, quality_info: Optional[DataQualityInfo],
@@ -799,12 +799,12 @@ class PIDCalculator:
             Kd = -Kd
         
         return {
-            'Kp': round(float(Kp), 4),
-            'Ki': round(float(Ki), 4),
-            'Kd': round(float(Kd), 4),
+            'Kp': round(float(Kp), 2),
+            'Ki': round(float(Ki), 2),
+            'Kd': round(float(Kd), 2),
             'method': f'oscillation_{method}',
-            'Pu': Pu,
-            'Ku': round(Ku, 4)
+            'Pu': round(Pu, 2),
+            'Ku': round(Ku, 2)
         }
     
     def calculate_model_rating(self, fusion: FusionResult, 

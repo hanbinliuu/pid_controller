@@ -205,3 +205,76 @@ class Config:
         'saturation_detection_threshold': 0.2, # 饱和检测阈值
         'max_polynomial_order': 3,           # Hammerstein多项式最高阶数
     }
+    
+    # ============================================================
+    # 整定默认参数配置
+    # ============================================================
+    TUNING_DEFAULTS = {
+        'lambda_factor': 0.8,                # Lambda整定系数
+        'enable_downsample': True,           # 是否启用智能降采样
+        'downsample_target': 1000,           # 降采样目标点数
+    }
+    
+    # ============================================================
+    # 模型选择器配置
+    # ============================================================
+    MODEL_SELECTOR = {
+        # R²阈值
+        'min_r2_for_vote': 0.3,              # 模型投票最低R²
+        'min_r2_for_quality': 0.4,           # 质量筛选最低R²
+        'r2_thresholds': [0.5, 0.3, 0.15, 0.0],  # R²分级阈值
+        
+        # 仿真质量判断阈值
+        'sim_r2_poor_threshold': 0.5,        # 仿真R²较差阈值
+        'sim_r2_fail_threshold': 0.1,        # 仿真R²失败阈值
+        'oscillation_poor_threshold': 0.4,   # 振荡较差阈值
+        'amplitude_ratio_min': 0.5,          # 幅度比下限（较差）
+        'amplitude_ratio_max': 2.0,          # 幅度比上限（较差）
+        'amplitude_ratio_fail_min': 0.3,     # 幅度比下限（失败）
+        'amplitude_ratio_fail_max': 3.0,     # 幅度比上限（失败）
+        
+        # 闭环验证默认参数
+        'default_sp_initial': 50.0,          # 默认SP初始值
+        'default_sp_final': 60.0,            # 默认SP终值
+        'default_pv_initial': 50.0,          # 默认PV初始值
+        'min_sp_change': 5.0,                # 最小SP变化量
+        
+        # 评分质量分级
+        'quality_excellent_r2': 0.85,        # 优秀R²阈值
+        'quality_good_r2': 0.7,              # 良好R²阈值
+        'quality_acceptable_r2': 0.5,        # 一般R²阈值
+    }
+    
+    # ============================================================
+    # 数据预处理配置
+    # ============================================================
+    PREPROCESSING = {
+        'filter_window': 5,                  # 滤波窗口大小
+        'noise_threshold': 0.02,             # 噪声阈值
+        'min_correlation': 0.15,             # 最小相关系数
+        'outlier_factor': 2.0,               # 异常值因子（IQR倍数）
+        'change_point_threshold': 0.1,       # MV变化点检测阈值
+        
+        # 质量评分权重
+        'quality_weights': {
+            'correlation': 0.25,             # 相关性权重
+            'noise': 0.20,                   # 噪声权重
+            'trend': 0.20,                   # 趋势一致性权重
+            'nonlinearity': 0.20,            # 非线性惩罚权重
+            'step_response': 0.15,           # 阶跃响应奖励权重
+        },
+        
+        # 质量等级阈值
+        'quality_good_threshold': 0.7,       # 良好质量阈值
+        'quality_medium_threshold': 0.4,     # 中等质量阈值
+        
+        # 复杂度乘数
+        'complexity_multipliers': {
+            'many_sv_changes': 1.3,          # SV变化次数>5
+            'some_sv_changes': 1.1,          # SV变化次数>2
+            'high_oscillation': 1.4,         # 高振荡
+            'medium_oscillation': 1.2,       # 中振荡
+            'high_extrema': 1.3,             # 高峰谷密度
+            'medium_extrema': 1.1,           # 中峰谷密度
+        },
+    }
