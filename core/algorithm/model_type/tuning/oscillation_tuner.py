@@ -660,8 +660,18 @@ class OscillationTuner:
             
             K_approx = pv_range / mv_range if mv_range > 0.1 and pv_range > 0.01 else 1.0
             
+            # 获取数据质量、非线性和阀门问题信息（用于保守策略）
+            fallback_data_quality = osc_result.get('data_quality', 0.5)
+            fallback_nonlinearity = osc_result.get('nonlinearity', 0.0)
+            fallback_valve_issues = osc_result.get('valve_issues', {})
+            fallback_osc_ratio = osc_info.get('oscillation_ratio', 0.5)
+            
             fallback_pid = self._get_conservative_pid_params(
-                Pu, osc_info['Ku'], K_approx=K_approx, reason='data_range'
+                Pu, osc_info['Ku'], K_approx=K_approx, reason='data_range',
+                oscillation_ratio=fallback_osc_ratio,
+                data_quality=fallback_data_quality,
+                nonlinearity=fallback_nonlinearity,
+                valve_issues=fallback_valve_issues
             )
             
             self.log(f"   ⚠️ 数据质量差，使用保守参数: pb={fallback_pid['pb']:.1f}, "
