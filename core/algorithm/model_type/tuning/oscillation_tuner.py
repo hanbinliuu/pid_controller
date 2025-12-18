@@ -312,18 +312,22 @@ class OscillationTuner:
         pb_osc_start = osc_config.get('pb_oscillation_start', 0.4)
         base_safety_factor = osc_config.get('critical_method_safety_factor', 1.4)
         
-        # 自适应安全系数：中等振荡加速，高振荡保守
-        # 振荡比 < 0.6: safety = 1.2 (加速)
-        # 振荡比 0.6-0.8: safety = 1.2 + (osc-0.6)*1.0 (线性过渡)
-        # 振荡比 > 0.8: safety = 1.4+ (保守)
-        if oscillation_ratio < 0.6:
-            safety_factor = 1.2  # 中低振荡，加速响应
-        elif oscillation_ratio < 0.8:
-            # 线性过渡：1.2 → 1.4
-            safety_factor = 1.2 + (oscillation_ratio - 0.6) * 1.0
+        # 自适应安全系数：保守优先，极高振荡更保守
+        # 振荡比 < 0.5: safety = 1.4 (基础保守)
+        # 振荡比 0.5-0.7: safety = 1.4 + (osc-0.5)*0.5 (线性过渡)
+        # 振荡比 0.7-0.85: safety = 1.5 + (osc-0.7)*1.0 (加速增长)
+        # 振荡比 > 0.85: safety = 1.65 + (osc-0.85)*2.0 (极高振荡，大幅保守)
+        if oscillation_ratio < 0.5:
+            safety_factor = 1.4  # 基础保守
+        elif oscillation_ratio < 0.7:
+            # 线性过渡：1.4 → 1.5
+            safety_factor = 1.4 + (oscillation_ratio - 0.5) * 0.5
+        elif oscillation_ratio < 0.85:
+            # 高振荡：1.5 → 1.65
+            safety_factor = 1.5 + (oscillation_ratio - 0.7) * 1.0
         else:
-            # 高振荡，更保守
-            safety_factor = 1.4 + (oscillation_ratio - 0.8) * 0.5
+            # 极高振荡(>0.85)，大幅保守：1.65 → 1.95+
+            safety_factor = 1.65 + (oscillation_ratio - 0.85) * 2.0
         
         # 计算综合保守乘数（将安全系数合并，避免多重乘数叠加）
         total_multiplier = safety_factor  # 自适应安全系数
@@ -337,8 +341,11 @@ class OscillationTuner:
             total_multiplier *= osc_multiplier
             
             # 限制总乘数上限，避免高增益+极高振荡导致pb爆炸
-            # 上限2.2：确保pb_base=300时，最终pb≤660（留有余量）
-            max_multiplier = 2.2
+            # 极高振荡时允许更大乘数，确保保守
+            if oscillation_ratio > 0.85:
+                max_multiplier = 3.0  # 极高振荡允许更保守
+            else:
+                max_multiplier = 2.5
             if total_multiplier > max_multiplier:
                 self.log(f"   ⚠️ 总乘数{total_multiplier:.2f}超限，限制为{max_multiplier}")
                 total_multiplier = max_multiplier
