@@ -137,9 +137,16 @@ class ModelSelector:
         Ki = pid_params.get('Ki', 0.0)
         Kd = pid_params.get('Kd', 0.0)
         
-        # 处理反向作用系统（Kp/Ki/Kd可能为负）
-        Ti = Kp / Ki if abs(Ki) > self._epsilon else 0.0
-        Td = Kd / Kp if abs(Kp) > self._epsilon else 0.0
+        # 优先使用pid_params中已计算的Ti/Td（避免四舍五入误差）
+        if 'Ti' in pid_params and pid_params['Ti'] > 0:
+            Ti = pid_params['Ti']
+        else:
+            Ti = Kp / Ki if abs(Ki) > self._epsilon else 0.0
+        
+        if 'Td' in pid_params:
+            Td = pid_params['Td']
+        else:
+            Td = Kd / Kp if abs(Kp) > self._epsilon else 0.0
         
         # 优先使用pid_params中已计算的pb（避免四舍五入误差）
         if 'pb' in pid_params and pid_params['pb'] > 0:
@@ -161,9 +168,9 @@ class ModelSelector:
             'end_time': result.get('end_time'),
             'model_parameters': result.get('model_parameters', {}),
             'pid_parameters': {
-                'pb': round(float(Pb), 4),
-                'ti': round(float(Ti), 4),
-                'td': round(float(Td), 4),
+                'pb': round(float(Pb), 2),
+                'ti': round(float(Ti), 2),
+                'td': round(float(Td), 2),
                 'kp': round(float(Kp), 2),
                 'ki': round(float(Ki), 2),
                 'kd': round(float(Kd), 2)

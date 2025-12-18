@@ -302,28 +302,33 @@ class OscillationTuner:
         
         # 5. 根据原因微调
         if reason == 'high_gain':
-            pb_base *= 1.2  # Ku过大，额外保守
-        elif reason == 'low_gain' and K_approx < 0.3:
-            pb_base = max(pb_base, osc_config.get('pb_min', 80.0))
+            pb_base *= 1.1  # Ku过大，轻微额外保守（降低以避免多重乘数溢出）
+        # 注意：低增益场景不再强制设为pb_min，避免与后续乘数叠加导致触边界
         
-        # ========== 渐进式振荡保守调整（核心改进，更通用） ==========
-        # pb_final = pb_base * (1 + (osc_ratio - start) * gradient)
-        # 这样振荡越严重，pb越大（Kp越小），实现平滑过渡
-        pb_gradient = osc_config.get('pb_gradient', 3.0)
-        pb_osc_start = osc_config.get('pb_oscillation_start', 0.3)
-        safety_factor = osc_config.get('critical_method_safety_factor', 1.5)
+        # ========== 渐进式振荡保守调整（核心改进，使用渐近函数） ==========
+        # 使用渐近函数避免高振荡时pb线性爆炸
+        # pb_multiplier = 1 + k * sqrt(osc - start)，增长放缓
+        pb_gradient = osc_config.get('pb_gradient', 2.0)
+        pb_osc_start = osc_config.get('pb_oscillation_start', 0.4)
+        safety_factor = osc_config.get('critical_method_safety_factor', 1.4)
+        
+        # 计算综合保守乘数（将安全系数合并，避免多重乘数叠加）
+        total_multiplier = safety_factor  # 基础安全系数
         
         if oscillation_ratio > pb_osc_start:
-            # 渐进式乘数：振荡比越高，pb越大
+            # 使用平方根函数，高振荡时增长放缓
+            # effective_osc ∈ [0, 0.6]（振荡比最高1.0）
             effective_osc = oscillation_ratio - pb_osc_start
-            gradual_multiplier = 1.0 + effective_osc * pb_gradient
-            pb_base *= gradual_multiplier
+            # sqrt(0.6) ≈ 0.77，乘以gradient=2.0 → 1.55
+            # 总乘数 = 1.4 * (1 + 1.55) = 3.57（可控）
+            osc_multiplier = 1.0 + np.sqrt(effective_osc) * pb_gradient
+            total_multiplier *= osc_multiplier
             self.log(f"   📊 渐进式保守调整: 振荡比={oscillation_ratio:.2f}, "
-                    f"pb乘数={gradual_multiplier:.2f}")
+                    f"osc乘数={osc_multiplier:.2f}, 总乘数={total_multiplier:.2f}")
+        else:
+            self.log(f"   📊 基础安全系数: ×{safety_factor}")
         
-        # 临界法额外安全系数
-        pb_base *= safety_factor
-        self.log(f"   📊 临界法安全系数: ×{safety_factor}")
+        pb_base *= total_multiplier
         
         # 6. 限制在合理范围（使用配置的范围）
         pb_min = osc_config.get('pb_min', 80.0)
@@ -335,25 +340,63 @@ class OscillationTuner:
                 f"最终pb={pb_safe:.1f}")
         
         conservative_Kp = 100.0 / pb_safe
-        conservative_Ti = max(Pu / 2, 2.0) if Pu > 0 else 2.0
+        
+        # ========== 自适应 Ti 计算（基于Pu和振荡比） ==========
+        # 基础Ti = Pu / 2（经典ZN法）
+        # 高振荡时增大Ti（减弱积分作用，提高稳定性）
+        base_Ti = max(Pu / 2, 1.5) if Pu > 0 else 2.0
+        
+        # 振荡调整因子：振荡比>0.5时逐渐增大Ti
+        ti_osc_start = 0.5
+        if oscillation_ratio > ti_osc_start:
+            # Ti乘数 = 1 + sqrt(osc - 0.5) * 0.8，最大约1.56倍
+            ti_multiplier = 1.0 + np.sqrt(oscillation_ratio - ti_osc_start) * 0.8
+        else:
+            ti_multiplier = 1.0
+        
+        # 慢系统调整：Pu大时Ti也应该更大
+        if Pu > 20:
+            ti_multiplier *= 1.2
+        elif Pu > 10:
+            ti_multiplier *= 1.1
+        
+        conservative_Ti = base_Ti * ti_multiplier
+        # Ti范围限制：[1.5, 10.0]
+        conservative_Ti = np.clip(conservative_Ti, 1.5, 10.0)
         conservative_Ki = conservative_Kp / conservative_Ti
         
-        # ========== 新增：自适应微分作用（借鉴大模型经验） ==========
+        # ========== 自适应 Td 计算（基于Pu和振荡比） ==========
         conservative_Kd = 0.0
+        conservative_Td = 0.0
         enable_derivative = osc_config.get('enable_adaptive_derivative', True)
         derivative_threshold = osc_config.get('derivative_oscillation_threshold', 0.5)
         
         if enable_derivative and oscillation_ratio > derivative_threshold:
-            # 微分作用帮助抑制振荡
-            derivative_factor = osc_config.get('derivative_factor', 0.3)
-            conservative_Kd = conservative_Kp * Pu * derivative_factor
-            self.log(f"   📊 添加微分作用: Kd={conservative_Kd:.4f} "
-                    f"(Kp×Pu×{derivative_factor}，用于抑制振荡)")
+            # 基础Td = Pu / 8（经典ZN法是Pu/8）
+            # 高振荡时适度增大Td（增强抑制作用）
+            base_Td = Pu / 8 if Pu > 0 else 0.5
+            
+            # Td乘数：振荡越高，Td越大（抑制振荡）
+            effective_osc = oscillation_ratio - derivative_threshold
+            td_multiplier = 1.0 + np.sqrt(effective_osc) * 1.5  # 最大约2.06倍
+            
+            conservative_Td = base_Td * td_multiplier
+            # Td范围限制：[0.3, 3.0]
+            conservative_Td = np.clip(conservative_Td, 0.3, 3.0)
+            conservative_Kd = conservative_Kp * conservative_Td
+            
+            self.log(f"   📊 自适应Ti/Td: Ti={conservative_Ti:.2f}s(×{ti_multiplier:.2f}), "
+                    f"Td={conservative_Td:.2f}s(×{td_multiplier:.2f})")
+            self.log(f"   📊 添加微分作用: Kd={conservative_Kd:.4f} (Kp×Td，用于抑制振荡)")
+        else:
+            self.log(f"   📊 自适应Ti: Ti={conservative_Ti:.2f}s(×{ti_multiplier:.2f})")
         
         return {
             'Kp': round(conservative_Kp, 2),
             'Ki': round(conservative_Ki, 2),
             'Kd': round(conservative_Kd, 2),
+            'Ti': round(conservative_Ti, 4),  # 精确的Ti值
+            'Td': round(conservative_Td, 4) if conservative_Td > 0 else 0.0,  # 精确的Td值
             'method': f'{reason}_adaptive',
             'Pu': round(Pu, 2),
             'Ku': round(Ku, 2),
