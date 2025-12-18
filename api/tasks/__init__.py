@@ -16,7 +16,7 @@ from api.services.loop_monitoring_service import LoopMonitoringService
 logger = logging.getLogger(__name__)
 
 # 定时任务初始化的文件锁(用于扩展为分布式锁或仅在一个worker中执行)
-_INIT_LOCK_FILE = "./lock/cron_tasks_init.lock"
+_INIT_LOCK_FILE = os.path.abspath("./lock/cron_tasks_init.lock")
 _init_lock_fd = None
 _init_lock = threading.Lock()
 
@@ -31,7 +31,7 @@ def _acquire_init_lock() -> bool:
     
     try:
         # 创建锁文件目录
-        lock_dir = "./lock"
+        lock_dir = os.path.abspath("./lock")
         if not os.path.exists(lock_dir):
             os.makedirs(lock_dir, exist_ok=True)
         
@@ -50,7 +50,7 @@ def _acquire_init_lock() -> bool:
         return True
         
     except IOError:
-        # 无法获取锁，読仁老其他 worker 正在执行初始化
+        # 无法获取锁，其他 worker 正在执行初始化
         if _init_lock_fd:
             _init_lock_fd.close()
             _init_lock_fd = None
@@ -58,8 +58,12 @@ def _acquire_init_lock() -> bool:
         return False
     except Exception as e:
         logger.warning(f"获取定时任务初始化锁時發生異常: {str(e)}")
+        # 确保在任何异常情况下都正确关闭文件描述符
         if _init_lock_fd:
-            _init_lock_fd.close()
+            try:
+                _init_lock_fd.close()
+            except:
+                pass
             _init_lock_fd = None
         return False
 
@@ -80,6 +84,8 @@ def _release_init_lock():
         logger.info(f"成功释放定时任务初始化锁 (PID: {os.getpid()})")
     except Exception as e:
         logger.warning(f"释放定时任务初始化锁時發生異常: {str(e)}")
+        # 确保在任何异常情况下都清除文件描述符
+        _init_lock_fd = None
 
 
 def init_cron_tasks():
@@ -102,7 +108,7 @@ def init_cron_tasks():
             logger.info("定时任务已经初始化过，跳过")
             return
         
-        logger.info(f"初始化定时任务... (不是单进程，使用了决策锁)")
+        logger.info(f"初始化定时任务... (多进程，使用了决策锁)")
         
         try:
             # 注册模型树加载任务

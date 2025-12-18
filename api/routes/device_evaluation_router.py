@@ -460,7 +460,7 @@ async def batch_query_devices(
             operation_id="get_device_loops",
             response_model=Dict[str, Any])
 async def get_device_loops(
-        device_uri: Optional[str] = Query(..., description="装置URI（模糊匹配）"),
+        device_uri: Optional[str] = Query(None, description="装置URI（模糊匹配）"),
         db: Session = Depends(get_db)
 ):
     """
@@ -477,6 +477,8 @@ async def get_device_loops(
     """
     try:
         logger.info(f"获取装置回路列表 - 装置URI: {device_uri}")
+        if not device_uri:
+            device_uri=Config.BFF_MODEL_ROOT_URI
 
         # 调用Service层方法
         result = DeviceEvaluationService.get_device_loops(

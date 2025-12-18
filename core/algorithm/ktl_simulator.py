@@ -138,15 +138,16 @@ class KTLSimulator:
             
         返回:
             包含时间、输入、输出序列及模型信息的字典
+            
+        注:
+            K为负值时表示反作用系统，即系统输出变化方向与输入变化方向相反
         """
         try:
             # 标准化模型类型
             model_type = model_type.upper()
             
             # 提取公共参数
-            K = parameters.get('K')
-            # if K is None or K <= 0:
-            #     raise ValueError(f"增益K必须大于0，当前值: {K}")
+            K = parameters.get('K', 1.0)  # 默认增益为1.0，允许负值表示反作用系统
             
             # 生成时间序列
             t = np.arange(0, duration + dt, dt)
@@ -157,16 +158,27 @@ class KTLSimulator:
             # 根据模型类型进行仿真
             if model_type in ['FOPDT', 'FO']:
                 # 一阶模型
-                T1 = parameters.get('T1')
+                T1 = parameters.get('T1') or parameters.get('T')
                 L = parameters.get('L', 0.0)
                 if T1 is None or T1 <= 0:
                     raise ValueError(f"时间常数T1必须大于0，当前值: {T1}")
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
-                delay_steps = round(L / dt)  # 改为整数
+                delay_steps = max(0, round(L / dt))  # 确保非负整数
+                u_buffer = np.zeros(max(delay_steps, 1))  # 输入缓冲区
+                
                 for i in range(1, n):
-                    u_delayed = u[i - delay_steps] if i > delay_steps else 0.0
+                    # 更新输入缓冲区
+                    if delay_steps > 0:
+                        u_buffer = np.roll(u_buffer, -1)
+                        u_buffer[-1] = u[i-1]  # 当前输入进入缓冲区
+                        u_delayed = u_buffer[0]  # 延迟后的输入
+                    else:
+                        u_delayed = u[i-1]
+                    
+                    # 一阶惯性过程响应
+                    # 当K为负值时，表示反作用系统，输出变化方向与输入变化方向相反
                     dy = (K * u_delayed - y[i-1]) / T1 * dt
                     y[i] = y[i-1] + dy
                 
@@ -182,13 +194,24 @@ class KTLSimulator:
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
-                delay_steps = round(L / dt)  # 改为整数
+                delay_steps = max(0, round(L / dt))  # 确保非负整数
+                u_buffer = np.zeros(max(delay_steps, 1))  # 输入缓冲区
                 y1 = np.ones(n) * initial_output  # 第一阶环节输出
                 
                 for i in range(1, n):
-                    u_delayed = u[i - delay_steps] if i > delay_steps else 0.0
+                    # 更新输入缓冲区
+                    if delay_steps > 0:
+                        u_buffer = np.roll(u_buffer, -1)
+                        u_buffer[-1] = u[i-1]  # 当前输入进入缓冲区
+                        u_delayed = u_buffer[0]  # 延迟后的输入
+                    else:
+                        u_delayed = u[i-1]
+                    
+                    # 第一阶环节
+                    # 当K为负值时，表示反作用系统
                     dy1 = (K * u_delayed - y1[i-1]) / T1 * dt
                     y1[i] = y1[i-1] + dy1
+                    # 第二阶环节
                     dy = (y1[i] - y[i-1]) / T2 * dt
                     y[i] = y[i-1] + dy
                 
@@ -196,14 +219,15 @@ class KTLSimulator:
                 
             elif model_type == 'FO_INTEGRATOR':
                 # 一阶积分模型
-                T1 = parameters.get('T1')
+                T1 = parameters.get('T1') or parameters.get('T')
                 if T1 is None or T1 <= 0:
                     raise ValueError(f"时间常数T1必须大于0，当前值: {T1}")
                 
                 y_int = 0.0  # 积分态
                 for i in range(1, n):
-                    y_int += K * u[i] * dt
-                    dy = (y_int - y[i-1]) / T1 * dt
+                    # 当K为负值时，表示反作用系统，积分累积方向相反
+                    y_int += K * u[i-1] * dt  # 积分累积
+                    dy = (y_int - y[i-1]) / T1 * dt  # 一阶惯性环节
                     y[i] = y[i-1] + dy
                 
                 params_dict = {'K': float(K), 'T1': float(T1)}
@@ -217,14 +241,15 @@ class KTLSimulator:
                 
                 y_int1 = 0.0  # 一重积分
                 y_int2 = 0.0  # 二重积分
-                y1 = 0.0      # 第一阶环节输出
+                y1 = np.ones(n) * initial_output  # 第一阶环节输出
                 
                 for i in range(1, n):
-                    y_int1 += K * u[i] * dt
-                    y_int2 += y_int1 * dt
-                    dy1 = (y_int2 - y1) / T1 * dt
-                    y1 = y1 + dy1
-                    dy = (y1 - y[i-1]) / T2 * dt
+                    # 当K为负值时，表示反作用系统，积分累积方向相反
+                    y_int1 += K * u[i-1] * dt  # 一重积分累积
+                    y_int2 += y_int1 * dt       # 二重积分累积
+                    dy1 = (y_int2 - y1[i-1]) / T1 * dt  # 第一阶环节
+                    y1[i] = y1[i-1] + dy1
+                    dy = (y1[i] - y[i-1]) / T2 * dt     # 第二阶环节
                     y[i] = y[i-1] + dy
                 
                 params_dict = {'K': float(K), 'T1': float(T1), 'T2': float(T2)}
@@ -455,15 +480,16 @@ class KTLSimulator:
             
         返回:
             包含时间、设定值、过程值、控制输出的字典
+            
+        注:
+            K为负值时表示反作用系统，即系统输出变化方向与输入变化方向相反
         """
         try:
             # 标准化模型类型
             model_type = model_type.upper()
             
             # 提取公共参数
-            K = parameters.get('K')
-            # if K is None or K <= 0:
-            #     raise ValueError(f"增益K必须大于0，当前值: {K}")
+            K = parameters.get('K', 1.0)  # 默认增益为1.0，允许负值表示反作用系统
             
             # 生成时间序列
             t = np.arange(0, duration + dt, dt)
@@ -488,7 +514,7 @@ class KTLSimulator:
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
-                delay_steps = round(L / dt)  # 改为整数
+                delay_steps = max(0, round(L / dt))  # 确保非负整数
                 u_buffer = np.zeros(max(delay_steps, 1))
                 
                 for i in range(1, n):
@@ -500,13 +526,16 @@ class KTLSimulator:
                     u[i] = np.clip(u[i], 0.0, 100.0)
                     prev_error = error
                     
-                    # 获取延迟后的控制输出
-                    u_delayed = u_buffer[0] if delay_steps > 0 else u[i]
+                    # 更新输入缓冲区
                     if delay_steps > 0:
                         u_buffer = np.roll(u_buffer, -1)
-                        u_buffer[-1] = u[i]
+                        u_buffer[-1] = u[i-1]  # 当前输入进入缓冲区
+                        u_delayed = u_buffer[0]  # 延迟后的输入
+                    else:
+                        u_delayed = u[i-1]
                     
                     # 一阶惯性过程响应
+                    # 当K为负值时，表示反作用系统，输出变化方向与输入变化方向相反
                     dy = (K * u_delayed - pv[i-1]) / T1 * dt
                     pv[i] = pv[i-1] + dy
                 
@@ -522,9 +551,9 @@ class KTLSimulator:
                 if L < 0:
                     raise ValueError(f"纯滞后L不能为负，当前值: {L}")
                 
-                delay_steps = round(L / dt)  # 改为整数
+                delay_steps = max(0, round(L / dt))  # 确保非负整数
                 u_buffer = np.zeros(max(delay_steps, 1))
-                pv1 = 0.0  # 第一阶环节输出
+                pv1 = np.zeros(n)  # 第一阶环节输出
                 
                 for i in range(1, n):
                     # PID控制
@@ -535,16 +564,19 @@ class KTLSimulator:
                     u[i] = np.clip(u[i], 0.0, 100.0)
                     prev_error = error
                     
-                    # 获取延迟后的控制输出
-                    u_delayed = u_buffer[0] if delay_steps > 0 else u[i]
+                    # 更新输入缓冲区
                     if delay_steps > 0:
                         u_buffer = np.roll(u_buffer, -1)
-                        u_buffer[-1] = u[i]
+                        u_buffer[-1] = u[i-1]  # 当前输入进入缓冲区
+                        u_delayed = u_buffer[0]  # 延迟后的输入
+                    else:
+                        u_delayed = u[i-1]
                     
                     # 二阶过程响应
-                    dy1 = (K * u_delayed - pv1) / T1 * dt
-                    pv1 = pv1 + dy1
-                    dy = (pv1 - pv[i-1]) / T2 * dt
+                    # 当K为负值时，表示反作用系统
+                    dy1 = (K * u_delayed - pv1[i-1]) / T1 * dt
+                    pv1[i] = pv1[i-1] + dy1
+                    dy = (pv1[i] - pv[i-1]) / T2 * dt
                     pv[i] = pv[i-1] + dy
                 
                 params_dict = {'K': float(K), 'T1': float(T1), 'T2': float(T2), 'L': float(L)}
@@ -567,7 +599,8 @@ class KTLSimulator:
                     prev_error = error
                     
                     # 积分环节
-                    pv_int += K * u[i] * dt
+                    # 当K为负值时，表示反作用系统，积分累积方向相反
+                    pv_int += K * u[i-1] * dt
                     # 一阶惯性环节
                     dy = (pv_int - pv[i-1]) / T1 * dt
                     pv[i] = pv[i-1] + dy
@@ -583,7 +616,7 @@ class KTLSimulator:
                 
                 pv_int1 = 0.0  # 一重积分
                 pv_int2 = 0.0  # 二重积分
-                pv1 = 0.0      # 第一阶环节输出
+                pv1 = np.zeros(n)  # 第一阶环节输出
                 
                 for i in range(1, n):
                     # PID控制
@@ -595,13 +628,14 @@ class KTLSimulator:
                     prev_error = error
                     
                     # 二重积分
-                    pv_int1 += K * u[i] * dt
+                    # 当K为负值时，表示反作用系统，积分累积方向相反
+                    pv_int1 += K * u[i-1] * dt
                     pv_int2 += pv_int1 * dt
                     # 第一阶环节
-                    dy1 = (pv_int2 - pv1) / T1 * dt
-                    pv1 = pv1 + dy1
+                    dy1 = (pv_int2 - pv1[i-1]) / T1 * dt
+                    pv1[i] = pv1[i-1] + dy1
                     # 第二阶环节
-                    dy = (pv1 - pv[i-1]) / T2 * dt
+                    dy = (pv1[i] - pv[i-1]) / T2 * dt
                     pv[i] = pv[i-1] + dy
                 
                 params_dict = {'K': float(K), 'T1': float(T1), 'T2': float(T2)}
@@ -638,7 +672,7 @@ class KTLSimulator:
     def generate_fopdt_response(
             K: float,
             T1: float,
-            T2: float,
+            T2: float = 0.0,
             L: float = 0.0,
             step_value: float = 1.0,
             duration: float = 600.0,
@@ -650,11 +684,12 @@ class KTLSimulator:
 
         此方法保留用于向后兼容，建议使用 generate_response() 统一接口
 
-        模型传递函数: G(s) = K * exp2(-L*s) / (T*s + 1)
+        模型传递函数: G(s) = K * exp(-L*s) / (T*s + 1)
 
         参数:
-            K: 系统增益 (过程增益)
-            T: 时间常数 (秒)
+            K: 系统增益 (过程增益)，负值表示反作用系统
+            T1: 时间常数 (秒)
+            T2: 附加时间常数 (秒，可选)
             L: 纯滞后时间 (秒)
             step_value: 阶跃输入幅值
             duration: 仿真时长 (秒)
@@ -663,10 +698,23 @@ class KTLSimulator:
 
         返回:
             包含时间、输入、输出序列的字典
+            
+        注:
+            K为负值时表示反作用系统，即系统输出变化方向与输入变化方向相反
         """
+        # 确定模型类型
+        if T2 > 0:
+            # 如果提供了T2，则使用SOPDT模型
+            model_type = 'SOPDT'
+            parameters = {'K': K, 'T1': T1, 'T2': T2, 'L': L}
+        else:
+            # 否则使用FOPDT模型
+            model_type = 'FOPDT'
+            parameters = {'K': K, 'T1': T1, 'L': L}
+        
         return KTLSimulator.generate_response(
-            model_type='FOPDT',
-            parameters={'K': K, 'T1': T1, 'T2': T2, 'L': L},
+            model_type=model_type,
+            parameters=parameters,
             step_value=step_value,
             duration=duration,
             dt=dt,

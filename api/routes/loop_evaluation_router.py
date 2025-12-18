@@ -19,8 +19,8 @@ router = APIRouter(prefix="/api/v1")
 
 
 @router.get("/loop-evaluation/now/page",
-            summary="分页查询装置下回路评估列表",
-            operation_id="list_loop_evaluations_now",
+            summary="分页查询装置下当天回路评估列表",
+            operation_id="分页查询装置下当天回路评估列表",
             response_model=Dict[str, Any])
 async def list_loop_evaluations_now(
         loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
@@ -56,8 +56,8 @@ async def list_loop_evaluations_now(
             detail=f"查询回路评估列表失败: {str(e)}"
         )
 @router.get("/loop-evaluation/page",
-           summary="分页查询装置下回路评估列表",
-           operation_id="list_loop_evaluations",
+           summary="分页查询装置下历史回路评估列表",
+           operation_id="分页查询装置下历史回路评估列表",
            response_model=Dict[str, Any])
 async def list_loop_evaluations(
     loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
@@ -97,7 +97,7 @@ async def list_loop_evaluations(
 
 @router.get("/loop-evaluation/by-uri",
             summary="根据回路URI查询评估历史",
-            operation_id="get_loop_evaluation_by_uri",
+            operation_id="根据回路URI查询评估历史",
             response_model=Dict[str, Any])
 async def get_loop_evaluation_by_uri(
         loop_uri: Optional[str] = Query(None, description="回路URI"),
@@ -141,7 +141,7 @@ async def get_loop_evaluation_by_uri(
 
 @router.get("/loop-evaluation/{evaluation_id}",
             summary="根据ID查询评估",
-            operation_id="get_loop_evaluation_by_id",
+            operation_id="根据ID查询评估",
             response_model=Dict[str, Any])
 async def get_loop_evaluation_by_id(
         evaluation_id: int,
@@ -199,7 +199,7 @@ async def get_loop_evaluation_by_id(
         )
 @router.delete("/loop-evaluation/{evaluation_id}",
                summary="删除评估记录",
-               operation_id="delete_loop_evaluation",
+               operation_id="删除评估记录",
                response_model=Dict[str, Any])
 async def delete_loop_evaluation(
         evaluation_id: int,

@@ -15,17 +15,6 @@ from core.database.database import get_db
 home_page_router = APIRouter(tags=["首页"])
 
 
-# @home_page_router.get("/perf-stats", summary="获取综合性能统计结果")
-# async def get_perf_stats(session: Session = Depends(get_db)) -> Dict[str, int]:
-#     results = HomePageService.get_perf_stats(session)
-#     if not results or len(results) == 0:
-#         return None
-#
-#     data = {}
-#     for item in results:
-#         data[item[0]] = item[1]
-#     return data
-
 @home_page_router.get("/perf-stats", summary="获取综合性能统计结果")
 async def get_perf_stats(
         session: Session = Depends(get_db),

@@ -101,10 +101,10 @@ class CronTask:
         
         try:
             # 创建锁文件目录
-            lock_dir = "./lock"
+            lock_dir = os.path.abspath("./lock")
             if not os.path.exists(lock_dir):
                 os.makedirs(lock_dir, exist_ok=True)
-            
+                        
             # 创建锁文件路径
             lock_file_path = os.path.join(lock_dir, f"cron_task_{self.task_id}.lock")
             
@@ -130,12 +130,15 @@ class CronTask:
             logger.debug(f"任务 [{self.task_id}] 无法获取分布式锁，跳过执行 (PID: {self.process_id})")
             return False
         except Exception as e:
-            # 其他异常，记录日志但继续执行
+            # 其他异常，记录日志并释放可能打开的文件
             if self._lock_fd:
-                self._lock_fd.close()
+                try:
+                    self._lock_fd.close()
+                except:
+                    pass
                 self._lock_fd = None
             logger.warning(f"任务 [{self.task_id}] 获取分布式锁时发生异常: {str(e)}")
-            return True  # 出现异常时仍允许执行，避免任务完全无法运行
+            return False  # 出现异常时不应执行任务，确保锁机制有效
     
     def _release_multiprocess_lock(self):
         """
@@ -153,6 +156,8 @@ class CronTask:
             logger.debug(f"任务 [{self.task_id}] 成功释放分布式锁 (PID: {self.process_id})")
         except Exception as e:
             logger.warning(f"任务 [{self.task_id}] 释放分布式锁时发生异常: {str(e)}")
+            # 确保在任何异常情况下都清除文件描述符
+            self._lock_fd = None
     
     def _calculate_next_run_time(self) -> datetime:
         """计算下次执行时间"""

@@ -148,7 +148,7 @@ async def list_instances_by_uri(
 async def query_loop_info(
         loop_uri: Optional[str] = Query(
             ...,
-            description="回路 URI，默认从 BFF_MODEL_LOOP_URI 读取",
+            description="回路 URI",
             example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
         )
 ) -> LoopInfoResponse:

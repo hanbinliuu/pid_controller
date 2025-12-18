@@ -616,7 +616,15 @@ class ExpertTuningService:
             model_type: 模型类型
 
         Returns:
-            Dict[str, Any]: PID参数计算结果
+
+            Dict[str, Any]：
+                - model_type: 使用的模型类型
+                - input_parameters: 输入的模型参数(K, T, T2, L, lambda_input)
+                - params: 计算得到的PID参数(Kp, Ki, Kd, Ti, Td, Pb)
+                - pid_form: PID参数形式
+                - lambda: 实际使用的Lambda值
+                - recommendations: 模型应用建议
+                - note: 计算说明
         """
         try:
             # 转换ModelType为字符串

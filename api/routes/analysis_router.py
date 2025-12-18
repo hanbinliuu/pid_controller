@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 @router.get("/temperature-analysis",
             summary="大模型整定-曲线分析",
-            operation_id="温度曲线分析",
+            operation_id="大模型整定-回路状态曲线分析",
             description="大模型整定-分析曲线的控制性能，包括上升时间、超调量、稳态误差等指标")
 async def analyze_temperature(
         start_time: Union[int, str] = Query(None,required=False, description="开始时间，支持毫秒时间戳或字符串格式",

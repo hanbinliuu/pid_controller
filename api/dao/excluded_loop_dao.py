@@ -98,7 +98,7 @@ class ExcludedLoopDAO:
             db: 数据库会话
             loop_name: 回路名称筛选（模糊匹配）
             device_uri: 装置URI筛选（模糊匹配loop_info.loop_path字段）
-            uri: 回路URI筛选（模糊匹配）
+            uri: 回路URI筛选
             page_no: 页码
             page_size: 每页数量
         
@@ -220,7 +220,7 @@ class ExcludedLoopDAO:
             db: 数据库会话
             loop_name: 回路名称筛选（模糊匹配）
             device_uri: 装置URI筛选（模糊匹配loop_path字段）
-            uri: 回路URI筛选（模糊匹配）
+            uri: 回路URI筛选
         
         Returns:
             List[str]: URI列表

@@ -16,68 +16,9 @@ logger = logging.getLogger(__name__)
 # 创建路由
 router = APIRouter(prefix="/api/v1")
 
-
-# @router.post("/loop-info",
-#             summary="创建回路信息",
-#             operation_id="create_loop_info",
-#             response_model=Dict[str, Any])
-# async def create_loop_info(
-#     loop_uri: str = Query(..., description="回路 URI"),
-#     loop_path: Optional[str] = Query(None, description="PID相关参数的相对路径"),
-#     loop_name: Optional[str] = Query(None, description="回路名称"),
-#     pv_field: Optional[str] = Query(None, description="PV字段名"),
-#     sv_field: Optional[str] = Query(None, description="SV字段名"),
-#     mv_field: Optional[str] = Query(None, description="MV字段名"),
-#     auto_status_field: Optional[str] = Query(None, description="自动状态字段名"),
-#     pb_field: Optional[str] = Query(None, description="PB(比例带)字段名"),
-#     ti_field: Optional[str] = Query(None, description="TI(积分时间常数)字段名"),
-#     td_field: Optional[str] = Query(None, description="TD(微分时间常数)字段名"),
-#     description: Optional[str] = Query(None, description="描述"),
-#     db: Session = Depends(get_db)
-# ):
-#     """
-#     创建回路信息记录
-#
-#     创建成功时返回创建的信息对象
-#     """
-#     try:
-#         mapping = LoopInfoService.create_mapping(
-#             db,
-#             loop_uri=loop_uri,
-#             loop_path=loop_path,
-#             loop_name=loop_name,
-#             pv_field=pv_field,
-#             sv_field=sv_field,
-#             mv_field=mv_field,
-#             auto_status_field=auto_status_field,
-#             pb_field=pb_field,
-#             ti_field=ti_field,
-#             td_field=td_field,
-#             description=description
-#         )
-#
-#         return {
-#             "code": 0,
-#             "message": "创建成功",
-#             "data": {
-#                 "id": mapping.id,
-#                 "loop_uri": mapping.loop_uri,
-#                 "loop_path": mapping.loop_path,
-#                 "loop_name": mapping.loop_name,
-#                 "created_time": mapping.created_time.isoformat()
-#             }
-#         }
-#     except Exception as e:
-#         logger.error(f"创建回路信息失败: {str(e)}")
-#         raise HTTPException(
-#             status_code=500,
-#             detail=f"创建回路信息失败: {str(e)}"
-#         )
-
-
 @router.get("/loop-info/by-uri",
            summary="根据loop_uri查询信息",
-           operation_id="get_info_by_uri",
+           operation_id="根据loop_uri查询回路信息",
            response_model=Dict[str, Any])
 async def get_info_by_uri(
     loop_uri: str = Query(..., description="回路URI"),
@@ -111,8 +52,8 @@ async def get_info_by_uri(
 
 
 @router.get("/loop-info/by-path",
-           summary="根据loop_path查询信息",
-           operation_id="get_info_by_path",
+           summary="根据loop_path查询回路信息",
+           operation_id="根据loop_path回路信息",
            response_model=Dict[str, Any])
 async def get_info_by_path(
     loop_path: str = Query(..., description="回路路径"),
@@ -147,12 +88,12 @@ async def get_info_by_path(
 
 @router.get("/loop-info/list",
            summary="分页查询回路列表",
-           operation_id="list_loop_info",
+           operation_id="分页查询回路列表",
            response_model=Dict[str, Any])
 async def list_loop_info(
     db: Session = Depends(get_db),
     loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
-    loop_uri: Optional[str] = Query(None, description="回路URI（模糊匹配）"),
+    loop_uri: Optional[str] = Query(None, description="回路URI"),
     loop_path: Optional[str] = Query(None, description="回路路径（模糊匹配）"),
     loop_type: Optional[str] = Query(None, description="回路类型"),
     page_no: int = Query(1, description="页码，从1开始"),
@@ -183,7 +124,7 @@ async def list_loop_info(
 
 @router.get("/loop-info/list-exclude-excluded",
           summary="分页查询回路列表(排除已剔除)",
-          operation_id="list_loop_info_exclude_excluded",
+          operation_id="分页查询非剔除回路列表",
           response_model=Dict[str, Any])
 async def list_loop_info_exclude_excluded(
         db: Session = Depends(get_db),

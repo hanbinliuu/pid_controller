@@ -66,7 +66,6 @@ async def get_point_history_data_tsdb(
 
 @router.get("/history-data-raw",
             summary="回路测点数据查询",
-            # operation_id="测点数据查询",
             description="查询指定设备在指定时间范围内的历史数据，支持多种时间格式")
 async def get_history_data_raw(
         loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",

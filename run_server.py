@@ -38,7 +38,7 @@ from api.routes.cron_task_router import router as cron_task_router
 from api.routes.home_page_route import home_page_router
 
 # 导入中间件
-from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware, RequestLoggingMiddleware
+from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware,RequestLoggingMiddleware
 
 # 导入数据库初始化函数
 from core.database.database import init_database
@@ -159,7 +159,6 @@ app.add_middleware(
 )
 
 
-
 # 注册所有路由
 app.include_router(analysis_router, prefix='/api/analysis', tags=['大模型整定'])
 app.include_router(expert_tuning_router, prefix='/api/expert', tags=['专家整定'])
@@ -234,9 +233,9 @@ if __name__ == "__main__":
     workers = int(workers_env) if not enable_reload else 1
     
     # 在调试器环境中强制使用单worker
-    # if os.getenv('PYCHARM_HOSTED') or os.getenv('VSCODE_PID'):
-    #     logger.info("检测到调试器环境，强制使用单worker模式")
-    #     workers = 1
+    if os.getenv('PYCHARM_HOSTED') or os.getenv('VSCODE_PID'):
+        logger.info("检测到调试器环境，强制使用单worker模式")
+        workers = 2
     
     logger.info("启动PID整定软件 API服务器...")
     logger.info("API文档地址: http://localhost:8001/docs")

@@ -147,7 +147,7 @@ async def check_excluded_loop(
 async def list_excluded_loops(
     loop_name: Optional[str] = Query(None, description="回路名称（模糊匹配）"),
     device_uri: Optional[str] = Query(None, description="装置URI（模糊匹配loop_path路径）"),
-    uri: Optional[str] = Query(None, description="回路URI（模糊匹配）"),
+    uri: Optional[str] = Query(None, description="回路URI"),
     loop_type: Optional[str] = Query(None, description="回路类型"),
     page_no: int = Query(1, description="页码，从1开始"),
     page_size: int = Query(10, description="每页数量"),
