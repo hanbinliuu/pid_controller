@@ -35,7 +35,7 @@ CONFIG = {
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        {'start_time': '2025-12-15 10:06:12', 'end_time': '2025-12-15 20:30:12'},
+        {'start_time': '2025-12-17 15:06:12', 'end_time': '2025-12-17 22:30:12'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
@@ -275,6 +275,66 @@ def run_model_selector(data: List[Dict], qualified_windows: List[Dict],
 # 可视化
 # ============================================================
 
+def visualize_raw_data(data: List[Dict], scenario_name: str = None):
+    """可视化原始数据（无扰动段时使用）"""
+    pv_array, sv_array, mv_array, timestamps = convert_to_arrays(data)
+    time_array = [datetime.fromtimestamp(ts / 1000) for ts in timestamps]
+    
+    # 计算一些基本统计信息
+    pv_range = np.ptp(pv_array)
+    mv_range = np.ptp(mv_array)
+    pv_std = np.std(pv_array)
+    mv_std = np.std(mv_array)
+    
+    # 创建3个子图
+    fig = plt.figure(figsize=(16, 12))
+    fig.suptitle(f'原始数据可视化（未检测到扰动段）\n'
+                 f'PV范围={pv_range:.2f}, PV标准差={pv_std:.2f} | '
+                 f'MV范围={mv_range:.2f}, MV标准差={mv_std:.2f}', 
+                 fontsize=12, fontweight='bold')
+    
+    # ========== 子图1: PV/SV ==========
+    ax1 = fig.add_subplot(3, 1, 1)
+    ax1.plot(time_array, pv_array, 'b-', label='PV (过程值)', linewidth=0.8, alpha=0.7)
+    ax1.plot(time_array, sv_array, 'r--', label='SV (设定值)', linewidth=1.2)
+    ax1.set_ylabel('PV / SV')
+    ax1.set_title('过程值与设定值')
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    
+    # ========== 子图2: MV ==========
+    ax2 = fig.add_subplot(3, 1, 2, sharex=ax1)
+    ax2.plot(time_array, mv_array, 'g-', label='MV (操作值)', linewidth=0.8)
+    ax2.set_ylabel('MV')
+    ax2.set_title('操作值')
+    ax2.legend(loc='upper right')
+    ax2.grid(True, alpha=0.3)
+    
+    # ========== 子图3: PV-SV 偏差 ==========
+    ax3 = fig.add_subplot(3, 1, 3, sharex=ax1)
+    error = np.array(pv_array) - np.array(sv_array)
+    ax3.plot(time_array, error, 'purple', label='PV-SV 偏差', linewidth=0.8)
+    ax3.axhline(y=0, color='k', linestyle='--', alpha=0.5)
+    ax3.set_ylabel('偏差')
+    ax3.set_xlabel('时间')
+    ax3.set_title(f'偏差 (均值={np.mean(error):.2f}, 标准差={np.std(error):.2f})')
+    ax3.legend(loc='upper right')
+    ax3.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # 保存图片
+    if scenario_name:
+        filepath = f"{CONFIG['log_dir']}/raw_data_{scenario_name}.png"
+    else:
+        filepath = f"{CONFIG['log_dir']}/raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    
+    plt.savefig(filepath, dpi=150, bbox_inches='tight')
+    print(f"\n📊 原始数据图表已保存至: {filepath}")
+    plt.close()
+
+
 def visualize_fitting_result(data: List[Dict], tuning_input: Dict, 
                               fitting_result: Dict, scenario_name: str = None):
     """可视化模型拟合结果（含闭环验证）"""
@@ -408,24 +468,31 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         # 进行闭环仿真（使用实际数据的初值）
         calculator = PIDCalculator()
         
-        # 从 fit_data 获取实际 SV 和 PV（fit_data 已在函数开始处定义）
-        sv_data = fit_data.get('sv', [])
-        pv_data = fit_data.get('pv', [])
+        # 优先使用 closed_loop_info 中保存的仿真参数（确保与验证时一致）
+        sp_initial = closed_loop_info.get('sp_initial')
+        sp_final = closed_loop_info.get('sp_final')
+        pv_initial = closed_loop_info.get('pv_initial')
         
-        sp_initial = sv_data[0] if sv_data else 50.0
-        sp_final = sv_data[-1] if sv_data else 60.0
-        pv_initial = pv_data[0] if pv_data else sp_initial
+        # 如果没有保存的参数，则从 fit_data 获取
+        if sp_initial is None or sp_final is None:
+            sv_data = fit_data.get('sv', [])
+            pv_data = fit_data.get('pv', [])
+            
+            sp_initial = sv_data[0] if sv_data else 50.0
+            sp_final = sv_data[-1] if sv_data else 60.0
+            pv_initial = pv_data[0] if pv_data else sp_initial
+            
+            # 确保有足够的阶跃幅度，并且初值合理
+            sp_change = abs(sp_final - sp_initial)
+            pv_sp_diff = abs(pv_initial - sp_initial)
+            
+            # 如果 SP 阶跃幅度太小，或者 PV 初值与 SP 初值差距太大，使用默认阶跃测试
+            if sp_change < 5.0 or pv_sp_diff > sp_change * 2:
+                sp_initial = 50.0
+                sp_final = 60.0
+                pv_initial = 50.0  # 假设稳态开始
         
-        # 确保有足够的阶跃幅度，并且初值合理
         sp_change = abs(sp_final - sp_initial)
-        pv_sp_diff = abs(pv_initial - sp_initial)
-        
-        # 如果 SP 阶跃幅度太小，或者 PV 初值与 SP 初值差距太大，使用默认阶跃测试
-        if sp_change < 5.0 or pv_sp_diff > sp_change * 2:
-            sp_initial = 50.0
-            sp_final = 60.0
-            sp_change = 10.0
-            pv_initial = 50.0  # 假设稳态开始
         
         # 自适应仿真参数
         # 对于振荡整定，使用临界周期 Pu 作为参考
@@ -683,7 +750,10 @@ if __name__ == "__main__":
         tuning_input = detect_tuning_windows(data)
         qualified_windows = tuning_input.get('qualified_windows', [])
         if not qualified_windows:
-            print("⚠️ 未检测到扰动段，跳过")
+            print("⚠️ 未检测到扰动段")
+            # 即使没有扰动段，也可视化原始数据
+            scenario_name = start_time_str.replace(' ', '_').replace(':', '-')
+            visualize_raw_data(data, scenario_name)
             continue
         
         # Step 3: 执行模型拟合

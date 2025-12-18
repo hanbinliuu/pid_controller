@@ -882,7 +882,11 @@ class OscillationTuner:
             'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
             'steady_state_error': cl_metrics.steady_state_error,
             'oscillation_count': cl_metrics.oscillation_count,
-            'decay_ratio': cl_metrics.decay_ratio
+            'decay_ratio': cl_metrics.decay_ratio,
+            # 保存仿真参数，供可视化使用
+            'sp_initial': sp_initial,
+            'sp_final': sp_final,
+            'pv_initial': pv_initial
         }
         
         return {
