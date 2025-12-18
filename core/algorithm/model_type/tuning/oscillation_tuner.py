@@ -49,6 +49,91 @@ class OscillationTuner:
         if self._verbose:
             print(msg)
     
+    def detect_valve_issues(self, mv: np.ndarray, pv: np.ndarray, dt: float = 1.0) -> Dict[str, Any]:
+        """
+        检测阀门问题（死区、粘滞、饱和）
+        
+        Args:
+            mv: 操作变量数组
+            pv: 过程变量数组
+            dt: 采样周期
+        
+        Returns:
+            阀门问题检测结果字典
+        """
+        result = {
+            'has_deadband': False,
+            'has_stiction': False,
+            'has_saturation': False,
+            'deadband_size': 0.0,
+            'stiction_severity': 0.0,
+            'saturation_ratio': 0.0,
+            'issues_detected': []
+        }
+        
+        if len(mv) < 20 or len(pv) < 20:
+            return result
+        
+        try:
+            mv_diff = np.diff(mv)
+            pv_diff = np.diff(pv)
+            
+            # 1. 死区检测：MV变化但PV无响应
+            mv_moving = np.abs(mv_diff) > 0.1 * np.std(mv_diff)
+            pv_response = np.abs(pv_diff) > 0.05 * np.std(pv_diff)
+            
+            if np.sum(mv_moving) > 10:
+                # 计算MV变化时PV无响应的比例
+                no_response_ratio = np.sum(mv_moving & ~pv_response) / np.sum(mv_moving)
+                if no_response_ratio > 0.3:
+                    result['has_deadband'] = True
+                    result['deadband_size'] = no_response_ratio
+                    result['issues_detected'].append(f'死区({no_response_ratio:.0%})')
+            
+            # 2. 粘滞检测：MV方向改变时PV响应延迟或卡顿
+            mv_sign_changes = np.where(np.diff(np.sign(mv_diff)) != 0)[0]
+            if len(mv_sign_changes) > 3:
+                stiction_count = 0
+                for idx in mv_sign_changes[:-1]:
+                    if idx + 5 < len(pv_diff):
+                        # 检查方向改变后5个点内PV是否有响应
+                        pv_response_window = np.abs(pv_diff[idx:idx+5])
+                        if np.max(pv_response_window) < 0.1 * np.std(pv_diff):
+                            stiction_count += 1
+                
+                stiction_ratio = stiction_count / len(mv_sign_changes)
+                if stiction_ratio > 0.4:
+                    result['has_stiction'] = True
+                    result['stiction_severity'] = stiction_ratio
+                    result['issues_detected'].append(f'粘滞({stiction_ratio:.0%})')
+            
+            # 3. 饱和检测：MV在极值附近但PV不再响应
+            mv_range = np.ptp(mv)
+            if mv_range > 0.1:
+                mv_normalized = (mv - np.min(mv)) / mv_range
+                # 检测MV在0-5%或95-100%范围的时间比例
+                at_limits = (mv_normalized < 0.05) | (mv_normalized > 0.95)
+                saturation_ratio = np.sum(at_limits) / len(mv)
+                
+                if saturation_ratio > 0.15:
+                    # 进一步检查饱和时PV是否失去响应
+                    # 确保数组长度匹配
+                    at_limits_diff = at_limits[:-1]  # 与pv_diff长度匹配
+                    if np.sum(at_limits_diff) > 10 and len(pv_diff) == len(at_limits_diff):
+                        pv_at_limits = pv_diff[at_limits_diff]
+                        pv_normal = pv_diff[~at_limits_diff]
+                        if len(pv_normal) > 0 and np.std(pv_normal) > self._epsilon:
+                            response_reduction = np.std(pv_at_limits) / np.std(pv_normal)
+                            if response_reduction < 0.5:
+                                result['has_saturation'] = True
+                                result['saturation_ratio'] = saturation_ratio
+                                result['issues_detected'].append(f'饱和({saturation_ratio:.0%})')
+            
+        except Exception as e:
+            self.log(f"   ⚠️ 阀门问题检测失败: {e}")
+        
+        return result
+    
     def try_oscillation_tuning(self, segments: List[HistoricalData], 
                                segment_results: List[SegmentResult],
                                current_pid: Dict = None) -> Optional[Dict]:
@@ -204,10 +289,19 @@ class OscillationTuner:
                     use_conservative = True
                     self.log(f"   ⚠️ Ku={Ku:.3f}<0.5，临界增益过小，使用保守参数")
         
-        # 获取最佳段的振荡比（用于自适应调整）
+        # 获取最佳段的振荡比和数据质量（用于自适应调整）
         best_seg_idx = best_analysis['segment_idx']
         best_seg_result = segment_results[best_seg_idx] if best_seg_idx < len(segment_results) else None
         oscillation_ratio = best_seg_result.oscillation_ratio if best_seg_result else 0.0
+        data_quality = best_seg_result.quality_score if best_seg_result else 0.5
+        nonlinearity = best_seg_result.nonlinearity_score if best_seg_result else 0.0
+        
+        # 阀门问题检测
+        valve_issues = {}
+        if best_seg is not None:
+            valve_issues = self.detect_valve_issues(best_seg.mv, best_seg.pv)
+            if valve_issues['issues_detected']:
+                self.log(f"   ⚠️ 阀门问题检测: {', '.join(valve_issues['issues_detected'])}")
         
         # ========== 改进：临界法整定统一使用保守参数（对齐大模型建议） ==========
         # 原因：Tyreus-Luyben等经典方法对于实际振荡系统往往过于激进
@@ -228,7 +322,10 @@ class OscillationTuner:
             Pu, Ku, 
             K_approx=apparent_gain,
             reason=reason,
-            oscillation_ratio=oscillation_ratio
+            oscillation_ratio=oscillation_ratio,
+            data_quality=data_quality,
+            nonlinearity=nonlinearity,
+            valve_issues=valve_issues
         )
         
         if pid_params is None:
@@ -244,13 +341,19 @@ class OscillationTuner:
             'pid_params': pid_params,
             'oscillation_info': best_analysis['osc_info'],
             'segment_idx': best_analysis['segment_idx'],
-            'method': 'oscillation_critical'
+            'method': 'oscillation_critical',
+            'data_quality': data_quality,
+            'nonlinearity': nonlinearity,
+            'valve_issues': valve_issues
         }
     
     def _get_conservative_pid_params(self, Pu: float, Ku: float, 
                                       K_approx: float = 1.0,
                                       reason: str = 'generic',
-                                      oscillation_ratio: float = 0.0) -> Dict[str, Any]:
+                                      oscillation_ratio: float = 0.0,
+                                      data_quality: float = 0.5,
+                                      nonlinearity: float = 0.0,
+                                      valve_issues: Dict = None) -> Dict[str, Any]:
         """
         获取保守PID参数（动态计算pb，借鉴大模型调参经验）
         
@@ -258,6 +361,8 @@ class OscillationTuner:
         1. 严重振荡时使用更保守的pb
         2. 自适应添加微分作用抑制振荡
         3. pb范围扩展，允许更保守的参数
+        4. 数据质量越差，参数越保守
+        5. 考虑阀门问题（死区、粘滞、卡涩）
         
         Args:
             Pu: 临界周期
@@ -265,10 +370,15 @@ class OscillationTuner:
             K_approx: 估计的过程增益
             reason: 使用保守参数的原因
             oscillation_ratio: 振荡比（用于自适应调整）
+            data_quality: 数据质量评分 (0-1)，越低越需要保守
+            nonlinearity: 非线性程度 (0-1)
+            valve_issues: 阀门问题检测结果
         
         Returns:
             保守PID参数字典
         """
+        if valve_issues is None:
+            valve_issues = {}
         osc_config = Config.OSCILLATION_TUNING
         
         # ========== 动态计算 pb（渐进式策略，更通用） ==========
@@ -304,6 +414,32 @@ class OscillationTuner:
         if reason == 'high_gain':
             pb_base *= 1.1  # Ku过大，轻微额外保守（降低以避免多重乘数溢出）
         # 注意：低增益场景不再强制设为pb_min，避免与后续乘数叠加导致触边界
+        
+        # 6. 数据质量因子（质量越差越保守）
+        # quality_score: 0.0-1.0, 低于0.5时开始增加保守度
+        if data_quality < 0.5:
+            quality_factor = 1.0 + (0.5 - data_quality) * 0.6  # 最多增加30%
+            pb_base *= quality_factor
+            self.log(f"   📊 数据质量调整: 质量={data_quality:.2f}, 因子=×{quality_factor:.2f}")
+        
+        # 7. 非线性因子（非线性越高越保守）
+        if nonlinearity > 0.5:
+            nonlin_factor = 1.0 + (nonlinearity - 0.5) * 0.4  # 最多增加20%
+            pb_base *= nonlin_factor
+            self.log(f"   📊 非线性调整: 非线性={nonlinearity:.2f}, 因子=×{nonlin_factor:.2f}")
+        
+        # 8. 阀门问题因子
+        valve_factor = 1.0
+        if valve_issues.get('has_deadband', False):
+            valve_factor *= 1.15
+            self.log(f"   ⚠️ 检测到阀门死区，增加保守度 ×1.15")
+        if valve_issues.get('has_stiction', False):
+            valve_factor *= 1.2
+            self.log(f"   ⚠️ 检测到阀门粘滞，增加保守度 ×1.2")
+        if valve_issues.get('has_saturation', False):
+            valve_factor *= 1.1
+            self.log(f"   ⚠️ 检测到阀门饱和，增加保守度 ×1.1")
+        pb_base *= valve_factor
         
         # ========== 渐进式振荡保守调整（核心改进，使用渐近函数） ==========
         # 使用渐近函数避免高振荡时pb线性爆炸
@@ -573,20 +709,35 @@ class OscillationTuner:
         rating_details['stability_score'] = round(stability_score, 2)
         
         # 2. 数据质量评分 (0-10) - 权重 25%
-        # 振荡比越高，数据质量越差
+        # 综合考虑振荡比、原始数据质量、非线性
         oscillation_ratio = osc_info.get('oscillation_ratio', 0.5)
+        raw_data_quality = osc_result.get('data_quality', 0.5)
+        nonlinearity = osc_result.get('nonlinearity', 0.0)
+        
+        # 基于振荡比的评分
         if oscillation_ratio < 0.4:
-            data_quality_score = 8.0
+            osc_score = 8.0
         elif oscillation_ratio < 0.6:
-            data_quality_score = 7.0 - (oscillation_ratio - 0.4) * 5
+            osc_score = 7.0 - (oscillation_ratio - 0.4) * 5
         elif oscillation_ratio < 0.8:
-            data_quality_score = 6.0 - (oscillation_ratio - 0.6) * 7.5
+            osc_score = 6.0 - (oscillation_ratio - 0.6) * 7.5
         else:
             # 极高振荡(>0.8)，数据质量较差
-            data_quality_score = 4.5 - (oscillation_ratio - 0.8) * 10
-        data_quality_score = max(2.0, min(8.0, data_quality_score))  # 上限为8，因为是振荡数据
+            osc_score = 4.5 - (oscillation_ratio - 0.8) * 15  # 加大惩罚
+        
+        # 原始数据质量因子（quality_score < 0.4 时开始扣分）
+        quality_penalty = max(0, (0.4 - raw_data_quality) * 3)  # 最多扣1.2分
+        
+        # 非线性因子（nonlinearity > 0.5 时开始扣分）
+        nonlin_penalty = max(0, (nonlinearity - 0.5) * 2)  # 最多扣1分
+        
+        data_quality_score = osc_score - quality_penalty - nonlin_penalty
+        data_quality_score = max(1.0, min(8.0, data_quality_score))  # 上限为8，下限为1
+        
         rating_details['data_quality_score'] = round(data_quality_score, 2)
         rating_details['oscillation_ratio'] = round(oscillation_ratio, 2)
+        rating_details['raw_data_quality'] = round(raw_data_quality, 2)
+        rating_details['nonlinearity'] = round(nonlinearity, 2)
         
         # 3. 参数边界距离评分 (0-10) - 权重 20%
         # pb距离边界越近，得分越低
@@ -642,15 +793,63 @@ class OscillationTuner:
         )
         
         # 特殊情况限制
+        warnings = []
+        
         if not is_stable:
             model_rating = min(model_rating, 4.0)  # 不稳定最高4分
+            warnings.append('闭环仿真不稳定')
+        
         if oscillation_ratio > 0.9:
-            model_rating = min(model_rating, 6.5)  # 极高振荡最高6.5分
+            model_rating = min(model_rating, 6.0)  # 极高振荡最高6分（从6.5降低）
+            warnings.append(f'极高振荡({oscillation_ratio:.0%})，建议人工排查根因')
+        elif oscillation_ratio > 0.85:
+            model_rating = min(model_rating, 6.5)
+            warnings.append(f'高振荡({oscillation_ratio:.0%})')
+        
         if pb <= pb_min * 1.02 or pb >= pb_max * 0.98:
             model_rating = min(model_rating, 5.5)  # 触边界最高5.5分
+            warnings.append('PID参数触达边界')
+        
+        # 数据质量极差时进一步限制
+        if raw_data_quality < 0.3:
+            model_rating = min(model_rating, 5.5)
+            warnings.append(f'数据质量极差({raw_data_quality:.2f})')
+        
+        # 非线性过高时限制
+        if nonlinearity > 0.6:
+            model_rating = min(model_rating, 6.0)
+            warnings.append(f'高非线性({nonlinearity:.2f})，可能存在阀门问题')
+        
+        # 阀门问题检测影响评分
+        valve_issues = osc_result.get('valve_issues', {})
+        if valve_issues.get('has_deadband', False):
+            model_rating = min(model_rating, 6.0)
+            warnings.append(f"检测到阀门死区({valve_issues.get('deadband_size', 0):.0%})")
+        if valve_issues.get('has_stiction', False):
+            model_rating = min(model_rating, 5.5)
+            warnings.append(f"检测到阀门粘滞({valve_issues.get('stiction_severity', 0):.0%})")
+        if valve_issues.get('has_saturation', False):
+            model_rating = min(model_rating, 6.0)
+            warnings.append(f"检测到阀门饱和({valve_issues.get('saturation_ratio', 0):.0%})")
+        
+        # 综合风险等级（极高振荡+低质量+阀门问题）
+        risk_factors = 0
+        if oscillation_ratio > 0.85:
+            risk_factors += 1
+        if raw_data_quality < 0.35:
+            risk_factors += 1
+        if valve_issues.get('has_stiction', False) or valve_issues.get('has_deadband', False):
+            risk_factors += 1
+        
+        if risk_factors >= 2:
+            model_rating = min(model_rating, 5.0)
+            warnings.append('❗多重风险因素，强烈建议人工排查')
         
         model_rating = round(min(10.0, max(0.0, model_rating)), 1)
         rating_details['weights'] = weights
+        rating_details['warnings'] = warnings
+        rating_details['risk_factors'] = risk_factors
+        rating_details['valve_issues'] = valve_issues
         
         closed_loop_info = {
             'is_stable': is_stable,
