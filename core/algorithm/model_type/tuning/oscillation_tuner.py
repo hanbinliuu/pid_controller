@@ -136,7 +136,8 @@ class OscillationTuner:
     
     def try_oscillation_tuning(self, segments: List[HistoricalData], 
                                segment_results: List[SegmentResult],
-                               current_pid: Dict = None) -> Optional[Dict]:
+                               current_pid: Dict = None,
+                               force: bool = False) -> Optional[Dict]:
         """
         尝试使用振荡分析进行临界法整定
         
@@ -146,6 +147,7 @@ class OscillationTuner:
             segments: 扰动段数据列表
             segment_results: 各段拟合结果
             current_pid: 当前PID参数（用于校正Ku估计）
+            force: 是否强制使用振荡整定（闭环不稳定时使用）
         
         Returns:
             振荡整定结果，如果不适用则返回 None
@@ -214,17 +216,28 @@ class OscillationTuner:
                 force_reason = f"平均振荡比{avg_osc_ratio:.2f}>0.7且{failed_segments}/{total_segments}段失败"
         
         # 如果有成功拟合的段且不需要强制临界法，使用常规流程
-        if successful_segments and not force_oscillation_tuning:
+        # 但如果 force=True（闭环不稳定时的fallback），跳过此检查
+        if successful_segments and not force_oscillation_tuning and not force:
             self.log(f"\n📊 有 {len(successful_segments)} 个段拟合成功，使用常规模型融合流程")
             return None
+        
+        if force:
+            self.log(f"\n🔄 强制使用振荡整定（闭环验证不稳定）")
         
         if force_oscillation_tuning:
             self.log(f"\n⚠️ 强制使用临界法整定: {force_reason}")
         
+        # 如果 force=True，即使没有"振荡失败段"也尝试分析所有段
         if not oscillating_segments:
-            return None  # 没有符合条件的振荡段
-        
-        self.log(f"\n🔄 检测到 {len(oscillating_segments)} 个高振荡拟合失败段，尝试临界法整定")
+            if force and segments:
+                # 强制模式：分析所有段
+                self.log(f"\n🔄 强制模式：分析所有 {len(segments)} 个段")
+                oscillating_segments = [(i, seg, result) for i, (seg, result) 
+                                       in enumerate(zip(segments, segment_results))]
+            else:
+                return None  # 没有符合条件的振荡段
+        else:
+            self.log(f"\n🔄 检测到 {len(oscillating_segments)} 个高振荡拟合失败段，尝试临界法整定")
         
         # 分析每个振荡段
         oscillation_analyses = []
@@ -338,6 +351,7 @@ class OscillationTuner:
         self.log(f"      方法: {pid_params['method']}")
         
         return {
+            'success': True,  # 振荡整定成功标志
             'pid_params': pid_params,
             'oscillation_info': best_analysis['osc_info'],
             'segment_idx': best_analysis['segment_idx'],

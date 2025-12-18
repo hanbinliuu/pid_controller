@@ -282,7 +282,8 @@ class ModelSelector:
         
         # 构建最终输出（传入扰动段信息和质量信息）
         return self._build_output(fusion_result, hist_data, time_range, lambda_factor, 
-                                  input_data.tuning_window, quality_info)
+                                  input_data.tuning_window, quality_info,
+                                  segment_results, valid_segments)
     
     def _build_quality_info(self, valid_segments: List[HistoricalData],
                             segment_results: List[SegmentResult],
@@ -771,6 +772,13 @@ class ModelSelector:
                 k_reasonable = fit_result.get('k_reasonable', True)
                 if not k_reasonable:
                     self.log(f"      段{result.segment_idx+1}: K={K:.4f} 超出合理范围，跳过融合")
+                    valid_segment_idx += 1
+                    continue
+                
+                # 跳过数据点数太少的段（防止过拟合）
+                min_fusion_points = Config.SEGMENT_PROCESSING.get('min_fusion_points', 100)
+                if result.data_points < min_fusion_points:
+                    self.log(f"      段{result.segment_idx+1}: 数据点数={result.data_points} < {min_fusion_points}，跳过融合")
                     valid_segment_idx += 1
                     continue
                 
@@ -1350,12 +1358,16 @@ class ModelSelector:
     def _build_output(self, fusion: FusionResult, hist_data: HistoricalData,
                       time_range: Dict, lambda_factor: float,
                       tuning_windows: List[Dict] = None,
-                      quality_info: DataQualityInfo = None) -> Dict[str, Any]:
+                      quality_info: DataQualityInfo = None,
+                      segment_results: List[SegmentResult] = None,
+                      segments: List[HistoricalData] = None) -> Dict[str, Any]:
         """
         构建最终输出
         
         Args:
             quality_info: 数据质量信息，用于自适应保守PID整定
+            segment_results: 各段拟合结果，用于闭环不稳定时切换振荡整定
+            segments: 各扰动段数据，用于闭环不稳定时切换振荡整定
         """
         pid_params = self._pid_calculator.calculate_from_fusion(
             fusion, lambda_factor, quality_info=quality_info
@@ -1461,6 +1473,27 @@ class ModelSelector:
             sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
             verbose=self._verbose
         )
+        
+        # 如果闭环不稳定，尝试切换到振荡整定法
+        if not is_stable and self._oscillation_tuner is not None and segments is not None:
+            self.log(f"\n   ⚠️ 常规整定闭环不稳定，尝试切换到振荡整定法...")
+            
+            # 尝试振荡整定 (参数顺序: segments, segment_results, current_pid, force)
+            # force=True 强制使用振荡整定，不检查是否有成功拟合的段
+            osc_result = self._oscillation_tuner.try_oscillation_tuning(
+                segments, segment_results, pid_params, force=True
+            )
+            
+            if osc_result is not None and osc_result.get('success', False):
+                self.log(f"   ✅ 振荡整定成功，使用振荡整定参数")
+                
+                # 使用振荡整定的结果
+                osc_output = self._oscillation_tuner.build_oscillation_output(
+                    osc_result, hist_data, time_range, tuning_windows
+                )
+                return osc_output
+            else:
+                self.log(f"   ⚠️ 振荡整定也失败，保持原参数")
         
         # 再计算 model_rating（传入闭环指标）
         model_rating, score_details = self._pid_calculator.calculate_model_rating(
