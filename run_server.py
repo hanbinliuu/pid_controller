@@ -233,9 +233,9 @@ if __name__ == "__main__":
     workers = int(workers_env) if not enable_reload else 1
     
     # 在调试器环境中强制使用单worker
-    if os.getenv('PYCHARM_HOSTED') or os.getenv('VSCODE_PID'):
-        logger.info("检测到调试器环境，强制使用单worker模式")
-        workers = 2
+    # if os.getenv('PYCHARM_HOSTED') or os.getenv('VSCODE_PID'):
+    #     logger.info("检测到调试器环境，强制使用单worker模式")
+    #     workers = 1
     
     logger.info("启动PID整定软件 API服务器...")
     logger.info("API文档地址: http://localhost:8001/docs")
