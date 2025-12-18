@@ -538,14 +538,119 @@ class OscillationTuner:
                 verbose=self._verbose
             )
         
-        # 计算评分
-        stability_score = 10.0 if is_stable else 5.0
-        if cl_metrics.overshoot > cl_config['overshoot_acceptable']:
-            stability_score -= 2.0
-        if cl_metrics.oscillation_count > cl_config['oscillation_count_ideal']:
-            stability_score -= 1.0
+        # ========== 综合评分策略（更精确反映参数可用性） ==========
+        rating_details = {}
         
-        model_rating = round(min(10.0, max(0.0, stability_score * 0.6 + 2.0)), 2)
+        # 1. 闭环稳定性评分 (0-10) - 权重 35%
+        stability_score = 6.0 if is_stable else 2.0
+        if is_stable:
+            # 超调量评分
+            if cl_metrics.overshoot <= 5:
+                stability_score += 1.5
+            elif cl_metrics.overshoot <= 15:
+                stability_score += 1.0
+            elif cl_metrics.overshoot <= 30:
+                stability_score += 0.5
+            elif cl_metrics.overshoot > 50:
+                stability_score -= 1.0
+            
+            # 调节时间评分
+            if cl_metrics.settling_time < float('inf'):
+                if cl_metrics.settling_time <= 30:
+                    stability_score += 1.0
+                elif cl_metrics.settling_time <= 60:
+                    stability_score += 0.5
+                elif cl_metrics.settling_time > 120:
+                    stability_score -= 0.5
+            
+            # 振荡次数
+            if cl_metrics.oscillation_count <= 2:
+                stability_score += 0.5
+            elif cl_metrics.oscillation_count > 5:
+                stability_score -= 0.5
+        
+        stability_score = min(10.0, max(0.0, stability_score))
+        rating_details['stability_score'] = round(stability_score, 2)
+        
+        # 2. 数据质量评分 (0-10) - 权重 25%
+        # 振荡比越高，数据质量越差
+        oscillation_ratio = osc_info.get('oscillation_ratio', 0.5)
+        if oscillation_ratio < 0.4:
+            data_quality_score = 8.0
+        elif oscillation_ratio < 0.6:
+            data_quality_score = 7.0 - (oscillation_ratio - 0.4) * 5
+        elif oscillation_ratio < 0.8:
+            data_quality_score = 6.0 - (oscillation_ratio - 0.6) * 7.5
+        else:
+            # 极高振荡(>0.8)，数据质量较差
+            data_quality_score = 4.5 - (oscillation_ratio - 0.8) * 10
+        data_quality_score = max(2.0, min(8.0, data_quality_score))  # 上限为8，因为是振荡数据
+        rating_details['data_quality_score'] = round(data_quality_score, 2)
+        rating_details['oscillation_ratio'] = round(oscillation_ratio, 2)
+        
+        # 3. 参数边界距离评分 (0-10) - 权重 20%
+        # pb距离边界越近，得分越低
+        pb = pid_params.get('pb', 200)
+        pb_min = Config.OSCILLATION_TUNING.get('pb_min', 120.0)
+        pb_max = Config.OSCILLATION_TUNING.get('pb_max', 600.0)
+        pb_range = pb_max - pb_min
+        pb_margin = min(pb - pb_min, pb_max - pb) / (pb_range / 2)  # 0~1，离中间越近越好
+        
+        boundary_score = 5.0 + pb_margin * 5.0  # 5~10分
+        if pb <= pb_min * 1.05 or pb >= pb_max * 0.95:
+            boundary_score = 3.0  # 触边界扣分
+        
+        # Ti边界检查
+        Ti = pid_params.get('Ti', 2.5)
+        if Ti <= 1.6 or Ti >= 9.5:  # 接近[1.5, 10.0]边界
+            boundary_score -= 1.0
+        
+        boundary_score = min(10.0, max(0.0, boundary_score))
+        rating_details['boundary_score'] = round(boundary_score, 2)
+        rating_details['pb'] = round(pb, 2)
+        
+        # 4. 整定方法评分 (0-10) - 权重 20%
+        # 临界法本身是fallback方法，基础分较低
+        method = pid_params.get('method', 'unknown')
+        if 'low_gain' in method or 'high_gain' in method:
+            method_score = 5.0  # 极端增益场景
+        elif 'oscillation' in method:
+            method_score = 6.0  # 正常振荡整定
+        else:
+            method_score = 5.5
+        
+        # 有微分作用时加分（有助于抑制振荡）
+        if pid_params.get('Kd', 0) > 0:
+            method_score += 0.5
+        
+        rating_details['method_score'] = round(method_score, 2)
+        rating_details['method'] = method
+        
+        # ========== 综合评分 ==========
+        weights = {
+            'stability': 0.35,
+            'data_quality': 0.25,
+            'boundary': 0.20,
+            'method': 0.20
+        }
+        
+        model_rating = (
+            weights['stability'] * stability_score +
+            weights['data_quality'] * data_quality_score +
+            weights['boundary'] * boundary_score +
+            weights['method'] * method_score
+        )
+        
+        # 特殊情况限制
+        if not is_stable:
+            model_rating = min(model_rating, 4.0)  # 不稳定最高4分
+        if oscillation_ratio > 0.9:
+            model_rating = min(model_rating, 6.5)  # 极高振荡最高6.5分
+        if pb <= pb_min * 1.02 or pb >= pb_max * 0.98:
+            model_rating = min(model_rating, 5.5)  # 触边界最高5.5分
+        
+        model_rating = round(min(10.0, max(0.0, model_rating)), 1)
+        rating_details['weights'] = weights
         
         closed_loop_info = {
             'is_stable': is_stable,
@@ -587,8 +692,5 @@ class OscillationTuner:
                 'oscillation_amplitude': osc_info['amplitude']
             },
             'closed_loop_verification': closed_loop_info,
-            'rating_details': {
-                'stability_score': stability_score,
-                'method': 'oscillation_critical'
-            }
+            'rating_details': rating_details
         }
