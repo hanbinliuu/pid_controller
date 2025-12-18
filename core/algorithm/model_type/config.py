@@ -62,7 +62,7 @@ class Config:
         # ========== 自适应整定参数（渐进式策略，动态pb调整） ==========
         # 渐进式pb调整：pb_final = pb_base * (1 + (oscillation_ratio - start) * pb_gradient)
         # 例如：振荡比=0.9, start=0.4 → pb乘以 1 + sqrt(0.5)*1.2 ≈ 1.85
-        'pb_gradient': 1.2,                   # pb渐进系数（使用sqrt后降低以控制增长）
+        'pb_gradient': 1.0,                   # pb渐进系数（降低以加快响应）
         'pb_oscillation_start': 0.4,          # 开始应用渐进调整的振荡比阈值
         
         # 自适应微分作用
@@ -71,11 +71,11 @@ class Config:
         'derivative_oscillation_threshold': 0.5,  # 振荡比超过此值才加微分
         
         # pb范围（扩大动态范围，确保普适性）
-        'pb_min': 150.0,                      # pb下限（适度降低以允许更快响应）
+        'pb_min': 120.0,                      # pb下限（降低以允许更快响应）
         'pb_max': 600.0,                      # pb上限（适度提高以覆盖极端场景）
         
         # 额外保守因子（针对临界法整定）
-        'critical_method_safety_factor': 1.4, # 临界法额外安全系数（增加以提高稳定性）
+        'critical_method_safety_factor': 1.2, # 临界法额外安全系数（降低以加快响应，允许少量超调）
     }
     
     # ============================================================

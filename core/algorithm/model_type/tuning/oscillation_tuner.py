@@ -310,23 +310,43 @@ class OscillationTuner:
         # pb_multiplier = 1 + k * sqrt(osc - start)，增长放缓
         pb_gradient = osc_config.get('pb_gradient', 2.0)
         pb_osc_start = osc_config.get('pb_oscillation_start', 0.4)
-        safety_factor = osc_config.get('critical_method_safety_factor', 1.4)
+        base_safety_factor = osc_config.get('critical_method_safety_factor', 1.4)
+        
+        # 自适应安全系数：中等振荡加速，高振荡保守
+        # 振荡比 < 0.6: safety = 1.2 (加速)
+        # 振荡比 0.6-0.8: safety = 1.2 + (osc-0.6)*1.0 (线性过渡)
+        # 振荡比 > 0.8: safety = 1.4+ (保守)
+        if oscillation_ratio < 0.6:
+            safety_factor = 1.2  # 中低振荡，加速响应
+        elif oscillation_ratio < 0.8:
+            # 线性过渡：1.2 → 1.4
+            safety_factor = 1.2 + (oscillation_ratio - 0.6) * 1.0
+        else:
+            # 高振荡，更保守
+            safety_factor = 1.4 + (oscillation_ratio - 0.8) * 0.5
         
         # 计算综合保守乘数（将安全系数合并，避免多重乘数叠加）
-        total_multiplier = safety_factor  # 基础安全系数
+        total_multiplier = safety_factor  # 自适应安全系数
         
         if oscillation_ratio > pb_osc_start:
             # 使用平方根函数，高振荡时增长放缓
             # effective_osc ∈ [0, 0.6]（振荡比最高1.0）
             effective_osc = oscillation_ratio - pb_osc_start
-            # sqrt(0.6) ≈ 0.77，乘以gradient=2.0 → 1.55
-            # 总乘数 = 1.4 * (1 + 1.55) = 3.57（可控）
+            # sqrt(0.6) ≈ 0.77，乘以gradient=1.0 → 0.77
             osc_multiplier = 1.0 + np.sqrt(effective_osc) * pb_gradient
             total_multiplier *= osc_multiplier
+            
+            # 限制总乘数上限，避免高增益+极高振荡导致pb爆炸
+            # 上限2.2：确保pb_base=300时，最终pb≤660（留有余量）
+            max_multiplier = 2.2
+            if total_multiplier > max_multiplier:
+                self.log(f"   ⚠️ 总乘数{total_multiplier:.2f}超限，限制为{max_multiplier}")
+                total_multiplier = max_multiplier
+            
             self.log(f"   📊 渐进式保守调整: 振荡比={oscillation_ratio:.2f}, "
-                    f"osc乘数={osc_multiplier:.2f}, 总乘数={total_multiplier:.2f}")
+                    f"安全系数={safety_factor:.2f}, osc乘数={osc_multiplier:.2f}, 总乘数={total_multiplier:.2f}")
         else:
-            self.log(f"   📊 基础安全系数: ×{safety_factor}")
+            self.log(f"   📊 基础安全系数: ×{safety_factor:.2f}")
         
         pb_base *= total_multiplier
         
@@ -346,19 +366,19 @@ class OscillationTuner:
         # 高振荡时增大Ti（减弱积分作用，提高稳定性）
         base_Ti = max(Pu / 2, 1.5) if Pu > 0 else 2.0
         
-        # 振荡调整因子：振荡比>0.5时逐渐增大Ti
-        ti_osc_start = 0.5
+        # 振荡调整因子：振荡比>0.6时逐渐增大Ti（提高阈值，减少Ti增大）
+        ti_osc_start = 0.6
         if oscillation_ratio > ti_osc_start:
-            # Ti乘数 = 1 + sqrt(osc - 0.5) * 0.8，最大约1.56倍
-            ti_multiplier = 1.0 + np.sqrt(oscillation_ratio - ti_osc_start) * 0.8
+            # Ti乘数 = 1 + sqrt(osc - 0.6) * 0.5，最大约1.32倍（降低系数加快响应）
+            ti_multiplier = 1.0 + np.sqrt(oscillation_ratio - ti_osc_start) * 0.5
         else:
             ti_multiplier = 1.0
         
-        # 慢系统调整：Pu大时Ti也应该更大
+        # 慢系统调整：Pu大时Ti也应该更大（降低乘数）
         if Pu > 20:
-            ti_multiplier *= 1.2
-        elif Pu > 10:
             ti_multiplier *= 1.1
+        elif Pu > 10:
+            ti_multiplier *= 1.05
         
         conservative_Ti = base_Ti * ti_multiplier
         # Ti范围限制：[1.5, 10.0]
