@@ -59,10 +59,15 @@ class Config:
         'sp_final': 60.0,                    # 设定值最终值
         'pv_initial': 50.0,                  # 过程值初始值
         
-        # ========== 保守策略判断阈值 ==========
-        'low_gain_threshold': 0.1,           # 低增益系统阈值
-        'ku_high_threshold': 5.0,            # Ku过大阈值
-        'ku_low_threshold': 0.5,             # Ku过小阈值
+        # ========== 通用保守策略（基于相对指标，提高普适性） ==========
+        # 使用 Ku/K 比值代替绝对Ku阈值，适用于不同量程的回路
+        'ku_k_ratio_high': 20.0,             # Ku/K > 此值认为临界增益相对过大
+        'ku_k_ratio_low': 0.5,               # Ku/K < 此值认为临界增益相对过小
+        
+        # 保留绝对阈值作为兜底（极端情况）
+        'low_gain_threshold': 0.05,          # 低增益系统绝对阈值（极低增益）
+        'ku_high_threshold': 50.0,           # Ku绝对上限（极端情况）
+        'ku_low_threshold': 0.1,             # Ku绝对下限（极端情况）
         
         # ========== 基础pb计算参数 ==========
         'pb_from_k_factor': 1.5,             # 基于K计算pb的保守系数
@@ -89,13 +94,13 @@ class Config:
         'valve_saturation_factor': 1.1,      # 饱和调整因子
         
         # ========== 振荡比自适应安全系数 ==========
-        'safety_factor_base': 1.4,           # 基础安全系数 (osc < 0.5)
+        'safety_factor_base': 1.3,           # 基础安全系数 (osc < 0.5)
         'safety_factor_thresholds': [0.5, 0.7, 0.85],  # 振荡比阈值
-        'safety_factor_slopes': [0.5, 1.0, 2.0],       # 各区间斜率
+        'safety_factor_slopes': [0.4, 0.8, 1.5],       # 各区间斜率（降低，转移到Ti）
         
         # ========== 总乘数上限 ==========
-        'max_multiplier_normal': 2.5,        # 正常振荡时的乘数上限
-        'max_multiplier_high_osc': 3.0,      # 高振荡(>0.85)时的乘数上限
+        'max_multiplier_normal': 2.0,        # 正常振荡时的乘数上限
+        'max_multiplier_high_osc': 2.5,      # 高振荡(>0.85)时的乘数上限
         
         # ========== 自适应整定参数（渐进式策略，动态pb调整） ==========
         'pb_gradient': 1.0,                  # pb渐进系数
@@ -110,11 +115,11 @@ class Config:
         'td_range': [0.3, 3.0],              # Td范围限制
         
         # ========== 自适应Ti参数 ==========
-        'ti_osc_start': 0.6,                 # Ti振荡调整开始阈值
-        'ti_osc_factor': 0.5,                # Ti振荡调整系数
+        'ti_osc_start': 0.5,                 # Ti振荡调整开始阈值（提前开始）
+        'ti_osc_factor': 0.8,                # Ti振荡调整系数（增大，补偿pb减小）
         'ti_slow_pu_thresholds': [20.0, 10.0],  # Ti慢系统Pu阈值
-        'ti_slow_factors': [1.1, 1.05, 1.0],    # Ti慢系统乘数
-        'ti_range': [1.5, 10.0],             # Ti范围限制
+        'ti_slow_factors': [1.15, 1.08, 1.0],   # Ti慢系统乘数（增大）
+        'ti_range': [1.5, 15.0],             # Ti范围限制（增大上限）
         'ti_min_base': 1.5,                  # Ti基础最小值
         
         # ========== pb范围 ==========

@@ -35,7 +35,7 @@ CONFIG = {
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        {'start_time': '2025-12-17 15:06:12', 'end_time': '2025-12-17 22:30:12'},
+        {'start_time': '2025-12-13 00:04:00', 'end_time': '2025-12-13 23:04:00'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'

@@ -287,26 +287,38 @@ class OscillationTuner:
             mv_range = np.ptp(best_seg.mv)
             if mv_range > 0.1:
                 apparent_gain = pv_range / mv_range
-                self.log(f"   📊 增益检查: MV范围={mv_range:.2f}, PV范围={pv_range:.2f}, apparent_gain={apparent_gain:.4f}, Ku={Ku:.3f}")
                 
-                # 从配置读取阈值
+                # 从配置读取阈值（通用相对指标）
                 osc_cfg = Config.OSCILLATION_TUNING
-                low_gain_th = osc_cfg.get('low_gain_threshold', 0.1)
-                ku_high_th = osc_cfg.get('ku_high_threshold', 5.0)
-                ku_low_th = osc_cfg.get('ku_low_threshold', 0.5)
+                ku_k_ratio_high = osc_cfg.get('ku_k_ratio_high', 20.0)
+                ku_k_ratio_low = osc_cfg.get('ku_k_ratio_low', 0.5)
+                low_gain_th = osc_cfg.get('low_gain_threshold', 0.05)
+                ku_high_th = osc_cfg.get('ku_high_threshold', 50.0)
+                ku_low_th = osc_cfg.get('ku_low_threshold', 0.1)
                 
-                # 条件1: 低增益系统
-                if apparent_gain < low_gain_th:
+                # 计算Ku/K比值（相对指标，更通用）
+                ku_k_ratio = Ku / apparent_gain if apparent_gain > 0.01 else float('inf')
+                self.log(f"   📊 增益检查: K={apparent_gain:.4f}, Ku={Ku:.3f}, Ku/K={ku_k_ratio:.2f}")
+                
+                # 使用相对指标判断（优先）
+                # 条件1: Ku/K比值过大（临界增益相对于过程增益过大）
+                if ku_k_ratio > ku_k_ratio_high:
                     use_conservative = True
-                    self.log(f"   ⚠️ 检测到低增益系统，使用保守参数")
-                # 条件2: Ku过大（会导致Kp过大）
+                    self.log(f"   ⚠️ Ku/K={ku_k_ratio:.1f}>{ku_k_ratio_high}(临界增益相对过大)，使用保守参数")
+                # 条件2: Ku/K比值过小（临界增益估计可能不可靠）
+                elif ku_k_ratio < ku_k_ratio_low:
+                    use_conservative = True
+                    self.log(f"   ⚠️ Ku/K={ku_k_ratio:.2f}<{ku_k_ratio_low}(临界增益相对过小)，使用保守参数")
+                # 兜底：绝对阈值检查（极端情况）
+                elif apparent_gain < low_gain_th:
+                    use_conservative = True
+                    self.log(f"   ⚠️ K={apparent_gain:.4f}<{low_gain_th}(极低增益)，使用保守参数")
                 elif Ku > ku_high_th:
                     use_conservative = True
-                    self.log(f"   ⚠️ Ku={Ku:.2f}>{ku_high_th}，临界增益过大，使用保守参数")
-                # 条件3: Ku过小（估计不可靠，会导致Kp过小、pb过大）
+                    self.log(f"   ⚠️ Ku={Ku:.1f}>{ku_high_th}(极高临界增益)，使用保守参数")
                 elif Ku < ku_low_th:
                     use_conservative = True
-                    self.log(f"   ⚠️ Ku={Ku:.3f}<{ku_low_th}，临界增益过小，使用保守参数")
+                    self.log(f"   ⚠️ Ku={Ku:.3f}<{ku_low_th}(极低临界增益)，使用保守参数")
         
         # 获取最佳段的振荡比和数据质量（用于自适应调整）
         best_seg_idx = best_analysis['segment_idx']

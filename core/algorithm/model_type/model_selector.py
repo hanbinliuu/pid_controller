@@ -252,6 +252,12 @@ class ModelSelector:
             self.log("⚠️ 无有效扰动段")
             return self._empty_result(input_data)
         
+        # Step 1.6: 检查MV是否有变化（无变化无法辨识）
+        mv_no_change = self._check_mv_no_change(valid_segments)
+        if mv_no_change:
+            self.log("❌ MV无变化，无法进行模型辨识")
+            return self._empty_result(input_data)
+        
         self.log(f"📊 有效扰动段: {len(valid_segments)}/{len(segments)}")
         
         # Step 2: 对每个有效段尝试多种模型拟合
@@ -266,6 +272,12 @@ class ModelSelector:
             return self._oscillation_tuner.build_oscillation_output(
                 oscillation_result, hist_data, time_range, input_data.tuning_window
             )
+        
+        # Step 2.6: 检查模型拟合是否全部失败
+        all_fitting_failed = self._check_all_fitting_failed(segment_results)
+        if all_fitting_failed:
+            self.log("❌ 所有模型拟合和振荡检测均失败，无法整定")
+            return self._empty_result(input_data)
         
         # Step 3: 基于AIC/RSS/形状特征选择最优模型结构（支持全量数据验证）
         best_model_type = self._select_best_model_type(segment_results, hist_data)
@@ -1558,6 +1570,35 @@ class ModelSelector:
             'closed_loop_verification': closed_loop_info,
             'rating_details': score_details
         }
+    
+    def _check_mv_no_change(self, valid_segments: List[HistoricalData]) -> bool:
+        """检查MV是否无变化（无变化无法进行模型辨识）"""
+        for seg in valid_segments:
+            mv = seg.mv
+            if len(mv) < 2:
+                continue
+            mv_range = np.max(mv) - np.min(mv)
+            # MV变化范围小于1%认为无变化
+            mv_mean = np.mean(np.abs(mv)) if np.mean(np.abs(mv)) > 0 else 1.0
+            if mv_range > mv_mean * 0.01 or mv_range > 1.0:
+                return False  # 有变化
+        return True  # 所有段MV都无变化
+    
+    def _check_all_fitting_failed(self, segment_results: List[SegmentResult]) -> bool:
+        """检查是否所有模型拟合都失败"""
+        for result in segment_results:
+            if result is None:
+                continue
+            # 检查是否有任何模型拟合成功（R² >= 0.4 且 K 值合理）
+            for model_type, fit in result.fits.items():
+                if fit is None:
+                    continue
+                r2 = getattr(fit, 'r_squared', 0)
+                K = getattr(fit, 'K', 0)
+                # R² >= 0.4 且 K 值在合理范围内认为拟合成功
+                if r2 >= 0.4 and 0.01 < abs(K) < 100:
+                    return False  # 有成功的拟合
+        return True  # 所有拟合都失败
     
     def _empty_result(self, input_data: Optional[TuningInput]) -> Dict[str, Any]:
         """空结果"""
