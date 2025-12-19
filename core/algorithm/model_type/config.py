@@ -59,23 +59,70 @@ class Config:
         'sp_final': 60.0,                    # 设定值最终值
         'pv_initial': 50.0,                  # 过程值初始值
         
+        # ========== 保守策略判断阈值 ==========
+        'low_gain_threshold': 0.1,           # 低增益系统阈值
+        'ku_high_threshold': 5.0,            # Ku过大阈值
+        'ku_low_threshold': 0.5,             # Ku过小阈值
+        
+        # ========== 基础pb计算参数 ==========
+        'pb_from_k_factor': 1.5,             # 基于K计算pb的保守系数
+        'kp_from_ku_factor': 0.2,            # 基于Ku计算Kp的系数（ZN法是0.45）
+        
+        # ========== 慢系统调整 ==========
+        'slow_system_pu_thresholds': [30.0, 15.0],  # Pu阈值
+        'slow_system_factors': [1.3, 1.15, 1.0],    # 对应因子
+        
+        # ========== 原因微调因子 ==========
+        'high_gain_extra_factor': 1.1,       # Ku过大时的额外保守系数
+        
+        # ========== 数据质量调整 ==========
+        'quality_adjustment_threshold': 0.5, # 数据质量低于此值开始调整
+        'quality_adjustment_factor': 0.6,    # 质量调整系数（最多增加30%）
+        
+        # ========== 非线性调整 ==========
+        'nonlinearity_threshold': 0.5,       # 非线性超过此值开始调整
+        'nonlinearity_factor': 0.4,          # 非线性调整系数（最多增加20%）
+        
+        # ========== 阀门问题调整因子 ==========
+        'valve_deadband_factor': 1.15,       # 死区调整因子
+        'valve_stiction_factor': 1.2,        # 粘滞调整因子
+        'valve_saturation_factor': 1.1,      # 饱和调整因子
+        
+        # ========== 振荡比自适应安全系数 ==========
+        'safety_factor_base': 1.4,           # 基础安全系数 (osc < 0.5)
+        'safety_factor_thresholds': [0.5, 0.7, 0.85],  # 振荡比阈值
+        'safety_factor_slopes': [0.5, 1.0, 2.0],       # 各区间斜率
+        
+        # ========== 总乘数上限 ==========
+        'max_multiplier_normal': 2.5,        # 正常振荡时的乘数上限
+        'max_multiplier_high_osc': 3.0,      # 高振荡(>0.85)时的乘数上限
+        
         # ========== 自适应整定参数（渐进式策略，动态pb调整） ==========
-        # 渐进式pb调整：pb_final = pb_base * (1 + (oscillation_ratio - start) * pb_gradient)
-        # 例如：振荡比=0.9, start=0.4 → pb乘以 1 + sqrt(0.5)*1.2 ≈ 1.85
-        'pb_gradient': 1.0,                   # pb渐进系数（降低以加快响应）
-        'pb_oscillation_start': 0.4,          # 开始应用渐进调整的振荡比阈值
+        'pb_gradient': 1.0,                  # pb渐进系数
+        'pb_oscillation_start': 0.4,         # 开始应用渐进调整的振荡比阈值
         
-        # 自适应微分作用
-        'enable_adaptive_derivative': True,   # 是否启用自适应微分
-        'derivative_factor': 0.25,            # Kd = Kp * Pu * derivative_factor（降低以减少过激响应）
+        # ========== 自适应微分作用 ==========
+        'enable_adaptive_derivative': True,  # 是否启用自适应微分
+        'derivative_factor': 0.25,           # Kd = Kp * Pu * derivative_factor
         'derivative_oscillation_threshold': 0.5,  # 振荡比超过此值才加微分
+        'td_base_divisor': 8.0,              # Td基础计算: Pu / td_base_divisor
+        'td_multiplier_factor': 1.5,         # Td乘数系数
+        'td_range': [0.3, 3.0],              # Td范围限制
         
-        # pb范围（扩大动态范围，确保普适性）
-        'pb_min': 120.0,                      # pb下限（降低以允许更快响应）
-        'pb_max': 600.0,                      # pb上限（适度提高以覆盖极端场景）
+        # ========== 自适应Ti参数 ==========
+        'ti_osc_start': 0.6,                 # Ti振荡调整开始阈值
+        'ti_osc_factor': 0.5,                # Ti振荡调整系数
+        'ti_slow_pu_thresholds': [20.0, 10.0],  # Ti慢系统Pu阈值
+        'ti_slow_factors': [1.1, 1.05, 1.0],    # Ti慢系统乘数
+        'ti_range': [1.5, 10.0],             # Ti范围限制
+        'ti_min_base': 1.5,                  # Ti基础最小值
         
-        # 额外保守因子（针对临界法整定）
-        'critical_method_safety_factor': 1.2, # 临界法额外安全系数（降低以加快响应，允许少量超调）
+        # ========== pb范围 ==========
+        'pb_min': 120.0,                     # pb下限
+        'pb_max': 600.0,                     # pb上限
+        
+        # ========== 额外保守因子 ==========
+        'critical_method_safety_factor': 1.2,  # 临界法额外安全系数
     }
     
     # ============================================================

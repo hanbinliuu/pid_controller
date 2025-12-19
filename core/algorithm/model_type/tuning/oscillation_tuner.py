@@ -289,18 +289,24 @@ class OscillationTuner:
                 apparent_gain = pv_range / mv_range
                 self.log(f"   📊 增益检查: MV范围={mv_range:.2f}, PV范围={pv_range:.2f}, apparent_gain={apparent_gain:.4f}, Ku={Ku:.3f}")
                 
+                # 从配置读取阈值
+                osc_cfg = Config.OSCILLATION_TUNING
+                low_gain_th = osc_cfg.get('low_gain_threshold', 0.1)
+                ku_high_th = osc_cfg.get('ku_high_threshold', 5.0)
+                ku_low_th = osc_cfg.get('ku_low_threshold', 0.5)
+                
                 # 条件1: 低增益系统
-                if apparent_gain < 0.1:
+                if apparent_gain < low_gain_th:
                     use_conservative = True
                     self.log(f"   ⚠️ 检测到低增益系统，使用保守参数")
                 # 条件2: Ku过大（会导致Kp过大）
-                elif Ku > 5.0:
+                elif Ku > ku_high_th:
                     use_conservative = True
-                    self.log(f"   ⚠️ Ku={Ku:.2f}>5.0，临界增益过大，使用保守参数")
+                    self.log(f"   ⚠️ Ku={Ku:.2f}>{ku_high_th}，临界增益过大，使用保守参数")
                 # 条件3: Ku过小（估计不可靠，会导致Kp过小、pb过大）
-                elif Ku < 0.5:
+                elif Ku < ku_low_th:
                     use_conservative = True
-                    self.log(f"   ⚠️ Ku={Ku:.3f}<0.5，临界增益过小，使用保守参数")
+                    self.log(f"   ⚠️ Ku={Ku:.3f}<{ku_low_th}，临界增益过小，使用保守参数")
         
         # 获取最佳段的振荡比和数据质量（用于自适应调整）
         best_seg_idx = best_analysis['segment_idx']
@@ -397,62 +403,67 @@ class OscillationTuner:
         
         # ========== 动态计算 pb（渐进式策略，更通用） ==========
         # 1. 基于过程增益的基础 pb
+        pb_from_k_factor = osc_config.get('pb_from_k_factor', 1.5)
         if K_approx > 0.01:
-            # pb = 100/Kp, 对于单位反馈系统 Kp ≈ 1/K 时响应较好
-            # 加入保守系数 1.5~2.0
-            pb_from_K = 100.0 * K_approx * 1.5
+            pb_from_K = 100.0 * K_approx * pb_from_k_factor
         else:
             pb_from_K = 80.0  # 增益过小时的默认值
         
         # 2. 基于临界参数的 pb（Ziegler-Nichols 变体）
+        kp_from_ku_factor = osc_config.get('kp_from_ku_factor', 0.2)
         if Ku > 0.1:
-            # ZN法: Kp = 0.45*Ku (PI), 但我们更保守: Kp = 0.2*Ku
-            Kp_from_Ku = 0.2 * Ku
+            Kp_from_Ku = kp_from_ku_factor * Ku
             pb_from_Ku = 100.0 / max(Kp_from_Ku, 0.1)
         else:
             pb_from_Ku = 100.0  # Ku 不可靠时的默认值
         
-        # 3. 基于临界周期的调整因子
-        # 慢系统（Pu大）需要更保守
-        if Pu > 30:
-            slow_factor = 1.3
-        elif Pu > 15:
-            slow_factor = 1.15
-        else:
-            slow_factor = 1.0
+        # 3. 基于临界周期的调整因子（从配置读取）
+        pu_thresholds = osc_config.get('slow_system_pu_thresholds', [30.0, 15.0])
+        slow_factors = osc_config.get('slow_system_factors', [1.3, 1.15, 1.0])
+        slow_factor = slow_factors[-1]  # 默认值
+        for i, threshold in enumerate(pu_thresholds):
+            if Pu > threshold:
+                slow_factor = slow_factors[i]
+                break
         
         # 4. 综合计算：取较大值（更保守）并应用慢系统因子
         pb_base = max(pb_from_K, pb_from_Ku) * slow_factor
         
-        # 5. 根据原因微调
+        # 5. 根据原因微调（从配置读取）
+        high_gain_factor = osc_config.get('high_gain_extra_factor', 1.1)
         if reason == 'high_gain':
-            pb_base *= 1.1  # Ku过大，轻微额外保守（降低以避免多重乘数溢出）
-        # 注意：低增益场景不再强制设为pb_min，避免与后续乘数叠加导致触边界
+            pb_base *= high_gain_factor
         
-        # 6. 数据质量因子（质量越差越保守）
-        # quality_score: 0.0-1.0, 低于0.5时开始增加保守度
-        if data_quality < 0.5:
-            quality_factor = 1.0 + (0.5 - data_quality) * 0.6  # 最多增加30%
+        # 6. 数据质量因子（从配置读取阈值）
+        quality_threshold = osc_config.get('quality_adjustment_threshold', 0.5)
+        quality_adj_factor = osc_config.get('quality_adjustment_factor', 0.6)
+        if data_quality < quality_threshold:
+            quality_factor = 1.0 + (quality_threshold - data_quality) * quality_adj_factor
             pb_base *= quality_factor
             self.log(f"   📊 数据质量调整: 质量={data_quality:.2f}, 因子=×{quality_factor:.2f}")
         
-        # 7. 非线性因子（非线性越高越保守）
-        if nonlinearity > 0.5:
-            nonlin_factor = 1.0 + (nonlinearity - 0.5) * 0.4  # 最多增加20%
+        # 7. 非线性因子（从配置读取阈值）
+        nonlin_threshold = osc_config.get('nonlinearity_threshold', 0.5)
+        nonlin_adj_factor = osc_config.get('nonlinearity_factor', 0.4)
+        if nonlinearity > nonlin_threshold:
+            nonlin_factor = 1.0 + (nonlinearity - nonlin_threshold) * nonlin_adj_factor
             pb_base *= nonlin_factor
             self.log(f"   📊 非线性调整: 非线性={nonlinearity:.2f}, 因子=×{nonlin_factor:.2f}")
         
-        # 8. 阀门问题因子
+        # 8. 阀门问题因子（从配置读取）
+        valve_deadband_f = osc_config.get('valve_deadband_factor', 1.15)
+        valve_stiction_f = osc_config.get('valve_stiction_factor', 1.2)
+        valve_saturation_f = osc_config.get('valve_saturation_factor', 1.1)
         valve_factor = 1.0
         if valve_issues.get('has_deadband', False):
-            valve_factor *= 1.15
-            self.log(f"   ⚠️ 检测到阀门死区，增加保守度 ×1.15")
+            valve_factor *= valve_deadband_f
+            self.log(f"   ⚠️ 检测到阀门死区，增加保守度 ×{valve_deadband_f}")
         if valve_issues.get('has_stiction', False):
-            valve_factor *= 1.2
-            self.log(f"   ⚠️ 检测到阀门粘滞，增加保守度 ×1.2")
+            valve_factor *= valve_stiction_f
+            self.log(f"   ⚠️ 检测到阀门粘滞，增加保守度 ×{valve_stiction_f}")
         if valve_issues.get('has_saturation', False):
-            valve_factor *= 1.1
-            self.log(f"   ⚠️ 检测到阀门饱和，增加保守度 ×1.1")
+            valve_factor *= valve_saturation_f
+            self.log(f"   ⚠️ 检测到阀门饱和，增加保守度 ×{valve_saturation_f}")
         pb_base *= valve_factor
         
         # ========== 渐进式振荡保守调整（核心改进，使用渐近函数） ==========
@@ -462,22 +473,22 @@ class OscillationTuner:
         pb_osc_start = osc_config.get('pb_oscillation_start', 0.4)
         base_safety_factor = osc_config.get('critical_method_safety_factor', 1.4)
         
-        # 自适应安全系数：保守优先，极高振荡更保守
-        # 振荡比 < 0.5: safety = 1.4 (基础保守)
-        # 振荡比 0.5-0.7: safety = 1.4 + (osc-0.5)*0.5 (线性过渡)
-        # 振荡比 0.7-0.85: safety = 1.5 + (osc-0.7)*1.0 (加速增长)
-        # 振荡比 > 0.85: safety = 1.65 + (osc-0.85)*2.0 (极高振荡，大幅保守)
-        if oscillation_ratio < 0.5:
-            safety_factor = 1.4  # 基础保守
-        elif oscillation_ratio < 0.7:
-            # 线性过渡：1.4 → 1.5
-            safety_factor = 1.4 + (oscillation_ratio - 0.5) * 0.5
-        elif oscillation_ratio < 0.85:
-            # 高振荡：1.5 → 1.65
-            safety_factor = 1.5 + (oscillation_ratio - 0.7) * 1.0
+        # 自适应安全系数（从配置读取阈值和斜率）
+        safety_base = osc_config.get('safety_factor_base', 1.4)
+        safety_thresholds = osc_config.get('safety_factor_thresholds', [0.5, 0.7, 0.85])
+        safety_slopes = osc_config.get('safety_factor_slopes', [0.5, 1.0, 2.0])
+        
+        if oscillation_ratio < safety_thresholds[0]:
+            safety_factor = safety_base
+        elif oscillation_ratio < safety_thresholds[1]:
+            safety_factor = safety_base + (oscillation_ratio - safety_thresholds[0]) * safety_slopes[0]
+        elif oscillation_ratio < safety_thresholds[2]:
+            prev_value = safety_base + (safety_thresholds[1] - safety_thresholds[0]) * safety_slopes[0]
+            safety_factor = prev_value + (oscillation_ratio - safety_thresholds[1]) * safety_slopes[1]
         else:
-            # 极高振荡(>0.85)，大幅保守：1.65 → 1.95+
-            safety_factor = 1.65 + (oscillation_ratio - 0.85) * 2.0
+            prev_value = safety_base + (safety_thresholds[1] - safety_thresholds[0]) * safety_slopes[0]
+            prev_value += (safety_thresholds[2] - safety_thresholds[1]) * safety_slopes[1]
+            safety_factor = prev_value + (oscillation_ratio - safety_thresholds[2]) * safety_slopes[2]
         
         # 计算综合保守乘数（将安全系数合并，避免多重乘数叠加）
         total_multiplier = safety_factor  # 自适应安全系数
@@ -490,12 +501,13 @@ class OscillationTuner:
             osc_multiplier = 1.0 + np.sqrt(effective_osc) * pb_gradient
             total_multiplier *= osc_multiplier
             
-            # 限制总乘数上限，避免高增益+极高振荡导致pb爆炸
-            # 极高振荡时允许更大乘数，确保保守
-            if oscillation_ratio > 0.85:
-                max_multiplier = 3.0  # 极高振荡允许更保守
+            # 限制总乘数上限（从配置读取）
+            max_mult_normal = osc_config.get('max_multiplier_normal', 2.5)
+            max_mult_high = osc_config.get('max_multiplier_high_osc', 3.0)
+            if oscillation_ratio > safety_thresholds[2]:
+                max_multiplier = max_mult_high
             else:
-                max_multiplier = 2.5
+                max_multiplier = max_mult_normal
             if total_multiplier > max_multiplier:
                 self.log(f"   ⚠️ 总乘数{total_multiplier:.2f}超限，限制为{max_multiplier}")
                 total_multiplier = max_multiplier
@@ -518,28 +530,30 @@ class OscillationTuner:
         
         conservative_Kp = 100.0 / pb_safe
         
-        # ========== 自适应 Ti 计算（基于Pu和振荡比） ==========
-        # 基础Ti = Pu / 2（经典ZN法）
-        # 高振荡时增大Ti（减弱积分作用，提高稳定性）
-        base_Ti = max(Pu / 2, 1.5) if Pu > 0 else 2.0
+        # ========== 自适应 Ti 计算（从配置读取参数） ==========
+        ti_min_base = osc_config.get('ti_min_base', 1.5)
+        base_Ti = max(Pu / 2, ti_min_base) if Pu > 0 else 2.0
         
-        # 振荡调整因子：振荡比>0.6时逐渐增大Ti（提高阈值，减少Ti增大）
-        ti_osc_start = 0.6
+        # 振荡调整因子（从配置读取）
+        ti_osc_start = osc_config.get('ti_osc_start', 0.6)
+        ti_osc_factor = osc_config.get('ti_osc_factor', 0.5)
         if oscillation_ratio > ti_osc_start:
-            # Ti乘数 = 1 + sqrt(osc - 0.6) * 0.5，最大约1.32倍（降低系数加快响应）
-            ti_multiplier = 1.0 + np.sqrt(oscillation_ratio - ti_osc_start) * 0.5
+            ti_multiplier = 1.0 + np.sqrt(oscillation_ratio - ti_osc_start) * ti_osc_factor
         else:
             ti_multiplier = 1.0
         
-        # 慢系统调整：Pu大时Ti也应该更大（降低乘数）
-        if Pu > 20:
-            ti_multiplier *= 1.1
-        elif Pu > 10:
-            ti_multiplier *= 1.05
+        # 慢系统调整（从配置读取）
+        ti_slow_thresholds = osc_config.get('ti_slow_pu_thresholds', [20.0, 10.0])
+        ti_slow_factors = osc_config.get('ti_slow_factors', [1.1, 1.05, 1.0])
+        for i, threshold in enumerate(ti_slow_thresholds):
+            if Pu > threshold:
+                ti_multiplier *= ti_slow_factors[i]
+                break
         
         conservative_Ti = base_Ti * ti_multiplier
-        # Ti范围限制：[1.5, 10.0]
-        conservative_Ti = np.clip(conservative_Ti, 1.5, 10.0)
+        # Ti范围限制（从配置读取）
+        ti_range = osc_config.get('ti_range', [1.5, 10.0])
+        conservative_Ti = np.clip(conservative_Ti, ti_range[0], ti_range[1])
         conservative_Ki = conservative_Kp / conservative_Ti
         
         # ========== 自适应 Td 计算（基于Pu和振荡比） ==========
@@ -549,17 +563,19 @@ class OscillationTuner:
         derivative_threshold = osc_config.get('derivative_oscillation_threshold', 0.5)
         
         if enable_derivative and oscillation_ratio > derivative_threshold:
-            # 基础Td = Pu / 8（经典ZN法是Pu/8）
-            # 高振荡时适度增大Td（增强抑制作用）
-            base_Td = Pu / 8 if Pu > 0 else 0.5
+            # 基础Td（从配置读取）
+            td_base_divisor = osc_config.get('td_base_divisor', 8.0)
+            base_Td = Pu / td_base_divisor if Pu > 0 else 0.5
             
-            # Td乘数：振荡越高，Td越大（抑制振荡）
+            # Td乘数（从配置读取）
+            td_mult_factor = osc_config.get('td_multiplier_factor', 1.5)
             effective_osc = oscillation_ratio - derivative_threshold
-            td_multiplier = 1.0 + np.sqrt(effective_osc) * 1.5  # 最大约2.06倍
+            td_multiplier = 1.0 + np.sqrt(effective_osc) * td_mult_factor
             
             conservative_Td = base_Td * td_multiplier
-            # Td范围限制：[0.3, 3.0]
-            conservative_Td = np.clip(conservative_Td, 0.3, 3.0)
+            # Td范围限制（从配置读取）
+            td_range = osc_config.get('td_range', [0.3, 3.0])
+            conservative_Td = np.clip(conservative_Td, td_range[0], td_range[1])
             conservative_Kd = conservative_Kp * conservative_Td
             
             self.log(f"   📊 自适应Ti/Td: Ti={conservative_Ti:.2f}s(×{ti_multiplier:.2f}), "
