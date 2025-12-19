@@ -261,6 +261,67 @@ class StabilityDetector:
             high_freq_oscillation
         )
     
+    def _is_normal_sv_response(self, pv_data, sv_data, sv_change_magnitude):
+        """
+        判断PV是否是SV变化后的正常响应（而不是扰动）
+        
+        正常响应特征：
+        1. PV变化方向与SV变化方向一致
+        2. PV最终收敛到新的SV值附近
+        3. PV范围相对于SV变化幅度是合理的（PV范围 < SV变化幅度 * 3）
+        4. 没有高频振荡
+        
+        Args:
+            pv_data: PV数据
+            sv_data: SV数据
+            sv_change_magnitude: SV变化幅度
+        
+        Returns:
+            bool: 是否是正常响应
+        """
+        if len(pv_data) < 10 or len(sv_data) < 10:
+            return False
+        
+        # 1. 检查PV变化方向是否与SV一致
+        sv_direction = sv_data[-1] - sv_data[0]  # SV变化方向
+        pv_direction = pv_data[-1] - pv_data[0]  # PV变化方向
+        
+        # 方向一致（同正或同负）
+        direction_consistent = (sv_direction * pv_direction >= 0)
+        
+        # 2. 检查PV是否收敛到新的SV值
+        new_sv = sv_data[-1]
+        final_error = abs(pv_data[-1] - new_sv)
+        initial_error = abs(pv_data[0] - sv_data[0])
+        
+        # PV最终误差小于SV变化幅度的50%，认为收敛
+        is_converging = final_error < sv_change_magnitude * 0.5 or final_error < 2.0
+        
+        # 3. 检查PV范围是否合理
+        pv_range = np.max(pv_data) - np.min(pv_data)
+        # PV范围应该在SV变化幅度的3倍以内（允许一定的超调）
+        range_reasonable = pv_range < sv_change_magnitude * 3.0 or pv_range < 10.0
+        
+        # 4. 检查是否有高频振荡
+        sign_changes = self._calculate_sign_changes(pv_data)
+        # 正常响应不应该有太多的方向变化
+        no_high_freq_oscillation = sign_changes < len(pv_data) * 0.25
+        
+        # 5. 检查PV标准差是否合理
+        pv_std = np.std(pv_data)
+        std_reasonable = pv_std < sv_change_magnitude * 1.0 or pv_std < 3.0
+        
+        # 综合判断：需要满足大部分条件
+        conditions_met = sum([
+            direction_consistent,
+            is_converging,
+            range_reasonable,
+            no_high_freq_oscillation,
+            std_reasonable
+        ])
+        
+        return conditions_met >= 4  # 至少满足4个条件
+    
     def _adjust_response_buffer(self, pv_data, sv_stable_end, new_sv, dynamic_buffer, n):
         """根据PV的收敛和振荡情况动态调整响应缓冲期"""
         max_check_len = min(1500, n - sv_stable_end)
@@ -739,13 +800,22 @@ class StabilityDetector:
                     sv_change_magnitude = abs(sv_end - sv_start)
                     current_sv = np.median(change_sv)
                     
+                    # 先检查是否是正常的SV跟随响应
+                    if self._is_normal_sv_response(change_pv, change_sv, sv_change_magnitude):
+                        # 正常响应，不是扰动，跳过
+                        continue
+                    
                     if sv_change_magnitude < 0.5:
                         # SV变化幅度小时，使用更高阈值检测
                         if self._check_large_oscillation(change_pv, current_sv, during_sv_change=True):
                             non_steady_segments.append((change_start, change_end, current_sv))
                     elif sv_change_magnitude > 5.0:
-                        # SV变化幅度很大时，直接识别为扰动（即使PV还未响应）
-                        non_steady_segments.append((change_start, change_end, current_sv))
+                        # SV变化幅度大时，检查是否有剧烈振荡（PV范围远大于SV变化）
+                        pv_range = np.max(change_pv) - np.min(change_pv)
+                        # 只有PV范围远超SV变化幅度（>5倍）或有明显异常振荡才认为是扰动
+                        if pv_range > sv_change_magnitude * 5 or \
+                           self._check_abnormal_oscillation_during_sv_change(change_pv, change_sv, sv_change_magnitude):
+                            non_steady_segments.append((change_start, change_end, current_sv))
                     else:
                         # SV变化幅度中等时，检测异常振荡或大幅振荡
                         if self._check_abnormal_oscillation_during_sv_change(change_pv, change_sv, sv_change_magnitude) or \
@@ -1067,6 +1137,29 @@ class StabilityDetector:
         
         # 后处理：分割过长的非稳态段（内部可能包含平稳区域）
         final_segments = self._split_long_segments(merged_segments, pv_data, sv_array, min_segment_len)
+        
+        # 过滤相对点位数过少的扰动段
+        # 如果扰动段点位数相对于总数据长度过少，则过滤掉
+        if len(final_segments) > 1:
+            # 计算所有段的长度
+            seg_lengths = [(seg_end - seg_start, idx) for idx, (seg_start, seg_end, _) in enumerate(final_segments)]
+            max_seg_length = max(length for length, _ in seg_lengths)
+            
+            # 相对过滤：段长度 < 最长段的5% 且 < 总数据长度的1%，则过滤
+            min_relative_to_max = max_seg_length * 0.05  # 最长段的5%
+            min_relative_to_total = n * 0.01  # 总数据的1%
+            min_absolute = 50  # 绝对最小值
+            
+            # 取这三个阈值中的最大值作为过滤阈值
+            min_length_threshold = max(min_relative_to_max, min_relative_to_total, min_absolute)
+            
+            filtered_final = []
+            for seg_start, seg_end, seg_sp in final_segments:
+                seg_len = seg_end - seg_start
+                if seg_len >= min_length_threshold:
+                    filtered_final.append((seg_start, seg_end, seg_sp))
+            
+            final_segments = filtered_final
         
         return final_segments
     
