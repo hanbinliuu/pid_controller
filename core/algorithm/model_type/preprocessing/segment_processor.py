@@ -256,6 +256,288 @@ class SegmentProcessor:
         self.log(f"   段{idx+1}: ✗ {reason}")
         results_list.append(result)
     
+    def detect_tuning_segments(self, hist_data: HistoricalData,
+                               min_step_size: float = 1.0,
+                               min_response_time: int = 30,
+                               max_response_time: int = 3000
+                               ) -> Tuple[List[HistoricalData], List[SegmentResult]]:
+        """
+        基于MV阶跃变化检测整定段（适合模型辨识的数据段）
+        
+        整定段定义：MV有明显阶跃变化，PV有响应的区间
+        
+        Args:
+            hist_data: 历史数据
+            min_step_size: 最小阶跃幅度（MV变化量）
+            min_response_time: 最小响应时间（采样点数）
+            max_response_time: 最大响应时间（采样点数）
+        
+        Returns:
+            (tuning_segments, segment_results)
+        """
+        self.log(f"\n{'='*60}")
+        self.log("📊 整定段检测（基于MV阶跃变化）")
+        self.log('='*60)
+        
+        mv = hist_data.mv
+        pv = hist_data.pv
+        sv = hist_data.sv
+        timestamp = hist_data.timestamp
+        n = len(mv)
+        
+        if n < min_response_time * 2:
+            self.log("   数据长度不足")
+            return [], []
+        
+        # Step 1: 检测MV阶跃变化点
+        mv_steps = self._detect_mv_steps(mv, min_step_size)
+        self.log(f"   检测到 {len(mv_steps)} 个MV阶跃变化点")
+        
+        if not mv_steps:
+            self.log("   ⚠️ 未检测到MV阶跃变化")
+            return [], []
+        
+        # Step 2: 从每个阶跃点提取整定段
+        tuning_segments = []
+        segment_results = []
+        
+        for i, (step_idx, step_size, step_dir) in enumerate(mv_steps):
+            # 确定响应区间：从阶跃点开始，到下一个阶跃点或最大响应时间
+            start_idx = step_idx
+            
+            # 找下一个阶跃点
+            if i + 1 < len(mv_steps):
+                next_step_idx = mv_steps[i + 1][0]
+                end_idx = min(next_step_idx, start_idx + max_response_time)
+            else:
+                end_idx = min(start_idx + max_response_time, n)
+            
+            # 检查区间长度
+            seg_len = end_idx - start_idx
+            if seg_len < min_response_time:
+                continue
+            
+            # 提取段数据
+            seg = HistoricalData(
+                timestamp=timestamp[start_idx:end_idx],
+                pv=pv[start_idx:end_idx],
+                sv=sv[start_idx:end_idx],
+                mv=mv[start_idx:end_idx]
+            )
+            
+            # 评估PV响应质量
+            quality_score, is_good_response = self._evaluate_step_response(
+                seg.pv, seg.mv, step_size, step_dir
+            )
+            
+            result = SegmentResult(
+                segment_idx=len(tuning_segments),
+                start_idx=start_idx,
+                end_idx=end_idx,
+                data_points=seg_len,
+                is_valid=is_good_response
+            )
+            
+            # 分析数据质量
+            quality = self._preprocessor.analyze_quality(seg.pv, seg.mv)
+            result.quality_score = quality.quality_score
+            result.nonlinearity_score = quality.nonlinearity_score
+            result.step_response_score = quality_score
+            result.oscillation_ratio = quality.oscillation_ratio
+            result.is_nonlinear = quality.is_nonlinear
+            
+            if is_good_response:
+                dir_str = "↑" if step_dir > 0 else "↓"
+                self.log(f"   阶跃@{step_idx}: MV{dir_str}{abs(step_size):.1f}, "
+                        f"响应={seg_len}点, 质量={quality_score:.2f} ✓")
+                tuning_segments.append(seg)
+                segment_results.append(result)
+        
+        self.log(f"   📊 检测到 {len(tuning_segments)} 个有效整定段")
+        return tuning_segments, segment_results
+    
+    def _detect_mv_steps(self, mv: np.ndarray, min_step_size: float = 1.0,
+                         stable_window: int = 10) -> List[Tuple[int, float, int]]:
+        """检测MV阶跃变化点"""
+        n = len(mv)
+        steps = []
+        
+        if n < stable_window * 3:
+            return steps
+        
+        i = stable_window
+        while i < n - stable_window:
+            before_window = mv[max(0, i-stable_window):i]
+            after_window = mv[i:min(n, i+stable_window)]
+            
+            before_std = np.std(before_window)
+            before_mean = np.mean(before_window)
+            after_mean = np.mean(after_window)
+            step_size = after_mean - before_mean
+            
+            if abs(step_size) >= min_step_size and before_std < abs(step_size) * 0.5:
+                step_dir = 1 if step_size > 0 else -1
+                steps.append((i, step_size, step_dir))
+                i += stable_window * 2
+            else:
+                i += 1
+        
+        return steps
+    
+    def _evaluate_step_response(self, pv: np.ndarray, mv: np.ndarray,
+                                 step_size: float, step_dir: int) -> Tuple[float, bool]:
+        """
+        评估PV对MV阶跃的响应质量
+        
+        关键改进：
+        1. 增加PV动态变化检测（排除稳态区域）
+        2. 检测PV响应方向与MV阶跃方向的一致性
+        3. 检测响应是否有典型的阶跃响应形态
+        """
+        n = len(pv)
+        if n < 20:
+            return 0.0, False
+        
+        scores = []
+        rejection_reasons = []
+        
+        # ========== 关键检查：PV必须有足够的动态变化 ==========
+        pv_range = np.ptp(pv)  # PV变化范围
+        pv_std = np.std(pv)    # PV标准差
+        mv_range = np.ptp(mv)  # MV变化范围
+        
+        # 计算PV的动态变化率（相对于MV变化）
+        pv_dynamic_ratio = pv_range / (mv_range + self._epsilon) if mv_range > 0.1 else 0
+        
+        # 如果PV几乎不变化，直接拒绝
+        # 阈值设计原则：
+        # - 需要有可见的动态响应（PV范围 > 2.0 或 相对于MV的5%）
+        # - 标准差也要足够（说明有变化过程）
+        min_pv_range = max(2.0, abs(step_size) * 0.05)  # 最小PV变化范围
+        min_pv_std = 0.3  # 最小PV标准差
+        
+        # PV范围和标准差至少有一个要达标
+        # 如果都不达标，则认为是稳态区域
+        if pv_range < min_pv_range and pv_std < min_pv_std:
+            return 0.0, False
+        
+        # 额外检查：PV动态变化率（相对于MV）应该足够
+        # 对于大的MV变化，PV也应该有相应的变化
+        # 典型过程增益K一般在0.01-10之间
+        if mv_range > 10 and pv_dynamic_ratio < 0.05:
+            # MV变化很大但PV几乎不变，说明是稳态区域
+            return 0.0, False
+        
+        # ========== 1. PV变化幅度评分 ==========
+        pv_change = pv[-1] - pv[0]  # 净变化
+        
+        # PV变化应该与MV阶跃成比例
+        if abs(pv_change) > abs(step_size) * 0.1:
+            scores.append(1.0)
+        elif abs(pv_change) > 0.5:
+            scores.append(0.7)
+        elif pv_range > min_pv_range:
+            # 虽然净变化小，但有动态过程
+            scores.append(0.5)
+        else:
+            scores.append(0.2)
+        
+        # ========== 2. 响应方向一致性 ==========
+        # 正常过程：MV↑ → PV↑ 或 MV↑ → PV↓（取决于过程增益正负）
+        # 检查PV主要变化方向
+        pv_first_half = np.mean(pv[:n//2])
+        pv_second_half = np.mean(pv[n//2:])
+        pv_trend = pv_second_half - pv_first_half
+        
+        # 需要有明显的趋势（正或负都可以，但不能接近0）
+        if abs(pv_trend) > pv_range * 0.1:
+            scores.append(1.0)
+        elif abs(pv_trend) > pv_range * 0.05:
+            scores.append(0.7)
+        else:
+            scores.append(0.3)
+        
+        # ========== 3. 收敛性检测 ==========
+        first_third = pv[:int(n/3)]
+        last_third = pv[int(n*2/3):]
+        
+        if len(last_third) > 5 and len(first_third) > 5:
+            std_first = np.std(first_third)
+            std_last = np.std(last_third)
+            
+            # 理想的阶跃响应：后期应该趋于稳定
+            # 但也要确保前期有变化（不是整个都稳定）
+            if std_first > self._epsilon:
+                settling_ratio = std_last / std_first
+                if settling_ratio < 0.5 and std_first > min_pv_std:
+                    # 有收敛，且前期有动态
+                    scores.append(1.0)
+                elif settling_ratio < 1.0:
+                    scores.append(0.7)
+                else:
+                    scores.append(0.4)
+            else:
+                # 前期标准差太小，可能是稳态
+                if std_last < min_pv_std:
+                    # 整段都很稳定，不是好的整定段
+                    scores.append(0.2)
+                else:
+                    scores.append(0.5)
+        
+        # ========== 4. 振荡比 ==========
+        pv_diff = np.diff(pv)
+        sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
+        osc_ratio = sign_changes / (n - 2) if n > 2 else 0
+        
+        if osc_ratio < 0.2:
+            scores.append(1.0)
+        elif osc_ratio < 0.4:
+            scores.append(0.7)
+        else:
+            scores.append(0.3)
+        
+        # ========== 5. MV-PV相关性 ==========
+        try:
+            corr = np.corrcoef(mv, pv)[0, 1]
+            if np.isnan(corr):
+                corr = 0
+            if abs(corr) > 0.5:
+                scores.append(1.0)
+            elif abs(corr) > 0.2:
+                scores.append(0.7)
+            else:
+                scores.append(0.4)
+        except:
+            scores.append(0.5)
+        
+        # ========== 6. 阶跃响应形态检测 ==========
+        # 典型阶跃响应：初期变化快，后期趋于稳定
+        # 计算前半段和后半段的变化率
+        if n > 10:
+            first_half_change = abs(pv[n//2] - pv[0])
+            second_half_change = abs(pv[-1] - pv[n//2])
+            total_change = first_half_change + second_half_change + self._epsilon
+            
+            # 理想情况：前半段变化占主导
+            front_ratio = first_half_change / total_change
+            if front_ratio > 0.6:
+                scores.append(1.0)
+            elif front_ratio > 0.4:
+                scores.append(0.7)
+            else:
+                scores.append(0.5)
+        
+        # ========== 综合评分 ==========
+        quality_score = np.mean(scores) if scores else 0.0
+        
+        # 判定条件：
+        # 1. 质量评分 >= 0.6
+        # 2. 振荡比 < 0.5
+        # 3. PV动态变化足够（已在前面检查）
+        is_good_response = quality_score >= 0.6 and osc_ratio < 0.5
+        
+        return float(quality_score), is_good_response
+    
     def analyze_segment_stability(self, seg: HistoricalData, 
                                    fit_result: dict) -> Tuple[float, float, float, bool]:
         """

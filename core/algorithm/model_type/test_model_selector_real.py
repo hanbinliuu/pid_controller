@@ -28,14 +28,15 @@ from core.algorithm.model_type.model_selector import ModelSelector
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951",
-    # 'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
-    'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
+    'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
+    # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        {'start_time': '2025-12-13 00:04:00', 'end_time': '2025-12-13 23:04:00'},
+        # {'start_time': '2025-12-17 00:31:36', 'end_time': '2025-12-17 23:31:36'},
+         {'start_time': '2025-12-22 13:50:00', 'end_time': '2025-12-22 14:50:00'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
@@ -380,7 +381,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     if fit_time_array and fit_pv_model:
         ax1.plot(fit_time_array, fit_pv_model, 'g-', label='PV_model (拟合)', linewidth=1.5, alpha=0.9)
     
-    # 标记 tuning_window（扰动段）
+    # 标记 tuning_window（扰动段）- 橙色
     tuning_windows = tuning_input.get('tuning_window', [])
     for i, w in enumerate(tuning_windows):
         start_ts = w.get('start_time')
@@ -392,8 +393,30 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
             else:
                 start_dt = start_ts
                 end_dt = end_ts
-            ax1.axvspan(start_dt, end_dt, alpha=0.2, color='orange', 
+            ax1.axvspan(start_dt, end_dt, alpha=0.15, color='orange', 
                        label='扰动段' if i == 0 else None)
+    
+    # 标记整定段（基于MV阶跃检测）- 绿色/红色区分整定段和振荡段
+    segment_info = fitting_result.get('segment_info', [])
+    tuning_count = 0
+    osc_count = 0
+    for seg in segment_info:
+        start_ts = seg.get('start_time')
+        end_ts = seg.get('end_time')
+        seg_type = seg.get('type', 'oscillation')
+        if start_ts and end_ts:
+            start_dt = datetime.fromtimestamp(start_ts / 1000)
+            end_dt = datetime.fromtimestamp(end_ts / 1000)
+            if seg_type == 'tuning':
+                # 整定段 - 绿色边框
+                ax1.axvspan(start_dt, end_dt, alpha=0.3, color='green', 
+                           label='整定段' if tuning_count == 0 else None)
+                tuning_count += 1
+            else:
+                # 振荡段 - 红色边框（较淡）
+                ax1.axvspan(start_dt, end_dt, alpha=0.1, color='red', 
+                           label='振荡段' if osc_count == 0 else None)
+                osc_count += 1
     
     ax1.set_ylabel('PV / SV')
     ax1.set_title('过程值与模型拟合对比')
@@ -405,6 +428,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     ax2 = fig.add_subplot(n_plots, 1, 2, sharex=ax1)
     ax2.plot(time_array, mv_array, 'g-', label='MV', linewidth=0.8)
     
+    # 扰动段 - 橙色
     for i, w in enumerate(tuning_windows):
         start_ts = w.get('start_time')
         end_ts = w.get('end_time')
@@ -415,7 +439,19 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
             else:
                 start_dt = start_ts
                 end_dt = end_ts
-            ax2.axvspan(start_dt, end_dt, alpha=0.2, color='orange')
+            ax2.axvspan(start_dt, end_dt, alpha=0.15, color='orange')
+    
+    # 整定段/振荡段
+    for seg in segment_info:
+        start_ts = seg.get('start_time')
+        end_ts = seg.get('end_time')
+        seg_type = seg.get('type', 'oscillation')
+        if start_ts and end_ts:
+            start_dt = datetime.fromtimestamp(start_ts / 1000)
+            end_dt = datetime.fromtimestamp(end_ts / 1000)
+            color = 'green' if seg_type == 'tuning' else 'red'
+            alpha = 0.3 if seg_type == 'tuning' else 0.1
+            ax2.axvspan(start_dt, end_dt, alpha=alpha, color=color)
     
     ax2.set_ylabel('MV')
     ax2.set_title('操作值(MV)')

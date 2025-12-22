@@ -574,8 +574,22 @@ class PIDCalculator:
         # 使用继电器反馈法估算临界增益
         if amplitude > self._epsilon:
             Ku_estimate = 4 * mv_amplitude / (np.pi * amplitude)
-            # 限制Ku的合理范围，避免极端值
-            Ku_estimate = np.clip(Ku_estimate, 0.1, 20.0)
+            
+            # 动态调整Ku边界（基于过程增益K）
+            # 先估算过程增益K
+            pv_range = np.ptp(pv)
+            mv_range = np.ptp(mv)
+            K_approx = pv_range / mv_range if mv_range > 0.1 else 1.0
+            
+            # Ku的合理范围应该与K相关：
+            # - 小增益系统(K=0.1): Ku合理范围约[0.5, 10] → Ku/K ∈ [5, 100]
+            # - 大增益系统(K=2.0): Ku合理范围约[0.1, 5] → Ku/K ∈ [0.05, 2.5]
+            # 使用动态边界: Ku_min = 0.1, Ku_max = max(10, 15/K)
+            Ku_min = 0.1
+            Ku_max = max(10.0, 15.0 / max(K_approx, 0.1))  # K越大，Ku上限越小
+            Ku_max = min(Ku_max, 100.0)  # 绝对上限100
+            
+            Ku_estimate = np.clip(Ku_estimate, Ku_min, Ku_max)
         else:
             Ku_estimate = 1.0
         

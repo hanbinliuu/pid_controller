@@ -126,6 +126,10 @@ class Config:
         'pb_min': 120.0,                     # pb下限
         'pb_max': 600.0,                     # pb上限
         
+        # ========== 动态pb边界（基于过程增益K） ==========
+        'pb_k_adjustment_factor': 0.3,       # pb下限动态调整系数: pb_min *= (1 + factor/K)
+        'ku_k_extreme_pb_factor': 1.5,       # Ku/K异常时的pb下限乘数
+        
         # ========== 额外保守因子 ==========
         'critical_method_safety_factor': 1.2,  # 临界法额外安全系数
     }

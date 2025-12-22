@@ -171,9 +171,26 @@ class OscillationTuner:
                 T1 = best_params.get('T1', None)
                 # T1 被推到下限（1.0s 或 0.5s）说明拟合可能不可靠
                 if T1 is not None and T1 <= 1.5:  # 放宽检测阈值
-                    params_at_boundary = True
-                    fit_failed = True  # 参数在边界也认为是拟合失败
-                    self.log(f"   ⚠️ 段{i+1}: T1={T1:.2f}s 过小，认为拟合不可靠")
+                    # 如果最佳模型T1过小，检查是否有其他模型T1合理
+                    # 优先检查简单模型（FOPDT, FO）
+                    has_valid_alternative = False
+                    for alt_model in ['FOPDT', 'FO']:
+                        if alt_model in result.model_results:
+                            alt_params = result.model_results[alt_model]
+                            alt_T1 = alt_params.get('T1', None)
+                            alt_r2 = alt_params.get('r2', 0)  # 注意：键名是r2不是r_squared
+                            # 如果简单模型T1合理（>0.8s）且R²可接受，认为拟合有效
+                            # 简单模型允许更小的T1，因为它们更稳健
+                            if alt_T1 is not None and alt_T1 >= 0.8 and alt_r2 >= r2_failure_threshold:
+                                has_valid_alternative = True
+                                self.log(f"   ℹ️ 段{i+1}: {result.best_model}的T1={T1:.2f}s过小，"
+                                        f"但{alt_model}的T1={alt_T1:.2f}s(R²={alt_r2:.2f})有效")
+                                break
+                    
+                    if not has_valid_alternative:
+                        params_at_boundary = True
+                        fit_failed = True  # 参数在边界也认为是拟合失败
+                        self.log(f"   ⚠️ 段{i+1}: T1={T1:.2f}s 过小，认为拟合不可靠")
             
             if not fit_failed and result.best_r2 >= r2_failure_threshold:
                 # 有成功拟合的段（且参数不在边界）
@@ -205,10 +222,13 @@ class OscillationTuner:
                     force_oscillation_tuning = True
                     force_reason = f"失败段数据量占比{failure_ratio:.0%}>80%"
             
-            # 条件2: 成功段数据量太小（<1000点）
-            if success_total_points < 1000:
+            # 条件2: 成功段数据量太小且拟合质量不够好
+            # 如果R²足够高（>0.6），即使数据点较少也可信任
+            best_success_r2 = max(r.best_r2 for _, _, r in successful_segments) if successful_segments else 0
+            min_points_threshold = 300 if best_success_r2 >= 0.6 else 500  # 高R²时降低点数要求
+            if success_total_points < min_points_threshold:
                 force_oscillation_tuning = True
-                force_reason = f"成功段数据量仅{success_total_points}点<1000"
+                force_reason = f"成功段数据量仅{success_total_points}点<{min_points_threshold}"
             
             # 条件3: 平均振荡比过高且有多个失败段
             if avg_osc_ratio > 0.7 and failed_segments >= total_segments // 2:
@@ -305,6 +325,9 @@ class OscillationTuner:
                 if ku_k_ratio > ku_k_ratio_high:
                     use_conservative = True
                     self.log(f"   ⚠️ Ku/K={ku_k_ratio:.1f}>{ku_k_ratio_high}(临界增益相对过大)，使用保守参数")
+                    # 诊断：Ku估计可能不可靠，系统可能已在振荡边缘
+                    if ku_k_ratio > 50:
+                        self.log(f"   💡 诊断: Ku估计可能不可靠，建议先手动降低Kp至当前值的50%后再整定")
                 # 条件2: Ku/K比值过小（临界增益估计可能不可靠）
                 elif ku_k_ratio < ku_k_ratio_low:
                     use_conservative = True
@@ -531,9 +554,31 @@ class OscillationTuner:
         
         pb_base *= total_multiplier
         
-        # 6. 限制在合理范围（使用配置的范围）
-        pb_min = osc_config.get('pb_min', 80.0)
-        pb_max = osc_config.get('pb_max', 500.0)
+        # 6. 限制在合理范围（动态调整边界）
+        pb_min_base = osc_config.get('pb_min', 80.0)
+        pb_max = osc_config.get('pb_max', 600.0)
+        
+        # 动态调整pb边界（基于过程增益K）
+        # 小增益系统需要更高的pb下限，大增益系统可以更激进
+        # pb_min = pb_min_base * (1 + factor/K), K越小pb下限越高
+        pb_k_factor = osc_config.get('pb_k_adjustment_factor', 0.3)
+        if K_approx > 0.01:
+            pb_min_dynamic = pb_min_base * (1.0 + pb_k_factor / K_approx)
+            pb_min_dynamic = min(pb_min_dynamic, 400.0)  # 绝对上限400%
+        else:
+            pb_min_dynamic = 400.0
+        pb_min = max(pb_min_base, pb_min_dynamic)
+        
+        # 优化：当reason为low_gain时（Ku/K比值过大），进一步提高pb下限
+        # 这种情况说明系统可能已经在振荡边缘，需要更保守的参数
+        if reason == 'low_gain':
+            ku_k_extreme_factor = osc_config.get('ku_k_extreme_pb_factor', 1.5)
+            pb_min = pb_min * ku_k_extreme_factor
+            pb_min = min(pb_min, 500.0)  # 绝对上限500%
+            self.log(f"   📊 Ku/K异常模式: pb下限={pb_min:.0f}% (K={K_approx:.3f})")
+        else:
+            self.log(f"   📊 动态pb下限: {pb_min:.0f}% (K={K_approx:.3f})")
+        
         pb_safe = np.clip(pb_base, pb_min, pb_max)
         
         self.log(f"   📊 动态pb计算: K={K_approx:.3f}→pb={pb_from_K:.1f}, "
@@ -609,7 +654,8 @@ class OscillationTuner:
         }
     
     def build_oscillation_output(self, osc_result: Dict, hist_data: HistoricalData,
-                                 time_range: Dict, tuning_windows: List) -> Dict[str, Any]:
+                                 time_range: Dict, tuning_windows: List,
+                                 segments: List = None, segment_results: List = None) -> Dict[str, Any]:
         """
         构建振荡分析整定的输出结果
         
@@ -618,6 +664,8 @@ class OscillationTuner:
             hist_data: 历史数据
             time_range: 时间范围
             tuning_windows: 整定窗口列表
+            segments: 段数据列表（用于可视化）
+            segment_results: 段结果列表（用于可视化）
         
         Returns:
             标准格式的整定输出
@@ -917,7 +965,7 @@ class OscillationTuner:
             'pv_initial': pv_initial
         }
         
-        return {
+        result = {
             'success': True,
             'model_type': 'FOPDT',
             'model_rating': model_rating,
@@ -947,5 +995,34 @@ class OscillationTuner:
                 'oscillation_amplitude': osc_info['amplitude']
             },
             'closed_loop_verification': closed_loop_info,
-            'rating_details': rating_details
+            'rating_details': rating_details,
+            'segment_info': self._build_segment_info(segments, segment_results) if segments else []
         }
+        return result
+    
+    def _build_segment_info(self, segments: List, segment_results: List) -> List[Dict]:
+        """构建段信息用于可视化"""
+        segment_info = []
+        if not segments or not segment_results:
+            return segment_info
+        for i, (seg, result) in enumerate(zip(segments, segment_results)):
+            if len(seg.timestamp) > 0:
+                # 获取属性值，兼容对象和字典
+                if hasattr(result, 'step_response_score'):
+                    step_score = result.step_response_score
+                    osc_ratio = result.oscillation_ratio
+                else:
+                    step_score = result.get('step_response_score', 0.5)
+                    osc_ratio = result.get('oscillation_ratio', 0.5)
+                
+                is_tuning = (step_score >= 0.5 and osc_ratio < 0.5)
+                segment_info.append({
+                    'index': i,
+                    'start_time': int(seg.timestamp[0]),
+                    'end_time': int(seg.timestamp[-1]),
+                    'data_points': len(seg.pv),
+                    'step_response_score': round(step_score, 2),
+                    'oscillation_ratio': round(osc_ratio, 2),
+                    'type': 'tuning' if is_tuning else 'oscillation'
+                })
+        return segment_info
