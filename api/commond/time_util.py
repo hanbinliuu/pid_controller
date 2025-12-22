@@ -76,6 +76,7 @@ def parse_time_to_milliseconds(time_input: Union[int, str]) -> int:
         raise ValueError(f"时间参数类型错误: {type(time_input)}. 期望 int 或 str 类型")
 
 
+
 def format_time_to_string(time_input: Union[int, str], fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
     """
     将时间输入转换为指定格式的字符串（默认 'YYYY-MM-DD HH:MM:SS'）
@@ -99,3 +100,14 @@ def format_time_to_iso(time_input: Union[int, str], with_ms: bool = False) -> st
     ms = parse_time_to_milliseconds(time_input)
     dt = datetime.fromtimestamp(ms / 1000.0)
     return dt.isoformat(timespec='milliseconds' if with_ms else 'seconds')
+
+def get_current_time() -> int:
+    """
+    获取当前时间戳（毫秒）
+    """
+    return int(datetime.now().timestamp() * 1000)
+def get_current_format_time() -> str:
+    """
+    获取当前时间格式化字符串（默认 'YYYY-MM-DD HH:MM:SS'）
+    """
+    return format_time_to_string(get_current_time())

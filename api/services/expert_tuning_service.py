@@ -586,8 +586,8 @@ class ExpertTuningService:
             result = detect_and_visualize(history_data)
 
             return {
-                "start_time": start_time,
-                "end_time": end_time,
+                "start_time": format_time_to_string(start_time),
+                "end_time": format_time_to_string(end_time),
                 "result": result,
             }
 

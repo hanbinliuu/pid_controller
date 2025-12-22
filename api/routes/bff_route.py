@@ -160,7 +160,7 @@ async def get_table_and_points(
         examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]
     ),
     point_path: Optional[str] = Query(
-        'loop_state_parameters',
+        '/loop_state_parameters',
         description="测点路径，默认从环境变量BFF_MODEL_POINT_PATH读取",
         examples=["/loop_state_parameters"]
     )
@@ -235,14 +235,14 @@ async def get_bff_config() -> Dict[str, Any]:
 
 @router.get(
     "/next-level-submodel",
-    summary="获取下一级子模型",
-    operation_id="获取下一级子模型",
+    summary="获取下一级子模型(获取回路类型模型信息)",
+    operation_id="获取下一级子模型(获取回路类型模型信息)",
     description="根据模型标识符获取其下一级的子模型列表",
     response_model=SubmodelListResponse
 )
 async def get_next_level_submodel(
     identifier: str = Query(
-        ...,
+        Config.BFF_MODEL_LOOP_MODEL_URI,
         description="模型标识符，URI路径",
         examples=["/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"]
     )
@@ -292,14 +292,14 @@ async def get_next_level_submodel(
 )
 async def list_instances_under_tree(
     model_identifier_list: List[str] = Query(
-        ...,
-        description="模型标识符列表",
-        examples=[["/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"]]
+        [Config.BFF_MODEL_LOOP_MODEL_URI],
+        description="实例模型类型URI",
+        examples=["/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243"]
     ),
     start_identifier_list: List[str] = Query(
-        ...,
-        description="起始标识符列表",
-        examples=[["/pid_zd/053f3c45413b48bbafacec609d142e57"]]
+        [Config.BFF_MODEL_ROOT_URI],
+        description="起始节点URI",
+        examples=["/pid_zd/053f3c45413b48bbafacec609d142e57"]
     ),
     contain_sub_model: bool = Query(
         True,

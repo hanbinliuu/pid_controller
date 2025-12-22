@@ -233,7 +233,7 @@ class BFFModelClient:
             logger.error(f"BFF模型查询失败: {str(e)}")
             raise
 
-    def query_common_fields(self,model_point_names:List[str]=None) -> Dict[str, Any]:
+    def query_common_fields(self,project_uri:str=None,point_path:str=None,model_point_names:List[str]=None) -> Dict[str, Any]:
         """
         查询常用PID默认控制字段（MV, PV, SV, PB, TI, TD）
         
@@ -253,11 +253,14 @@ class BFFModelClient:
             }
         """
         # 确保 project_path 和 point_path 不为 None
-        project_path = self.deafult_device_uri if self.deafult_device_uri is not None else ""
-        point_path = self.deafult_point_path if self.deafult_point_path is not None else ""
+        project_path = project_uri if project_uri is not None else self.deafult_device_uri
+        point_path = point_path if point_path is not None else self.deafult_point_path
+        # 确保 point_path 以 / 开头
+        if not point_path.startswith('/'):
+            point_path = f"/{point_path}"
         body_data = {
-            "project_uri": self.deafult_device_uri,
-            "point_path": self.deafult_point_path,
+            "project_uri": project_path,
+            "point_path": point_path,
             "pid_point_map": {}
         }
         browse_paths = []

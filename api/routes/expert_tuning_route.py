@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Body, Depends
@@ -8,7 +10,8 @@ import logging
 from pydantic import BaseModel, Field
 
 from api.bean.generate_curves_request import GenerateCurvesRequest, KTLSimulatorRequest
-from api.commond.time_util import parse_time_to_milliseconds
+from api.commond.time_util import parse_time_to_milliseconds, format_time_to_string, get_current_format_time, \
+    get_current_time
 from api.middleware.exceptions import RuntimeException
 from api.response.tuning_response import AutoTuningResponse
 from core.agent.tools import process_query_tsdb_data_interpolated, detect_and_visualize
@@ -17,6 +20,7 @@ from api.services.expert_tuning_service import ExpertTuningService
 from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
+from core.config import Config
 from core.utils.idass import UserInfo, get_current_user
 from core.utils.model_type import ModelType
 
@@ -241,10 +245,10 @@ async def auto_tuning(
             operation_id="设备状态识别",
             description="智能识别时间区间数据状态（稳态、非稳态）")
 async def auto_detect_and_visualize(
-        loop_uri: str = Query('/pid_zd/0b521c82a96d4107a564e4c2678bdeca', required=False, description="回路URI",
+        loop_uri: str = Query(Config.BFF_MODEL_DEFULT_LOOP_URI, required=False, description="回路URI",
                                  examples=["/pid_zd/0b521c82a96d4107a564e4c2678bdeca"]),
-        start_time: Union[int, str] = Query(None, required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
-        end_time: Union[int, str] = Query(None, required=False, description="结束时间，支持毫秒时间戳或字符串格式")
+        start_time: Union[int, str] = Query(format_time_to_string(get_current_time() - 86400000), required=False, description="开始时间，支持毫秒时间戳或字符串格式"),
+        end_time: Union[int, str] = Query(get_current_format_time(), required=False, description="结束时间，支持毫秒时间戳或字符串格式")
 ):
     try:
         # 调用Service层执行状态识别

@@ -366,39 +366,6 @@ async def run_workflow(
             detail=f"代理服务内部错误: {str(e)}"
         )
 
-@router.get("/workflow/config",
-            summary="获取工作流配置",
-            operation_id="获取PID_AGENT工作流配置",
-            description="获取当前工作流代理的配置信息")
-async def get_workflow_config():
-    """
-    **获取工作流配置信息**
-
-    返回当前工作流代理的配置参数，用于调试和监控。
-    """
-    return {
-        "config": {
-            "base_url": ProxyConfig.WORKFLOW_BASE_URL,
-            "timeout": ProxyConfig.WORKFLOW_TIMEOUT,
-            "connect_timeout": ProxyConfig.WORKFLOW_CONNECT_TIMEOUT,
-            "read_timeout": ProxyConfig.WORKFLOW_READ_TIMEOUT,
-            "health_check_timeout": ProxyConfig.HEALTH_CHECK_TIMEOUT,
-            "token_configured": bool(ProxyConfig.WORKFLOW_TOKEN)
-        },
-        "endpoints": [
-            {
-                "path": "/api/proxy/workflow/run",
-                "method": "POST",
-                "description": "执行整定分析"
-            },
-            {
-                "path": "/api/proxy/workflow/config",
-                "method": "GET",
-                "description": "获取大模型整定配置"
-            }
-        ]
-    }
-
 @router.get("/model-recommendations/{model_type}",
          summary="获取模型推荐信息",
          operation_id="获取模型推荐信息",

@@ -138,18 +138,22 @@ class Config:
         'http://bff-model-product-infra-system.sit-cloud.ieccloud.hollicube.com'
     )
     BFF_MODEL_TIMEOUT: int = _get_config('bff.model.timeout', '30', int)
+    # 默认回路URI
     BFF_MODEL_DEFULT_LOOP_URI: str = _get_config(
         'bff.model.loop_uri',
         '/pid_zd/0b521c82a96d4107a564e4c2678bdeca'
     )
+    # 信息模型测点属性路径名称
     BFF_MODEL_POINT_PATH: str = _get_config(
         'bff.model.point_path',
         '/loop_state_parameters'
     )
+    # BFF回路模型URI（根节点URI）
     BFF_MODEL_ROOT_URI: str = _get_config(
         'bff.model.root_uri',
         '/pid_zd/053f3c45413b48bbafacec609d142e57'
     )
+    # BFF回路模型URI（通用装置类型类型）
     BFF_MODEL_LOOP_MODEL_URI: str = _get_config(
         'bff.model.loop_model_uri',
         '/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243'
