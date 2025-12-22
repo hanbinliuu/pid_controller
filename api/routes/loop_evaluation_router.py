@@ -113,9 +113,6 @@ async def get_loop_evaluation_by_uri(
         )
 
         return {
-            "code": 0,
-            "message": "查询成功",
-            "data": {
                 "evaluations": [
                     {
                         "id": e.id,
@@ -131,102 +128,9 @@ async def get_loop_evaluation_by_uri(
                 ],
                 "total": len(evaluations)
             }
-        }
     except Exception as e:
         logger.error(f"查询回路评估历史失败: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"查询回路评估历史失败: {str(e)}"
-        )
-
-@router.get("/loop-evaluation/{evaluation_id}",
-            summary="根据ID查询评估",
-            operation_id="根据ID查询评估",
-            response_model=Dict[str, Any])
-async def get_loop_evaluation_by_id(
-        evaluation_id: int,
-        db: Session = Depends(get_db)
-):
-    """
-    根据ID查询回路评估记录
-    """
-    try:
-        evaluation = LoopEvaluationService.get_evaluation_by_id(db, evaluation_id)
-
-        if not evaluation:
-            raise HTTPException(
-                status_code=404,
-                detail=f"未找到ID为 {evaluation_id} 的评估记录"
-            )
-
-        return {
-            "code": 0,
-            "message": "查询成功",
-            "data": {
-                "id": evaluation.id,
-                "loop_uri": evaluation.loop_uri,
-                "loop_name": evaluation.loop_name,
-                "description": evaluation.description,
-                "assessment_time": evaluation.assessment_time.isoformat() if evaluation.assessment_time else None,
-                "operator": evaluation.operator,
-                "before_params": evaluation.before_params,
-                "after_params": evaluation.after_params,
-                "status": evaluation.status,
-                "remark": evaluation.remark,
-                "tuning_details": evaluation.tuning_details,
-                "performance_score": evaluation.performance_score,
-                "auto_control_rate": evaluation.auto_control_rate,
-                "stability_rate": evaluation.stability_rate,
-                "auto_control_time": evaluation.auto_control_time,
-                "stable_time": evaluation.stable_time,
-                "total_time": evaluation.total_time,
-                "pt_count": evaluation.pt_count,
-                "pv_sum_value": evaluation.pv_sum_value,
-                "pv_sum_squares": evaluation.pv_sum_squares,
-                "mv_sum_value": evaluation.mv_sum_value,
-                "mv_sum_squares": evaluation.mv_sum_squares,
-                "created_time": evaluation.created_time.isoformat() if evaluation.created_time else None,
-                "updated_time": evaluation.updated_time.isoformat() if evaluation.updated_time else None
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"查询回路评估失败: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"查询回路评估失败: {str(e)}"
-        )
-@router.delete("/loop-evaluation/{evaluation_id}",
-               summary="删除评估记录",
-               operation_id="删除评估记录",
-               response_model=Dict[str, Any])
-async def delete_loop_evaluation(
-        evaluation_id: int,
-        db: Session = Depends(get_db)
-):
-    """
-    删除回路评估记录
-    """
-    try:
-        success = LoopEvaluationService.delete_evaluation(db, evaluation_id)
-
-        if not success:
-            raise HTTPException(
-                status_code=404,
-                detail=f"未找到ID为 {evaluation_id} 的评估记录"
-            )
-
-        return {
-            "code": 0,
-            "message": "删除成功",
-            "data": {"evaluation_id": evaluation_id}
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除回路评估失败: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"删除回路评估失败: {str(e)}"
         )

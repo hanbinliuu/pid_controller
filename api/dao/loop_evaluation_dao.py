@@ -9,7 +9,7 @@ from sqlmodel import Session, select, func, desc
 
 from api.bean.loop_evaluation import LoopEvaluation
 from api.bean.loop_info import LoopInfo
-
+from api.response.loop_evaluation_detail_response import LoopEvaluationDetailResponse
 
 logger = logging.getLogger(__name__)
 

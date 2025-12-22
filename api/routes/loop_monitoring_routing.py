@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
 from api.services.loop_monitoring_service import LoopMonitoringService
+from core.config import Config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -24,16 +25,16 @@ async def get_loop_realtime_status(
         plant_uri: Optional[str] = Query(
             None,
             description="装置URI，用于筛选指定装置下的回路",
-            example="/pid_zd/1f59615dc9d44b4388e29829f95a49c6"
+            example=Config.BFF_MODEL_DEFULT_LOOP_URI
         ),
         loop_name: Optional[str] = Query(
             None,
             description="回路名称模糊查询",
-            example="流量"
+            examples=["流量"]
         ),
         status: Optional[str] = Query(
             None,
-            description="状态筛选（自动/手动/异常）",
+            description="状态筛选（自动/手动）",
             example="自动"
         ),
         page_no: int = Query(
@@ -59,7 +60,7 @@ async def get_loop_realtime_status(
     """
     try:
         result = LoopMonitoringService.get_loop_realtime_status(
-            plant_uri=plant_uri,
+            device_uri=plant_uri,
             loop_name=loop_name,
             status=status,
             page_no=page_no,
@@ -86,7 +87,7 @@ async def get_loop_trend_data(
         loop_uri: str = Query(
             ...,
             description="回路URI",
-            example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
+            examples=[Config.BFF_MODEL_DEFULT_LOOP_URI]
         ),
         time_range: int = Query(
             None,
@@ -149,7 +150,7 @@ async def get_performance_status(
     loop_uri: str = Query(
         ...,
         description="回路 URI",
-        example="/pid_zd/0b521c82a96d4107a564e4c2678bdeca"
+        example=Config.BFF_MODEL_DEFULT_LOOP_URI
     )
 ) -> Dict[str, Any]:
     """
@@ -248,7 +249,7 @@ async def get_performance_status_by_plant_24h(
     plant_uri: Optional[str] = Query(
         ...,
         description="层级URI",
-        example="/pid_zd/1f59615dc9d44b4388e29829f95a49c6"
+        example=Config.BFF_MODEL_DEFULT_LOOP_URI
     ),
     max_workers: int = Query(
         5,

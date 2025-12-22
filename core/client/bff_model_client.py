@@ -1187,7 +1187,7 @@ class BFFModelClient:
                     logger.warning(f"测点索引 {i} 超出返回结果范围")
                 values_map[point_name] = value
 
-            logger.info(f"成功查询到 {len(values_map)} 个测点值")
+            # logger.info(f"成功查询到 {len(values_map)} 个测点值")
             return values_map
 
         except requests.exceptions.Timeout:

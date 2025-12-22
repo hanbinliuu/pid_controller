@@ -63,9 +63,8 @@ async def get_this_child_evaluation_now_by_device_uri(
         db: Session = Depends(get_db)
 )->List[DeviceEvaluation]:
     # 获取最新的装置评估数据
-    # if device_uri is None:
-    #     device_uri = Config.BFF_MODEL_ROOT_URI
-    # results = DeviceEvaluationService.get_this_child_by_device_uri_and_date_now(db, device_uri)
+    if device_uri is None:
+        device_uri = Config.BFF_MODEL_ROOT_URI
 
     device_list:List[DeviceEvaluation] = []
     parient_result = DeviceEvaluationService.get_evaluation_by_device_uri_now(db, device_uri)

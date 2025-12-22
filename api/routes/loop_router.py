@@ -70,21 +70,15 @@ class LoopValuesResponse(BaseModel):
     response_model=LoopListResponse
 )
 async def list_instances_by_uri(
-        db: Session = Depends(get_db),
         node_uri: str = Query(
             None,
             description="起始节点URI",
-            example=[Config.BFF_MODEL_ROOT_URI]
+            examples=[Config.BFF_MODEL_ROOT_URI]
         ),
         type_uri: str = Query(
             None,
             description="类型uri",
         ),
-        name: str = Query(
-            None,
-            description="名称"
-        )
-        ,
         page_no: int = Query(
             1,
             description="页码",

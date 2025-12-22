@@ -10,6 +10,7 @@ from sqlmodel import Session
 from core.database.database import get_db
 from api.services.loop_info_service import LoopInfoService
 from api.bean.loop_info import LoopInfo
+from api.response.loop_info_response import LoopInfoResponse, UpdateLoopInfoResponse
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ router = APIRouter(prefix="/api/v1")
 @router.get("/loop-info/by-uri",
            summary="根据loop_uri查询信息",
            operation_id="根据loop_uri查询回路信息",
-           response_model=Dict[str, Any])
+           response_model=LoopInfoResponse)
 async def get_info_by_uri(
     loop_uri: str = Query(..., description="回路URI"),
     db: Session = Depends(get_db)
@@ -36,11 +37,26 @@ async def get_info_by_uri(
                 detail=f"未找到loop_uri为 {loop_uri} 的信息记录"
             )
         
-        return {
-            "code": 0,
-            "message": "查询成功",
-            "data": mapping
-        }
+            # 将LoopInfo对象转换为LoopInfoResponse Bean
+        return LoopInfoResponse(
+            id=mapping.id,
+            loop_uri=mapping.loop_uri,
+            loop_path=mapping.loop_path,
+            loop_name=mapping.loop_name,
+            loop_type=mapping.loop_type,
+            description=mapping.description,
+            point_path=mapping.point_path,
+            pv_field=mapping.pv_field,
+            sv_field=mapping.sv_field,
+            mv_field=mapping.mv_field,
+            auto_status_field=mapping.auto_status_field,
+            pb_field=mapping.pb_field,
+            ti_field=mapping.ti_field,
+            td_field=mapping.td_field,
+            is_active=mapping.is_active,
+            created_time=mapping.created_time.isoformat() if mapping.created_time else None,
+            updated_time=mapping.updated_time.isoformat() if mapping.updated_time else None
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -54,7 +70,7 @@ async def get_info_by_uri(
 @router.get("/loop-info/by-path",
            summary="根据loop_path查询回路信息",
            operation_id="根据loop_path回路信息",
-           response_model=Dict[str, Any])
+           response_model=List[LoopInfoResponse])
 async def get_info_by_path(
     loop_path: str = Query(..., description="回路路径"),
     db: Session = Depends(get_db)
@@ -71,11 +87,29 @@ async def get_info_by_path(
                 detail=f"未找到loop_path为 {loop_path} 的信息记录"
             )
         
-        return {
-            "code": 0,
-            "message": "查询成功",
-            "data": mapping
-        }
+        # 将LoopInfo对象列表转换为LoopInfoResponse Bean列表
+        return [
+            LoopInfoResponse(
+                id=m.id,
+                loop_uri=m.loop_uri,
+                loop_path=m.loop_path,
+                loop_name=m.loop_name,
+                loop_type=m.loop_type,
+                description=m.description,
+                point_path=m.point_path,
+                pv_field=m.pv_field,
+                sv_field=m.sv_field,
+                mv_field=m.mv_field,
+                auto_status_field=m.auto_status_field,
+                pb_field=m.pb_field,
+                ti_field=m.ti_field,
+                td_field=m.td_field,
+                is_active=m.is_active,
+                created_time=m.created_time.isoformat() if m.created_time else None,
+                updated_time=m.updated_time.isoformat() if m.updated_time else None
+            )
+            for m in mapping
+        ]
     except HTTPException:
         raise
     except Exception as e:
@@ -155,63 +189,4 @@ async def list_loop_info_exclude_excluded(
         raise HTTPException(
             status_code=500,
             detail=f"查询回路信息列表失败: {str(e)}"
-        )
-
-@router.put("/loop-info",
-           summary="更新回路信息",
-           operation_id="update_loop_info",
-           response_model=Dict[str, Any])
-async def update_loop_info(
-    loop_uri: str = Query(..., description="回路 URI"),
-    loop_path: Optional[str] = Query(None, description="新的PID相关参数相对路径"),
-    loop_name: Optional[str] = Query(None, description="新的回路名称"),
-    pv_field: Optional[str] = Query(None, description="新的PV字段名"),
-    sv_field: Optional[str] = Query(None, description="新的SV字段名"),
-    mv_field: Optional[str] = Query(None, description="新的MV字段名"),
-    auto_status_field: Optional[str] = Query(None, description="新的自动状态字段名"),
-    pb_field: Optional[str] = Query(None, description="新的PB(比例带)字段名"),
-    ti_field: Optional[str] = Query(None, description="新的TI(积分时间常数)字段名"),
-    td_field: Optional[str] = Query(None, description="新的TD(微分时间常数)字段名"),
-    description: Optional[str] = Query(None, description="新的描述"),
-    db: Session = Depends(get_db)
-):
-    """
-    更新回路信息记录
-    """
-    try:
-        mapping = LoopInfoService.update_mapping(
-            db,
-            loop_uri=loop_uri,
-            loop_path=loop_path,
-            loop_name=loop_name,
-            pv_field=pv_field,
-            sv_field=sv_field,
-            mv_field=mv_field,
-            auto_status_field=auto_status_field,
-            pb_field=pb_field,
-            ti_field=ti_field,
-            td_field=td_field,
-            description=description
-        )
-        
-        if not mapping:
-            raise HTTPException(
-                status_code=404,
-                detail=f"未找到loop_uri为 {loop_uri} 的信息记录"
-            )
-        
-        return {
-                "id": mapping.id,
-                "loop_uri": mapping.loop_uri,
-                "loop_path": mapping.loop_path,
-                "loop_name": mapping.loop_name,
-                "updated_time": mapping.updated_time.isoformat()
-            }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"更新回路信息失败: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"更新回路信息失败: {str(e)}"
         )

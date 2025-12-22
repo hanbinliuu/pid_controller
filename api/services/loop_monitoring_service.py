@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from api.services.device_data_service import DeviceDataService
 from core.client.bff_model_client import BFFModelClient
 from core.algorithm.stability_rate import PerformanceEvaluator
+from core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class LoopMonitoringService:
 
     @staticmethod
     def get_loop_realtime_status(
-            plant_uri: Optional[str] = None,
+            device_uri: Optional[str] = None,
             loop_name: Optional[str] = None,
             status: Optional[str] = None,
             page_no: int = 1,
@@ -45,8 +46,8 @@ class LoopMonitoringService:
             # 使用BFF客户端查询回路列表
             with BFFModelClient() as client:
                 # 如果指定了装置URI，则查询该装置下的回路
-                start_identifier_list = [plant_uri] if plant_uri else []
-                model_identifier_list = ['/pid_zd/31512b195f3f4cca9a08a9aeeb3bb243']
+                start_identifier_list = [device_uri] if device_uri else [Config.BFF_MODEL_ROOT_URI]
+                model_identifier_list = [Config.BFF_MODEL_LOOP_MODEL_URI]
                 result = client.list_instances_under_tree(
                     model_identifier_list=model_identifier_list,
                     start_identifier_list=start_identifier_list,
@@ -56,7 +57,7 @@ class LoopMonitoringService:
                 )
 
                 logger.info(
-                    f"BFF查询成功，实例数量: {len(result.get('instances', []))}"
+                    f"BFF查询成功，回路实例数量: {len(result.get('instances', []))}"
                 )
 
                 # 获取回路列表
@@ -91,7 +92,8 @@ class LoopMonitoringService:
 
                         # 获取自控情况
                         auto_status = point_values.get('AUTO', 0)  # 255表示自动，0表示手动
-                        control_status = "自动" if auto_status == 255 else "手动"
+
+                        control_status = "自动" if (auto_status == 255 or auto_status == True) else "手动"
 
                         # 获取当前值
                         current_pv = point_values.get('PV')
@@ -107,9 +109,9 @@ class LoopMonitoringService:
                         mv_range_min = range_values.get('MVL', 0)
 
                         # 格式化当前值显示
-                        pv_display = f"{current_pv:.1f}" if current_pv is not None else "--"
-                        sv_display = f"{current_sv:.1f}" if current_sv is not None else "--"
-                        mv_display = f"{current_mv:.1f}" if current_mv is not None else "--"
+                        pv_display = f"{current_pv:.2f}" if current_pv is not None else "--"
+                        sv_display = f"{current_sv:.2f}" if current_sv is not None else "--"
+                        mv_display = f"{current_mv:.2f}" if current_mv is not None else "--"
 
                         # 判断运行状态（简化实现，实际应根据数据质量等判断）
                         running_status = "运行" if current_pv is not None else "停止"
@@ -133,7 +135,10 @@ class LoopMonitoringService:
                         }
 
                         # 状态筛选
-                        if status is None or status == "" or control_status == status:
+                        if status :
+                            if status == control_status:
+                                loop_list.append(loop_item)
+                        else:
                             loop_list.append(loop_item)
 
                     except Exception as e:
