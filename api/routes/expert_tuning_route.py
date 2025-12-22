@@ -709,7 +709,7 @@ async def get_step_response_windows(
                     'confidence': float(step_result['confidence']),
                     'recommendation': recommendation,
                     'group_key': group_key,
-                    'last_pid': {"kp": kp, "ki": ki, "kd": kd}
+                    'last_pid': {"kp": kp, "ki": ki, "kd": kd, "pb": pb, "ti": ti, "td": td}
                 }
                 qualified_windows.append(qualified_window)
 

@@ -1422,6 +1422,7 @@ def process_query_tsdb_data_interpolated(db: str,
     if has_pid:
         import numpy as np
 
+
         pb = np.asarray([row[pb_idx] for row in values], dtype=np.float64)
         ti = np.asarray([row[ti_idx] for row in values], dtype=np.float64)
         td = np.asarray([row[td_idx] for row in values], dtype=np.float64)
@@ -1431,10 +1432,20 @@ def process_query_tsdb_data_interpolated(db: str,
         ti = np.nan_to_num(ti, nan=0.0, posinf=0.0, neginf=0.0)
         td = np.nan_to_num(td, nan=0.0, posinf=0.0, neginf=0.0)
         
+        # 保留两位小数
+        pb = np.round(pb, 2)
+        ti = np.round(ti, 2)
+        td = np.round(td, 2)
+        
         # 安全计算PID参数，避免除零和无效值
         kp = np.where((pb != 0) & np.isfinite(pb), 100.0 / pb, 0.0)
         ki = np.where((ti != 0) & np.isfinite(ti) & np.isfinite(kp), kp / ti, 0.0)
         kd = np.where((td != 0) & np.isfinite(td) & np.isfinite(kp), kp / td, 0.0)
+
+        # 保留两位小数
+        kp = np.round(kp, 2)
+        ki = np.round(ki, 2)
+        kd = np.round(kd, 2)
 
     # ---------- 构建最终结果 ----------
     result = []
@@ -1453,6 +1464,9 @@ def process_query_tsdb_data_interpolated(db: str,
             record["kp"] = float(kp[i])
             record["ki"] = float(ki[i])
             record["kd"] = float(kd[i])
+            record["pb"] = float(pb[i])
+            record["ti"] = float(ti[i])
+            record["td"] = float(td[i])
 
         append(record)
 
