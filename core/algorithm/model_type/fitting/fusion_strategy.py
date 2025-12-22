@@ -33,6 +33,8 @@
 
 import numpy as np
 from typing import Dict, List, Optional, Tuple
+
+from ..logger import LoggerMixin
 from dataclasses import dataclass
 from enum import Enum
 
@@ -96,7 +98,7 @@ class FusionResult:
     reasoning: str
 
 
-class PIDFusionStrategy:
+class PIDFusionStrategy(LoggerMixin):
     """多扰动段 PID 参数融合策略"""
     
     # 策略阈值
@@ -107,11 +109,7 @@ class PIDFusionStrategy:
     EPSILON = 1e-8
     
     def __init__(self, verbose: bool = False):
-        self.verbose = verbose
-    
-    def log(self, msg: str):
-        if self.verbose:
-            print(msg)
+        self._init_logger(verbose)
     
     def _safe_cv(self, values: List[float]) -> float:
         """安全计算变异系数"""

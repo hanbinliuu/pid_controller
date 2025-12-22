@@ -24,9 +24,10 @@ from typing import List, Dict, Any, Optional
 from ..config import Config, ModelType
 from ..data_models import SegmentResult, HistoricalData, FusionResult
 from ..utils import calculate_r2, calculate_rmse
+from ..logger import LoggerMixin
 
 
-class OscillationTuner:
+class OscillationTuner(LoggerMixin):
     """
     振荡数据整定器
     
@@ -40,14 +41,10 @@ class OscillationTuner:
             simulator: ModelSimulator 实例
             verbose: 是否输出详细日志
         """
+        self._init_logger(verbose)
         self._pid_calculator = pid_calculator
         self._simulator = simulator
-        self._verbose = verbose
         self._epsilon = Config.EPSILON
-    
-    def log(self, msg: str) -> None:
-        if self._verbose:
-            print(msg)
     
     def detect_valve_issues(self, mv: np.ndarray, pv: np.ndarray, dt: float = 1.0) -> Dict[str, Any]:
         """

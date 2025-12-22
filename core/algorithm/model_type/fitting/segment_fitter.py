@@ -49,25 +49,11 @@ class SegmentFitter(LoggerMixin):
     4. 尝试振荡临界法整定
     """
     
-    # 候选模型
-    CANDIDATE_MODELS = [
-        ModelType.FOPDT,
-        ModelType.FO,
-        ModelType.SO,
-        ModelType.SOPDT,
-        ModelType.FOPI,
-    ]
+    # 使用统一的常量定义（来自 ModelType）
+    CANDIDATE_MODELS = ModelType.CANDIDATE_MODELS
+    MODEL_PARAM_COUNT = ModelType.MODEL_PARAM_COUNT
     
-    # 模型参数数量
-    MODEL_PARAM_COUNT = {
-        ModelType.FOPDT: 3,
-        ModelType.FO: 2,
-        ModelType.SO: 3,
-        ModelType.SOPDT: 4,
-        ModelType.FOPI: 2,
-    }
-    
-    # 模型辨识方法
+    # 模型辨识方法映射（保留在此处，因为依赖 ModelIdentifier）
     IDENTIFY_METHODS = {
         ModelType.FOPDT: ModelIdentifier.identify_fopdt,
         ModelType.FO: ModelIdentifier.identify_first_order,
@@ -520,18 +506,5 @@ class SegmentFitter(LoggerMixin):
         return best_params if best_params else method(t, y, u), max(best_r2, 0)
     
     def _get_bounds(self, model_type: str) -> Tuple[List, List]:
-        """获取参数边界"""
-        bounds_config = Config.MODEL_BOUNDS.get(model_type, {})
-        if 'initial' in bounds_config:
-            return bounds_config['initial']
-        
-        if model_type == ModelType.FOPDT:
-            return ([-20, 0.1, 0], [20, 1000, 100])
-        elif model_type == ModelType.FO:
-            return ([-20, 0.1], [20, 1000])
-        elif model_type == ModelType.SO:
-            return ([-20, 0.1, 0.1], [20, 1000, 1000])
-        elif model_type == ModelType.SOPDT:
-            return ([-20, 0.1, 0.1, 0], [20, 1000, 1000, 100])
-        else:
-            return ([-20, 0.1], [20, 1000])
+        """获取参数边界（委托给 ModelType.get_bounds）"""
+        return ModelType.get_bounds(model_type)

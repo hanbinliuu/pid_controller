@@ -36,6 +36,41 @@ class ModelType:
     HAMMERSTEIN = "HAMMERSTEIN"       # Hammerstein模型 (静态非线性 + 线性动态)
     DEADBAND_FOPDT = "DEADBAND_FOPDT" # 死区 + FOPDT模型
     SATURATION_FOPDT = "SAT_FOPDT"    # 饱和 + FOPDT模型
+    
+    # ============================================================
+    # 统一常量定义（避免各模块重复定义）
+    # ============================================================
+    
+    # 候选模型列表（用于多模型拟合）
+    CANDIDATE_MODELS = [FOPDT, FO, SO, SOPDT, FOPI]
+    
+    # 模型参数数量（用于AIC/BIC计算）
+    MODEL_PARAM_COUNT = {
+        FOPDT: 3,
+        FO: 2,
+        SO: 3,
+        SOPDT: 4,
+        FOPI: 2,
+    }
+    
+    # 模型参数边界（用于优化拟合）
+    # 格式: {model_type: (lower_bounds, upper_bounds)}
+    DEFAULT_BOUNDS = {
+        FOPDT: ([-20, 0.1, 0], [20, 1000, 100]),
+        FO: ([-20, 0.1], [20, 1000]),
+        SO: ([-20, 0.1, 0.1], [20, 1000, 1000]),
+        SOPDT: ([-20, 0.1, 0.1, 0], [20, 1000, 1000, 100]),
+        FOPI: ([-20, 0], [20, 100]),
+    }
+    
+    @classmethod
+    def get_bounds(cls, model_type: str) -> tuple:
+        """获取模型参数边界（统一方法）"""
+        from .config import Config
+        bounds_config = Config.MODEL_BOUNDS.get(model_type, {})
+        if 'initial' in bounds_config:
+            return bounds_config['initial']
+        return cls.DEFAULT_BOUNDS.get(model_type, ([-20, 0.1, 0], [20, 1000, 100]))
 
 
 class Config:

@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from scipy.ndimage import uniform_filter1d
 
 from ..config import Config
+from ..logger import LoggerMixin
 
 
 @dataclass
@@ -80,7 +81,7 @@ class DataQuality:
             return 'poor'
 
 
-class DataPreprocessor:
+class DataPreprocessor(LoggerMixin):
     """
     数据预处理器
     
@@ -122,12 +123,8 @@ class DataPreprocessor:
         self.noise_threshold = noise_threshold if noise_threshold is not None else cfg['noise_threshold']
         self.min_correlation = min_correlation if min_correlation is not None else cfg['min_correlation']
         self.outlier_factor = outlier_factor if outlier_factor is not None else cfg['outlier_factor']
-        self.verbose = verbose
+        self._init_logger(verbose)
         self._epsilon = Config.EPSILON
-    
-    def log(self, msg: str):
-        if self.verbose:
-            print(msg)
     
     # ============================================================
     # 滤波方法

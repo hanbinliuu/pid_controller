@@ -28,15 +28,15 @@ from core.algorithm.model_type.model_selector import ModelSelector
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951",
-    'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
-    # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
+    # 'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
+    'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
         # {'start_time': '2025-12-17 00:31:36', 'end_time': '2025-12-17 23:31:36'},
-         {'start_time': '2025-12-22 13:50:00', 'end_time': '2025-12-22 14:50:00'},
+         {'start_time': '2025-12-22 11:37:29', 'end_time': '2025-12-22 17:37:29'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
@@ -237,37 +237,6 @@ def run_model_selector(data: List[Dict], qualified_windows: List[Dict],
     # 调用新的 run 方法
     selector = ModelSelector(verbose=verbose)
     result = selector.run(input_data)
-    
-    # 打印输出结果（新格式）
-    print(f"\n📤 输出结果（新格式）:")
-    print(f"   model_type: {result.get('model_type')}")
-    print(f"   turning_type: {result.get('turning_type')}")
-    print(f"   model_rating: {result.get('model_rating')}")
-    print(f"   start_time: {result.get('start_time')}")
-    print(f"   end_time: {result.get('end_time')}")
-    
-    model_params = result.get('model_parameters', {})
-    print(f"\n   model_parameters:")
-    print(f"      K  = {model_params.get('K')}")
-    print(f"      T1 = {model_params.get('T1')}")
-    print(f"      T2 = {model_params.get('T2')}")
-    print(f"      L  = {model_params.get('L')}")
-    
-    pid_params = result.get('pid_parameters', {})
-    print(f"\n   pid_parameters:")
-    print(f"      pb = {pid_params.get('pb')}")
-    print(f"      ti = {pid_params.get('ti')}")
-    print(f"      td = {pid_params.get('td')}")
-    print(f"      kp = {pid_params.get('kp')}")
-    print(f"      ki = {pid_params.get('ki')}")
-    print(f"      kd = {pid_params.get('kd')}")
-    
-    fitting = result.get('fitting_result', {})
-    print(f"\n   fitting_result:")
-    print(f"      r_squared = {fitting.get('r_squared')}")
-    print(f"      rmse = {fitting.get('rmse')}")
-    print(f"      数据点数 = {len(fitting.get('pv', []))}")
-    print(f"      recommendation = {fitting.get('recommendation')}")
     
     return result
 

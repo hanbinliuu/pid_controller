@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 
 from ..config import Config, ModelType
 from ..data_models import SegmentResult, FusionResult
+from ..logger import LoggerMixin
 
 
 @dataclass
@@ -59,7 +60,7 @@ class SegmentModelFit:
         return self.best_r2 >= 0.5 and self.quality_score >= 0.4 and not self.is_nonlinear
 
 
-class UnifiedModelSelector:
+class UnifiedModelSelector(LoggerMixin):
     """
     统一模型选择器
     
@@ -91,12 +92,8 @@ class UnifiedModelSelector:
     }
     
     def __init__(self, verbose: bool = False):
-        self._verbose = verbose
+        self._init_logger(verbose)
         self._epsilon = Config.EPSILON
-    
-    def log(self, msg: str):
-        if self._verbose:
-            print(msg)
     
     def select_unified_model_type(self, segment_fits: List[SegmentModelFit], 
                                    return_need_fulldata: bool = False) -> Tuple[str, str, bool]:

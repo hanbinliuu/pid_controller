@@ -29,21 +29,18 @@ from ..config import Config
 from ..data_models import SegmentResult, HistoricalData, TuningWindow
 from .data_preprocessor import DataPreprocessor
 from ..utils import parse_timestamp
+from ..logger import LoggerMixin
 
 
-class SegmentProcessor:
+class SegmentProcessor(LoggerMixin):
     """段处理器 - 负责段提取、过滤和有效性检查"""
     
     def __init__(self, verbose: bool = False):
-        self._verbose = verbose
+        self._init_logger(verbose)
         self._epsilon = Config.EPSILON
         self._preprocessor = DataPreprocessor(verbose=verbose)
         # 从集中化配置获取阈值
         self._seg_config = Config.SEGMENT_PROCESSING
-    
-    def log(self, msg: str):
-        if self._verbose:
-            print(msg)
     
     def extract_segments(self, hist_data: HistoricalData, 
                          windows: List[TuningWindow]) -> List[HistoricalData]:
