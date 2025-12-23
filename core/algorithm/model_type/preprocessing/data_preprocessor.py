@@ -157,6 +157,154 @@ class DataPreprocessor(LoggerMixin):
         
         return y_filtered, u_filtered
     
+    def adaptive_filter(self, y: np.ndarray, u: np.ndarray,
+                        oscillation_ratio: float = None,
+                        noise_ratio: float = None) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+        """
+        自适应滤波：根据数据振荡程度和噪声水平自动选择滤波参数
+        
+        Args:
+            y: PV数据
+            u: MV数据
+            oscillation_ratio: 振荡比例（可选，若不提供则自动计算）
+            noise_ratio: 噪声比例（可选，若不提供则自动计算）
+        
+        Returns:
+            (y_filtered, u_filtered, filter_info)
+            filter_info 包含: method, window, oscillation_level, noise_level
+        """
+        cfg = Config.PREPROCESSING.get('adaptive_filter', {})
+        
+        if not cfg.get('enabled', True):
+            # 未启用自适应滤波，使用默认
+            y_f, u_f = self.filter(y, u, method='moving_average')
+            return y_f, u_f, {'method': 'moving_average', 'window': self.filter_window, 'adaptive': False}
+        
+        # 1. 计算振荡和噪声程度（如未提供）
+        if oscillation_ratio is None:
+            oscillation_ratio = self._calculate_oscillation_ratio(y)
+        if noise_ratio is None:
+            noise_ratio = self._calculate_noise_ratio(y)
+        
+        # 2. 判断振荡等级
+        osc_low = cfg.get('oscillation_low', 0.3)
+        osc_high = cfg.get('oscillation_high', 0.7)
+        if oscillation_ratio < osc_low:
+            osc_level = 'low'
+        elif oscillation_ratio < osc_high:
+            osc_level = 'medium'
+        else:
+            osc_level = 'high'
+        
+        # 3. 判断噪声等级
+        noise_low = cfg.get('noise_low', 0.05)
+        noise_high = cfg.get('noise_high', 0.15)
+        if noise_ratio < noise_low:
+            noise_level = 'low'
+        elif noise_ratio < noise_high:
+            noise_level = 'medium'
+        else:
+            noise_level = 'high'
+        
+        # 4. 选择滤波方法
+        method_map = cfg.get('method_by_oscillation', {})
+        method = method_map.get(osc_level, 'moving_average')
+        
+        # 5. 计算自适应窗口大小
+        window_min = cfg.get('window_min', 3)
+        window_max = cfg.get('window_max', 15)
+        window_default = cfg.get('window_default', 5)
+        
+        # 基于振荡和噪声的综合评分 (0-1)
+        severity = max(oscillation_ratio, noise_ratio)
+        # 线性插值计算窗口
+        adaptive_window = int(window_min + severity * (window_max - window_min))
+        adaptive_window = max(window_min, min(window_max, adaptive_window))
+        
+        # 确保窗口为奇数（中值滤波更好）
+        if method == 'median' and adaptive_window % 2 == 0:
+            adaptive_window += 1
+        
+        # 6. 执行滤波
+        original_window = self.filter_window
+        self.filter_window = adaptive_window
+        
+        if cfg.get('preserve_step', True):
+            # 保护阶跃边缘的滤波
+            y_filtered, u_filtered = self._filter_with_step_preservation(y, u, method, cfg)
+        else:
+            y_filtered, u_filtered = self.filter(y, u, method=method)
+        
+        self.filter_window = original_window
+        
+        filter_info = {
+            'method': method,
+            'window': adaptive_window,
+            'oscillation_ratio': oscillation_ratio,
+            'noise_ratio': noise_ratio,
+            'oscillation_level': osc_level,
+            'noise_level': noise_level,
+            'adaptive': True
+        }
+        
+        self.log(f"🔧 自适应滤波: method={method}, window={adaptive_window}, "
+                 f"振荡={osc_level}({oscillation_ratio:.2f}), 噪声={noise_level}({noise_ratio:.2f})")
+        
+        return y_filtered, u_filtered, filter_info
+    
+    def _filter_with_step_preservation(self, y: np.ndarray, u: np.ndarray,
+                                       method: str, cfg: dict) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        保护阶跃边缘的滤波：在MV阶跃点附近减小滤波窗口
+        """
+        step_threshold = cfg.get('step_detection_threshold', 0.1)
+        u_range = np.ptp(u)
+        if u_range < self._epsilon:
+            return self.filter(y, u, method=method)
+        
+        # 检测MV阶跃点
+        du = np.abs(np.diff(u))
+        step_indices = np.where(du > step_threshold * u_range)[0]
+        
+        if len(step_indices) == 0:
+            # 无阶跃点，正常滤波
+            return self.filter(y, u, method=method)
+        
+        # 分段滤波：在阶跃点附近使用更小的窗口
+        y_filtered = y.copy()
+        u_filtered = u.copy()
+        
+        # 创建距离阶跃点的掩码
+        protection_radius = self.filter_window  # 保护半径
+        step_mask = np.zeros(len(y), dtype=bool)
+        for idx in step_indices:
+            start = max(0, idx - protection_radius)
+            end = min(len(y), idx + protection_radius + 2)
+            step_mask[start:end] = True
+        
+        # 非阶跃区域正常滤波
+        if method == 'moving_average':
+            y_full_filter = uniform_filter1d(y, size=self.filter_window, mode='nearest')
+            u_full_filter = uniform_filter1d(u, size=self.filter_window, mode='nearest')
+        else:
+            y_full_filter = self._median_filter(y, self.filter_window)
+            u_full_filter = self._median_filter(u, self.filter_window)
+        
+        # 阶跃区域用最小窗口
+        min_window = 3
+        if method == 'moving_average':
+            y_min_filter = uniform_filter1d(y, size=min_window, mode='nearest')
+            u_min_filter = uniform_filter1d(u, size=min_window, mode='nearest')
+        else:
+            y_min_filter = self._median_filter(y, min_window)
+            u_min_filter = self._median_filter(u, min_window)
+        
+        # 合并
+        y_filtered = np.where(step_mask, y_min_filter, y_full_filter)
+        u_filtered = np.where(step_mask, u_min_filter, u_full_filter)
+        
+        return y_filtered, u_filtered
+    
     def _median_filter(self, data: np.ndarray, window: int) -> np.ndarray:
         """中值滤波"""
         result = np.zeros_like(data)

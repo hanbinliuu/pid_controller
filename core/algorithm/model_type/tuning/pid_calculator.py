@@ -67,6 +67,20 @@ class PIDCalculator:
     
     def __init__(self):
         self._epsilon = EPSILON
+        self._pid_constraints = Config.PID_CONSTRAINTS
+    
+    def _get_fallback_params(self, Ti_override: float = None) -> Tuple[float, float, float]:
+        """获取回退PID参数（从配置读取）"""
+        cfg = self._pid_constraints
+        Kp = cfg.get('fallback_kp', 1.0)
+        Ti = Ti_override if Ti_override is not None else cfg.get('fallback_ti', 20.0)
+        Td = cfg.get('fallback_td', 0.0)
+        return Kp, Ti, Td
+    
+    def _get_max_kp(self, pb_min: float) -> float:
+        """根据pb_min计算Kp上限（从配置读取系数）"""
+        kp_max_from_pb = self._pid_constraints.get('kp_max_from_pb', 100.0)
+        return kp_max_from_pb / pb_min
     
     def calculate(self, K: float, T1: float, T2: float, L: float,
                   model_type: str, lambda_factor: float,
@@ -136,8 +150,9 @@ class PIDCalculator:
                                                conservative_level, pb_min, model_type)
             
         else:
-            # 默认保守参数
-            Kp, Ti, Td = 1.0, 20.0, 0.0
+            # 默认保守参数（从配置读取）
+            fallback = self._pid_constraints
+            Kp, Ti, Td = fallback['fallback_kp'], fallback['fallback_ti'], fallback['fallback_td']
         
         # 应用K的符号到Kp（反向作用系统Kp为负）
         Kp = Kp * K_sign
@@ -250,13 +265,20 @@ class PIDCalculator:
             conservativeness *= r2_multipliers[0.8]
         
         # 阀门补偿：高振荡+低R²时自动增加保守度（可能存在阀门死区/黏连）
+        valve_cfg = self._pid_constraints.get('valve_compensation', {})
+        osc_th_high = valve_cfg.get('osc_threshold_high', 0.5)
+        osc_th_med = valve_cfg.get('osc_threshold_med', 0.6)
+        r2_th = valve_cfg.get('r2_threshold', 0.85)
+        factor_high_base = valve_cfg.get('factor_high_base', 1.3)
+        factor_high_slope = valve_cfg.get('factor_high_slope', 0.6)
+        factor_med_base = valve_cfg.get('factor_med_base', 1.2)
+        factor_med_slope = valve_cfg.get('factor_med_slope', 0.5)
+        
         valve_compensation = 1.0
-        if osc_ratio > 0.5 and r2 < 0.85:
-            # 典型阀门问题特征：高振荡但模型拟合差
-            valve_compensation = 1.3 + (osc_ratio - 0.5) * 0.6  # 1.3~1.6倍补偿
-        elif osc_ratio > 0.6:
-            # 高振荡本身就需要更保守
-            valve_compensation = 1.2 + (osc_ratio - 0.6) * 0.5  # 1.2~1.4倍补偿
+        if osc_ratio > osc_th_high and r2 < r2_th:
+            valve_compensation = factor_high_base + (osc_ratio - osc_th_high) * factor_high_slope
+        elif osc_ratio > osc_th_med:
+            valve_compensation = factor_med_base + (osc_ratio - osc_th_med) * factor_med_slope
         
         # 映射到保守等级和pb_min（应用阀门补偿）
         conservative_level = level_min + conservativeness * (level_max - level_min) * valve_compensation
@@ -283,12 +305,12 @@ class PIDCalculator:
         
         denom = K * lambda_val
         if denom < self._epsilon:
-            return 1.0, T1, 0.0
+            return self._get_fallback_params(Ti_override=T1)
         
         Kp = T1 / denom
         
-        # 根据pb_min计算max_Kp: pb = 100/Kp -> Kp = 100/pb
-        max_Kp = 100.0 / pb_min
+        # 根据pb_min计算max_Kp
+        max_Kp = self._get_max_kp(pb_min)
         if Kp > max_Kp:
             Kp = max_Kp
         
@@ -315,7 +337,7 @@ class PIDCalculator:
             lambda_val = max(L, T1 * 0.1)
             denom = K * (lambda_val + L / 2)
             if denom < self._epsilon:
-                return 1.0, T1, 0.0
+                return self._get_fallback_params(Ti_override=T1)
             Kp = (T1 + L / 2) / denom
             Ti = T1 + L / 2
             Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
@@ -325,13 +347,13 @@ class PIDCalculator:
             lambda_val = T1 * lambda_factor * (conservative_level / 4.0)  # 标准化到基准
             denom = K * (lambda_val + L / 2)
             if denom < self._epsilon:
-                return 1.0, T1 + L / 2, 0.0
+                return self._get_fallback_params(Ti_override=T1 + L / 2)
             Kp = (T1 + L / 2) / denom
             Ti = T1 + L / 2
             Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
         
         # 应用pb下限
-        max_Kp = 100.0 / pb_min
+        max_Kp = self._get_max_kp(pb_min)
         if Kp > max_Kp:
             Kp = max_Kp
         
@@ -347,7 +369,7 @@ class PIDCalculator:
         
         denom = K * (lambda_val + L / 2) if L > 0 else K * lambda_val
         if denom < self._epsilon:
-            return 1.0, T_eq, 0.0
+            return self._get_fallback_params(Ti_override=T_eq)
         
         Kp = T_eq / denom
         Ti = T_eq
@@ -355,7 +377,7 @@ class PIDCalculator:
         Td = (T1 * T2) / T_eq if T_eq > self._epsilon and T2 > 0 else 0.0
         
         # 应用pb下限
-        max_Kp = 100.0 / pb_min
+        max_Kp = self._get_max_kp(pb_min)
         if Kp > max_Kp:
             Kp = max_Kp
         
@@ -368,7 +390,7 @@ class PIDCalculator:
         # 积分过程: G(s) = K / (T1*s + 1) / s
         # 使用 SIMC 规则
         if K < self._epsilon:
-            return 1.0, 20.0, 0.0
+            return self._get_fallback_params()
         
         # 使用自适应保守因子
         lambda_val = max(T1 * lambda_factor * (conservative_level / 4.0), 0.2)
@@ -379,7 +401,7 @@ class PIDCalculator:
         Td = 0.0  # 积分过程一般不用微分
         
         # 应用pb下限
-        max_Kp = 100.0 / pb_min
+        max_Kp = self._get_max_kp(pb_min)
         if Kp > max_Kp:
             Kp = max_Kp
         
@@ -405,18 +427,16 @@ class PIDCalculator:
             pb_min: 基础pb最小值
             model_type: 非线性模型类型
         """
-        # 非线性模型需要额外的保守度
-        nonlinear_factor = 1.3  # 基础非线性补偿因子
+        # 非线性模型需要额外的保守度（从配置读取）
+        nl_factors = self._pid_constraints.get('nonlinear_factors', {})
+        nonlinear_factor = nl_factors.get('default', 1.3)
         
         if model_type == ModelType.HAMMERSTEIN:
-            # Hammerstein模型：增益随工作点变化
-            nonlinear_factor = 1.4
+            nonlinear_factor = nl_factors.get('HAMMERSTEIN', 1.4)
         elif model_type == ModelType.DEADBAND_FOPDT:
-            # 死区模型：小信号时控制效果差
-            nonlinear_factor = 1.5
+            nonlinear_factor = nl_factors.get('DEADBAND_FOPDT', 1.5)
         elif model_type == ModelType.SATURATION_FOPDT:
-            # 饱和模型：大信号时增益下降
-            nonlinear_factor = 1.3
+            nonlinear_factor = nl_factors.get('SAT_FOPDT', 1.3)
         
         # 应用非线性补偿到保守等级
         adjusted_conservative = conservative_level * nonlinear_factor
@@ -433,17 +453,22 @@ class PIDCalculator:
     
     def _apply_constraints(self, Kp: float, Ti: float, Td: float,
                            K_sign: int) -> Tuple[float, float, float]:
-        """应用参数合理性约束"""
+        """应用参数合理性约束（从配置读取阈值）"""
+        cfg = self._pid_constraints
+        
         # 1. 限制Kp的绝对值下限
-        if abs(Kp) < 0.01:
-            Kp = 0.01 * K_sign
+        kp_min = cfg.get('kp_min', 0.01)
+        if abs(Kp) < kp_min:
+            Kp = kp_min * K_sign
         
         # 2. 限制Ti的范围
-        Ti_max = 120.0  # 最大积分时间 120 秒
-        Ti = max(0.1, min(Ti, Ti_max))
+        ti_min = cfg.get('ti_min', 0.1)
+        ti_max = cfg.get('ti_max', 120.0)
+        Ti = max(ti_min, min(Ti, ti_max))
         
-        # 3. 限制Td的范围（不超过 Ti/4）
-        Td = max(0.0, min(Td, Ti / 4))
+        # 3. 限制Td的范围（不超过 Ti * td_max_ratio）
+        td_max_ratio = cfg.get('td_max_ratio', 0.25)
+        Td = max(0.0, min(Td, Ti * td_max_ratio))
         
         return Kp, Ti, Td
     

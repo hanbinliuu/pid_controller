@@ -41,6 +41,7 @@ class SegmentProcessor(LoggerMixin):
         self._preprocessor = DataPreprocessor(verbose=verbose)
         # 从集中化配置获取阈值
         self._seg_config = Config.SEGMENT_PROCESSING
+        self._tuning_config = Config.TUNING_SEGMENT
     
     def extract_segments(self, hist_data: HistoricalData, 
                          windows: List[TuningWindow]) -> List[HistoricalData]:
@@ -254,9 +255,9 @@ class SegmentProcessor(LoggerMixin):
         results_list.append(result)
     
     def detect_tuning_segments(self, hist_data: HistoricalData,
-                               min_step_size: float = 1.0,
-                               min_response_time: int = 30,
-                               max_response_time: int = 3000
+                               min_step_size: float = None,
+                               min_response_time: int = None,
+                               max_response_time: int = None
                                ) -> Tuple[List[HistoricalData], List[SegmentResult]]:
         """
         基于MV阶跃变化检测整定段（适合模型辨识的数据段）
@@ -265,13 +266,22 @@ class SegmentProcessor(LoggerMixin):
         
         Args:
             hist_data: 历史数据
-            min_step_size: 最小阶跃幅度（MV变化量）
-            min_response_time: 最小响应时间（采样点数）
-            max_response_time: 最大响应时间（采样点数）
+            min_step_size: 最小阶跃幅度（MV变化量），默认从配置读取
+            min_response_time: 最小响应时间（采样点数），默认从配置读取
+            max_response_time: 最大响应时间（采样点数），默认从配置读取
         
         Returns:
             (tuning_segments, segment_results)
         """
+        # 从配置读取默认值
+        cfg = self._tuning_config
+        if min_step_size is None:
+            min_step_size = cfg['min_step_size']
+        if min_response_time is None:
+            min_response_time = cfg['min_response_time']
+        if max_response_time is None:
+            max_response_time = cfg['max_response_time']
+        
         self.log(f"\n{'='*60}")
         self.log("📊 整定段检测（基于MV阶跃变化）")
         self.log('='*60)
@@ -287,7 +297,8 @@ class SegmentProcessor(LoggerMixin):
             return [], []
         
         # Step 1: 检测MV阶跃变化点
-        mv_steps = self._detect_mv_steps(mv, min_step_size)
+        stable_window = cfg['stable_window']
+        mv_steps = self._detect_mv_steps(mv, min_step_size, stable_window)
         self.log(f"   检测到 {len(mv_steps)} 个MV阶跃变化点")
         
         if not mv_steps:
@@ -353,9 +364,16 @@ class SegmentProcessor(LoggerMixin):
         self.log(f"   📊 检测到 {len(tuning_segments)} 个有效整定段")
         return tuning_segments, segment_results
     
-    def _detect_mv_steps(self, mv: np.ndarray, min_step_size: float = 1.0,
-                         stable_window: int = 10) -> List[Tuple[int, float, int]]:
+    def _detect_mv_steps(self, mv: np.ndarray, min_step_size: float = None,
+                         stable_window: int = None) -> List[Tuple[int, float, int]]:
         """检测MV阶跃变化点"""
+        cfg = self._tuning_config
+        if min_step_size is None:
+            min_step_size = cfg['min_step_size']
+        if stable_window is None:
+            stable_window = cfg['stable_window']
+        step_std_ratio = cfg['step_std_ratio']
+        
         n = len(mv)
         steps = []
         
@@ -372,7 +390,7 @@ class SegmentProcessor(LoggerMixin):
             after_mean = np.mean(after_window)
             step_size = after_mean - before_mean
             
-            if abs(step_size) >= min_step_size and before_std < abs(step_size) * 0.5:
+            if abs(step_size) >= min_step_size and before_std < abs(step_size) * step_std_ratio:
                 step_dir = 1 if step_size > 0 else -1
                 steps.append((i, step_size, step_dir))
                 i += stable_window * 2
@@ -391,12 +409,12 @@ class SegmentProcessor(LoggerMixin):
         2. 检测PV响应方向与MV阶跃方向的一致性
         3. 检测响应是否有典型的阶跃响应形态
         """
+        cfg = self._tuning_config
         n = len(pv)
         if n < 20:
             return 0.0, False
         
         scores = []
-        rejection_reasons = []
         
         # ========== 关键检查：PV必须有足够的动态变化 ==========
         pv_range = np.ptp(pv)  # PV变化范围
@@ -404,37 +422,32 @@ class SegmentProcessor(LoggerMixin):
         mv_range = np.ptp(mv)  # MV变化范围
         
         # 计算PV的动态变化率（相对于MV变化）
-        pv_dynamic_ratio = pv_range / (mv_range + self._epsilon) if mv_range > 0.1 else 0
+        mv_range_th = cfg['mv_range_threshold']
+        pv_dynamic_ratio = pv_range / (mv_range + self._epsilon) if mv_range > mv_range_th else 0
         
         # 如果PV几乎不变化，直接拒绝
-        # 阈值设计原则：
-        # - 需要有可见的动态响应（PV范围 > 2.0 或 相对于MV的5%）
-        # - 标准差也要足够（说明有变化过程）
-        min_pv_range = max(2.0, abs(step_size) * 0.05)  # 最小PV变化范围
-        min_pv_std = 0.3  # 最小PV标准差
+        min_pv_range = max(cfg['min_pv_range'], abs(step_size) * cfg['min_pv_change_ratio'])
+        min_pv_std = cfg['min_pv_std']
         
         # PV范围和标准差至少有一个要达标
-        # 如果都不达标，则认为是稳态区域
         if pv_range < min_pv_range and pv_std < min_pv_std:
             return 0.0, False
         
         # 额外检查：PV动态变化率（相对于MV）应该足够
-        # 对于大的MV变化，PV也应该有相应的变化
-        # 典型过程增益K一般在0.01-10之间
-        if mv_range > 10 and pv_dynamic_ratio < 0.05:
-            # MV变化很大但PV几乎不变，说明是稳态区域
+        large_mv_range = cfg['large_mv_range']
+        pv_dynamic_min = cfg['pv_dynamic_ratio_min']
+        if mv_range > large_mv_range and pv_dynamic_ratio < pv_dynamic_min:
             return 0.0, False
         
         # ========== 1. PV变化幅度评分 ==========
         pv_change = pv[-1] - pv[0]  # 净变化
         
         # PV变化应该与MV阶跃成比例
-        if abs(pv_change) > abs(step_size) * 0.1:
+        if abs(pv_change) > abs(step_size) * cfg['pv_change_ratio_good']:
             scores.append(1.0)
-        elif abs(pv_change) > 0.5:
+        elif abs(pv_change) > cfg['pv_change_abs_good']:
             scores.append(0.7)
         elif pv_range > min_pv_range:
-            # 虽然净变化小，但有动态过程
             scores.append(0.5)
         else:
             scores.append(0.2)
@@ -447,9 +460,9 @@ class SegmentProcessor(LoggerMixin):
         pv_trend = pv_second_half - pv_first_half
         
         # 需要有明显的趋势（正或负都可以，但不能接近0）
-        if abs(pv_trend) > pv_range * 0.1:
+        if abs(pv_trend) > pv_range * cfg['trend_ratio_good']:
             scores.append(1.0)
-        elif abs(pv_trend) > pv_range * 0.05:
+        elif abs(pv_trend) > pv_range * cfg['trend_ratio_acceptable']:
             scores.append(0.7)
         else:
             scores.append(0.3)
@@ -463,20 +476,17 @@ class SegmentProcessor(LoggerMixin):
             std_last = np.std(last_third)
             
             # 理想的阶跃响应：后期应该趋于稳定
-            # 但也要确保前期有变化（不是整个都稳定）
+            settling_ratio_th = cfg['settling_ratio_good']
             if std_first > self._epsilon:
                 settling_ratio = std_last / std_first
-                if settling_ratio < 0.5 and std_first > min_pv_std:
-                    # 有收敛，且前期有动态
+                if settling_ratio < settling_ratio_th and std_first > min_pv_std:
                     scores.append(1.0)
                 elif settling_ratio < 1.0:
                     scores.append(0.7)
                 else:
                     scores.append(0.4)
             else:
-                # 前期标准差太小，可能是稳态
                 if std_last < min_pv_std:
-                    # 整段都很稳定，不是好的整定段
                     scores.append(0.2)
                 else:
                     scores.append(0.5)
@@ -486,21 +496,25 @@ class SegmentProcessor(LoggerMixin):
         sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
         osc_ratio = sign_changes / (n - 2) if n > 2 else 0
         
-        if osc_ratio < 0.2:
+        osc_good = cfg['osc_ratio_good']
+        osc_acceptable = cfg['osc_ratio_acceptable']
+        if osc_ratio < osc_good:
             scores.append(1.0)
-        elif osc_ratio < 0.4:
+        elif osc_ratio < osc_acceptable:
             scores.append(0.7)
         else:
             scores.append(0.3)
         
         # ========== 5. MV-PV相关性 ==========
+        corr_good = cfg['corr_good']
+        corr_acceptable = cfg['corr_acceptable']
         try:
             corr = np.corrcoef(mv, pv)[0, 1]
             if np.isnan(corr):
                 corr = 0
-            if abs(corr) > 0.5:
+            if abs(corr) > corr_good:
                 scores.append(1.0)
-            elif abs(corr) > 0.2:
+            elif abs(corr) > corr_acceptable:
                 scores.append(0.7)
             else:
                 scores.append(0.4)
@@ -508,18 +522,17 @@ class SegmentProcessor(LoggerMixin):
             scores.append(0.5)
         
         # ========== 6. 阶跃响应形态检测 ==========
-        # 典型阶跃响应：初期变化快，后期趋于稳定
-        # 计算前半段和后半段的变化率
+        front_good = cfg['front_ratio_good']
+        front_acceptable = cfg['front_ratio_acceptable']
         if n > 10:
             first_half_change = abs(pv[n//2] - pv[0])
             second_half_change = abs(pv[-1] - pv[n//2])
             total_change = first_half_change + second_half_change + self._epsilon
             
-            # 理想情况：前半段变化占主导
             front_ratio = first_half_change / total_change
-            if front_ratio > 0.6:
+            if front_ratio > front_good:
                 scores.append(1.0)
-            elif front_ratio > 0.4:
+            elif front_ratio > front_acceptable:
                 scores.append(0.7)
             else:
                 scores.append(0.5)
@@ -527,11 +540,10 @@ class SegmentProcessor(LoggerMixin):
         # ========== 综合评分 ==========
         quality_score = np.mean(scores) if scores else 0.0
         
-        # 判定条件：
-        # 1. 质量评分 >= 0.6
-        # 2. 振荡比 < 0.5
-        # 3. PV动态变化足够（已在前面检查）
-        is_good_response = quality_score >= 0.6 and osc_ratio < 0.5
+        # 判定条件
+        quality_pass = cfg['quality_pass_threshold']
+        osc_pass = cfg['osc_ratio_pass']
+        is_good_response = quality_score >= quality_pass and osc_ratio < osc_pass
         
         return float(quality_score), is_good_response
     
@@ -586,9 +598,10 @@ class SegmentProcessor(LoggerMixin):
             stability_score = min(max(stability_score, 0.0), 1.0)
             
             # 4. 判断是否为稳态段
-            is_steady = (oscillation_ratio < 0.3 and 
-                        settling_quality > 0.5 and 
-                        r2 > 0.4)
+            steady_cfg = self._tuning_config
+            is_steady = (oscillation_ratio < steady_cfg['steady_osc_ratio'] and 
+                        settling_quality > steady_cfg['steady_settling_quality'] and 
+                        r2 > steady_cfg['steady_r2'])
             
             self.log(f"      稳态分析: 振荡={oscillation_ratio:.2f}, "
                     f"收敛={settling_quality:.2f}, 评分={stability_score:.2f}, "

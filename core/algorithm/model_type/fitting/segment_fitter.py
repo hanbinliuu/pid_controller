@@ -130,8 +130,13 @@ class SegmentFitter(LoggerMixin):
                     )
                     self.log(f"   📈 使用稳健KTL估计, K={k_expected:.4f} (置信度={robust_ktl['confidence']:.2f})")
                 else:
-                    # 轻微振荡：使用滤波预处理
-                    y_fit, u_fit = ModelIdentifier.preprocess_oscillating_data(y, u, filter_size, severity)
+                    # 轻微振荡：使用自适应滤波预处理
+                    y_fit, u_fit, filter_info = self._preprocessor.adaptive_filter(
+                        y, u, 
+                        oscillation_ratio=oscillation_info['oscillation_ratio'],
+                        noise_ratio=None
+                    )
+                    self.log(f"   🔧 自适应滤波: {filter_info['method']}, window={filter_info['window']}")
                     k_expected = abs(ModelIdentifier.estimate_gain_from_oscillating_data(y, u))
                 
                 # 根据振荡程度调整K值允许范围
@@ -145,7 +150,10 @@ class SegmentFitter(LoggerMixin):
                     k_min = k_expected * 0.3
                     k_max = k_expected * 3.0
             else:
-                y_fit, u_fit = y, u
+                # 非振荡数据：也应用自适应滤波（如果数据噪声较大）
+                y_fit, u_fit, filter_info = self._preprocessor.adaptive_filter(y, u)
+                if filter_info.get('adaptive') and filter_info.get('noise_level') != 'low':
+                    self.log(f"   🔧 自适应滤波: {filter_info['method']}, window={filter_info['window']}")
             
             quality = self._preprocessor.analyze_quality(y, u)
             use_multi_start = quality.is_noisy or not quality.is_correlated or is_oscillating

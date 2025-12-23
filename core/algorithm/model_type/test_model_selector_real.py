@@ -19,7 +19,7 @@ from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
 from core.algorithm.tuning_segment.stability_detector import find_high_variability_periods
 from core.algorithm.model_type.model_selector import ModelSelector
-
+ 
 
 # ============================================================
 # 配置区域 - 修改这里的参数进行测试
@@ -28,15 +28,15 @@ from core.algorithm.model_type.model_selector import ModelSelector
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951",
-    # 'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
-    'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
+    'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
+    # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
         # {'start_time': '2025-12-17 00:31:36', 'end_time': '2025-12-17 23:31:36'},
-         {'start_time': '2025-12-23 02:32:15', 'end_time': '2025-12-23 08:20:15'},
+         {'start_time': '2025-12-23 10:32:15', 'end_time': '2025-12-23 11:00:15'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
