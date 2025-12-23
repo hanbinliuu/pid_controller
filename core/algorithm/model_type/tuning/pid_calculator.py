@@ -27,9 +27,12 @@ PID参数计算模块 (PID Calculator Module)
 - decay_ratio: 衰减比
 """
 
+from readline import parse_and_bind
 import numpy as np
 from typing import Dict, Tuple, Optional, List
 from dataclasses import dataclass
+
+from pydantic.v1.main import Model
 
 from ..config import Config, ModelType
 from ..data_models import FusionResult
@@ -449,6 +452,19 @@ class PIDCalculator:
         # 非线性模型一般不使用微分（避免放大噪声）
         Td = Td * 0.5
         
+        # 死区专用补偿：增强积分作用以消除稳态误差
+        if model_type == ModelType.DEADBAND_FOPDT:
+            db_comp = self._pid_constraints.get('deadband_compensation', {})
+            if db_comp.get('enable', True):
+                ti_factor = db_comp.get('ti_reduction_factor', 0.7)
+                Ti = Ti * ti_factor  # 减小Ti，加快积分消除稳态误差
+
+        if modeel_type == ModelType.HAMMERSTEIN:
+            pass   
+
+        if modeel_type == ModelType.SATURATION_FOPDT:
+            pass   
+
         return Kp, Ti, Td
     
     def _apply_constraints(self, Kp: float, Ti: float, Td: float,

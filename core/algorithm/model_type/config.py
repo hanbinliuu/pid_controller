@@ -286,8 +286,15 @@ class Config:
         'nonlinear_factors': {
             'default': 1.3,              # 默认非线性补偿
             'HAMMERSTEIN': 1.4,          # Hammerstein模型
-            'DEADBAND_FOPDT': 1.5,       # 死区模型
+            'DEADBAND_FOPDT': 1.3,       # 死区模型（降低Kp补偿，避免振荡）
             'SAT_FOPDT': 1.3,            # 饱和模型
+        },
+        
+        # 死区专用补偿：增强积分作用以消除稳态误差
+        'deadband_compensation': {
+            'ti_reduction_factor': 0.7,  # Ti缩减系数（减小Ti加快积分）
+            'ki_boost_factor': 1.3,      # Ki增强系数
+            'enable': True,              # 是否启用死区补偿
         },
         
         # 阀门补偿参数
