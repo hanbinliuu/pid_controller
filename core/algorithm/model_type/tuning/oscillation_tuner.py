@@ -369,6 +369,9 @@ class OscillationTuner(LoggerMixin):
         else:
             reason = 'oscillation'
         
+        # 获取 Ku/Pu 估计的置信度（用于动态调整 pb_max）
+        confidence = best_analysis['osc_info'].get('confidence', 0.5)
+        
         pid_params = self._get_conservative_pid_params(
             Pu, Ku, 
             K_approx=apparent_gain,
@@ -376,7 +379,8 @@ class OscillationTuner(LoggerMixin):
             oscillation_ratio=oscillation_ratio,
             data_quality=data_quality,
             nonlinearity=nonlinearity,
-            valve_issues=valve_issues
+            valve_issues=valve_issues,
+            confidence=confidence
         )
         
         if pid_params is None:
@@ -405,7 +409,8 @@ class OscillationTuner(LoggerMixin):
                                       oscillation_ratio: float = 0.0,
                                       data_quality: float = 0.5,
                                       nonlinearity: float = 0.0,
-                                      valve_issues: Dict = None) -> Dict[str, Any]:
+                                      valve_issues: Dict = None,
+                                      confidence: float = 0.5) -> Dict[str, Any]:
         """
         获取保守PID参数（动态计算pb，借鉴大模型调参经验）
         
@@ -415,6 +420,7 @@ class OscillationTuner(LoggerMixin):
         3. pb范围扩展，允许更保守的参数
         4. 数据质量越差，参数越保守
         5. 考虑阀门问题（死区、粘滞、卡涩）
+        6. 基于置信度动态调整pb_max（鲁棒性策略）
         
         Args:
             Pu: 临界周期
@@ -425,6 +431,7 @@ class OscillationTuner(LoggerMixin):
             data_quality: 数据质量评分 (0-1)，越低越需要保守
             nonlinearity: 非线性程度 (0-1)
             valve_issues: 阀门问题检测结果
+            confidence: Ku/Pu估计的置信度 (0-1)，越高允许更激进
         
         Returns:
             保守PID参数字典
@@ -553,7 +560,22 @@ class OscillationTuner(LoggerMixin):
         
         # 6. 限制在合理范围（动态调整边界）
         pb_min_base = osc_config.get('pb_min', 80.0)
-        pb_max = osc_config.get('pb_max', 600.0)
+        pb_max_config = osc_config.get('pb_max', 600.0)
+        
+        # ========== 基于置信度的 pb_max 分级策略（鲁棒性优化）==========
+        # 高置信度：允许更激进（pb_max 较低）
+        # 低置信度：强制保守（pb_max 较高）
+        if confidence >= 0.8:
+            # 高置信度：Ku/Pu 估计可靠，允许更激进控制
+            pb_max = min(pb_max_config, 400.0)
+            self.log(f"   📊 高置信度({confidence:.2f}): pb_max=400")
+        elif confidence >= 0.5:
+            # 中等置信度：适度保守
+            pb_max = min(pb_max_config, 600.0)
+        else:
+            # 低置信度：Ku/Pu 估计不可靠，强制保守
+            pb_max = min(pb_max_config * 1.3, 800.0)
+            self.log(f"   📊 低置信度({confidence:.2f}): pb_max={pb_max:.0f}")
         
         # 动态调整pb边界（基于过程增益K）
         # 小增益系统需要更高的pb下限，大增益系统可以更激进
@@ -753,12 +775,16 @@ class OscillationTuner(LoggerMixin):
             fallback_valve_issues = osc_result.get('valve_issues', {})
             fallback_osc_ratio = osc_info.get('oscillation_ratio', 0.5)
             
+            # 闭环不稳定时使用低置信度（强制保守）
+            fallback_confidence = osc_info.get('confidence', 0.3) * 0.5
+            
             fallback_pid = self._get_conservative_pid_params(
                 Pu, osc_info['Ku'], K_approx=K_approx, reason='data_range',
                 oscillation_ratio=fallback_osc_ratio,
                 data_quality=fallback_data_quality,
                 nonlinearity=fallback_nonlinearity,
-                valve_issues=fallback_valve_issues
+                valve_issues=fallback_valve_issues,
+                confidence=fallback_confidence
             )
             
             self.log(f"   ⚠️ 数据质量差，使用保守参数: pb={fallback_pid['pb']:.1f}, "

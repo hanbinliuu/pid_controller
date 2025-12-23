@@ -28,7 +28,7 @@ PID参数计算模块 (PID Calculator Module)
 """
 
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 from dataclasses import dataclass
 
 from ..config import Config, ModelType
@@ -558,40 +558,59 @@ class PIDCalculator:
             avg_decay = 1.0
         
         # 检查MV是否也在振荡（而不是阶跃）
-        # 如果MV是阶跃后的小幅波动，不应该用全范围计算
         mv_diff = np.diff(mv)
         mv_sign_changes = np.sum(np.abs(np.diff(np.sign(mv_diff))) > 0)
         mv_oscillation_ratio = mv_sign_changes / (len(mv) - 2) if len(mv) > 2 else 0
         
         # 计算MV的振荡幅度（排除阶跃影响）
         if mv_oscillation_ratio > 0.2:
-            # MV确实在振荡，使用振荡幅度
             mv_amplitude = (np.max(mv) - np.min(mv)) / 2
         else:
-            # MV可能是阶跃，使用中位数绝对差分作为振荡幅度
             mv_amplitude = np.median(np.abs(mv_diff)) * 2
         
-        # 使用继电器反馈法估算临界增益
-        if amplitude > self._epsilon:
+        # ========== 多周期 Ku 估计（提高鲁棒性）==========
+        Ku_estimates = []
+        pv_mean = np.mean(pv_detrend)
+        
+        # 逐周期计算 Ku
+        n_peaks = min(len(peak_indices), len(valley_indices))
+        for i in range(n_peaks):
+            # 每个周期的 PV 振幅
+            cycle_pv_amp = abs(peak_values[i] - valley_values[i]) / 2
+            
+            # 对应周期的 MV 振幅（查找该周期内的 MV 范围）
+            start_idx = valley_indices[i] if i == 0 else min(peak_indices[i-1], valley_indices[i])
+            end_idx = peak_indices[i] if i < len(peak_indices) else valley_indices[i]
+            if start_idx < end_idx and end_idx <= len(mv):
+                cycle_mv = mv[start_idx:end_idx]
+                cycle_mv_amp = (np.max(cycle_mv) - np.min(cycle_mv)) / 2
+                
+                if cycle_pv_amp > self._epsilon and cycle_mv_amp > self._epsilon:
+                    Ku_cycle = 4 * cycle_mv_amp / (np.pi * cycle_pv_amp)
+                    Ku_estimates.append(Ku_cycle)
+        
+        # 如果多周期估计可用，使用中位数（更鲁棒）
+        if len(Ku_estimates) >= 2:
+            Ku_estimate = float(np.median(Ku_estimates))
+            Ku_std = float(np.std(Ku_estimates))
+        elif amplitude > self._epsilon:
+            # 回退到整体估计
             Ku_estimate = 4 * mv_amplitude / (np.pi * amplitude)
-            
-            # 动态调整Ku边界（基于过程增益K）
-            # 先估算过程增益K
-            pv_range = np.ptp(pv)
-            mv_range = np.ptp(mv)
-            K_approx = pv_range / mv_range if mv_range > 0.1 else 1.0
-            
-            # Ku的合理范围应该与K相关：
-            # - 小增益系统(K=0.1): Ku合理范围约[0.5, 10] → Ku/K ∈ [5, 100]
-            # - 大增益系统(K=2.0): Ku合理范围约[0.1, 5] → Ku/K ∈ [0.05, 2.5]
-            # 使用动态边界: Ku_min = 0.1, Ku_max = max(10, 15/K)
-            Ku_min = 0.1
-            Ku_max = max(10.0, 15.0 / max(K_approx, 0.1))  # K越大，Ku上限越小
-            Ku_max = min(Ku_max, 100.0)  # 绝对上限100
-            
-            Ku_estimate = np.clip(Ku_estimate, Ku_min, Ku_max)
+            Ku_std = Ku_estimate * 0.5  # 假设50%不确定度
         else:
             Ku_estimate = 1.0
+            Ku_std = 1.0
+        
+        # 动态调整 Ku 边界
+        pv_range = np.ptp(pv)
+        mv_range = np.ptp(mv)
+        K_approx = pv_range / mv_range if mv_range > 0.1 else 1.0
+        
+        Ku_min = 0.1
+        Ku_max = max(10.0, 15.0 / max(K_approx, 0.1))
+        Ku_max = min(Ku_max, 100.0)
+        
+        Ku_estimate = np.clip(Ku_estimate, Ku_min, Ku_max)
         
         # 判断振荡类型
         if avg_decay > 1.1:
@@ -603,8 +622,13 @@ class PIDCalculator:
         
         n_cycles = max(len(peak_indices), len(valley_indices)) - 1
         
+        # ========== 置信度评估 ==========
+        confidence = self._calculate_oscillation_confidence(
+            valid_periods, weights, Ku_estimates, n_cycles, avg_decay, osc_type
+        )
+        
         return {
-            'Pu': round(Pu, 3),              # 临界周期（提高精度）
+            'Pu': round(Pu, 3),              # 临界周期
             'Ku': round(Ku_estimate, 4),     # 临界增益估计
             'amplitude': round(amplitude, 2), # 振荡幅度
             'mv_amplitude': round(mv_amplitude, 2),  # MV幅度
@@ -612,6 +636,8 @@ class PIDCalculator:
             'oscillation_type': osc_type,    # 振荡类型
             'n_cycles': n_cycles,            # 完整振荡周期数
             'is_valid': n_cycles >= 2 and osc_type != 'diverging',
+            'confidence': round(confidence, 3),      # 置信度 [0, 1]
+            'Ku_std': round(Ku_std, 4) if Ku_std else None,  # Ku 标准差
             'detection_methods': {           # 各方法检测结果（调试用）
                 'peaks': round(Pu_peaks, 3) if Pu_peaks else None,
                 'fft': round(Pu_fft, 3) if Pu_fft else None,
@@ -656,7 +682,7 @@ class PIDCalculator:
         return float(np.median(periods)) if len(periods) > 0 else None
     
     def _detect_period_from_fft(self, pv: np.ndarray, dt: float) -> Optional[float]:
-        """使用 FFT 检测主频"""
+        """使用 FFT 检测主频（带抛物线插值提高分辨率）"""
         n = len(pv)
         if n < 10:
             return None
@@ -665,9 +691,12 @@ class PIDCalculator:
         window = np.hanning(n)
         pv_windowed = pv * window
         
+        # 零填充提高频率分辨率
+        n_fft = max(n * 4, 1024)
+        
         # FFT
-        fft_result = np.fft.rfft(pv_windowed)
-        freqs = np.fft.rfftfreq(n, dt)
+        fft_result = np.fft.rfft(pv_windowed, n=n_fft)
+        freqs = np.fft.rfftfreq(n_fft, dt)
         
         # 找到主频（排除直流分量）
         magnitude = np.abs(fft_result)
@@ -680,12 +709,27 @@ class PIDCalculator:
         if not np.any(valid_mask):
             return None
         
-        valid_freqs = freqs[valid_mask]
-        valid_magnitude = magnitude[valid_mask]
+        # 获取有效范围内的索引
+        valid_indices = np.where(valid_mask)[0]
+        if len(valid_indices) < 3:
+            return None
         
-        # 找到最大幅度对应的频率
-        peak_idx = np.argmax(valid_magnitude)
-        dominant_freq = valid_freqs[peak_idx]
+        # 找到最大幅度对应的索引
+        peak_idx_in_valid = np.argmax(magnitude[valid_mask])
+        peak_idx = valid_indices[peak_idx_in_valid]
+        
+        # 抛物线插值精化频率（如果峰值不在边界）
+        if peak_idx > 0 and peak_idx < len(magnitude) - 1:
+            y0, y1, y2 = magnitude[peak_idx-1], magnitude[peak_idx], magnitude[peak_idx+1]
+            denom = 2 * (y0 - 2*y1 + y2)
+            if abs(denom) > self._epsilon:
+                delta = (y0 - y2) / denom
+                refined_idx = peak_idx + delta
+                dominant_freq = freqs[0] + refined_idx * (freqs[1] - freqs[0])
+            else:
+                dominant_freq = freqs[peak_idx]
+        else:
+            dominant_freq = freqs[peak_idx]
         
         if dominant_freq > self._epsilon:
             return 1.0 / dominant_freq
@@ -736,6 +780,65 @@ class PIDCalculator:
         
         return (np.array(peak_indices), np.array(peak_values), 
                 np.array(valley_indices), np.array(valley_values))
+    
+    def _calculate_oscillation_confidence(self, valid_periods: List[float], 
+                                          weights: List[float],
+                                          Ku_estimates: List[float],
+                                          n_cycles: int, 
+                                          decay_ratio: float,
+                                          osc_type: str) -> float:
+        """
+        计算振荡分析结果的置信度
+        
+        综合考虑以下因素：
+        1. Pu 检测方法的一致性
+        2. Ku 多周期估计的一致性
+        3. 振荡周期数量
+        4. 振荡类型
+        
+        Returns:
+            置信度 [0, 1]
+        """
+        confidence = 0.0
+        
+        # 1. Pu 一致性评分 (0-0.4)
+        if len(valid_periods) >= 2:
+            period_cv = np.std(valid_periods) / np.mean(valid_periods) if np.mean(valid_periods) > 0 else 1.0
+            # CV < 0.1 得满分，CV > 0.5 得0分
+            pu_score = max(0, 1 - period_cv / 0.5) * 0.4
+        elif len(valid_periods) == 1:
+            pu_score = 0.2  # 只有一种方法检测到
+        else:
+            pu_score = 0.0
+        confidence += pu_score
+        
+        # 2. Ku 一致性评分 (0-0.3)
+        if len(Ku_estimates) >= 3:
+            Ku_cv = np.std(Ku_estimates) / np.mean(Ku_estimates) if np.mean(Ku_estimates) > 0 else 1.0
+            # CV < 0.2 得满分，CV > 0.8 得0分
+            Ku_score = max(0, 1 - Ku_cv / 0.8) * 0.3
+        elif len(Ku_estimates) >= 2:
+            Ku_cv = np.std(Ku_estimates) / np.mean(Ku_estimates) if np.mean(Ku_estimates) > 0 else 1.0
+            Ku_score = max(0, 1 - Ku_cv / 0.8) * 0.2
+        else:
+            Ku_score = 0.1  # 只有整体估计
+        confidence += Ku_score
+        
+        # 3. 周期数评分 (0-0.2)
+        # 2个周期得0.1，5个以上得满分
+        cycle_score = min(n_cycles / 5, 1.0) * 0.2
+        confidence += cycle_score
+        
+        # 4. 振荡类型评分 (0-0.1)
+        if osc_type == 'sustained':
+            type_score = 0.1  # 持续振荡最可靠
+        elif osc_type == 'converging':
+            type_score = 0.08  # 收敛振荡也可以
+        else:
+            type_score = 0.0  # 发散振荡不可靠
+        confidence += type_score
+        
+        return min(confidence, 1.0)
     
     def calculate_from_oscillation(self, osc_info: Dict, 
                                    current_pid: Dict = None,
