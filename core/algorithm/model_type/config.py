@@ -12,13 +12,15 @@
 配置分组
 --------
 - OSCILLATION_TUNING: 振荡整定相关配置
-- DATA_QUALITY: 数据质量评估阈值
 - MODEL_FITTING: 模型拟合质量阈值
 - CLOSED_LOOP: 闭环稳定性验证配置
 - SEGMENT_PROCESSING: 扰动段处理配置
+- TUNING_SEGMENT: 整定段检测配置
+- PID_CONSTRAINTS: PID参数约束配置
 - OPTIMIZATION: 优化算法配置
-- PARAMETER_CONSTRAINTS: 参数约束配置
 - MODEL_BOUNDS: 各模型的参数边界
+- NONLINEAR_FITTING: 非线性模型配置
+- PREPROCESSING: 数据预处理配置
 """
 
 
@@ -53,24 +55,15 @@ class ModelType:
         FOPI: 2,
     }
     
-    # 模型参数边界（用于优化拟合）
-    # 格式: {model_type: (lower_bounds, upper_bounds)}
-    DEFAULT_BOUNDS = {
-        FOPDT: ([-20, 0.1, 0], [20, 1000, 100]),
-        FO: ([-20, 0.1], [20, 1000]),
-        SO: ([-20, 0.1, 0.1], [20, 1000, 1000]),
-        SOPDT: ([-20, 0.1, 0.1, 0], [20, 1000, 1000, 100]),
-        FOPI: ([-20, 0], [20, 100]),
-    }
-    
     @classmethod
     def get_bounds(cls, model_type: str) -> tuple:
-        """获取模型参数边界（统一方法）"""
+        """获取模型参数边界（统一从Config.MODEL_BOUNDS读取）"""
         from .config import Config
         bounds_config = Config.MODEL_BOUNDS.get(model_type, {})
         if 'initial' in bounds_config:
             return bounds_config['initial']
-        return cls.DEFAULT_BOUNDS.get(model_type, ([-20, 0.1, 0], [20, 1000, 100]))
+        # 默认回退边界
+        return ([-10.0, 1.0, 0.0], [10.0, 500.0, 50.0])
 
 
 class Config:
@@ -106,7 +99,7 @@ class Config:
         
         # ========== 基础pb计算参数 ==========
         'pb_from_k_factor': 1.5,             # 基于K计算pb的保守系数
-        'kp_from_ku_factor': 0.2,            # 基于Ku计算Kp的系数（ZN法是0.45）
+        'kp_from_ku_factor': 0.35,           # 基于Ku计算Kp的系数（ZN法是0.45，保守用0.35）
         
         # ========== 慢系统调整 ==========
         'slow_system_pu_thresholds': [30.0, 15.0],  # Pu阈值
@@ -129,7 +122,7 @@ class Config:
         'valve_saturation_factor': 1.1,      # 饱和调整因子
         
         # ========== 振荡比自适应安全系数 ==========
-        'safety_factor_base': 1.3,           # 基础安全系数 (osc < 0.5)
+        'safety_factor_base': 1.2,           # 基础安全系数 (osc < 0.5)
         'safety_factor_thresholds': [0.5, 0.7, 0.85],  # 振荡比阈值
         'safety_factor_slopes': [0.4, 0.8, 1.5],       # 各区间斜率（降低，转移到Ti）
         
@@ -159,7 +152,7 @@ class Config:
         
         # ========== pb范围 ==========
         'pb_min': 120.0,                     # pb下限
-        'pb_max': 600.0,                     # pb上限
+        'pb_max': 400.0,                     # pb上限（降低以避免过度保守）
         
         # ========== 动态pb边界（基于过程增益K） ==========
         'pb_k_adjustment_factor': 0.3,       # pb下限动态调整系数: pb_min *= (1 + factor/K)
@@ -170,23 +163,12 @@ class Config:
     }
     
     # ============================================================
-    # 数据质量配置
-    # ============================================================
-    DATA_QUALITY = {
-        'noise_threshold': 0.1,              # 噪声比阈值
-        'correlation_threshold': 0.3,        # 相关性阈值
-        'nonlinearity_threshold': 0.5,       # 非线性阈值
-        'oscillation_warning_threshold': 0.3,  # 振荡警告阈值
-        'min_data_points': 30,               # 最小数据点数
-    }
-    
-    # ============================================================
     # 模型拟合配置
     # ============================================================
     MODEL_FITTING = {
         'r2_good_threshold': 0.8,            # R² 良好阈值
         'r2_acceptable_threshold': 0.5,      # R² 可接受阈值
-        'r2_poor_threshold': 0.3,            # R² 较差阈值
+        'r2_poor_threshold': 0.3,            # R² 较差阈值（与OSCILLATION_TUNING.r2_failure_threshold一致）
         'k_min': 0.001,                      # K 最小有效值
         'k_max': 50.0,                       # K 最大合理值
     }

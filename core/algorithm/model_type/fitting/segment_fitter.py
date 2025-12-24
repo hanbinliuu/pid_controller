@@ -53,6 +53,13 @@ class SegmentFitter(LoggerMixin):
     CANDIDATE_MODELS = ModelType.CANDIDATE_MODELS
     MODEL_PARAM_COUNT = ModelType.MODEL_PARAM_COUNT
     
+    # 模型优先级（简单→复杂），用于早停优化
+    MODEL_PRIORITY = [ModelType.FOPDT, ModelType.FO, ModelType.SO, ModelType.SOPDT, ModelType.FOPI]
+    # 振荡数据时跳过的模型（这些模型对振荡数据效果差）
+    SKIP_ON_OSCILLATION = {ModelType.SOPDT, ModelType.FOPI}
+    # 早停R²阈值：简单模型达到此阈值则跳过复杂模型
+    EARLY_STOP_R2 = 0.7
+    
     # 模型辨识方法映射（保留在此处，因为依赖 ModelIdentifier）
     IDENTIFY_METHODS = {
         ModelType.FOPDT: ModelIdentifier.identify_fopdt,
@@ -158,7 +165,18 @@ class SegmentFitter(LoggerMixin):
             quality = self._preprocessor.analyze_quality(y, u)
             use_multi_start = quality.is_noisy or not quality.is_correlated or is_oscillating
             
-            for model_type in self.CANDIDATE_MODELS:
+            best_r2_so_far = 0.0
+            for model_type in self.MODEL_PRIORITY:
+                # 早停优化：简单模型效果已经很好，跳过复杂模型
+                if best_r2_so_far >= self.EARLY_STOP_R2 and model_type in {ModelType.SOPDT, ModelType.FOPI}:
+                    self.log(f"   {model_type}: 跳过(早停, R²={best_r2_so_far:.2f})")
+                    continue
+                
+                # 振荡数据跳过不适合的模型
+                if is_oscillating and model_type in self.SKIP_ON_OSCILLATION:
+                    self.log(f"   {model_type}: 跳过(振荡数据)")
+                    continue
+                
                 try:
                     if use_multi_start:
                         params_raw, _ = self._multi_start_fit(t, y_fit, u_fit, model_type)
@@ -217,6 +235,10 @@ class SegmentFitter(LoggerMixin):
                         'is_oscillating': is_oscillating,
                         'oscillation_severity': severity if is_oscillating else 'none'
                     }
+                    
+                    # 更新最佳R²用于早停判断
+                    if r2_adjusted > best_r2_so_far and k_reasonable:
+                        best_r2_so_far = r2_adjusted
                     
                     k_flag = "✓" if k_reasonable else "✗"
                     osc_flag = " [振荡]" if is_oscillating else ""
@@ -341,125 +363,6 @@ class SegmentFitter(LoggerMixin):
             if result.best_r2 < 0.4:
                 self.log(f"   ⚠️ 段{idx+1}所有模型R²<0.4或K值异常")
     
-    def try_oscillation_tuning(self, segments: List[HistoricalData], 
-                               segment_results: List[SegmentResult],
-                               current_pid: Dict = None) -> Optional[Dict]:
-        """
-        尝试使用振荡分析进行整定
-        
-        适用于高振荡数据且常规拟合失败的情况
-        """
-        osc_config = Config.OSCILLATION_TUNING
-        
-        high_osc_failed_segments = []
-        for i, result in enumerate(segment_results):
-            if not result.is_valid:
-                continue
-            oscillation_ratio = result.oscillation_ratio or 0
-            best_r2 = result.best_r2 or 0
-            
-            # 检查是否有模型参数被推到边界（说明拟合不可靠）
-            params_at_boundary = False
-            if result.best_model and result.model_results:
-                best_params = result.model_results.get(result.best_model, {})
-                T1 = best_params.get('T1', 0)
-                # T1 被推到下限（1.0s）说明拟合可能不可靠
-                if T1 is not None and abs(T1 - 1.0) < 0.1:
-                    params_at_boundary = True
-            
-            # 触发条件：高振荡 + (R²低 或 参数被推到边界)
-            fit_unreliable = best_r2 < osc_config['r2_failure_threshold'] or params_at_boundary
-            
-            if (oscillation_ratio > osc_config['oscillation_ratio_threshold'] and fit_unreliable):
-                high_osc_failed_segments.append((i, result, segments[i] if i < len(segments) else None))
-        
-        if not high_osc_failed_segments:
-            return None
-        
-        self.log(f"\n🔄 检测到 {len(high_osc_failed_segments)} 个高振荡拟合失败段，尝试临界法整定")
-        
-        # 选择振荡最明显的段进行分析
-        best_seg_info = max(high_osc_failed_segments, 
-                           key=lambda x: x[1].oscillation_ratio or 0)
-        seg_idx, seg_result, seg_data = best_seg_info
-        
-        if seg_data is None:
-            return None
-        
-        valid_mask = seg_data.pv != 0
-        pv = seg_data.pv[valid_mask]
-        mv = seg_data.mv[valid_mask]
-        
-        if len(pv) < 20:
-            return None
-        
-        # 分析振荡特征
-        dt = 1.0
-        osc_info = self._pid_calculator.analyze_oscillation(pv, mv, dt)
-        
-        if osc_info is None or osc_info['Pu'] <= 0:
-            return None
-        
-        self.log(f"   段{seg_idx+1}: Pu={osc_info['Pu']:.1f}s, Ku≈{osc_info['Ku']:.3f}, "
-                f"振幅={osc_info['amplitude']:.2f}, 类型={osc_info['oscillation_type']}")
-        
-        # 验证数据是否适合临界法整定
-        # 检查1：MV变化幅度与PV振荡幅度的比例是否合理
-        mv_range = np.ptp(mv)
-        pv_range = np.ptp(pv)
-        pv_amplitude = osc_info['amplitude']
-        
-        # 使用PV范围和振荡幅度中较大的
-        effective_pv_change = max(pv_range, pv_amplitude)
-        apparent_gain = effective_pv_change / mv_range if mv_range > 0.1 else 1.0
-        
-        self.log(f"   📊 增益检查: MV范围={mv_range:.2f}, PV范围={pv_range:.2f}, apparent_gain={apparent_gain:.4f}")
-        
-        use_conservative = False
-        if apparent_gain < 0.1:  # 放宽阈值到0.1
-            self.log(f"   ⚠️ 警告：MV变化幅度={mv_range:.2f}，PV变化={effective_pv_change:.2f}，增益={apparent_gain:.4f}")
-            self.log(f"   ⚠️ 检测到低增益系统，使用保守参数")
-            use_conservative = True
-            # 对于低增益系统，直接使用保守的pb值
-            # 已知稳定参数约pb=71.3, ti=2.1，使用类似的保守参数
-            Pu = osc_info['Pu']
-            conservative_pb = 70.0  # 保守的pb值
-            conservative_Kp = 100.0 / conservative_pb  # ≈1.43
-            conservative_Ti = max(Pu / 2, 2.0)  # 积分时间
-            conservative_Ki = conservative_Kp / conservative_Ti
-            
-            pid_result = {
-                'Kp': round(conservative_Kp, 4),
-                'Ki': round(conservative_Ki, 4),
-                'Kd': 0.0,  # 不使用微分
-                'method': 'low_gain_conservative',
-                'Pu': Pu,
-                'Ku': osc_info['Ku']
-            }
-            self.log(f"   ✅ 保守整定: pb={conservative_pb:.1f}, Kp={conservative_Kp:.4f}, Ki={conservative_Ki:.4f}")
-        
-        if not use_conservative:
-            # 基于振荡特征计算PID参数
-            # 使用更保守的tyreus_luyben方法，避免过激参数
-            pid_result = self._pid_calculator.calculate_from_oscillation(
-                osc_info, current_pid, method='tyreus_luyben'
-            )
-        
-        if pid_result is None:
-            return None
-        
-        self.log(f"   ✅ 临界法整定成功:")
-        self.log(f"      Pu={osc_info['Pu']:.1f}s, Ku={osc_info['Ku']:.3f}")
-        self.log(f"      Kp={pid_result['Kp']:.4f}, Ki={pid_result['Ki']:.4f}, Kd={pid_result['Kd']:.4f}")
-        self.log(f"      方法: {pid_result.get('method', 'unknown')}")
-        
-        return {
-            'success': True,
-            'pid_params': pid_result,
-            'oscillation_info': osc_info,
-            'segment_idx': seg_idx
-        }
-    
     def _multi_start_fit(self, t: np.ndarray, y: np.ndarray, u: np.ndarray,
                          model_type: str, n_starts: int = 3) -> Tuple[tuple, float]:
         """多起点拟合"""
@@ -500,7 +403,11 @@ class SegmentFitter(LoggerMixin):
                 )
                 result = least_squares(
                     lambda params: self._simulator.simulate(params, model_type, t, u, y0) - y,
-                    perturbed, bounds=bounds, method='trf', max_nfev=200
+                    perturbed, bounds=bounds, method='trf', 
+                    max_nfev=100,  # 减少最大函数评估次数
+                    ftol=1e-4,     # 放宽函数收敛容差
+                    xtol=1e-4,     # 放宽参数收敛容差
+                    gtol=1e-4      # 放宽梯度容差
                 )
                 if result.success:
                     y_pred = self._simulator.simulate(tuple(result.x), model_type, t, u, y0)

@@ -594,6 +594,8 @@ class ModelIdentifier:
     def _estimate_gain_from_correlation(u, y, y0):
         """使用输入输出变化的相关性估计增益"""
         corr = np.corrcoef(u, y)[0, 1] if len(u) > 2 else 0
+        if np.isnan(corr):
+            corr = 0
         u_range = np.max(u) - np.min(u)
         y_range = np.max(y) - np.min(y)
         

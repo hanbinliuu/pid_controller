@@ -989,7 +989,7 @@ class OscillationTuner(LoggerMixin):
         }
         
         result = {
-            'success': True,
+            'success': is_stable,
             'model_type': 'FOPDT',
             'model_rating': model_rating,
             'start_time': time_range.get('start_time'),

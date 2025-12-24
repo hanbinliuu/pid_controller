@@ -1410,7 +1410,7 @@ class ModelSelector(LoggerMixin):
         for result in segment_results:
             if result is None:
                 continue
-            # 检查是否有任何模型拟合成功（R² >= 0.4 且 K 值合理）
+            # 检查是否有任何模型拟合成功（R² >= 0.3 且 K 值合理）
             # 注意：SegmentResult使用model_results而不是fits
             model_results = getattr(result, 'model_results', {}) or {}
             for model_type, params in model_results.items():
@@ -1418,9 +1418,17 @@ class ModelSelector(LoggerMixin):
                     continue
                 r2 = params.get('r2', 0)
                 K = params.get('K', 0)
-                # R² >= 0.4 且 K 值在合理范围内认为拟合成功
-                if r2 >= 0.4 and 0.01 < abs(K) < 100:
+                # R² >= 0.3 且 K 值在合理范围内认为拟合成功（降低阈值以容纳振荡数据）
+                if r2 >= 0.3 and 0.01 < abs(K) < 100:
                     return False  # 有成功的拟合
+            
+            # 检查非线性模型结果
+            nonlinear = getattr(result, 'nonlinear_result', None)
+            if nonlinear is not None:
+                nl_r2 = nonlinear.get('r2', 0)
+                nl_K = nonlinear.get('params', {}).get('K', 0) if nonlinear.get('params') else 0
+                if nl_r2 >= 0.3 and 0.01 < abs(nl_K) < 100:
+                    return False  # 非线性模型拟合成功
         return True  # 所有拟合都失败
     
     def _merge_tuning_and_disturbance(

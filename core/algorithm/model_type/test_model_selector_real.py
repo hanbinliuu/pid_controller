@@ -6,6 +6,7 @@
 """
 import sys
 import os
+import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
 import numpy as np
@@ -28,15 +29,15 @@ from core.algorithm.model_type.model_selector import ModelSelector
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951",
-    # 'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
-    'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
+    'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
+    # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        # {'start_time': '2025-12-17 00:31:36', 'end_time': '2025-12-17 23:31:36'},
-         {'start_time': '2025-12-23 00:32:15', 'end_time': '2025-12-23 23:30:15'},
+        # {'start_time': '2025-12-17 00:31:36', 'end_time': '2025-12-17 20:31:36'},
+         {'start_time': '2025-12-24 08:51:52', 'end_time': '2025-12-24 12:00:52'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
@@ -236,7 +237,13 @@ def run_model_selector(data: List[Dict], qualified_windows: List[Dict],
     
     # 调用新的 run 方法
     selector = ModelSelector(verbose=verbose)
+    
+    start_time = time.time()
     result = selector.run(input_data)
+    elapsed_time = time.time() - start_time
+    
+    print(f"\n⏱️ 整定耗时: {elapsed_time:.2f} 秒")
+    result['tuning_elapsed_time'] = elapsed_time
     
     return result
 
@@ -667,15 +674,19 @@ def print_result_json(result: Dict):
         for k, v in model_params.items()
     }
     
+    # 高级参数建议
+    adv_params = result.get('advanced_params_recommendation', {})
+    
     output = {
-        'success': result.get('success'),
+        'success': bool(result.get('success')),  # 转换 numpy.bool_ 为 Python bool
         'model_type': result.get('model_type'),
         'turning_type': result.get('turning_type'),
-        'model_rating': result.get('model_rating'),
+        'model_rating': float(result.get('model_rating', 0)),
         'start_time': str(result.get('start_time')),
         'end_time': str(result.get('end_time')),
         'model_parameters': model_params_formatted,
         'pid_parameters': pid_params_formatted,
+        'advanced_params_recommendation': adv_params,
         'fitting_result': {
             'r_squared': round(fitting_result.get('r_squared', 0), 4),
             'rmse': round(fitting_result.get('rmse', 0), 4),
@@ -746,13 +757,19 @@ if __name__ == "__main__":
         print(f"场景 {idx}: {start_time_str} ~ {end_time_str}")
         print(f"{'='*60}")
         
+        scenario_total_start = time.time()
+        
         # Step 1: 获取历史数据
+        step1_start = time.time()
         data = get_history_data(start_ts, end_ts)
+        step1_elapsed = time.time() - step1_start
         if not data:
             continue
         
         # Step 2: 检测扰动段
+        step2_start = time.time()
         tuning_input = detect_tuning_windows(data)
+        step2_elapsed = time.time() - step2_start
         qualified_windows = tuning_input.get('qualified_windows', [])
         if not qualified_windows:
             print("⚠️ 未检测到扰动段")
@@ -768,8 +785,22 @@ if __name__ == "__main__":
         print_result_json(result)
         
         # Step 5: 可视化
+        step5_start = time.time()
         scenario_name = start_time_str.replace(' ', '_').replace(':', '-')
         visualize_fitting_result(data, tuning_input, result, scenario_name)
+        step5_elapsed = time.time() - step5_start
+        
+        # 汇总耗时统计
+        scenario_total_elapsed = time.time() - scenario_total_start
+        tuning_elapsed = result.get('tuning_elapsed_time', 0)
+        
+        print(f"\n📊 场景 {idx} 耗时统计:")
+        print(f"   ‣ 数据获取: {step1_elapsed:.2f} 秒")
+        print(f"   ‣ 扰动检测: {step2_elapsed:.2f} 秒")
+        print(f"   ‣ 模型整定: {tuning_elapsed:.2f} 秒")
+        print(f"   ‣ 可视化:   {step5_elapsed:.2f} 秒")
+        print(f"   ━━━━━━━━━━━━━━━━━━━━")
+        print(f"   ‣ 总耗时:     {scenario_total_elapsed:.2f} 秒")
     
     # 关闭日志
     print(f"\n{'='*60}")
