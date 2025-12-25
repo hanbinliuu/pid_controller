@@ -19,6 +19,7 @@
 4. **闭环稳定性验证**: 仿真验证PID参数的闭环性能
 """
 
+import numpy as np
 from typing import Dict, Tuple, Optional
 
 from ..config import Config, ModelType
@@ -168,31 +169,31 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
             - conservative_level: 保守因子，越大越保守
             - pb_min: pb最小值
         """
-        # 响应模式基准参数
+        # 响应模式基准参数（优化：收窄范围，避免过于保守）
         # fast: 更小的保守因子，更低的pb_min，响应更快但可能有超调
         # balanced: 适中参数
         # conservative: 更大的保守因子，响应慢但稳定
         MODE_PARAMS = {
             'fast': {
-                'level_range': (0.8, 1.8),    # 保守因子范围
-                'pb_range': (8, 30),          # pb_min范围
-                'default_level': 1.2,
-                'default_pb': 20,
-                'r2_multipliers': {0.95: 0.3, 0.9: 0.4, 0.85: 0.5, 0.8: 0.7}
+                'level_range': (0.8, 1.5),    # 保守因子范围（收窄上限）
+                'pb_range': (8, 25),          # pb_min范围（收窄上限）
+                'default_level': 1.0,
+                'default_pb': 15,
+                'r2_multipliers': {0.95: 0.3, 0.9: 0.4, 0.85: 0.5, 0.8: 0.65}
             },
             'balanced': {
-                'level_range': (1.2, 2.5),
-                'pb_range': (15, 45),
-                'default_level': 1.8,
-                'default_pb': 30,
-                'r2_multipliers': {0.95: 0.4, 0.9: 0.55, 0.85: 0.7, 0.8: 0.85}
+                'level_range': (1.0, 2.0),    # 收窄：原(1.2, 2.5)
+                'pb_range': (12, 35),         # 收窄：原(15, 45)
+                'default_level': 1.5,
+                'default_pb': 25,
+                'r2_multipliers': {0.95: 0.35, 0.9: 0.5, 0.85: 0.65, 0.8: 0.8}
             },
             'conservative': {
-                'level_range': (2.0, 4.0),
-                'pb_range': (30, 70),
-                'default_level': 2.5,
-                'default_pb': 45,
-                'r2_multipliers': {0.95: 0.6, 0.9: 0.7, 0.85: 0.8, 0.8: 0.9}
+                'level_range': (1.5, 3.0),    # 收窄：原(2.0, 4.0)
+                'pb_range': (25, 50),         # 收窄：原(30, 70)
+                'default_level': 2.0,
+                'default_pb': 35,
+                'r2_multipliers': {0.95: 0.5, 0.9: 0.65, 0.85: 0.75, 0.8: 0.85}
             }
         }
         
@@ -226,12 +227,12 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         else:
             consist_factor = max(0, 1.0 - consistency)
         
-        # 综合保守度：加权平均
+        # 综合保守度：加权平均（优化：降低R²权重，更均衡）
         conservativeness = (
-            0.20 * quality_factor +
-            0.15 * osc_factor +
-            0.45 * r2_factor +
-            0.20 * consist_factor
+            0.25 * quality_factor +
+            0.20 * osc_factor +
+            0.30 * r2_factor +      # 降低：原0.45，避免低R²时过于保守
+            0.25 * consist_factor
         )
         
         # 根据R²和响应模式调整保守度
@@ -261,13 +262,26 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         elif osc_ratio > osc_th_med:
             valve_compensation = factor_med_base + (osc_ratio - osc_th_med) * factor_med_slope
         
+        # 限制 valve_compensation 避免过度放大（优化：加上限）
+        valve_compensation = min(valve_compensation, 1.4)
+        
         # 映射到保守等级和pb_min（应用阀门补偿）
         conservative_level = level_min + conservativeness * (level_max - level_min) * valve_compensation
         pb_min = pb_min_range + conservativeness * (pb_max_range - pb_min_range) * valve_compensation
         
-        # 限制在合理范围内
-        conservative_level = min(conservative_level, level_max * 1.5)
-        pb_min = min(pb_min, pb_max_range * 1.5)
+        # 使用 soft clipping 替代硬边界，避免撞边界（优化）
+        def soft_clip(x, x_min, x_max):
+            range_half = (x_max - x_min) / 2
+            if x > x_max:
+                overshoot = x - x_max
+                return x_max + range_half * 0.1 * (1 - np.exp(-overshoot / range_half))
+            elif x < x_min:
+                undershoot = x_min - x
+                return x_min - range_half * 0.1 * (1 - np.exp(-undershoot / range_half))
+            return x
+        
+        conservative_level = soft_clip(conservative_level, level_min, level_max)
+        pb_min = soft_clip(pb_min, pb_min_range, pb_max_range)
         
         return conservative_level, pb_min
     
