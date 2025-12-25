@@ -37,7 +37,7 @@ CONFIG = {
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
         # {'start_time': '2025-12-17 00:31:36', 'end_time': '2025-12-17 20:31:36'},
-         {'start_time': '2025-12-25 08:45:52', 'end_time': '2025-12-25 09:15:52'},
+        {'start_time': '2025-12-18 00:39:41', 'end_time': '2025-12-18 23:39:41'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
@@ -434,16 +434,41 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     ax2.legend(loc='upper right')
     ax2.grid(True, alpha=0.3)
     
-    # ========== 子图3: 拟合误差 ==========
+    # ========== 子图3: 拟合误差 或 振荡整定信息 ==========
     ax3 = fig.add_subplot(n_plots, 1, 3, sharex=ax1)
-    # 判断是否为振荡整定模式
-    is_oscillation_tuning = fusion_info.get('method') == 'oscillation_critical'
+    # 判断是否为振荡整定模式（包括 oscillation_critical, oscillation_adaptive, oscillation_llm）
+    fusion_method = fusion_info.get('method', '')
+    is_oscillation_tuning = 'oscillation' in fusion_method
+    
     if is_oscillation_tuning:
-        # 振荡整定没有模型拟合，显示提示信息
-        ax3.text(0.5, 0.5, '振荡整定模式\n无模型拟合（使用临界法）', 
+        # 振荡整定模式，显示整定信息而不是拟合误差
+        pid_params = fitting_result.get('pid_parameters', {})
+        model_params = fitting_result.get('model_parameters', {})
+        
+        info_text = f"🔄 振荡整定模式 ({fusion_method})\n\n"
+        info_text += f"临界参数:\n"
+        info_text += f"  Pu (临界周期) = {model_params.get('T1', 0):.2f} s\n"
+        info_text += f"  K (过程增益) = {model_params.get('K', 0):.3f}\n\n"
+        info_text += f"PID 参数:\n"
+        info_text += f"  pb = {pid_params.get('pb', 0):.1f}%\n"
+        info_text += f"  Ti = {pid_params.get('ti', 0):.2f} s\n"
+        info_text += f"  Td = {pid_params.get('td', 0):.2f} s"
+        
+        # 如果有 LLM 决策信息，也显示
+        llm_decision = pid_params.get('llm_decision', {})
+        if llm_decision:
+            strategy = llm_decision.get('strategy_params', {})
+            info_text += f"\n\n🤖 LLM 策略:\n"
+            info_text += f"  safety_factor = {strategy.get('safety_factor', 'N/A')}\n"
+            info_text += f"  ti_multiplier = {strategy.get('ti_multiplier', 'N/A')}"
+        
+        ax3.text(0.5, 0.5, info_text, 
                 transform=ax3.transAxes, ha='center', va='center',
-                fontsize=14, color='gray', style='italic')
-        ax3.set_title('拟合误差 - 振荡整定模式')
+                fontsize=11, color='darkblue',
+                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+        ax3.set_title('振荡整定信息')
+        ax3.set_xticks([])
+        ax3.set_yticks([])
     elif fit_time_array and fit_pv and fit_pv_model:
         error = np.array(fit_pv) - np.array(fit_pv_model)
         ax3.plot(fit_time_array, error, 'r-', label='误差 (PV - PV_model)', linewidth=0.8)

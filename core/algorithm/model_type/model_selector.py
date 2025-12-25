@@ -34,6 +34,10 @@ class ModelSelector(LoggerMixin):
     3. 基于AIC/RSS/形状特征选择最优模型结构 → 确定模型类型
     4. 融合各段参数 → 唯一K, T, L（加权平均 / 全局优化）
     5. 验证一致性与仿真匹配度 → 最终输出
+    
+    LLM 增强:
+    - 支持使用大模型决策保守策略
+    - 通过构造函数或 set_llm_client() 启用
     """
     
     # 使用统一的常量定义（来自 ModelType）
@@ -45,15 +49,31 @@ class ModelSelector(LoggerMixin):
     MIN_R2_FOR_QUALITY = Config.MODEL_SELECTOR['min_r2_for_quality']
     R2_THRESHOLDS = Config.MODEL_SELECTOR['r2_thresholds']
     
-    def __init__(self, verbose: bool = False):
+    def __init__(self, verbose: bool = False, llm_client=None, process_context: dict = None):
+        """
+        Args:
+            verbose: 是否输出详细日志
+            llm_client: LLM 客户端，用于决策保守策略
+                       需实现 chat(prompt) -> str 方法
+            process_context: 工艺上下文信息（可选）
+                - loop_type: 回路类型 (flow/temperature/pressure/level)
+                - loop_name: 回路名称
+                - safety_critical: 是否安全关键
+                - allow_overshoot: 是否允许超调
+        """
         self._init_logger(verbose)
         self._epsilon = Config.EPSILON
+        self._llm_client = llm_client
+        self._process_context = process_context
         
         # 初始化子模块
         self._preprocessor = DataPreprocessor(verbose=verbose)
         self._segment_processor = SegmentProcessor(verbose=verbose)
         self._simulator = ModelSimulator()
+        
+        # PIDCalculator（正常整定用规则引擎，不需要 LLM）
         self._pid_calculator = PIDCalculator()
+        
         self._unified_selector = UnifiedModelSelector(verbose=verbose)
         
         # 拆分后的子模块
@@ -63,9 +83,43 @@ class ModelSelector(LoggerMixin):
         self._output_builder = OutputBuilder(
             self._simulator, self._pid_calculator, verbose
         )
+        
+        # OscillationTuner 支持 LLM 决策（临界法整定专用）
+        loop_type = process_context.get('loop_type', '') if process_context else ''
+        loop_name = process_context.get('loop_name', '') if process_context else ''
         self._oscillation_tuner = OscillationTuner(
-            self._pid_calculator, self._simulator, verbose
+            self._pid_calculator, self._simulator, verbose,
+            llm_client=llm_client, loop_type=loop_type, loop_name=loop_name
         )
+    
+    def set_llm_client(self, llm_client, process_context: dict = None):
+        """
+        设置 LLM 客户端，启用 LLM 决策保守策略
+        
+        注意：LLM 只在临界法整定时使用，正常数据质量好的整定不需要 LLM。
+        
+        Args:
+            llm_client: LLM 客户端
+            process_context: 工艺上下文信息
+                - loop_type: 回路类型 (flow/temperature/pressure/level)
+                - loop_name: 回路名称
+                - safety_critical: 是否安全关键
+        
+        使用示例:
+            selector = ModelSelector(verbose=True)
+            selector.set_llm_client(
+                llm_client=OllamaClient(model="qwen2.5:7b"),
+                process_context={'loop_type': 'temperature', 'loop_name': '反应釜温度'}
+            )
+            result = selector.run(input_data)
+        """
+        self._llm_client = llm_client
+        self._process_context = process_context
+        
+        # 更新 OscillationTuner（临界法整定专用）
+        loop_type = process_context.get('loop_type', '') if process_context else ''
+        loop_name = process_context.get('loop_name', '') if process_context else ''
+        self._oscillation_tuner.set_llm_client(llm_client, loop_type, loop_name)
     
     @property
     def verbose(self) -> bool:
@@ -76,7 +130,16 @@ class ModelSelector(LoggerMixin):
     # ============================================================
     
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """模型整定主入口（新格式）"""
+        """模型整定主入口（新格式）
+        
+        Args:
+            input_data: 输入数据字典
+                - history_data: 历史数据列表
+                - params: 参数配置
+                - qualified_windows: 扰动窗口列表
+                - current_pid: 当前 PID 参数（可选）
+                - process_context: 工艺上下文（可选，会覆盖构造函数中的设置）
+        """
         history_data = input_data.get('history_data', [])
         params = input_data.get('params', {})
         qualified_windows = input_data.get('qualified_windows', [])
@@ -133,6 +196,20 @@ class ModelSelector(LoggerMixin):
         fitting_result = result.get('fitting_result', {})
         fitting_result['recommendation'] = recommendation
         
+        # 构建新的 pid_parameters，保留 llm_decision
+        new_pid_params = {
+            'pb': round(float(Pb), 2),
+            'ti': round(float(Ti), 2),
+            'td': round(float(Td), 2),
+            'kp': round(float(Kp), 2),
+            'ki': round(float(Ki), 2),
+            'kd': round(float(Kd), 2)
+        }
+        
+        # 保留 LLM 决策信息（如果有）
+        if 'llm_decision' in pid_params:
+            new_pid_params['llm_decision'] = pid_params['llm_decision']
+        
         return {
             'success': result.get('success', False),
             'model_type': result.get('model_type', 'FOPDT'),
@@ -141,14 +218,7 @@ class ModelSelector(LoggerMixin):
             'start_time': result.get('start_time'),
             'end_time': result.get('end_time'),
             'model_parameters': result.get('model_parameters', {}),
-            'pid_parameters': {
-                'pb': round(float(Pb), 2),
-                'ti': round(float(Ti), 2),
-                'td': round(float(Td), 2),
-                'kp': round(float(Kp), 2),
-                'ki': round(float(Ki), 2),
-                'kd': round(float(Kd), 2)
-            },
+            'pid_parameters': new_pid_params,
             'fitting_result': fitting_result,
             'fusion_info': result.get('fusion_info', {}),
             'closed_loop_verification': result.get('closed_loop_verification', {}),
@@ -246,8 +316,28 @@ class ModelSelector(LoggerMixin):
             use_tuning_segments = False
         
         # 保存原始段数据用于可视化（降采样前）
-        original_segments = valid_segments.copy()
-        original_results = segment_results.copy()
+        # 使用深拷贝避免后续修改影响原始数据
+        original_segments = [
+            HistoricalData(
+                timestamp=seg.timestamp.copy(),
+                pv=seg.pv.copy(),
+                sv=seg.sv.copy(),
+                mv=seg.mv.copy()
+            ) for seg in valid_segments
+        ]
+        original_results = [SegmentResult(
+            segment_idx=r.segment_idx,
+            start_idx=r.start_idx,
+            end_idx=r.end_idx,
+            data_points=r.data_points,
+            is_valid=r.is_valid,
+            invalid_reason=r.invalid_reason,
+            quality_score=r.quality_score,
+            nonlinearity_score=r.nonlinearity_score,
+            step_response_score=r.step_response_score,
+            oscillation_ratio=r.oscillation_ratio,
+            is_nonlinear=r.is_nonlinear
+        ) for r in segment_results]
         
         # Step 1.7: 智能降采样（加速整定）
         if enable_downsample and valid_segments:
@@ -1463,6 +1553,14 @@ class ModelSelector(LoggerMixin):
         self.log(f"   整定段（MV阶跃检测）: {len(tuning_segs)} 个")
         self.log(f"   扰动段（扰动窗口）: {len(disturbance_segs)} 个")
         
+        # 从配置读取合并参数
+        seg_config = Config.SEGMENT_PROCESSING
+        gap_threshold = seg_config.get('merge_gap_threshold', 300000)  # 默认5分钟
+        expansion_max = seg_config.get('merge_expansion_max', 5.0)
+        expansion_allow = seg_config.get('merge_expansion_allow', 2.0)
+        quality_diff_threshold = seg_config.get('merge_quality_diff', 0.3)
+        osc_diff_threshold = seg_config.get('merge_osc_diff', 0.4)
+        
         merged_segments = []
         merged_results = []
         used_disturbance_indices = set()
@@ -1481,8 +1579,7 @@ class ModelSelector(LoggerMixin):
                 dist_start = dist_seg.timestamp[0] if len(dist_seg.timestamp) > 0 else 0
                 dist_end = dist_seg.timestamp[-1] if len(dist_seg.timestamp) > 0 else 0
                 
-                # 检查时间是否有重叠或相近（间隔小于5分钟=300秒=300000毫秒）
-                gap_threshold = 300000  # 5分钟
+                # 检查时间是否有重叠或相近
                 has_overlap = not (tuning_end + gap_threshold < dist_start or dist_end + gap_threshold < tuning_start)
                 
                 if has_overlap:
@@ -1506,8 +1603,8 @@ class ModelSelector(LoggerMixin):
                     dist_osc = dist_result.oscillation_ratio
                     osc_diff = dist_osc - tuning_osc  # 正值表示扰动段振荡更严重
                     
-                    if tuning_is_subset and expansion_ratio > 5:
-                        # 整定段是扰动段的子集，且扩展比例太大（>5倍）
+                    if tuning_is_subset and expansion_ratio > expansion_max:
+                        # 整定段是扰动段的子集，且扩展比例太大
                         # 直接使用整定段，不扩展（避免引入大量低质量数据）
                         merged_segments.append(tuning_seg)
                         tuning_result.segment_idx = len(merged_segments) - 1
@@ -1521,8 +1618,8 @@ class ModelSelector(LoggerMixin):
                         merged_results.append(tuning_result)
                         self.log(f"   + 扰动段{j+1} ⊂ 整定段{i+1}: 使用整定段")
                         self.log(f"     整定段={len(tuning_seg.pv)}点")
-                    elif quality_diff > 0.3 or osc_diff > 0.4:
-                        # 整定段质量明显好于扰动段（质量差>0.3）或扰动段振荡严重（振荡差>0.4）
+                    elif quality_diff > quality_diff_threshold or osc_diff > osc_diff_threshold:
+                        # 整定段质量明显好于扰动段或扰动段振荡严重
                         # 不合并，避免低质量数据稀释整定段
                         merged_segments.append(tuning_seg)
                         tuning_result.segment_idx = len(merged_segments) - 1
@@ -1530,8 +1627,8 @@ class ModelSelector(LoggerMixin):
                         self.log(f"   + 整定段{i+1} 与 扰动段{j+1}: 质量差异大，保留原整定段")
                         self.log(f"     整定段质量={tuning_quality:.2f}(振荡={tuning_osc:.2f}), 扰动段质量={dist_quality:.2f}(振荡={dist_osc:.2f})")
                         self.log(f"     质量差={quality_diff:.2f}, 振荡差={osc_diff:.2f} → 不合并")
-                    elif expansion_ratio <= 2:
-                        # 扩展比例较小（<=2倍）且质量差异不大，可以合并
+                    elif expansion_ratio <= expansion_allow:
+                        # 扩展比例较小且质量差异不大，可以合并
                         merged_start = min(tuning_start, dist_start)
                         merged_end = max(tuning_end, dist_end)
                         merged_seg = self._extract_segment_by_time(hist_data, merged_start, merged_end)

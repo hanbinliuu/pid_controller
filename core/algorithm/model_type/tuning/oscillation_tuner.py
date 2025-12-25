@@ -31,20 +31,62 @@ class OscillationTuner(LoggerMixin):
     """
     振荡数据整定器
     
-    当常规模型拟合失败且检测到高振荡时，使用临界法进行PID整定
+    当常规模型拟合失败且检测到高振荡时，使用临界法进行PID整定。
+    
+    LLM 增强：
+    - 支持使用大模型决策保守参数
+    - 只在临界法整定时使用 LLM，正常整定不需要
     """
     
-    def __init__(self, pid_calculator, simulator, verbose: bool = False):
+    def __init__(self, pid_calculator, simulator, verbose: bool = False, 
+                 llm_client=None, loop_type: str = "", loop_name: str = ""):
         """
         Args:
             pid_calculator: PIDCalculator 实例
             simulator: ModelSimulator 实例
             verbose: 是否输出详细日志
+            llm_client: LLM 客户端（可选），用于决策保守参数
+            loop_type: 回路类型 (flow/temperature/pressure/level)
+            loop_name: 回路名称
         """
         self._init_logger(verbose)
         self._pid_calculator = pid_calculator
         self._simulator = simulator
         self._epsilon = Config.EPSILON
+        
+        # LLM 相关
+        self._llm_client = llm_client
+        self._llm_advisor = None
+        self._loop_type = loop_type
+        self._loop_name = loop_name
+        
+        if llm_client is not None:
+            self._init_llm_advisor(llm_client)
+    
+    def set_llm_client(self, llm_client, loop_type: str = "", loop_name: str = ""):
+        """
+        设置 LLM 客户端，启用 LLM 决策保守参数
+        
+        Args:
+            llm_client: LLM 客户端
+            loop_type: 回路类型
+            loop_name: 回路名称
+        """
+        self._llm_client = llm_client
+        self._loop_type = loop_type
+        self._loop_name = loop_name
+        self._init_llm_advisor(llm_client)
+    
+    def _init_llm_advisor(self, llm_client):
+        """初始化 LLM 顾问"""
+        try:
+            from .llm_conservative_advisor import LLMOscillationTuningAdvisor
+            self._llm_advisor = LLMOscillationTuningAdvisor(
+                llm_client=llm_client,
+                verbose=self._verbose
+            )
+        except ImportError:
+            self._llm_advisor = None
     
     def detect_valve_issues(self, mv: np.ndarray, pv: np.ndarray, dt: float = 1.0) -> Dict[str, Any]:
         """
@@ -421,6 +463,7 @@ class OscillationTuner(LoggerMixin):
         4. 数据质量越差，参数越保守
         5. 考虑阀门问题（死区、粘滞、卡涩）
         6. 基于置信度动态调整pb_max（鲁棒性策略）
+        7. 支持 LLM 决策保守策略参数（当 llm_client 可用时）
         
         Args:
             Pu: 临界周期
@@ -440,7 +483,48 @@ class OscillationTuner(LoggerMixin):
             valve_issues = {}
         osc_config = Config.OSCILLATION_TUNING
         
-        # ========== 动态计算 pb（渐进式策略，更通用） ==========
+        # ========== LLM 决策保守策略参数 ==========
+        # LLM 返回的是策略参数（调整因子），而不是直接的 PID 参数
+        # 这些策略参数会用于调整下面规则引擎的计算
+        llm_strategy = None
+        llm_decision_info = None
+        
+        # 检查配置开关是否启用 LLM
+        enable_llm = osc_config.get('enable_llm', True)
+        
+        if enable_llm and self._llm_advisor is not None:
+            try:
+                llm_strategy = self._llm_advisor.decide_conservative_strategy(
+                    Pu=Pu,
+                    Ku=Ku,
+                    K_approx=K_approx,
+                    oscillation_ratio=oscillation_ratio,
+                    data_quality=data_quality,
+                    nonlinearity=nonlinearity,
+                    valve_issues=valve_issues,
+                    confidence=confidence,
+                    loop_type=self._loop_type,
+                    loop_name=self._loop_name
+                )
+                
+                if llm_strategy is not None:
+                    llm_decision_info = {
+                        'strategy_params': {
+                            'safety_factor': llm_strategy.safety_factor,
+                            'pb_extra_factor': llm_strategy.pb_extra_factor,
+                            'ti_multiplier': llm_strategy.ti_multiplier,
+                            'enable_derivative': llm_strategy.enable_derivative,
+                            'td_factor': llm_strategy.td_factor,
+                        },
+                        'reasoning': llm_strategy.reasoning,
+                        'confidence': llm_strategy.confidence,
+                        'risk_factors': llm_strategy.risk_factors,
+                        'recommendations': llm_strategy.recommendations
+                    }
+            except Exception as e:
+                self.log(f"   ⚠️ LLM 策略决策失败: {e}，使用规则引擎默认参数")
+        
+        # ========== 规则引擎计算（使用 LLM 策略参数调整）==========
         # 1. 基于过程增益的基础 pb
         pb_from_k_factor = osc_config.get('pb_from_k_factor', 1.5)
         if K_approx > 0.01:
@@ -512,25 +596,37 @@ class OscillationTuner(LoggerMixin):
         pb_osc_start = osc_config.get('pb_oscillation_start', 0.4)
         base_safety_factor = osc_config.get('critical_method_safety_factor', 1.4)
         
-        # 自适应安全系数（从配置读取阈值和斜率）
+        # 自适应安全系数（从配置读取阈值和斜率，或使用 LLM 策略）
         safety_base = osc_config.get('safety_factor_base', 1.4)
         safety_thresholds = osc_config.get('safety_factor_thresholds', [0.5, 0.7, 0.85])
         safety_slopes = osc_config.get('safety_factor_slopes', [0.5, 1.0, 2.0])
         
-        if oscillation_ratio < safety_thresholds[0]:
-            safety_factor = safety_base
-        elif oscillation_ratio < safety_thresholds[1]:
-            safety_factor = safety_base + (oscillation_ratio - safety_thresholds[0]) * safety_slopes[0]
-        elif oscillation_ratio < safety_thresholds[2]:
-            prev_value = safety_base + (safety_thresholds[1] - safety_thresholds[0]) * safety_slopes[0]
-            safety_factor = prev_value + (oscillation_ratio - safety_thresholds[1]) * safety_slopes[1]
+        # ========== 如果有 LLM 策略，使用 LLM 决策的安全系数 ==========
+        if llm_strategy is not None:
+            safety_factor = llm_strategy.safety_factor
+            self.log(f"   🤖 LLM 策略: safety_factor={safety_factor:.2f}, "
+                    f"pb_extra={llm_strategy.pb_extra_factor:.2f}, "
+                    f"ti_mult={llm_strategy.ti_multiplier:.2f}")
         else:
-            prev_value = safety_base + (safety_thresholds[1] - safety_thresholds[0]) * safety_slopes[0]
-            prev_value += (safety_thresholds[2] - safety_thresholds[1]) * safety_slopes[1]
-            safety_factor = prev_value + (oscillation_ratio - safety_thresholds[2]) * safety_slopes[2]
+            # 规则引擎计算安全系数
+            if oscillation_ratio < safety_thresholds[0]:
+                safety_factor = safety_base
+            elif oscillation_ratio < safety_thresholds[1]:
+                safety_factor = safety_base + (oscillation_ratio - safety_thresholds[0]) * safety_slopes[0]
+            elif oscillation_ratio < safety_thresholds[2]:
+                prev_value = safety_base + (safety_thresholds[1] - safety_thresholds[0]) * safety_slopes[0]
+                safety_factor = prev_value + (oscillation_ratio - safety_thresholds[1]) * safety_slopes[1]
+            else:
+                prev_value = safety_base + (safety_thresholds[1] - safety_thresholds[0]) * safety_slopes[0]
+                prev_value += (safety_thresholds[2] - safety_thresholds[1]) * safety_slopes[1]
+                safety_factor = prev_value + (oscillation_ratio - safety_thresholds[2]) * safety_slopes[2]
         
         # 计算综合保守乘数（将安全系数合并，避免多重乘数叠加）
         total_multiplier = safety_factor  # 自适应安全系数
+        
+        # 应用 LLM 的 pb_extra_factor
+        if llm_strategy is not None:
+            total_multiplier *= llm_strategy.pb_extra_factor
         
         if oscillation_ratio > pb_osc_start:
             # 使用平方根函数，高振荡时增长放缓
@@ -606,7 +702,7 @@ class OscillationTuner(LoggerMixin):
         
         conservative_Kp = 100.0 / pb_safe
         
-        # ========== 自适应 Ti 计算（从配置读取参数） ==========
+        # ========== 自适应 Ti 计算（从配置读取参数，或使用 LLM 策略） ==========
         ti_min_base = osc_config.get('ti_min_base', 1.5)
         base_Ti = max(Pu / 2, ti_min_base) if Pu > 0 else 2.0
         
@@ -626,27 +722,41 @@ class OscillationTuner(LoggerMixin):
                 ti_multiplier *= ti_slow_factors[i]
                 break
         
+        # ========== 如果有 LLM 策略，应用 LLM 的 ti_multiplier ==========
+        if llm_strategy is not None:
+            ti_multiplier *= llm_strategy.ti_multiplier
+            self.log(f"   🤖 LLM Ti调整: 基础乘数×LLM乘数={ti_multiplier:.2f}")
+        
         conservative_Ti = base_Ti * ti_multiplier
         # Ti范围限制（从配置读取）
         ti_range = osc_config.get('ti_range', [1.5, 10.0])
         conservative_Ti = np.clip(conservative_Ti, ti_range[0], ti_range[1])
         conservative_Ki = conservative_Kp / conservative_Ti
         
-        # ========== 自适应 Td 计算（基于Pu和振荡比） ==========
+        # ========== 自适应 Td 计算（基于Pu和振荡比，或使用 LLM 策略） ==========
         conservative_Kd = 0.0
         conservative_Td = 0.0
         enable_derivative = osc_config.get('enable_adaptive_derivative', True)
         derivative_threshold = osc_config.get('derivative_oscillation_threshold', 0.5)
         
-        if enable_derivative and oscillation_ratio > derivative_threshold:
+        # 如果有 LLM 策略，使用 LLM 决策是否启用微分
+        if llm_strategy is not None:
+            enable_derivative = llm_strategy.enable_derivative
+        
+        if enable_derivative and (oscillation_ratio > derivative_threshold or (llm_strategy and llm_strategy.enable_derivative)):
             # 基础Td（从配置读取）
             td_base_divisor = osc_config.get('td_base_divisor', 8.0)
             base_Td = Pu / td_base_divisor if Pu > 0 else 0.5
             
             # Td乘数（从配置读取）
             td_mult_factor = osc_config.get('td_multiplier_factor', 1.5)
-            effective_osc = oscillation_ratio - derivative_threshold
+            effective_osc = max(0, oscillation_ratio - derivative_threshold)
             td_multiplier = 1.0 + np.sqrt(effective_osc) * td_mult_factor
+            
+            # 如果有 LLM 策略，应用 LLM 的 td_factor
+            if llm_strategy is not None and llm_strategy.td_factor > 0:
+                td_multiplier *= llm_strategy.td_factor
+                self.log(f"   🤖 LLM Td调整: td_factor={llm_strategy.td_factor:.2f}")
             
             conservative_Td = base_Td * td_multiplier
             # Td范围限制（从配置读取）
@@ -660,17 +770,29 @@ class OscillationTuner(LoggerMixin):
         else:
             self.log(f"   📊 自适应Ti: Ti={conservative_Ti:.2f}s(×{ti_multiplier:.2f})")
         
-        return {
+        # 构建返回结果
+        result = {
             'Kp': round(conservative_Kp, 2),
             'Ki': round(conservative_Ki, 2),
             'Kd': round(conservative_Kd, 2),
             'Ti': round(conservative_Ti, 4),  # 精确的Ti值
             'Td': round(conservative_Td, 4) if conservative_Td > 0 else 0.0,  # 精确的Td值
-            'method': f'{reason}_adaptive',
+            'method': f'{reason}_llm' if llm_strategy else f'{reason}_adaptive',
             'Pu': round(Pu, 2),
             'Ku': round(Ku, 2),
             'pb': round(pb_safe, 2)
         }
+        
+        # 如果有 LLM 决策信息，添加到结果中
+        if llm_decision_info is not None:
+            result['llm_decision'] = llm_decision_info
+            self.log(f"   🤖 LLM 决策理由: {llm_decision_info['reasoning']}")
+            if llm_decision_info.get('risk_factors'):
+                self.log(f"      风险: {', '.join(llm_decision_info['risk_factors'])}")
+            if llm_decision_info.get('recommendations'):
+                self.log(f"      建议: {', '.join(llm_decision_info['recommendations'])}")
+        
+        return result
     
     def build_oscillation_output(self, osc_result: Dict, hist_data: HistoricalData,
                                  time_range: Dict, tuning_windows: List,
@@ -1011,7 +1133,7 @@ class OscillationTuner(LoggerMixin):
                 'rmse': calculate_rmse(y, pv_model)
             },
             'fusion_info': {
-                'method': 'oscillation_critical',
+                'method': pid_params.get('method', 'oscillation_critical'),
                 'n_segments': 1,
                 'consistency_score': 0.0,
                 'oscillation_type': osc_info['oscillation_type'],

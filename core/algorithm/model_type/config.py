@@ -74,6 +74,9 @@ class Config:
     # 振荡整定配置
     # ============================================================
     OSCILLATION_TUNING = {
+        # ========== LLM 辅助决策开关 ==========
+        'enable_llm': True,                  # 是否启用 LLM 辅助决策保守策略
+        
         # 触发振荡整定的条件
         'oscillation_ratio_threshold': 0.1,  # 振荡比阈值，超过此值认为是高振荡数据
         'r2_failure_threshold': 0.3,         # R² 阈值，低于此值认为模型拟合失败
@@ -198,6 +201,13 @@ class Config:
         'severe_nonlinearity': 0.7,      # 严重非线性阈值
         'severe_oscillation': 0.75,      # 严重振荡阈值
         'low_quality_threshold': 0.25,   # 低质量分阈值
+        
+        # ========== 整定段合并配置 ==========
+        'merge_gap_threshold': 300000,   # 合并间隔阈值（毫秒），5分钟=300000ms
+        'merge_expansion_max': 5.0,      # 最大扩展比，超过此值不扩展
+        'merge_expansion_allow': 2.0,    # 允许合并的扩展比上限
+        'merge_quality_diff': 0.3,       # 质量差异阈值，超过此值不合并
+        'merge_osc_diff': 0.4,           # 振荡差异阈值，超过此值不合并
     }
     
     # ============================================================

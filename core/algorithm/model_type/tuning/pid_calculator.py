@@ -45,6 +45,9 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
     - OscillationAnalysisMixin: 振荡分析 (analyze_oscillation, 等)
     - ClosedLoopSimMixin: 闭环仿真 (simulate_closed_loop, 等)
     - ModelRatingMixin: 模型评分 (calculate_model_rating)
+    
+    注意：LLM 决策只用于临界法整定（OscillationTuner），
+    正常整定使用规则引擎即可。
     """
     
     def __init__(self):
@@ -155,7 +158,10 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
     def _calculate_conservative_level(self, quality_info: Optional[DataQualityInfo],
                                        response_mode: str = 'balanced') -> Tuple[float, float]:
         """
-        根据数据质量和响应模式计算自适应保守等级
+        根据数据质量和响应模式计算自适应保守等级（规则引擎）
+        
+        注意：LLM 决策只用于临界法整定（OscillationTuner），
+        正常整定使用此规则引擎即可。
         
         Args:
             quality_info: 数据质量信息
