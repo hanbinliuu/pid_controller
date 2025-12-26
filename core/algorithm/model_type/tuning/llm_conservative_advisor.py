@@ -158,11 +158,12 @@ class LLMOscillationTuningAdvisor:
         nonlinearity: float, valve_issues: Dict,
         confidence: float, loop_type: str, loop_name: str
     ) -> str:
-        """构建 LLM Prompt（few-shot 示例，提高输出稳定性）"""
+        """构建 LLM Prompt（简化版，更容易让小模型理解）"""
         
         # 阀门问题
         has_deadband = valve_issues.get('has_deadband', False) if valve_issues else False
         has_stiction = valve_issues.get('has_stiction', False) if valve_issues else False
+        valve_issue = has_deadband or has_stiction
         
         # 回路类型中文映射
         loop_type_map = {
@@ -171,54 +172,64 @@ class LLMOscillationTuningAdvisor:
             'flow': '流量',
             'level': '液位'
         }
-        loop_type_cn = loop_type_map.get(loop_type, '未知')
+        loop_type_cn = loop_type_map.get(loop_type, '流量')
         
         # 系统速度判断
         if Pu > 30:
             system_speed = "慢"
+            speed_advice = "Ti可以大一些(1.2-1.5)"
         elif Pu > 10:
             system_speed = "中"
+            speed_advice = "Ti适中(1.0-1.2)"
         else:
             system_speed = "快"
+            speed_advice = "Ti可以小一些(0.8-1.0)"
         
-        prompt = f"""任务：根据PID控制数据，输出5个保守策略参数（用逗号分隔）。
+        # 计算 Ku/K 比值
+        ku_k_ratio = Ku / K_approx if K_approx > 0.01 else 10.0
+        
+        # 根据条件给出建议
+        if data_quality < 0.4 or confidence < 0.4:
+            quality_advice = "质量/置信度低，需要保守(safety=1.5-2.5)"
+        elif data_quality < 0.6 or confidence < 0.6:
+            quality_advice = "质量/置信度中等(safety=1.2-1.5)"
+        else:
+            quality_advice = "质量/置信度好，可以激进(safety=0.8-1.2)"
+        
+        if ku_k_ratio < 2:
+            margin_advice = "稳定裕度小(Ku/K<2)，需要保守(safety+0.5)"
+        elif ku_k_ratio < 4:
+            margin_advice = "稳定裕度中等"
+        else:
+            margin_advice = "稳定裕度大，可以激进"
+        
+        prompt = f"""PID整定参数决策。输出5个数字，用逗号分隔。
 
-参数范围：
-- p1: safety_factor (1.2-2.2) 安全系数，振荡严重/质量差时增大
-- p2: pb_extra (1.0-1.3) pb额外乘数，阀门问题时增大
-- p3: ti_mult (1.0-1.4) Ti乘数，慢系统/低置信度时增大
-- p4: use_deriv (0或1) 是否用微分，振荡>0.5且非流量回路时用1
-- p5: td_factor (0.3-0.8) Td因子，振荡严重时增大
+参数:
+p1=safety(0.8-3.0) p2=pb_extra(1.0-2.0) p3=ti_mult(0.8-2.0) p4=use_d(0/1) p5=td(0-0.8)
 
-回路特性：
-- 压力回路：敏感，需更保守(safety+0.2)
-- 温度回路：慢响应，Ti可稍大
-- 流量回路：快响应，一般不用微分
-- 液位回路：积分特性，Ti需大
+当前情况:
+- {loop_type_cn}回路, {system_speed}系统(Pu={Pu:.0f}s)
+- 质量={data_quality:.1f}, 置信度={confidence:.1f}, Ku/K={ku_k_ratio:.1f}
+- 振荡={oscillation_ratio:.1f}, 阀门问题={valve_issue}
 
-示例1: 振荡=0.3, 质量=0.6, Pu=5s, 置信度=0.7, 流量回路, 无阀门问题
-输出: 1.3,1.0,1.0,0,0.3
+建议:
+- {quality_advice}
+- {margin_advice}
+- {speed_advice}
+- {loop_type_cn}回路{'不用微分(p4=0)' if loop_type == 'flow' else '可用微分(p4=1)'}
 
-示例2: 振荡=0.5, 质量=0.4, Pu=15s, 置信度=0.5, 温度回路, 无阀门问题
-输出: 1.5,1.1,1.2,1,0.5
+示例:
+质量好+裕度大: 0.9,1.0,0.9,0,0
+质量中+裕度中: 1.3,1.0,1.1,0,0.3
+质量差+裕度小: 2.0,1.2,1.3,1,0.5
 
-示例3: 振荡=0.7, 质量=0.3, Pu=8s, 置信度=0.4, 压力回路, 有死区
-输出: 1.9,1.2,1.3,1,0.6
-
-示例4: 振荡=0.8, 质量=0.2, Pu=25s, 置信度=0.3, 温度回路, 有粘滞
-输出: 2.1,1.2,1.4,1,0.7
-
-当前数据:
-- 振荡={oscillation_ratio:.2f}, 质量={data_quality:.2f}
-- Pu={Pu:.1f}s({system_speed}系统), Ku={Ku:.2f}, K={K_approx:.3f}
-- 置信度={confidence:.2f}, 非线性={nonlinearity:.2f}
-- 回路={loop_type_cn}, 死区={has_deadband}, 粘滞={has_stiction}
 输出:"""
         
         return prompt
     
     def _parse_response(self, response: str) -> ConservativeStrategyParams:
-        """解析 LLM 响应"""
+        """解析 LLM 响应（不限制参数范围，让LLM自由决策）"""
         
         try:
             response = response.strip()
@@ -232,12 +243,18 @@ class LLMOscillationTuningAdvisor:
             numbers = re.findall(r'(\d+\.?\d*)', response)
             
             if len(numbers) >= 5:
-                # 完整解析
-                safety_factor = max(1.2, min(2.2, float(numbers[0])))
-                pb_extra_factor = max(1.0, min(1.3, float(numbers[1])))
-                ti_multiplier = max(1.0, min(1.4, float(numbers[2])))
+                # 完整解析 - 只做基本的合理性检查，不强制限制范围
+                safety_factor = float(numbers[0])
+                pb_extra_factor = float(numbers[1])
+                ti_multiplier = float(numbers[2])
                 use_derivative = float(numbers[3]) >= 0.5
-                td_factor = max(0.3, min(0.8, float(numbers[4])))
+                td_factor = float(numbers[4])
+                
+                # 基本合理性检查（防止明显错误，但范围很宽）
+                safety_factor = max(0.5, min(5.0, safety_factor))  # 0.5-5.0
+                pb_extra_factor = max(0.8, min(3.0, pb_extra_factor))  # 0.8-3.0
+                ti_multiplier = max(0.5, min(3.0, ti_multiplier))  # 0.5-3.0
+                td_factor = max(0.0, min(1.5, td_factor))  # 0-1.5
                 
                 if self._verbose:
                     print(f"   ✅ 完整解析: {safety_factor},{pb_extra_factor},{ti_multiplier},{int(use_derivative)},{td_factor}")
@@ -249,7 +266,7 @@ class LLMOscillationTuningAdvisor:
                     enable_derivative=use_derivative,
                     td_factor=td_factor,
                     confidence=0.85,
-                    reasoning=f"LLM决策: safety={safety_factor:.1f}, ti={ti_multiplier:.1f}",
+                    reasoning=f"LLM决策: safety={safety_factor:.1f}, pb_extra={pb_extra_factor:.1f}, ti={ti_multiplier:.1f}",
                     risk_factors=[],
                     recommendations=[]
                 )
@@ -259,18 +276,24 @@ class LLMOscillationTuningAdvisor:
                 first_num = float(numbers[0])
                 
                 # 判断第一个数字是什么参数
-                if 1.0 <= first_num <= 2.5:
-                    safety_factor = max(1.2, min(2.2, first_num))
+                if 0.5 <= first_num <= 5.0:
+                    safety_factor = first_num
                 else:
                     safety_factor = 1.5  # 默认
                 
-                # 根据 safety_factor 推断其他参数
-                if safety_factor >= 1.8:
-                    pb_extra, ti_mult, use_d, td_f = 1.2, 1.3, True, 0.6
-                elif safety_factor >= 1.5:
-                    pb_extra, ti_mult, use_d, td_f = 1.1, 1.15, True, 0.5
+                # 根据 safety_factor 推断其他参数（更灵活的推断）
+                if safety_factor >= 2.5:
+                    # 非常保守
+                    pb_extra, ti_mult, use_d, td_f = 1.5, 1.5, True, 0.6
+                elif safety_factor >= 1.8:
+                    # 保守
+                    pb_extra, ti_mult, use_d, td_f = 1.2, 1.3, True, 0.5
+                elif safety_factor >= 1.3:
+                    # 中等
+                    pb_extra, ti_mult, use_d, td_f = 1.1, 1.1, False, 0.3
                 else:
-                    pb_extra, ti_mult, use_d, td_f = 1.0, 1.0, False, 0.3
+                    # 激进
+                    pb_extra, ti_mult, use_d, td_f = 1.0, 0.9, False, 0.0
                 
                 if self._verbose:
                     print(f"   ⚠️ 部分解析: safety={safety_factor}, 推断其他参数")

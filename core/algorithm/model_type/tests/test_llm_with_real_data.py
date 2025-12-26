@@ -3,13 +3,20 @@
 使用方法:
     1. 确保 Ollama 已启动: ollama serve
     2. 修改 CONFIG 配置
-    3. 运行: python -m core.algorithm.model_type.test_llm_with_real_data
+    3. 运行: python test_llm_with_real_data.py (在 tests 目录下)
+       或者: python -m core.algorithm.model_type.tests.test_llm_with_real_data (在项目根目录)
 """
 import sys
 import os
-import time
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
+# 获取项目根目录（从 tests 目录往上 4 层）
+# tests -> model_type -> algorithm -> core -> 项目根目录
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_current_dir))))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates

@@ -2,13 +2,20 @@
 
 使用方法:
     1. 修改 CONFIG 配置区域的参数
-    2. 运行: python test_model_selector_real.py
+    2. 运行: python test_model_selector_real.py (在 tests 目录下)
+    3. 或者: python -m core.algorithm.model_type.tests.test_model_selector_real (在项目根目录)
 """
 import sys
 import os
-import time
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 
+# 获取项目根目录（从 tests 目录往上 4 层）
+# tests -> model_type -> algorithm -> core -> 项目根目录
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_current_dir))))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
