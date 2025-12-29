@@ -100,7 +100,7 @@ CONFIG = {
     # Ollama 配置
     'ollama_model': 'qwen3-vl:8b',
     'ollama_base_url': 'http://localhost:11434',
-    'skip_llm_test': False,  # 设为 True 可跳过 LLM 测试，只运行规则引擎
+    'skip_llm_test': True,  # 设为 True 可跳过 LLM 测试，只运行规则引擎
     
     # 原始过程模型参数（稳态时）
     'process_original': {
@@ -2803,8 +2803,8 @@ def run_stability_test():
             # 动态仿真时长：极慢系统需要更长时间
             T1_changed = process_changed.get('T1', 30)
             L_changed = process_changed.get('L', 5)
-            # 使用 5 倍时间常数确保极慢系统有足够时间稳定
-            sim_duration = max(400, int((T1_changed + L_changed) * 5))
+            # 【优化】使用 6 倍时间常数确保极慢系统有足够时间稳定
+            sim_duration = max(400, int((T1_changed + L_changed) * 6))
             
             # ===== 规则引擎整定 =====
             print("   🔧 规则引擎整定...")

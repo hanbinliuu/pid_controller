@@ -651,11 +651,18 @@ class OscillationTuner(LoggerMixin):
             self.log(f"   ⚠️ 检测到阀门饱和，增加保守度 ×{valve_saturation_f}")
         pb_base *= valve_factor
         
-        # ========== 新增：极端场景处理（针对失败场景优化）==========
+        # ========== 新增：极端场景处理（针对失败场景优化 v2）==========
         # 9. 极高增益因子（K > 4 时使用更保守策略）
+        # 【优化】K>6 时增强斜率，K>8 时提高上限
         if K_approx > 4.0:
-            extreme_gain_factor = 1.0 + (K_approx - 4.0) * 0.15  # 每超过1，增加15%
-            extreme_gain_factor = min(extreme_gain_factor, 2.0)  # 上限2倍
+            if K_approx > 6.0:
+                # 高增益区域：斜率 0.25，上限 3.0
+                extreme_gain_factor = 1.0 + (K_approx - 4.0) * 0.25
+                extreme_gain_factor = min(extreme_gain_factor, 3.0)
+            else:
+                # 中等增益区域：斜率 0.15，上限 2.0
+                extreme_gain_factor = 1.0 + (K_approx - 4.0) * 0.15
+                extreme_gain_factor = min(extreme_gain_factor, 2.0)
             pb_base *= extreme_gain_factor
             self.log(f"   ⚠️ 极高增益场景(K={K_approx:.1f}): 保守因子 ×{extreme_gain_factor:.2f}")
         
@@ -675,17 +682,31 @@ class OscillationTuner(LoggerMixin):
             pb_base *= level_slow_factor
             self.log(f"   ⚠️ Level极慢系统(Pu={Pu:.0f}s): 保守因子 ×{level_slow_factor:.2f}")
         
-        # 10. 大滞后比因子（L/T1 > 0.3 时）- 从 Pu 估算 L/T1
-        # Ziegler-Nichols: Pu ≈ 4L 对于低阻尼系统
-        # 如果 Pu > T1_approx，说明滞后可能较大
-        estimated_L = Pu / 4.0  # 粗略估计
-        T1_approx = Pu * 0.7  # 粗略估计（经验值）
+        # 10. 【优化】大滞后比因子 - 使用更准确的估算
+        # Ziegler-Nichols: Pu ≈ 4L，所以 L ≈ Pu/4
+        # T1 可以从 Pu 和 K 估算：T1 ≈ Pu * (1 + 1/K) / 4 (经验公式)
+        estimated_L = Pu / 4.0
+        # 改进的 T1 估算：考虑增益影响
+        T1_approx = Pu * (1.0 + 1.0 / max(K_approx, 0.5)) / 4.0
         delay_ratio = estimated_L / max(T1_approx, 1.0)
-        if delay_ratio > 0.3:
-            delay_factor = 1.0 + (delay_ratio - 0.3) * 0.8  # 滞后比>0.3时增加保守度
-            delay_factor = min(delay_factor, 1.8)  # 上限1.8倍
-            pb_base *= delay_factor
-            self.log(f"   ⚠️ 大滞后比场景(L/T1≈{delay_ratio:.2f}): 保守因子 ×{delay_factor:.2f}")
+        
+        # 【优化】分层滞后比处理
+        if delay_ratio > 0.8:
+            # 极大滞后比：极端保守
+            delay_factor = 2.5
+            self.log(f"   ⚠️ 极大滞后比(L/T1≈{delay_ratio:.2f}): 极端保守 ×{delay_factor:.2f}")
+        elif delay_ratio > 0.6:
+            # 大滞后比：显著保守
+            delay_factor = 1.6 + (delay_ratio - 0.6) * 4.0  # 0.6→1.6, 0.8→2.4
+            delay_factor = min(delay_factor, 2.4)
+            self.log(f"   ⚠️ 大滞后比(L/T1≈{delay_ratio:.2f}): 显著保守 ×{delay_factor:.2f}")
+        elif delay_ratio > 0.4:
+            # 中等滞后比：适度保守
+            delay_factor = 1.3 + (delay_ratio - 0.4) * 1.5  # 0.4→1.3, 0.6→1.6
+            self.log(f"   ⚠️ 中等滞后比(L/T1≈{delay_ratio:.2f}): 适度保守 ×{delay_factor:.2f}")
+        else:
+            delay_factor = 1.0
+        pb_base *= delay_factor
         
         # 11. 极端振荡场景（振荡比>0.85）额外保守
         if oscillation_ratio > 0.85:
