@@ -23,6 +23,60 @@ from typing import Dict, Any, Optional, List
 from ..config import Config
 
 
+# ============================================================
+# 预定义整定策略库
+# LLM 只需选择策略代码，参数由工程师预先调优
+# ============================================================
+TUNING_STRATEGIES = {
+    'A': {
+        'name': '标准整定',
+        'description': '适用于一般场景，数据质量好，过程稳定',
+        'safety_factor': 1.0,
+        'pb_extra_factor': 1.0,
+        'ti_multiplier': 1.0,
+        'enable_derivative': False,
+        'td_factor': 0.0,
+    },
+    'B': {
+        'name': '保守整定',
+        'description': '适用于不确定场景，数据质量中等或置信度低',
+        'safety_factor': 1.5,
+        'pb_extra_factor': 1.2,
+        'ti_multiplier': 1.3,
+        'enable_derivative': False,
+        'td_factor': 0.0,
+    },
+    'C': {
+        'name': '快速整定',
+        'description': '适用于响应速度优先，数据质量好，系统稳定裕度大',
+        'safety_factor': 0.9,
+        'pb_extra_factor': 1.0,
+        'ti_multiplier': 0.9,
+        'enable_derivative': True,
+        'td_factor': 0.3,
+    },
+    'D': {
+        'name': '抗扰动整定',
+        'description': '适用于存在外部扰动，需要更稳健的控制',
+        'safety_factor': 1.3,
+        'pb_extra_factor': 1.1,
+        'ti_multiplier': 1.1,
+        'enable_derivative': True,
+        'td_factor': 0.4,
+    },
+    'E': {
+        'name': '阀门问题整定',
+        'description': '适用于阀门死区或粘滞问题',
+        'safety_factor': 1.4,
+        'pb_extra_factor': 1.15,
+        'ti_multiplier': 1.2,
+        'enable_derivative': False,
+        'td_factor': 0.0,
+    },
+}
+
+
+
 @dataclass
 class ConservativeStrategyParams:
     """LLM 决策的保守策略参数（用于调整规则引擎的配置）"""
@@ -158,7 +212,7 @@ class LLMOscillationTuningAdvisor:
         nonlinearity: float, valve_issues: Dict,
         confidence: float, loop_type: str, loop_name: str
     ) -> str:
-        """构建增强版 LLM Prompt（更多上下文和示例）"""
+        """构建策略选择 Prompt（LLM 选择策略代码而非数值参数）"""
         
         # 阀门问题
         has_deadband = valve_issues.get('has_deadband', False) if valve_issues else False
@@ -189,162 +243,115 @@ class LLMOscillationTuningAdvisor:
         else:
             margin = "大（容易稳定）"
         
-        # 综合难度评估
-        difficulty_score = 0
-        if data_quality < 0.5: difficulty_score += 2
-        if confidence < 0.5: difficulty_score += 2
-        if oscillation_ratio > 0.7: difficulty_score += 1
-        if ku_k_ratio < 2: difficulty_score += 2
-        if has_deadband or has_stiction: difficulty_score += 1
-        
-        if difficulty_score >= 5:
-            difficulty = "困难（需要保守）"
-        elif difficulty_score >= 2:
-            difficulty = "中等"
-        else:
-            difficulty = "简单（可以激进）"
-        
-        prompt = f"""你是工业PID整定专家。根据振荡数据给出整定策略参数。
-
-## 目标
-让控制系统快速达到稳态（<100秒），同时避免过大超调（<30%）。
+        prompt = f"""你是工业PID整定专家。根据过程特征选择最合适的整定策略。
 
 ## 当前过程特征
 - 回路类型: {loop_type_cn}
 - 系统速度: {speed_class}（临界周期Pu={Pu:.0f}秒）
 - 过程增益: K={K_approx:.2f}，临界增益Ku={Ku:.2f}
 - 稳定裕度: Ku/K={ku_k_ratio:.1f}（{margin}）
-- 数据质量: {data_quality:.1%}
-- 估计置信度: {confidence:.1%}
-- 振荡程度: {oscillation_ratio:.1%}
+- 数据质量: {data_quality:.0%}
+- 估计置信度: {confidence:.0%}
+- 振荡程度: {oscillation_ratio:.0%}
 - 阀门问题: {valve_problem}
-- 综合难度: {difficulty}
 
-## 策略参数说明
-1. safety: 安全系数，影响比例带。0.8=激进，1.0=标准，1.5=保守，2.0=很保守
-2. pb_extra: 比例带额外乘数，通常1.0-1.3
-3. ti_mult: 积分时间乘数，0.8=快积分，1.0=标准，1.3=慢积分
-4. use_d: 是否启用微分（0或1）。流量回路用0，温度/压力可用1
-5. td: 微分时间因子，通常0-0.5
+## 可选策略
+A - 标准整定：适用于一般场景，数据质量好，过程稳定
+B - 保守整定：适用于不确定场景，数据质量中等或置信度低
+C - 快速整定：适用于响应速度优先，数据质量好，稳定裕度大
+D - 抗扰动整定：适用于存在外部扰动，需要更稳健的控制
+E - 阀门问题整定：适用于阀门死区或粘滞问题
 
-## 成功案例参考
-| 场景 | safety | pb_extra | ti_mult | use_d | td | 结果 |
-|------|--------|----------|---------|-------|----|------|
-| 快流量-质量好 | 0.9 | 1.0 | 0.9 | 0 | 0 | 28秒稳态 |
-| 中温度-阀门粘滞 | 1.3 | 1.1 | 1.1 | 1 | 0.3 | 65秒稳态 |
-| 慢液位-低置信 | 1.5 | 1.2 | 1.4 | 0 | 0 | 120秒稳态 |
-| 快压力-高振荡 | 1.2 | 1.0 | 1.0 | 1 | 0.4 | 42秒稳态 |
-
-## 失败案例（避免）
-| 场景 | 参数 | 问题 |
-|------|------|------|
-| 过于保守 | safety=2.5 | 调节太慢（>200秒）|
-| 过于激进 | safety=0.6 | 系统不稳定振荡 |
+## 选择指南
+- 数据质量>80% + 稳定裕度大 → C（快速）
+- 数据质量>60% + 无特殊问题 → A（标准）
+- 数据质量<60% 或 置信度<60% → B（保守）
+- 振荡程度>70% → D（抗扰动）
+- 阀门问题 → E（阀门）
 
 ## 输出格式
-只输出5个数字（逗号分隔）：safety,pb_extra,ti_mult,use_d,td
+只输出一个字母（A/B/C/D/E），代表你选择的策略。
 
-示例输出: 1.1,1.0,1.0,0,0
-
-你的输出:"""
+你的选择:"""
         
         return prompt
     
     def _parse_response(self, response: str) -> ConservativeStrategyParams:
-        """解析 LLM 响应（不限制参数范围，让LLM自由决策）"""
+        """解析 LLM 响应（解析策略代码 A-E，映射到预定义参数）"""
         
         try:
-            response = response.strip()
+            response = response.strip().upper()
             
             if self._verbose:
                 print(f"   📝 LLM 响应: {response[:100]}")
             
             import re
             
-            # 提取所有数字
-            numbers = re.findall(r'(\d+\.?\d*)', response)
+            # 提取策略代码（A-E）
+            strategy_match = re.search(r'[A-E]', response)
             
-            if len(numbers) >= 5:
-                # 完整解析 - 只做基本的合理性检查，不强制限制范围
-                safety_factor = float(numbers[0])
-                pb_extra_factor = float(numbers[1])
-                ti_multiplier = float(numbers[2])
-                use_derivative = float(numbers[3]) >= 0.5
-                td_factor = float(numbers[4])
+            if strategy_match:
+                strategy_code = strategy_match.group(0)
+                strategy = TUNING_STRATEGIES.get(strategy_code)
                 
-                # 基本合理性检查（防止明显错误，但范围很宽）
-                safety_factor = max(0.5, min(5.0, safety_factor))  # 0.5-5.0
-                pb_extra_factor = max(0.8, min(3.0, pb_extra_factor))  # 0.8-3.0
-                ti_multiplier = max(0.5, min(3.0, ti_multiplier))  # 0.5-3.0
-                td_factor = max(0.0, min(1.5, td_factor))  # 0-1.5
-                
-                if self._verbose:
-                    print(f"   ✅ 完整解析: {safety_factor},{pb_extra_factor},{ti_multiplier},{int(use_derivative)},{td_factor}")
-                
-                return ConservativeStrategyParams(
-                    safety_factor=safety_factor,
-                    pb_extra_factor=pb_extra_factor,
-                    ti_multiplier=ti_multiplier,
-                    enable_derivative=use_derivative,
-                    td_factor=td_factor,
-                    confidence=0.85,
-                    reasoning=f"LLM决策: safety={safety_factor:.1f}, pb_extra={pb_extra_factor:.1f}, ti={ti_multiplier:.1f}",
-                    risk_factors=[],
-                    recommendations=[]
-                )
+                if strategy:
+                    if self._verbose:
+                        print(f"   ✅ 选择策略 {strategy_code}: {strategy['name']}")
+                    
+                    return ConservativeStrategyParams(
+                        safety_factor=strategy['safety_factor'],
+                        pb_extra_factor=strategy['pb_extra_factor'],
+                        ti_multiplier=strategy['ti_multiplier'],
+                        enable_derivative=strategy['enable_derivative'],
+                        td_factor=strategy['td_factor'],
+                        confidence=0.9,  # 策略选择模式置信度高
+                        reasoning=f"LLM选择策略{strategy_code}: {strategy['name']}",
+                        risk_factors=[],
+                        recommendations=[]
+                    )
             
-            elif len(numbers) >= 1:
-                # 部分解析，根据第一个数字推断
-                first_num = float(numbers[0])
-                
-                # 判断第一个数字是什么参数
-                if 0.5 <= first_num <= 5.0:
-                    safety_factor = first_num
-                else:
-                    safety_factor = 1.5  # 默认
-                
-                # 根据 safety_factor 推断其他参数（更灵活的推断）
-                if safety_factor >= 2.5:
-                    # 非常保守
-                    pb_extra, ti_mult, use_d, td_f = 1.5, 1.5, True, 0.6
-                elif safety_factor >= 1.8:
-                    # 保守
-                    pb_extra, ti_mult, use_d, td_f = 1.2, 1.3, True, 0.5
-                elif safety_factor >= 1.3:
-                    # 中等
-                    pb_extra, ti_mult, use_d, td_f = 1.1, 1.1, False, 0.3
-                else:
-                    # 激进
-                    pb_extra, ti_mult, use_d, td_f = 1.0, 0.9, False, 0.0
-                
-                if self._verbose:
-                    print(f"   ⚠️ 部分解析: safety={safety_factor}, 推断其他参数")
-                
-                return ConservativeStrategyParams(
-                    safety_factor=safety_factor,
-                    pb_extra_factor=pb_extra,
-                    ti_multiplier=ti_mult,
-                    enable_derivative=use_d,
-                    td_factor=td_f,
-                    confidence=0.6,
-                    reasoning=f"LLM决策(部分): safety={safety_factor:.1f}",
-                    risk_factors=["LLM响应不完整"],
-                    recommendations=[]
-                )
+            # 如果无法识别策略代码，尝试从响应内容推断
+            if '保守' in response or 'conservative' in response.lower():
+                selected = 'B'
+            elif '快速' in response or 'fast' in response.lower():
+                selected = 'C'
+            elif '阀门' in response or 'valve' in response.lower():
+                selected = 'E'
+            elif '扰动' in response or 'disturbance' in response.lower():
+                selected = 'D'
+            else:
+                selected = 'A'  # 默认标准策略
+            
+            strategy = TUNING_STRATEGIES[selected]
+            if self._verbose:
+                print(f"   ⚠️ 推断策略 {selected}: {strategy['name']}")
+            
+            return ConservativeStrategyParams(
+                safety_factor=strategy['safety_factor'],
+                pb_extra_factor=strategy['pb_extra_factor'],
+                ti_multiplier=strategy['ti_multiplier'],
+                enable_derivative=strategy['enable_derivative'],
+                td_factor=strategy['td_factor'],
+                confidence=0.7,  # 推断模式置信度较低
+                reasoning=f"LLM推断策略{selected}: {strategy['name']}",
+                risk_factors=["策略代码未直接匹配"],
+                recommendations=[]
+            )
                 
         except Exception as e:
             if self._verbose:
                 print(f"   ⚠️ 解析失败: {e}")
         
-        # 降级：返回默认值
+        # 降级：返回标准策略
+        strategy = TUNING_STRATEGIES['A']
         return ConservativeStrategyParams(
-            safety_factor=1.5,
-            pb_extra_factor=1.1,
-            ti_multiplier=1.1,
-            enable_derivative=True,
-            td_factor=0.5,
+            safety_factor=strategy['safety_factor'],
+            pb_extra_factor=strategy['pb_extra_factor'],
+            ti_multiplier=strategy['ti_multiplier'],
+            enable_derivative=strategy['enable_derivative'],
+            td_factor=strategy['td_factor'],
             confidence=0.5,
-            reasoning="LLM响应解析失败",
+            reasoning="LLM响应解析失败，使用标准策略",
             risk_factors=["LLM响应格式异常"],
             recommendations=[]
         )

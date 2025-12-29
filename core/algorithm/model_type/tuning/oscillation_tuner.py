@@ -609,6 +609,33 @@ class OscillationTuner(LoggerMixin):
             self.log(f"   ⚠️ 检测到阀门饱和，增加保守度 ×{valve_saturation_f}")
         pb_base *= valve_factor
         
+        # ========== 新增：极端场景处理（针对失败场景优化）==========
+        # 9. 极高增益因子（K > 4 时使用更保守策略）
+        if K_approx > 4.0:
+            extreme_gain_factor = 1.0 + (K_approx - 4.0) * 0.15  # 每超过1，增加15%
+            extreme_gain_factor = min(extreme_gain_factor, 2.0)  # 上限2倍
+            pb_base *= extreme_gain_factor
+            self.log(f"   ⚠️ 极高增益场景(K={K_approx:.1f}): 保守因子 ×{extreme_gain_factor:.2f}")
+        
+        # 10. 大滞后比因子（L/T1 > 0.3 时）- 从 Pu 估算 L/T1
+        # Ziegler-Nichols: Pu ≈ 4L 对于低阻尼系统
+        # 如果 Pu > T1_approx，说明滞后可能较大
+        estimated_L = Pu / 4.0  # 粗略估计
+        T1_approx = Pu * 0.7  # 粗略估计（经验值）
+        delay_ratio = estimated_L / max(T1_approx, 1.0)
+        if delay_ratio > 0.3:
+            delay_factor = 1.0 + (delay_ratio - 0.3) * 0.8  # 滞后比>0.3时增加保守度
+            delay_factor = min(delay_factor, 1.8)  # 上限1.8倍
+            pb_base *= delay_factor
+            self.log(f"   ⚠️ 大滞后比场景(L/T1≈{delay_ratio:.2f}): 保守因子 ×{delay_factor:.2f}")
+        
+        # 11. 极端振荡场景（振荡比>0.85）额外保守
+        if oscillation_ratio > 0.85:
+            extreme_osc_factor = 1.2 + (oscillation_ratio - 0.85) * 2.0
+            extreme_osc_factor = min(extreme_osc_factor, 1.6)
+            pb_base *= extreme_osc_factor
+            self.log(f"   ⚠️ 极端振荡场景(ratio={oscillation_ratio:.2f}): 保守因子 ×{extreme_osc_factor:.2f}")
+        
         # ========== 渐进式振荡保守调整（核心改进，使用渐近函数） ==========
         # 使用渐近函数避免高振荡时pb线性爆炸
         # pb_multiplier = 1 + k * sqrt(osc - start)，增长放缓
