@@ -200,7 +200,8 @@ class Config:
     # ============================================================
     SEGMENT_PROCESSING = {
         'min_data_points': 30,           # 最小数据点数（小于30点的扰动段会被过滤）
-        'min_fusion_points': 100,        # 融合最小数据点数（用于模型融合的段至少需要100点）
+        'min_fusion_points': 50,         # 融合最小数据点数（降低阈值，允许更短的高质量段）
+        'min_fusion_points_high_quality': 30,  # 高质量段(R²>0.8)的最小点数
         'min_pv_range': 0.5,             # 最小PV变化范围
         'min_mv_range': 0.1,             # 最小MV变化范围
         'correlation_threshold': 0.1,    # 相关性阈值（阶跃响应检测）

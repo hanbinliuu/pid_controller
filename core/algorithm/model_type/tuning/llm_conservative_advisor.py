@@ -158,73 +158,95 @@ class LLMOscillationTuningAdvisor:
         nonlinearity: float, valve_issues: Dict,
         confidence: float, loop_type: str, loop_name: str
     ) -> str:
-        """构建 LLM Prompt（简化版，更容易让小模型理解）"""
+        """构建增强版 LLM Prompt（更多上下文和示例）"""
         
         # 阀门问题
         has_deadband = valve_issues.get('has_deadband', False) if valve_issues else False
         has_stiction = valve_issues.get('has_stiction', False) if valve_issues else False
-        valve_issue = has_deadband or has_stiction
+        valve_problem = "死区" if has_deadband else ("粘滞" if has_stiction else "无")
         
         # 回路类型中文映射
         loop_type_map = {
-            'temperature': '温度',
-            'pressure': '压力',
-            'flow': '流量',
-            'level': '液位'
+            'temperature': '温度', 'pressure': '压力',
+            'flow': '流量', 'level': '液位'
         }
         loop_type_cn = loop_type_map.get(loop_type, '流量')
         
-        # 系统速度判断
+        # 系统速度分类
         if Pu > 30:
-            system_speed = "慢"
-            speed_advice = "Ti可以大一些(1.2-1.5)"
+            speed_class = "慢系统"
         elif Pu > 10:
-            system_speed = "中"
-            speed_advice = "Ti适中(1.0-1.2)"
+            speed_class = "中速系统"
         else:
-            system_speed = "快"
-            speed_advice = "Ti可以小一些(0.8-1.0)"
+            speed_class = "快系统"
         
-        # 计算 Ku/K 比值
+        # Ku/K 比值（稳定裕度）
         ku_k_ratio = Ku / K_approx if K_approx > 0.01 else 10.0
-        
-        # 根据条件给出建议
-        if data_quality < 0.4 or confidence < 0.4:
-            quality_advice = "质量/置信度低，需要保守(safety=1.5-2.5)"
-        elif data_quality < 0.6 or confidence < 0.6:
-            quality_advice = "质量/置信度中等(safety=1.2-1.5)"
-        else:
-            quality_advice = "质量/置信度好，可以激进(safety=0.8-1.2)"
-        
         if ku_k_ratio < 2:
-            margin_advice = "稳定裕度小(Ku/K<2)，需要保守(safety+0.5)"
+            margin = "小（容易不稳定）"
         elif ku_k_ratio < 4:
-            margin_advice = "稳定裕度中等"
+            margin = "中等"
         else:
-            margin_advice = "稳定裕度大，可以激进"
+            margin = "大（容易稳定）"
         
-        prompt = f"""PID整定参数决策。输出5个数字，用逗号分隔。
+        # 综合难度评估
+        difficulty_score = 0
+        if data_quality < 0.5: difficulty_score += 2
+        if confidence < 0.5: difficulty_score += 2
+        if oscillation_ratio > 0.7: difficulty_score += 1
+        if ku_k_ratio < 2: difficulty_score += 2
+        if has_deadband or has_stiction: difficulty_score += 1
+        
+        if difficulty_score >= 5:
+            difficulty = "困难（需要保守）"
+        elif difficulty_score >= 2:
+            difficulty = "中等"
+        else:
+            difficulty = "简单（可以激进）"
+        
+        prompt = f"""你是工业PID整定专家。根据振荡数据给出整定策略参数。
 
-参数:
-p1=safety(0.8-3.0) p2=pb_extra(1.0-2.0) p3=ti_mult(0.8-2.0) p4=use_d(0/1) p5=td(0-0.8)
+## 目标
+让控制系统快速达到稳态（<100秒），同时避免过大超调（<30%）。
 
-当前情况:
-- {loop_type_cn}回路, {system_speed}系统(Pu={Pu:.0f}s)
-- 质量={data_quality:.1f}, 置信度={confidence:.1f}, Ku/K={ku_k_ratio:.1f}
-- 振荡={oscillation_ratio:.1f}, 阀门问题={valve_issue}
+## 当前过程特征
+- 回路类型: {loop_type_cn}
+- 系统速度: {speed_class}（临界周期Pu={Pu:.0f}秒）
+- 过程增益: K={K_approx:.2f}，临界增益Ku={Ku:.2f}
+- 稳定裕度: Ku/K={ku_k_ratio:.1f}（{margin}）
+- 数据质量: {data_quality:.1%}
+- 估计置信度: {confidence:.1%}
+- 振荡程度: {oscillation_ratio:.1%}
+- 阀门问题: {valve_problem}
+- 综合难度: {difficulty}
 
-建议:
-- {quality_advice}
-- {margin_advice}
-- {speed_advice}
-- {loop_type_cn}回路{'不用微分(p4=0)' if loop_type == 'flow' else '可用微分(p4=1)'}
+## 策略参数说明
+1. safety: 安全系数，影响比例带。0.8=激进，1.0=标准，1.5=保守，2.0=很保守
+2. pb_extra: 比例带额外乘数，通常1.0-1.3
+3. ti_mult: 积分时间乘数，0.8=快积分，1.0=标准，1.3=慢积分
+4. use_d: 是否启用微分（0或1）。流量回路用0，温度/压力可用1
+5. td: 微分时间因子，通常0-0.5
 
-示例:
-质量好+裕度大: 0.9,1.0,0.9,0,0
-质量中+裕度中: 1.3,1.0,1.1,0,0.3
-质量差+裕度小: 2.0,1.2,1.3,1,0.5
+## 成功案例参考
+| 场景 | safety | pb_extra | ti_mult | use_d | td | 结果 |
+|------|--------|----------|---------|-------|----|------|
+| 快流量-质量好 | 0.9 | 1.0 | 0.9 | 0 | 0 | 28秒稳态 |
+| 中温度-阀门粘滞 | 1.3 | 1.1 | 1.1 | 1 | 0.3 | 65秒稳态 |
+| 慢液位-低置信 | 1.5 | 1.2 | 1.4 | 0 | 0 | 120秒稳态 |
+| 快压力-高振荡 | 1.2 | 1.0 | 1.0 | 1 | 0.4 | 42秒稳态 |
 
-输出:"""
+## 失败案例（避免）
+| 场景 | 参数 | 问题 |
+|------|------|------|
+| 过于保守 | safety=2.5 | 调节太慢（>200秒）|
+| 过于激进 | safety=0.6 | 系统不稳定振荡 |
+
+## 输出格式
+只输出5个数字（逗号分隔）：safety,pb_extra,ti_mult,use_d,td
+
+示例输出: 1.1,1.0,1.0,0,0
+
+你的输出:"""
         
         return prompt
     

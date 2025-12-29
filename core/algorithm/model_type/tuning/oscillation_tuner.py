@@ -493,36 +493,56 @@ class OscillationTuner(LoggerMixin):
         enable_llm = osc_config.get('enable_llm', True)
         
         if enable_llm and self._llm_advisor is not None:
-            try:
-                llm_strategy = self._llm_advisor.decide_conservative_strategy(
-                    Pu=Pu,
-                    Ku=Ku,
-                    K_approx=K_approx,
-                    oscillation_ratio=oscillation_ratio,
-                    data_quality=data_quality,
-                    nonlinearity=nonlinearity,
-                    valve_issues=valve_issues,
-                    confidence=confidence,
-                    loop_type=self._loop_type,
-                    loop_name=self._loop_name
-                )
-                
-                if llm_strategy is not None:
-                    llm_decision_info = {
-                        'strategy_params': {
-                            'safety_factor': llm_strategy.safety_factor,
-                            'pb_extra_factor': llm_strategy.pb_extra_factor,
-                            'ti_multiplier': llm_strategy.ti_multiplier,
-                            'enable_derivative': llm_strategy.enable_derivative,
-                            'td_factor': llm_strategy.td_factor,
-                        },
-                        'reasoning': llm_strategy.reasoning,
-                        'confidence': llm_strategy.confidence,
-                        'risk_factors': llm_strategy.risk_factors,
-                        'recommendations': llm_strategy.recommendations
-                    }
-            except Exception as e:
-                self.log(f"   ⚠️ LLM 策略决策失败: {e}，使用规则引擎默认参数")
+            # ========== 条件性 LLM 调用（仅困难场景）==========
+            # 判断是否为困难场景，只在复杂情况下启用 LLM
+            has_valve_issues = valve_issues.get('has_deadband', False) or valve_issues.get('has_stiction', False)
+            is_low_quality = data_quality < 0.5
+            is_high_nonlinearity = nonlinearity > 0.5
+            is_low_confidence = confidence < 0.5
+            is_high_oscillation = oscillation_ratio > 0.7
+            
+            should_use_llm = (
+                has_valve_issues or 
+                is_low_quality or 
+                is_high_nonlinearity or 
+                is_low_confidence or
+                is_high_oscillation
+            )
+            
+            if not should_use_llm:
+                self.log(f"   📊 场景简单（质量={data_quality:.2f}, 置信={confidence:.2f}），跳过LLM，使用规则引擎")
+            else:
+                self.log(f"   🤖 困难场景（阀门={has_valve_issues}, 质量={data_quality:.2f}, 置信={confidence:.2f}），启用LLM")
+                try:
+                    llm_strategy = self._llm_advisor.decide_conservative_strategy(
+                        Pu=Pu,
+                        Ku=Ku,
+                        K_approx=K_approx,
+                        oscillation_ratio=oscillation_ratio,
+                        data_quality=data_quality,
+                        nonlinearity=nonlinearity,
+                        valve_issues=valve_issues,
+                        confidence=confidence,
+                        loop_type=self._loop_type,
+                        loop_name=self._loop_name
+                    )
+                    
+                    if llm_strategy is not None:
+                        llm_decision_info = {
+                            'strategy_params': {
+                                'safety_factor': llm_strategy.safety_factor,
+                                'pb_extra_factor': llm_strategy.pb_extra_factor,
+                                'ti_multiplier': llm_strategy.ti_multiplier,
+                                'enable_derivative': llm_strategy.enable_derivative,
+                                'td_factor': llm_strategy.td_factor,
+                            },
+                            'reasoning': llm_strategy.reasoning,
+                            'confidence': llm_strategy.confidence,
+                            'risk_factors': llm_strategy.risk_factors,
+                            'recommendations': llm_strategy.recommendations
+                        }
+                except Exception as e:
+                    self.log(f"   ⚠️ LLM 策略决策失败: {e}，使用规则引擎默认参数")
         
         # ========== 规则引擎计算（使用 LLM 策略参数调整）==========
         # 1. 基于过程增益的基础 pb
@@ -722,8 +742,22 @@ class OscillationTuner(LoggerMixin):
                 ti_multiplier *= ti_slow_factors[i]
                 break
         
-        # ========== 如果有 LLM 策略，应用 LLM 的 ti_multiplier ==========
-        if llm_strategy is not None:
+        # ========== 回路类型特定调整（鲁棒性优化）==========
+        # 注意：这些调整只在没有 LLM 策略时应用，避免与 LLM 调整叠加过度
+        if llm_strategy is None:
+            # 液位回路：积分过程特性，需要更大 Ti 避免积分饱和
+            if self._loop_type == 'level':
+                level_ti_multiplier = osc_config.get('level_ti_multiplier', 1.4)
+                ti_multiplier *= level_ti_multiplier
+                self.log(f"   📊 液位回路Ti调整: ×{level_ti_multiplier}")
+            
+            # 高振荡情况下，进一步增加 Ti
+            if K_approx > 0 and oscillation_ratio > 0.5:
+                delay_factor = osc_config.get('high_delay_ti_factor', 1.2)
+                ti_multiplier *= delay_factor
+                self.log(f"   📊 高振荡Ti调整: ×{delay_factor}")
+        else:
+            # 有 LLM 策略时，应用 LLM 的 ti_multiplier
             ti_multiplier *= llm_strategy.ti_multiplier
             self.log(f"   🤖 LLM Ti调整: 基础乘数×LLM乘数={ti_multiplier:.2f}")
         

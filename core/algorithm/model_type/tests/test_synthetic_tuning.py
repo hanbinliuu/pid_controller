@@ -62,8 +62,31 @@ class OllamaClient:
 
 
 # ============================================================
-# 场景选择
+# 测试模式选择（直接修改此变量即可切换测试模式）
 # ============================================================
+# 
+# TEST_MODE 可选值 (对应4个验证目标):
+#
+#   'stability'   : 目标1 - 振荡场景稳态验证
+#                   验证现有算法和LLM+算法能否在不同生产振荡场景中让控制器达到稳态
+#
+#   'llm_compare' : 目标2 - LLM 优化效果对比
+#                   对比振荡场景下 LLM 参数 vs 纯规则引擎参数，验证LLM是否能优化参数
+#
+#   'amplitude'   : 目标3 - 振荡幅度阈值估计
+#                   固定振荡场景，测试不同幅度，找出能回稳态/不能回稳态的边界
+#
+#   'lambda'      : 目标4 - Lambda 整定验证
+#                   常规扰动下用模型辨识+Lambda整定在不同生产场景下验证能否回稳态
+#
+#   'all'         : 运行所有测试并生成汇总报告
+#
+# 向后兼容的旧模式（不推荐使用）:
+#   'default', 'batch', 'model_id'
+#
+TEST_MODE = 'stability'
+
+# SCENARIO 用于 default 模式时选择场景类型（向后兼容）
 SCENARIO = 'oscillation'  # 'oscillation' 或 'normal_disturbance'
 
 
@@ -72,7 +95,7 @@ SCENARIO = 'oscillation'  # 'oscillation' 或 'normal_disturbance'
 # ============================================================
 CONFIG = {
     # Ollama 配置
-    'ollama_model': 'qwen:7b',
+    'ollama_model': 'qwen3-vl:8b',
     'ollama_base_url': 'http://localhost:11434',
     
     # 原始过程模型参数（稳态时）
@@ -382,7 +405,7 @@ def generate_synthetic_data() -> Tuple[List[Dict], Dict, Dict]:
 
 def simulate_with_new_pid(process_params: Dict, pid_params: Dict,
                           sv: float, duration: float = 300, dt: float = 1.0,
-                          error_band_pct: float = 0.05) -> Dict:
+                          error_band_pct: float = 0.05, seed: int = None) -> Dict:
     """用PID参数仿真，计算性能指标
     
     Args:
@@ -392,7 +415,11 @@ def simulate_with_new_pid(process_params: Dict, pid_params: Dict,
         duration: 仿真时长（秒）
         dt: 采样周期（秒）
         error_band_pct: 误差带百分比（默认5%）
+        seed: 随机种子，确保可重复性
     """
+    # 固定随机种子确保可重复性
+    if seed is not None:
+        np.random.seed(seed)
     process = FOPDTProcess(
         K=process_params['K'],
         T1=process_params['T1'],
@@ -1433,11 +1460,653 @@ TEST_SCENARIOS = [
         'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
         'loop_type': 'flow',
     },
+    
+    # ========== 极端挑战场景（测试算法鲁棒性边界）==========
+    {
+        'name': 'Ultra Fast Flow',
+        'description': '超快流量回路 - 极小时间常数',
+        'process_original': {'K': 1.0, 'T1': 3.0, 'L': 0.5},
+        'process_changed': {'K': 2.0, 'T1': 2.0, 'L': 1.5},
+        'original_pid': {'Kp': 8.0, 'Ki': 0.5, 'Kd': 0.0},
+        'loop_type': 'flow',
+    },
+    {
+        'name': 'Very Slow Temperature',
+        'description': '极慢温度回路 - 大时间常数',
+        'process_original': {'K': 0.6, 'T1': 200.0, 'L': 30.0},
+        'process_changed': {'K': 1.0, 'T1': 180.0, 'L': 50.0},
+        'original_pid': {'Kp': 1.5, 'Ki': 0.005, 'Kd': 0.0},
+        'loop_type': 'temperature',
+    },
+    {
+        'name': 'High Noise Flow',
+        'description': '高噪声流量回路 - 测噪声鲁棒性',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 3.0},
+        'process_changed': {'K': 1.8, 'T1': 18.0, 'L': 6.0},
+        'original_pid': {'Kp': 3.0, 'Ki': 0.1, 'Kd': 0.0},
+        'noise_std': 0.8,
+        'loop_type': 'flow',
+    },
+    {
+        'name': 'Extreme Gain Change',
+        'description': '极高增益变化 - K从1变到6',
+        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
+        'process_changed': {'K': 6.0, 'T1': 25.0, 'L': 8.0},
+        'original_pid': {'Kp': 2.5, 'Ki': 0.08, 'Kd': 0.0},
+        'loop_type': 'flow',
+    },
+    {
+        'name': 'Very Large Delay',
+        'description': '极大滞后 - L/T1 接近1',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 5.0},
+        'process_changed': {'K': 1.2, 'T1': 18.0, 'L': 15.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.05, 'Kd': 0.0},
+        'loop_type': 'temperature',
+    },
+    {
+        'name': 'Integrating Level',
+        'description': '积分液位回路 - 大时间常数模拟积分',
+        'process_original': {'K': 0.8, 'T1': 150.0, 'L': 5.0},
+        'process_changed': {'K': 1.2, 'T1': 140.0, 'L': 10.0},
+        'original_pid': {'Kp': 1.0, 'Ki': 0.003, 'Kd': 0.0},
+        'loop_type': 'level',
+    },
+    {
+        'name': 'Reverse Acting Flow',
+        'description': '反向作用流量 - 负增益系统',
+        'process_original': {'K': -1.0, 'T1': 25.0, 'L': 2.0},
+        'process_changed': {'K': -2.0, 'T1': 20.0, 'L': 5.0},
+        'original_pid': {'Kp': -3.0, 'Ki': -0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+    },
+    {
+        'name': 'Fast Pressure Disturbance',
+        'description': '快速压力扰动 - 小时间常数',
+        'process_original': {'K': 1.2, 'T1': 8.0, 'L': 1.0},
+        'process_changed': {'K': 2.5, 'T1': 6.0, 'L': 3.0},
+        'original_pid': {'Kp': 5.0, 'Ki': 0.3, 'Kd': 0.0},
+        'loop_type': 'pressure',
+    },
+    {
+        'name': 'Coupled Temperature',
+        'description': '强耦合温度回路 - 增益和滞后同时变化',
+        'process_original': {'K': 1.0, 'T1': 60.0, 'L': 8.0},
+        'process_changed': {'K': 3.0, 'T1': 40.0, 'L': 20.0},
+        'original_pid': {'Kp': 1.2, 'Ki': 0.015, 'Kd': 0.0},
+        'loop_type': 'temperature',
+    },
+    {
+        'name': 'Low Gain System',
+        'description': '小增益系统 - K < 0.5',
+        'process_original': {'K': 0.3, 'T1': 40.0, 'L': 5.0},
+        'process_changed': {'K': 0.6, 'T1': 35.0, 'L': 10.0},
+        'original_pid': {'Kp': 10.0, 'Ki': 0.2, 'Kd': 0.0},
+        'loop_type': 'flow',
+    },
+    {
+        'name': 'High Gain Temperature',
+        'description': '高增益温度系统 - K > 3',
+        'process_original': {'K': 3.0, 'T1': 50.0, 'L': 5.0},
+        'process_changed': {'K': 5.0, 'T1': 45.0, 'L': 12.0},
+        'original_pid': {'Kp': 0.5, 'Ki': 0.008, 'Kd': 0.0},
+        'loop_type': 'temperature',
+    },
+    {
+        'name': 'Minimal Delay',
+        'description': '极小滞后 - L接近0',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 0.5},
+        'process_changed': {'K': 2.0, 'T1': 18.0, 'L': 2.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.15, 'Kd': 0.0},
+        'loop_type': 'flow',
+    },
 ]
 
 
+# ============================================================
+# 幅度变化场景生成器
+# ============================================================
+
+def generate_amplitude_variations(base_scenario: Dict, 
+                                   amplitude_factors: List[float] = None) -> List[Dict]:
+    """
+    基于一个基础场景生成不同幅度变化的场景变体
+    
+    Args:
+        base_scenario: 基础场景配置
+        amplitude_factors: 幅度因子列表，如 [0.5, 1.0, 1.5, 2.0]
+                          1.0 表示原始变化幅度
+                          0.5 表示变化幅度减半
+                          2.0 表示变化幅度翻倍
+    
+    Returns:
+        场景变体列表
+    """
+    if amplitude_factors is None:
+        amplitude_factors = [0.5, 0.75, 1.0, 1.25, 1.5]
+    
+    variations = []
+    orig = base_scenario['process_original']
+    changed = base_scenario['process_changed']
+    
+    # 计算原始变化量
+    delta_K = changed['K'] - orig['K']
+    delta_T1 = changed['T1'] - orig['T1']
+    delta_L = changed['L'] - orig['L']
+    
+    for factor in amplitude_factors:
+        # 生成新的变化后参数
+        new_changed = {
+            'K': orig['K'] + delta_K * factor,
+            'T1': max(5.0, orig['T1'] + delta_T1 * factor),  # T1 最小 5s
+            'L': max(1.0, orig['L'] + delta_L * factor),     # L 最小 1s
+        }
+        
+        # 确保 K 不为 0 或负数（除非原本就是反向作用）
+        if orig['K'] > 0 and new_changed['K'] <= 0:
+            new_changed['K'] = 0.1
+        
+        variation = {
+            'name': f"{base_scenario['name']} (×{factor})",
+            'description': f"{base_scenario['description']} - 幅度×{factor}",
+            'process_original': orig.copy(),
+            'process_changed': new_changed,
+            'original_pid': base_scenario['original_pid'].copy(),
+            'loop_type': base_scenario.get('loop_type', 'flow'),
+            'noise_std': base_scenario.get('noise_std', 0.2),
+            'amplitude_factor': factor,
+        }
+        variations.append(variation)
+    
+    return variations
+
+
+def generate_all_amplitude_scenarios(base_scenarios: List[Dict] = None,
+                                      selected_names: List[str] = None,
+                                      amplitude_factors: List[float] = None) -> List[Dict]:
+    """
+    为选定的基础场景生成所有幅度变体
+    
+    Args:
+        base_scenarios: 基础场景列表，默认使用 TEST_SCENARIOS
+        selected_names: 要生成变体的场景名称列表，None 表示全部
+        amplitude_factors: 幅度因子列表
+    
+    Returns:
+        所有场景变体的列表
+    """
+    if base_scenarios is None:
+        base_scenarios = TEST_SCENARIOS
+    
+    if amplitude_factors is None:
+        amplitude_factors = [0.5, 0.75, 1.0, 1.25, 1.5]
+    
+    all_variations = []
+    
+    for scenario in base_scenarios:
+        if selected_names is None or scenario['name'] in selected_names:
+            variations = generate_amplitude_variations(scenario, amplitude_factors)
+            all_variations.extend(variations)
+    
+    return all_variations
+
+
+# 预定义的幅度测试场景（选择几个典型场景）
+# ============================================================
+# 工业实际场景测试配置
+# ============================================================
+# 设计原则：
+# 1. 基于实际工业场景的系统变化特点
+# 2. Old PID 参数是针对原系统合理整定的（不是故意激进）
+# 3. 系统变化后 Old PID 会振荡，需要重新整定
+# 4. 幅度变化模拟实际工况波动（如负荷变化、季节变化等）
+
+# 实际工业场景
+REALISTIC_SCENARIOS = [
+    # ========== 流量回路 ==========
+    # 特点：响应快，滞后小，但阀门特性会随时间变化
+    {
+        'name': 'Flow - Valve Stiction',
+        'description': '流量回路 - 阀门粘滞（增益非线性+滞后增加）',
+        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 2.0},
+        'process_changed': {'K': 1.6, 'T1': 22.0, 'L': 8.0},
+        'original_pid': {'Kp': 3.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'flow',
+        # 扩展幅度范围：0.7 ~ 1.4
+        'amplitude_factors': [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4],
+    },
+    {
+        'name': 'Flow - Pump Cavitation',
+        'description': '流量回路 - 泵气蚀（增益下降+响应变慢）',
+        'process_original': {'K': 1.2, 'T1': 20.0, 'L': 1.5},
+        'process_changed': {'K': 1.6, 'T1': 18.0, 'L': 5.0},
+        'original_pid': {'Kp': 3.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
+    },
+    
+    # ========== 温度回路 ==========
+    # 特点：响应慢，滞后大，受换热效率影响
+    {
+        'name': 'Temp - Heat Exchanger Fouling',
+        'description': '温度回路 - 换热器结垢（传热系数下降）',
+        'process_original': {'K': 0.8, 'T1': 50.0, 'L': 10.0},
+        'process_changed': {'K': 1.3, 'T1': 55.0, 'L': 18.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2],
+    },
+    {
+        'name': 'Temp - Ambient Change',
+        'description': '温度回路 - 环境温度变化（季节性）',
+        'process_original': {'K': 0.9, 'T1': 45.0, 'L': 8.0},
+        'process_changed': {'K': 1.3, 'T1': 40.0, 'L': 12.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [0.7, 0.8, 0.85, 0.9, 0.95, 1.0, 1.1, 1.2, 1.3],
+    },
+    
+    # ========== 压力回路 ==========
+    # 特点：响应快，对增益变化敏感
+    {
+        'name': 'Press - Compressor Surge',
+        'description': '压力回路 - 压缩机喘振边界变化',
+        'process_original': {'K': 1.0, 'T1': 15.0, 'L': 1.0},
+        'process_changed': {'K': 1.6, 'T1': 12.0, 'L': 4.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.2, 'Kd': 0.0},
+        'loop_type': 'pressure',
+        'amplitude_factors': [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4],
+    },
+    {
+        'name': 'Press - Upstream Disturbance',
+        'description': '压力回路 - 上游压力波动',
+        'process_original': {'K': 1.2, 'T1': 18.0, 'L': 2.0},
+        'process_changed': {'K': 1.5, 'T1': 15.0, 'L': 5.0},
+        'original_pid': {'Kp': 3.5, 'Ki': 0.15, 'Kd': 0.0},
+        'loop_type': 'pressure',
+        'amplitude_factors': [0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2],
+    },
+    
+    # ========== 液位回路 ==========
+    # 特点：积分特性，对滞后敏感
+    {
+        'name': 'Level - Tank Geometry',
+        'description': '液位回路 - 储罐液面形状变化（锥形底）',
+        'process_original': {'K': 1.0, 'T1': 40.0, 'L': 5.0},
+        'process_changed': {'K': 1.5, 'T1': 35.0, 'L': 10.0},
+        'original_pid': {'Kp': 4.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'level',
+        'amplitude_factors': [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
+    },
+    {
+        'name': 'Level - Outflow Change',
+        'description': '液位回路 - 出口流量变化（下游负荷）',
+        'process_original': {'K': 1.0, 'T1': 35.0, 'L': 4.0},
+        'process_changed': {'K': 1.4, 'T1': 38.0, 'L': 9.0},
+        'original_pid': {'Kp': 4.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'level',
+        'amplitude_factors': [0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2],
+    },
+    
+    # ========== 极端挑战场景 ==========
+    # 专门测试算法鲁棒性的边界情况
+    
+    # 1. 极快系统（响应时间 < 5s）
+    {
+        'name': 'Ultra Fast Flow',
+        'description': '超快流量回路 - 极小时间常数',
+        'process_original': {'K': 1.0, 'T1': 3.0, 'L': 0.5},
+        'process_changed': {'K': 2.0, 'T1': 2.0, 'L': 1.5},
+        'original_pid': {'Kp': 8.0, 'Ki': 0.5, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 2. 极慢系统（响应时间 > 200s）
+    {
+        'name': 'Very Slow Temperature',
+        'description': '极慢温度回路 - 大时间常数',
+        'process_original': {'K': 0.6, 'T1': 200.0, 'L': 30.0},
+        'process_changed': {'K': 1.0, 'T1': 180.0, 'L': 50.0},
+        'original_pid': {'Kp': 1.5, 'Ki': 0.005, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 3. 高噪声环境
+    {
+        'name': 'High Noise Flow',
+        'description': '高噪声流量回路 - 测噪声鲁棒性',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 3.0},
+        'process_changed': {'K': 1.8, 'T1': 18.0, 'L': 6.0},
+        'original_pid': {'Kp': 3.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'noise_std': 0.8,  # 高噪声
+        'amplitude_factors': [1.0],
+    },
+    
+    # 4. 极高增益变化（5倍以上）
+    {
+        'name': 'Extreme Gain Change',
+        'description': '极高增益变化 - K从1变到6',
+        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
+        'process_changed': {'K': 6.0, 'T1': 25.0, 'L': 8.0},
+        'original_pid': {'Kp': 2.5, 'Ki': 0.08, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 5. 极大滞后（L/T1 > 0.5）
+    {
+        'name': 'Very Large Delay',
+        'description': '极大滞后 - L/T1 接近1',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 5.0},
+        'process_changed': {'K': 1.2, 'T1': 18.0, 'L': 15.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.05, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 6. 积分过程（液位）
+    {
+        'name': 'Integrating Level',
+        'description': '积分液位回路 - 大时间常数模拟积分',
+        'process_original': {'K': 0.8, 'T1': 150.0, 'L': 5.0},
+        'process_changed': {'K': 1.2, 'T1': 140.0, 'L': 10.0},
+        'original_pid': {'Kp': 1.0, 'Ki': 0.003, 'Kd': 0.0},
+        'loop_type': 'level',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 7. 反向作用（负增益）
+    {
+        'name': 'Reverse Acting Flow',
+        'description': '反向作用流量 - 负增益系统',
+        'process_original': {'K': -1.0, 'T1': 25.0, 'L': 2.0},
+        'process_changed': {'K': -2.0, 'T1': 20.0, 'L': 5.0},
+        'original_pid': {'Kp': -3.0, 'Ki': -0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 8. 压力回路 - 快速扰动
+    {
+        'name': 'Fast Pressure Disturbance',
+        'description': '快速压力扰动 - 小时间常数',
+        'process_original': {'K': 1.2, 'T1': 8.0, 'L': 1.0},
+        'process_changed': {'K': 2.5, 'T1': 6.0, 'L': 3.0},
+        'original_pid': {'Kp': 5.0, 'Ki': 0.3, 'Kd': 0.0},
+        'loop_type': 'pressure',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 9. 温度回路 - 强耦合
+    {
+        'name': 'Coupled Temperature',
+        'description': '强耦合温度回路 - 增益和滞后同时变化',
+        'process_original': {'K': 1.0, 'T1': 60.0, 'L': 8.0},
+        'process_changed': {'K': 3.0, 'T1': 40.0, 'L': 20.0},
+        'original_pid': {'Kp': 1.2, 'Ki': 0.015, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 10. 小增益系统
+    {
+        'name': 'Low Gain System',
+        'description': '小增益系统 - K < 0.5',
+        'process_original': {'K': 0.3, 'T1': 40.0, 'L': 5.0},
+        'process_changed': {'K': 0.6, 'T1': 35.0, 'L': 10.0},
+        'original_pid': {'Kp': 10.0, 'Ki': 0.2, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 11. 高增益系统
+    {
+        'name': 'High Gain Temperature',
+        'description': '高增益温度系统 - K > 3',
+        'process_original': {'K': 3.0, 'T1': 50.0, 'L': 5.0},
+        'process_changed': {'K': 5.0, 'T1': 45.0, 'L': 12.0},
+        'original_pid': {'Kp': 0.5, 'Ki': 0.008, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 12. 边界条件 - 极小滞后
+    {
+        'name': 'Minimal Delay',
+        'description': '极小滞后 - L接近0',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 0.5},
+        'process_changed': {'K': 2.0, 'T1': 18.0, 'L': 2.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.15, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+]
+
+
+def generate_realistic_amplitude_scenarios() -> List[Dict]:
+    """
+    生成贴合实际的幅度变化场景
+    每个场景使用自己定义的幅度因子范围
+    """
+    all_scenarios = []
+    
+    for base in REALISTIC_SCENARIOS:
+        factors = base.get('amplitude_factors', [0.9, 1.0, 1.1])
+        
+        for factor in factors:
+            # 计算变化后的参数
+            orig = base['process_original']
+            changed = base['process_changed']
+            
+            # 幅度因子作用于变化量
+            delta_K = changed['K'] - orig['K']
+            delta_T1 = changed['T1'] - orig['T1']
+            delta_L = changed['L'] - orig['L']
+            
+            new_changed = {
+                'K': orig['K'] + delta_K * factor,
+                'T1': orig['T1'] + delta_T1 * factor,
+                'L': orig['L'] + delta_L * factor,
+            }
+            
+            # 确保参数合理
+            new_changed['K'] = max(0.1, new_changed['K'])
+            new_changed['T1'] = max(5.0, new_changed['T1'])
+            new_changed['L'] = max(0.5, new_changed['L'])
+            
+            scenario = {
+                'name': f"{base['name']} (×{factor})",
+                'description': f"{base['description']} - 幅度×{factor}",
+                'process_original': orig.copy(),
+                'process_changed': new_changed,
+                'original_pid': base['original_pid'].copy(),
+                'loop_type': base.get('loop_type', 'flow'),
+                'noise_std': base.get('noise_std', 0.2),
+                'amplitude_factor': factor,
+            }
+            all_scenarios.append(scenario)
+    
+    return all_scenarios
+
+
+# 使用新的生成函数
+AMPLITUDE_TEST_SCENARIOS = generate_realistic_amplitude_scenarios()
+
+
+# ============================================================
+# 模型辨识测试场景（非振荡，MV阶跃响应）
+# ============================================================
+# 设计原则：
+# 1. 系统有MV阶跃变化，PV有响应但不振荡
+# 2. 适合用模型辨识（FOPDT拟合）进行整定
+# 3. 测试Lambda整定的效果
+
+MODEL_ID_SCENARIOS = [
+    # ========== 流量回路 ==========
+    {
+        'name': 'Flow - Step Response',
+        'description': '流量回路 - MV阶跃响应测试',
+        'process': {'K': 1.0, 'T1': 25.0, 'L': 3.0},
+        'pid': {'Kp': 0.8, 'Ki': 0.03, 'Kd': 0.0},  # 保守PID，不会振荡
+        'mv_step': 10.0,  # MV阶跃幅度
+        'loop_type': 'flow',
+    },
+    {
+        'name': 'Flow - Large Step',
+        'description': '流量回路 - 大幅MV阶跃',
+        'process': {'K': 1.2, 'T1': 20.0, 'L': 2.0},
+        'pid': {'Kp': 0.6, 'Ki': 0.02, 'Kd': 0.0},
+        'mv_step': 20.0,
+        'loop_type': 'flow',
+    },
+    
+    # ========== 温度回路 ==========
+    {
+        'name': 'Temp - Slow Response',
+        'description': '温度回路 - 慢速阶跃响应',
+        'process': {'K': 0.8, 'T1': 60.0, 'L': 10.0},
+        'pid': {'Kp': 0.5, 'Ki': 0.01, 'Kd': 0.0},
+        'mv_step': 15.0,
+        'loop_type': 'temperature',
+    },
+    {
+        'name': 'Temp - High Gain',
+        'description': '温度回路 - 高增益系统',
+        'process': {'K': 1.5, 'T1': 50.0, 'L': 8.0},
+        'pid': {'Kp': 0.4, 'Ki': 0.01, 'Kd': 0.0},
+        'mv_step': 10.0,
+        'loop_type': 'temperature',
+    },
+    
+    # ========== 压力回路 ==========
+    {
+        'name': 'Press - Fast Response',
+        'description': '压力回路 - 快速阶跃响应',
+        'process': {'K': 1.0, 'T1': 15.0, 'L': 1.5},
+        'pid': {'Kp': 0.8, 'Ki': 0.04, 'Kd': 0.0},
+        'mv_step': 12.0,
+        'loop_type': 'pressure',
+    },
+    {
+        'name': 'Press - Large Delay',
+        'description': '压力回路 - 大滞后系统',
+        'process': {'K': 1.0, 'T1': 18.0, 'L': 5.0},
+        'pid': {'Kp': 0.5, 'Ki': 0.02, 'Kd': 0.0},
+        'mv_step': 15.0,
+        'loop_type': 'pressure',
+    },
+    
+    # ========== 液位回路 ==========
+    {
+        'name': 'Level - Normal Response',
+        'description': '液位回路 - 正常阶跃响应',
+        'process': {'K': 1.0, 'T1': 40.0, 'L': 5.0},
+        'pid': {'Kp': 0.6, 'Ki': 0.02, 'Kd': 0.0},
+        'mv_step': 12.0,
+        'loop_type': 'level',
+    },
+    {
+        'name': 'Level - Integrating',
+        'description': '液位回路 - 积分特性',
+        'process': {'K': 0.8, 'T1': 50.0, 'L': 4.0},
+        'pid': {'Kp': 0.5, 'Ki': 0.015, 'Kd': 0.0},
+        'mv_step': 10.0,
+        'loop_type': 'level',
+    },
+]
+
+
+def generate_step_response_scenario_data(scenario: Dict) -> Tuple[List[Dict], Dict]:
+    """
+    生成MV阶跃响应数据（用于模型辨识测试）
+    
+    数据结构：稳态 → MV阶跃（开环）→ PV响应 → 保持
+    
+    关键：这是开环阶跃测试，MV直接变化，不经过PID控制
+    这样PV响应是纯粹的过程响应，没有振荡，适合模型辨识
+    """
+    dt = 1.0
+    sv = 50.0
+    noise_std = scenario.get('noise_std', 0.1)  # 降低噪声
+    
+    process_params = scenario['process']
+    mv_step = scenario.get('mv_step', 10.0)
+    
+    process = FOPDTProcess(
+        K=process_params['K'],
+        T1=process_params['T1'],
+        L=process_params['L'],
+        dt=dt
+    )
+    
+    # 计算稳态MV（使PV=SV）
+    K = process_params['K']
+    mv_ss = sv / K if abs(K) > 0.001 else sv
+    
+    # 初始化过程
+    process.reset(pv_initial=sv)
+    
+    # 时间配置
+    steady_steps = 100       # 稳态段（较短）
+    step_duration = 200      # MV阶跃持续时间（开环）
+    hold_steps = 300         # 保持段（观察响应）
+    total_steps = steady_steps + step_duration + hold_steps
+    
+    start_time = datetime.now() - timedelta(seconds=total_steps * dt)
+    history_data = []
+    step_time = None
+    pv = sv
+    
+    for step in range(total_steps):
+        current_time = start_time + timedelta(seconds=step * dt)
+        timestamp = int(current_time.timestamp() * 1000)
+        
+        if step < steady_steps:
+            # 稳态段：MV保持稳态值
+            mv = mv_ss
+        elif step < steady_steps + step_duration:
+            # MV阶跃段：开环，MV直接增加
+            if step == steady_steps:
+                step_time = timestamp
+            mv = mv_ss + mv_step
+        else:
+            # 保持段：MV保持阶跃后的值
+            mv = mv_ss + mv_step
+        
+        # 限制MV范围
+        mv = np.clip(mv, 0, 100)
+        
+        # 过程响应
+        pv = process.step(mv)
+        pv_noisy = pv + np.random.normal(0, noise_std)
+        
+        history_data.append({
+            'timestamp': timestamp,
+            'pv': round(pv_noisy, 2),
+            'sv': round(sv, 2),
+            'mv': round(mv, 2),
+        })
+    
+    metadata = {
+        'process': process_params,
+        'pid': scenario.get('pid', {}),
+        'change_time': step_time,
+        'sv': sv,
+        'scenario_type': 'model_identification',
+        'mv_step': mv_step,
+    }
+    
+    return history_data, metadata
+
+
 def generate_scenario_data(scenario: Dict) -> Tuple[List[Dict], Dict]:
-    """根据场景配置生成数据（支持正向和反向作用系统）"""
+    # 固定随机种子，确保每次运行结果一致
+    # 使用场景名称的哈希值作为种子，这样不同场景有不同但可重复的随机序列
+    seed = hash(scenario['name']) % (2**32)
+    np.random.seed(seed)
+    
     dt = 1.0
     sv = 50.0
     noise_std = scenario.get('noise_std', 0.2)
@@ -1723,11 +2392,12 @@ ti_multiplier:    {strategy.get('ti_multiplier', 'N/A')}
     
     plt.tight_layout()
     
-    # 保存图片
-    os.makedirs(CONFIG['output_dir'], exist_ok=True)
+    # 保存图片到 stability 子目录
+    stability_dir = os.path.join(CONFIG['output_dir'], 'stability')
+    os.makedirs(stability_dir, exist_ok=True)
     safe_name = scenario['name'].replace(' ', '_').replace('/', '_')
     filename = f'scenario_{scenario_idx:02d}_{safe_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
-    filepath = os.path.join(CONFIG['output_dir'], filename)
+    filepath = os.path.join(stability_dir, filename)
     plt.savefig(filepath, dpi=150, bbox_inches='tight')
     print(f"   📊 Scenario chart saved: {filepath}")
     plt.close()
@@ -2134,9 +2804,1029 @@ def visualize_batch_results(results: List[Dict]):
     plt.close()
 
 
+def run_amplitude_test():
+    """运行幅度变化测试"""
+    print("=" * 70)
+    print("AMPLITUDE VARIATION TEST")
+    print("Testing same scenarios with different change magnitudes")
+    print("=" * 70)
+    
+    # 使用预定义的幅度测试场景
+    scenarios = AMPLITUDE_TEST_SCENARIOS
+    print(f"\n📊 Total scenarios: {len(scenarios)}")
+    
+    # 按基础场景分组显示
+    base_names = set()
+    for s in scenarios:
+        # 提取基础场景名（去掉幅度后缀）
+        base_name = s['name'].rsplit(' (×', 1)[0]
+        base_names.add(base_name)
+    
+    print(f"📊 Base scenarios: {len(base_names)}")
+    for name in sorted(base_names):
+        print(f"   - {name}")
+    
+    # 运行测试（复用 batch test 逻辑）
+    results = []
+    
+    # 检查 Ollama
+    try:
+        ollama_client = OllamaClient(
+            model=CONFIG['ollama_model'],
+            base_url=CONFIG['ollama_base_url']
+        )
+        ollama_client.chat("test")
+        print(f"\n📡 Ollama connected (model: {CONFIG['ollama_model']})")
+    except Exception as e:
+        print(f"\n⚠️ Ollama not available: {e}")
+        print("   Running Rule Engine only mode")
+        ollama_client = None
+    
+    for i, scenario in enumerate(scenarios):
+        print(f"\n{'='*70}")
+        print(f"Scenario {i+1}/{len(scenarios)}: {scenario['name']}")
+        print(f"Description: {scenario['description']}")
+        print(f"Process: K={scenario['process_changed']['K']}, "
+              f"T1={scenario['process_changed']['T1']}, L={scenario['process_changed']['L']}")
+        print("=" * 70)
+        
+        try:
+            # 生成数据
+            data, metadata = generate_scenario_data(scenario)
+            
+            # 检测扰动窗口
+            change_time = metadata['change_time']
+            end_time = data[-1]['timestamp']
+            qualified_windows = [{'start_time': change_time, 'end_time': end_time}]
+            
+            # Rule Engine 整定
+            print("   🔧 Rule Engine tuning...")
+            Config.OSCILLATION_TUNING['enable_llm'] = False
+            selector_rule = ModelSelector(verbose=False)
+            result_rule = selector_rule.run({
+                'history_data': data,
+                'params': {},
+                'qualified_windows': qualified_windows,
+            })
+            pid_rule = result_rule.get('pid_parameters', {})
+            
+            # LLM 整定
+            if ollama_client:
+                print("   🤖 LLM tuning...")
+                Config.OSCILLATION_TUNING['enable_llm'] = True
+                selector_llm = ModelSelector(
+                    verbose=False,
+                    llm_client=ollama_client,
+                    process_context={'loop_type': scenario.get('loop_type', 'flow')}
+                )
+                result_llm = selector_llm.run({
+                    'history_data': data,
+                    'params': {},
+                    'qualified_windows': qualified_windows,
+                })
+                pid_llm = result_llm.get('pid_parameters', {})
+            else:
+                pid_llm = pid_rule
+            
+            # 根据回路类型选择仿真时长（慢系统需要更长时间）
+            loop_type = scenario.get('loop_type', 'flow')
+            if loop_type == 'temperature':
+                sim_duration = 600  # 温度回路：600s
+            elif loop_type == 'level':
+                sim_duration = 500  # 液位回路：500s
+            else:
+                sim_duration = 300  # 流量/压力回路：300s
+            
+            # 仿真对比
+            sim_old = simulate_with_new_pid(
+                scenario['process_changed'],
+                scenario['original_pid'],
+                metadata['sv'],
+                duration=sim_duration
+            )
+            sim_rule = simulate_with_new_pid(
+                scenario['process_changed'],
+                {'Kp': pid_rule.get('kp', 1), 'Ki': pid_rule.get('ki', 0), 'Kd': pid_rule.get('kd', 0)},
+                metadata['sv'],
+                duration=sim_duration
+            )
+            sim_llm = simulate_with_new_pid(
+                scenario['process_changed'],
+                {'Kp': pid_llm.get('kp', 1), 'Ki': pid_llm.get('ki', 0), 'Kd': pid_llm.get('kd', 0)},
+                metadata['sv'],
+                duration=sim_duration
+            )
+            
+            # 记录结果
+            results.append({
+                'scenario': scenario['name'],
+                'base_scenario': scenario['name'].rsplit(' (×', 1)[0],
+                'amplitude_factor': scenario.get('amplitude_factor', 1.0),
+                'old_stable': sim_old['is_stable'],
+                'old_ts': sim_old['settling_time'],
+                'rule_stable': sim_rule['is_stable'],
+                'rule_ts': sim_rule['settling_time'],
+                'rule_pb': pid_rule.get('pb', 0),
+                'llm_stable': sim_llm['is_stable'],
+                'llm_ts': sim_llm['settling_time'],
+                'llm_pb': pid_llm.get('pb', 0),
+            })
+            
+            status_old = "✓" if sim_old['is_stable'] else "✗"
+            status_rule = "✓" if sim_rule['is_stable'] else "✗"
+            status_llm = "✓" if sim_llm['is_stable'] else "✗"
+            
+            print(f"   Old PID:     {status_old} Ts={sim_old['settling_time']:.0f}s")
+            print(f"   Rule Engine: {status_rule} Ts={sim_rule['settling_time']:.0f}s, pb={pid_rule.get('pb', 0):.1f}%")
+            print(f"   LLM:         {status_llm} Ts={sim_llm['settling_time']:.0f}s, pb={pid_llm.get('pb', 0):.1f}%")
+            
+        except Exception as e:
+            print(f"   ❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # 打印汇总
+    print("\n" + "=" * 90)
+    print("AMPLITUDE TEST SUMMARY")
+    print("=" * 90)
+    
+    # 按基础场景分组统计
+    from collections import defaultdict
+    grouped = defaultdict(list)
+    for r in results:
+        grouped[r['base_scenario']].append(r)
+    
+    print(f"\n{'Base Scenario':<30} {'Factor':<8} {'Old':<8} {'Rule':<12} {'LLM':<12}")
+    print("-" * 90)
+    
+    for base_name in sorted(grouped.keys()):
+        group = sorted(grouped[base_name], key=lambda x: x['amplitude_factor'])
+        for r in group:
+            old_status = "✓" if r['old_stable'] else "✗"
+            rule_status = f"✓ {r['rule_ts']:.0f}s" if r['rule_stable'] else "✗"
+            llm_status = f"✓ {r['llm_ts']:.0f}s" if r['llm_stable'] else "✗"
+            
+            print(f"{r['base_scenario']:<30} ×{r['amplitude_factor']:<6.2f} "
+                  f"{old_status:<8} {rule_status:<12} {llm_status:<12}")
+    
+    # 统计成功率
+    total = len(results)
+    rule_success = sum(1 for r in results if r['rule_stable'])
+    llm_success = sum(1 for r in results if r['llm_stable'])
+    
+    print("-" * 90)
+    print(f"\nSuccess Rate:")
+    print(f"   Rule Engine: {rule_success}/{total} ({rule_success/total*100:.1f}%)")
+    print(f"   LLM:         {llm_success}/{total} ({llm_success/total*100:.1f}%)")
+    
+    print("\n✅ Amplitude test completed!")
+
+
+def run_model_id_test():
+    """运行模型辨识测试（非振荡场景，MV阶跃响应）
+    
+    测试场景：系统有MV阶跃变化，PV有响应但不振荡
+    整定方法：应该使用模型辨识（FOPDT拟合）+ Lambda整定
+    """
+    print("=" * 70)
+    print("MODEL IDENTIFICATION TEST")
+    print("Testing step response scenarios (non-oscillating)")
+    print("Expected: Lambda tuning (模型辨识整定), NOT critical method (临界法)")
+    print("=" * 70)
+    
+    scenarios = MODEL_ID_SCENARIOS
+    print(f"\n📊 Total scenarios: {len(scenarios)}")
+    
+    results = []
+    
+    for i, scenario in enumerate(scenarios):
+        print(f"\n{'='*70}")
+        print(f"Scenario {i+1}/{len(scenarios)}: {scenario['name']}")
+        print(f"Description: {scenario['description']}")
+        print(f"Process: K={scenario['process']['K']}, T1={scenario['process']['T1']}, L={scenario['process']['L']}")
+        print(f"MV Step: {scenario.get('mv_step', 10.0)}")
+        print("=" * 70)
+        
+        try:
+            # 生成阶跃响应数据
+            data, metadata = generate_step_response_scenario_data(scenario)
+            
+            # 设置扰动窗口：从阶跃前50点开始，包含完整的阶跃变化
+            change_time = metadata['change_time']
+            start_time = data[0]['timestamp']  # 从数据开始
+            end_time = data[-1]['timestamp']
+            
+            # 窗口需要包含MV阶跃变化，所以从阶跃前开始
+            # 阶跃发生在第100点，窗口从第50点开始
+            window_start_idx = 50
+            window_start_time = data[window_start_idx]['timestamp']
+            qualified_windows = [{'start_time': window_start_time, 'end_time': end_time}]
+            
+            # 运行整定（不启用LLM，因为LLM只用于临界法）
+            print("   🔧 Running model identification tuning...")
+            Config.OSCILLATION_TUNING['enable_llm'] = False
+            selector = ModelSelector(verbose=True)
+            result = selector.run({
+                'history_data': data,
+                'params': {},
+                'qualified_windows': qualified_windows,
+            })
+            
+            # 获取整定结果
+            pid_new = result.get('pid_parameters', {})
+            model_params = result.get('model_parameters', {})
+            fusion_info = result.get('fusion_info', {})
+            tuning_method = fusion_info.get('method', 'unknown')
+            
+            # 检查是否使用了正确的整定方法
+            # Lambda整定 = 模型辨识 + Lambda公式，方法名通常是 best_window, weighted_average 等
+            # 临界法整定 = 振荡数据 + Z-N公式，方法名包含 oscillation
+            is_oscillation_tuning = 'oscillation' in tuning_method.lower() or 'critical' in tuning_method.lower()
+            is_model_based_tuning = not is_oscillation_tuning  # 非临界法就是模型辨识法
+            
+            print(f"\n   📋 Tuning Method: {tuning_method}")
+            if is_model_based_tuning:
+                print(f"   ✅ Correct: Using Model-based tuning (Lambda)")
+            else:
+                print(f"   ⚠️ Warning: Using oscillation/critical tuning (should be Model-based)")
+            
+            # 模型辨识精度
+            true_K = scenario['process']['K']
+            true_T1 = scenario['process']['T1']
+            true_L = scenario['process']['L']
+            
+            id_K = model_params.get('K', 0)
+            id_T1 = model_params.get('T1', 0)
+            id_L = model_params.get('L', model_params.get('delay', 0))
+            
+            K_error = abs(id_K - true_K) / true_K * 100 if true_K != 0 else 0
+            T1_error = abs(id_T1 - true_T1) / true_T1 * 100 if true_T1 != 0 else 0
+            L_error = abs(id_L - true_L) / true_L * 100 if true_L != 0 else 0
+            
+            print(f"\n   📊 Model Identification Accuracy:")
+            print(f"      K:  True={true_K:.2f}, Identified={id_K:.2f}, Error={K_error:.1f}%")
+            print(f"      T1: True={true_T1:.1f}s, Identified={id_T1:.1f}s, Error={T1_error:.1f}%")
+            print(f"      L:  True={true_L:.1f}s, Identified={id_L:.1f}s, Error={L_error:.1f}%")
+            
+            # 仿真验证
+            sim_duration = 400
+            if scenario.get('loop_type') == 'temperature':
+                sim_duration = 600
+            elif scenario.get('loop_type') == 'level':
+                sim_duration = 500
+            
+            # Old PID 仿真
+            sim_old = simulate_with_new_pid(
+                scenario['process'],
+                scenario['pid'],
+                metadata['sv'],
+                duration=sim_duration
+            )
+            
+            # New PID 仿真
+            sim_new = simulate_with_new_pid(
+                scenario['process'],
+                {'Kp': pid_new.get('kp', 1), 'Ki': pid_new.get('ki', 0), 'Kd': pid_new.get('kd', 0)},
+                metadata['sv'],
+                duration=sim_duration
+            )
+            
+            print(f"\n   📈 Simulation Results:")
+            print(f"      Old PID: Stable={sim_old['is_stable']}, Ts={sim_old['settling_time']:.0f}s, OS={sim_old['overshoot']:.1f}%")
+            print(f"      New PID: Stable={sim_new['is_stable']}, Ts={sim_new['settling_time']:.0f}s, OS={sim_new['overshoot']:.1f}%")
+            print(f"      New PID params: pb={pid_new.get('pb', 'N/A')}%, Kp={pid_new.get('kp', 0):.4f}, Ki={pid_new.get('ki', 0):.4f}")
+            
+            # 判断是否改进
+            improved = False
+            if sim_new['is_stable'] and sim_old['is_stable']:
+                if sim_new['settling_time'] < sim_old['settling_time'] * 0.9:
+                    improved = True
+                    print(f"   ✅ Improved: Settling time reduced by {(sim_old['settling_time'] - sim_new['settling_time']) / sim_old['settling_time'] * 100:.0f}%")
+                elif sim_new['settling_time'] <= sim_old['settling_time'] * 1.1:
+                    improved = True
+                    print(f"   ✅ Similar performance (within 10%)")
+                else:
+                    print(f"   ⚠️ Performance degraded")
+            elif sim_new['is_stable'] and not sim_old['is_stable']:
+                improved = True
+                print(f"   ✅ Improved: New PID stabilized the system")
+            elif not sim_new['is_stable']:
+                print(f"   ❌ Failed: New PID is unstable")
+            
+            results.append({
+                'scenario': scenario['name'],
+                'loop_type': scenario.get('loop_type', 'flow'),
+                'tuning_method': tuning_method,
+                'is_model_based': is_model_based_tuning,
+                'K_error': K_error,
+                'T1_error': T1_error,
+                'L_error': L_error,
+                'old_stable': sim_old['is_stable'],
+                'old_ts': sim_old['settling_time'],
+                'new_stable': sim_new['is_stable'],
+                'new_ts': sim_new['settling_time'],
+                'new_pb': pid_new.get('pb', 0),
+                'improved': improved,
+            })
+            
+        except Exception as e:
+            print(f"   ❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            results.append({
+                'scenario': scenario['name'],
+                'error': str(e),
+            })
+    
+    # 打印汇总
+    print("\n" + "=" * 100)
+    print("MODEL IDENTIFICATION TEST SUMMARY")
+    print("=" * 100)
+    
+    print(f"\n{'Scenario':<25} {'Method':<20} {'K Err':<8} {'T1 Err':<8} {'L Err':<8} {'Old Ts':<8} {'New Ts':<8} {'Result':<10}")
+    print("-" * 100)
+    
+    model_based_count = 0
+    success_count = 0
+    total_valid = 0
+    
+    for r in results:
+        if 'error' in r:
+            print(f"{r['scenario']:<25} ERROR: {r['error']}")
+            continue
+        
+        total_valid += 1
+        if r['is_model_based']:
+            model_based_count += 1
+        if r['improved']:
+            success_count += 1
+        
+        method_short = r['tuning_method'][:18] if len(r['tuning_method']) > 18 else r['tuning_method']
+        result_str = "✅ OK" if r['improved'] else "❌ Fail"
+        
+        print(f"{r['scenario']:<25} {method_short:<20} {r['K_error']:<8.1f} {r['T1_error']:<8.1f} {r['L_error']:<8.1f} "
+              f"{r['old_ts']:<8.0f} {r['new_ts']:<8.0f} {result_str:<10}")
+    
+    print("-" * 100)
+    print(f"\nSummary:")
+    print(f"   Total scenarios: {len(results)}")
+    print(f"   Model-based tuning (Lambda): {model_based_count}/{total_valid} ({model_based_count/total_valid*100:.0f}%)" if total_valid > 0 else "   No valid results")
+    print(f"   Oscillation tuning (Critical): {total_valid - model_based_count}/{total_valid} ({(total_valid - model_based_count)/total_valid*100:.0f}%)" if total_valid > 0 else "")
+    print(f"   Success rate: {success_count}/{total_valid} ({success_count/total_valid*100:.0f}%)" if total_valid > 0 else "")
+    
+    # 模型辨识精度统计
+    if total_valid > 0:
+        avg_K_err = np.mean([r['K_error'] for r in results if 'K_error' in r])
+        avg_T1_err = np.mean([r['T1_error'] for r in results if 'T1_error' in r])
+        avg_L_err = np.mean([r['L_error'] for r in results if 'L_error' in r])
+        print(f"\n   Average Model ID Error:")
+        print(f"      K:  {avg_K_err:.1f}%")
+        print(f"      T1: {avg_T1_err:.1f}%")
+        print(f"      L:  {avg_L_err:.1f}%")
+    
+    print("\n✅ Model identification test completed!")
+    return results
+
+
+# ============================================================
+# 目标1: 振荡场景稳态验证 (run_stability_test)
+# ============================================================
+def run_stability_test():
+    """目标1: 振荡场景稳态验证
+    
+    验证现有算法和LLM+算法能否在不同生产振荡场景中让控制器达到稳态
+    """
+    print("=" * 80)
+    print("目标1: 振荡场景稳态验证")
+    print("验证现有算法和LLM+算法能否在不同生产振荡场景中让控制器达到稳态")
+    print("=" * 80)
+    
+    # 检查 LLM 连接
+    print("\n📡 检查 Ollama 连接...")
+    llm_available = False
+    try:
+        llm_client = OllamaClient(
+            model=CONFIG['ollama_model'],
+            base_url=CONFIG['ollama_base_url']
+        )
+        llm_client.chat("test")
+        print(f"   ✅ Ollama 连接成功 (模型: {CONFIG['ollama_model']})")
+        llm_available = True
+    except Exception as e:
+        print(f"   ⚠️ Ollama 连接失败: {e}")
+        print("   将只测试规则引擎模式")
+    
+    # 使用振荡场景
+    scenarios = TEST_SCENARIOS
+    print(f"\n📊 测试场景总数: {len(scenarios)}")
+    
+    results = []
+    rule_stable_count = 0
+    llm_stable_count = 0
+    
+    for idx, scenario in enumerate(scenarios, 1):
+        print(f"\n{'─'*70}")
+        print(f"场景 {idx}/{len(scenarios)}: {scenario['name']}")
+        print(f"描述: {scenario['description']}")
+        print("─" * 70)
+        
+        try:
+            # 生成振荡数据
+            data, metadata = generate_scenario_data(scenario)
+            
+            # 检测扰动窗口
+            change_time = metadata['change_time']
+            end_time = data[-1]['timestamp']
+            qualified_windows = [{'start_time': change_time, 'end_time': end_time}]
+            
+            input_data = {
+                'history_data': data,
+                'params': {},
+                'qualified_windows': qualified_windows,
+            }
+            
+            # 获取变化后的过程参数用于仿真
+            process_changed = scenario['process_changed']
+            sv = metadata['sv']
+            
+            # 动态仿真时长：极慢系统需要更长时间
+            T1_changed = process_changed.get('T1', 30)
+            sim_duration = max(400, int(T1_changed * 3))  # 至少 3 倍时间常数
+            
+            # ===== 规则引擎整定 =====
+            print("   🔧 规则引擎整定...")
+            Config.OSCILLATION_TUNING['enable_llm'] = False
+            selector_rule = ModelSelector(verbose=False)
+            result_rule = selector_rule.run(input_data)
+            pid_rule = result_rule.get('pid_parameters', {})
+            
+            # 仿真规则引擎参数（使用固定种子确保可重复）
+            sim_seed = hash(scenario['name']) % (2**32) + 1  # +1 区分规则引擎
+            sim_rule = simulate_with_new_pid(process_changed, pid_rule, sv, duration=sim_duration, seed=sim_seed)
+            rule_stable = sim_rule['is_stable']
+            if rule_stable:
+                rule_stable_count += 1
+            print(f"      稳态: {'✅ 是' if rule_stable else '❌ 否'} (Ts={sim_rule['settling_time']:.0f}s)")
+            
+            # ===== LLM + 规则引擎整定 =====
+            llm_stable = None
+            sim_llm = None
+            pid_llm = None
+            if llm_available:
+                print("   🤖 LLM + 规则引擎整定...")
+                Config.OSCILLATION_TUNING['enable_llm'] = True
+                loop_type = scenario.get('loop_type', 'flow')
+                # 重要：必须传入 llm_client 才能真正使用 LLM
+                selector_llm = ModelSelector(
+                    verbose=False,
+                    llm_client=llm_client,
+                    process_context={'loop_type': loop_type, 'loop_name': scenario['name']}
+                )
+                result_llm = selector_llm.run(input_data)
+                pid_llm = result_llm.get('pid_parameters', {})
+                
+                sim_llm = simulate_with_new_pid(process_changed, pid_llm, sv, duration=sim_duration, seed=sim_seed+1)  # +1 区分LLM
+                llm_stable = sim_llm['is_stable']
+                if llm_stable:
+                    llm_stable_count += 1
+                print(f"      稳态: {'✅ 是' if llm_stable else '❌ 否'} (Ts={sim_llm['settling_time']:.0f}s)")
+            
+            results.append({
+                'scenario': scenario['name'],
+                'loop_type': scenario.get('loop_type', 'unknown'),
+                'rule_stable': rule_stable,
+                'rule_ts': sim_rule['settling_time'],
+                'rule_overshoot': sim_rule.get('overshoot', 0),
+                'llm_stable': llm_stable,
+                'llm_ts': sim_llm['settling_time'] if sim_llm else None,
+                'llm_overshoot': sim_llm.get('overshoot', 0) if sim_llm else None,
+            })
+            
+            # ===== 生成可视化图表 =====
+            print("   📊 生成可视化图表...")
+            
+            # 仿真老PID参数（在变化后的系统上）
+            pid_old = scenario['original_pid']
+            sim_old = simulate_with_new_pid(process_changed, pid_old, sv, duration=300)
+            
+            # 如果没有LLM结果，用规则引擎结果替代
+            if sim_llm is None:
+                sim_llm = sim_rule
+                pid_llm = pid_rule
+            
+            # 确定获胜者
+            rule_better = sim_rule['settling_time'] < sim_llm['settling_time'] if sim_llm else True
+            if rule_stable and (not llm_stable if llm_stable is not None else False):
+                winner = 'Rule'
+            elif llm_stable and not rule_stable:
+                winner = 'LLM'
+            elif rule_stable and llm_stable:
+                winner = 'Rule' if rule_better else 'LLM'
+            else:
+                winner = 'Both Failed'
+            
+            comparison_result = {
+                'winner': winner,
+                'rule_stable': rule_stable,
+                'llm_stable': llm_stable,
+                'rule_ts': sim_rule['settling_time'],
+                'llm_ts': sim_llm['settling_time'],
+            }
+            
+            # 获取整定方法
+            tuning_method = result_rule.get('fusion_info', {}).get('method', 'unknown')
+            
+            # 调用可视化函数
+            visualize_scenario_comparison(
+                scenario=scenario,
+                metadata=metadata,
+                data=data,
+                sim_old=sim_old,
+                sim_rule=sim_rule,
+                sim_llm=sim_llm,
+                pid_rule=pid_rule,
+                pid_llm=pid_llm,
+                result=comparison_result,
+                scenario_idx=idx,
+                tuning_method=tuning_method
+            )
+            print(f"   ✅ 图表已保存")
+            
+        except Exception as e:
+            print(f"   ❌ 错误: {e}")
+            import traceback
+            traceback.print_exc()
+            results.append({
+                'scenario': scenario['name'],
+                'error': str(e),
+            })
+    
+    # 打印汇总报告
+    valid_results = [r for r in results if 'error' not in r]
+    total = len(valid_results)
+    
+    if total == 0:
+        print("\n❌ 没有有效结果")
+        return results
+    
+    # 计算 LLM 价值指标
+    llm_wins = 0
+    rule_wins = 0
+    ties = 0
+    both_stable = 0
+    llm_only_stable = 0
+    rule_only_stable = 0
+    both_failed = 0
+    
+    for r in valid_results:
+        rule_s = r.get('rule_stable', False)
+        llm_s = r.get('llm_stable', False)
+        rule_ts = r.get('rule_ts', 9999)
+        llm_ts = r.get('llm_ts', 9999)
+        
+        if rule_s and llm_s:
+            both_stable += 1
+            if llm_ts < rule_ts * 0.95:
+                llm_wins += 1
+            elif rule_ts < llm_ts * 0.95:
+                rule_wins += 1
+            else:
+                ties += 1
+        elif llm_s and not rule_s:
+            llm_only_stable += 1
+            llm_wins += 1
+        elif rule_s and not llm_s:
+            rule_only_stable += 1
+            rule_wins += 1
+        else:
+            both_failed += 1
+            ties += 1
+    
+    print("\n")
+    print("╔" + "═" * 78 + "╗")
+    print("║" + "振荡场景稳态验证 + LLM价值分析报告".center(66) + "║")
+    print("╠" + "═" * 78 + "╣")
+    print(f"║  场景总数: {total:<65}║")
+    print("╠" + "═" * 78 + "╣")
+    print("║  【稳态达成率】" + " " * 62 + "║")
+    print(f"║    规则引擎:     {rule_stable_count}/{total} ({rule_stable_count/total*100:.1f}%)" + " " * 49 + "║")
+    if llm_available:
+        print(f"║    LLM+规则引擎: {llm_stable_count}/{total} ({llm_stable_count/total*100:.1f}%)" + " " * 47 + "║")
+    print("╠" + "═" * 78 + "╣")
+    if llm_available:
+        print("║  【LLM价值分析】" + " " * 61 + "║")
+        print(f"║    双方均稳态:   {both_stable}场 → LLM调节更快: {llm_wins}场, 规则更快: {rule_wins}场, 平局: {ties}场" + " " * 10 + "║")
+        print(f"║    仅LLM稳态:    {llm_only_stable}场" + " " * 59 + "║")
+        print(f"║    仅规则稳态:   {rule_only_stable}场" + " " * 59 + "║")
+        print(f"║    双方均失败:   {both_failed}场" + " " * 59 + "║")
+        llm_win_rate = llm_wins / total * 100 if total > 0 else 0
+        print(f"║    LLM综合胜率:  {llm_win_rate:.1f}%" + " " * 59 + "║")
+    print("╚" + "═" * 78 + "╝")
+    
+    # 按回路类型统计
+    print("\n【按回路类型统计】")
+    print(f"{'回路类型':<15} {'规则稳态':<12} {'LLM稳态':<12} {'LLM胜场':<10}")
+    print("-" * 50)
+    loop_types = set(r.get('loop_type', 'unknown') for r in valid_results)
+    for lt in sorted(loop_types):
+        lt_results = [r for r in valid_results if r.get('loop_type') == lt]
+        lt_rule_stable = sum(1 for r in lt_results if r.get('rule_stable'))
+        lt_llm_stable = sum(1 for r in lt_results if r.get('llm_stable'))
+        lt_llm_wins = sum(1 for r in lt_results 
+                         if r.get('llm_stable') and r.get('llm_ts', 9999) < r.get('rule_ts', 9999) * 0.95)
+        print(f"{lt:<15} {lt_rule_stable}/{len(lt_results):<10} {lt_llm_stable}/{len(lt_results):<10} {lt_llm_wins}/{len(lt_results)}")
+    
+    print("\n✅ 稳态验证测试完成!")
+    return results
+
+
+
+# ============================================================
+def run_amplitude_threshold_test():
+    """目标3: 振荡幅度阈值估计
+    
+    固定振荡场景，测试不同幅度，找出能回稳态/不能回稳态的边界
+    """
+    print("=" * 80)
+    print("目标3: 振荡幅度阈值估计")
+    print("固定振荡场景，测试不同幅度，找出能回稳态/不能回稳态的边界")
+    print("=" * 80)
+    
+    # 选取代表性场景进行细粒度测试
+    representative_scenarios = [
+        s for s in TEST_SCENARIOS 
+        if s['name'] in ['Severe Gain Increase', 'Large Delay Increase', 
+                         'Temperature Loop Oscillation', 'Pressure Loop Oscillation',
+                         'Moderate Oscillation']
+    ]
+    
+    if not representative_scenarios:
+        representative_scenarios = TEST_SCENARIOS[:5]
+    
+    # 细粒度幅度因子
+    amplitude_factors = [0.3, 0.5, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.5, 1.8, 2.0, 2.5]
+    
+    print(f"\n📊 代表性场景: {len(representative_scenarios)}")
+    print(f"📊 幅度因子范围: {amplitude_factors}")
+    
+    threshold_results = []
+    
+    for scenario in representative_scenarios:
+        print(f"\n{'='*70}")
+        print(f"场景: {scenario['name']}")
+        print("=" * 70)
+        
+        stable_factors = []
+        unstable_factors = []
+        
+        for factor in amplitude_factors:
+            # 根据幅度因子生成变化后的参数
+            orig = scenario['process_original']
+            changed = scenario['process_changed']
+            
+            delta_K = changed['K'] - orig['K']
+            delta_T1 = changed['T1'] - orig['T1']
+            delta_L = changed['L'] - orig['L']
+            
+            new_changed = {
+                'K': max(0.1, orig['K'] + delta_K * factor),
+                'T1': max(5.0, orig['T1'] + delta_T1 * factor),
+                'L': max(0.5, orig['L'] + delta_L * factor),
+            }
+            
+            # 创建变体场景
+            variant_scenario = scenario.copy()
+            variant_scenario['process_changed'] = new_changed
+            
+            try:
+                data, metadata = generate_scenario_data(variant_scenario)
+                change_time = metadata['change_time']
+                end_time = data[-1]['timestamp']
+                qualified_windows = [{'start_time': change_time, 'end_time': end_time}]
+                
+                input_data = {
+                    'history_data': data,
+                    'params': {},
+                    'qualified_windows': qualified_windows,
+                }
+                
+                # 整定
+                Config.OSCILLATION_TUNING['enable_llm'] = False
+                selector = ModelSelector(verbose=False)
+                result = selector.run(input_data)
+                pid_new = result.get('pid_parameters', {})
+                
+                # 仿真
+                sim = simulate_with_new_pid(new_changed, pid_new, metadata['sv'], duration=400)
+                is_stable = sim['is_stable']
+                
+                if is_stable:
+                    stable_factors.append(factor)
+                    status = "✅"
+                else:
+                    unstable_factors.append(factor)
+                    status = "❌"
+                
+                print(f"   幅度×{factor}: {status} (Ts={sim['settling_time']:.0f}s)")
+                
+            except Exception as e:
+                print(f"   幅度×{factor}: ⚠️ 错误 - {e}")
+                unstable_factors.append(factor)
+        
+        # 估计阈值
+        max_stable = max(stable_factors) if stable_factors else 0
+        min_unstable = min(unstable_factors) if unstable_factors else float('inf')
+        threshold = (max_stable + min_unstable) / 2 if stable_factors and unstable_factors else None
+        
+        threshold_results.append({
+            'scenario': scenario['name'],
+            'max_stable': max_stable,
+            'min_unstable': min_unstable if min_unstable != float('inf') else None,
+            'threshold': threshold,
+            'stable_factors': stable_factors,
+            'unstable_factors': unstable_factors,
+        })
+    
+    # 打印汇总报告
+    print("\n")
+    print("╔" + "═" * 78 + "╗")
+    print("║" + "振荡幅度阈值估计报告".center(70) + "║")
+    print("╠" + "═" * 32 + "╦" + "═" * 14 + "╦" + "═" * 14 + "╦" + "═" * 14 + "╣")
+    print("║ 场景                           ║ 可恢复幅度   ║ 不可恢复幅度 ║ 估计阈值     ║")
+    print("╠" + "═" * 32 + "╬" + "═" * 14 + "╬" + "═" * 14 + "╬" + "═" * 14 + "╣")
+    
+    for r in threshold_results:
+        name = r['scenario'][:30]
+        max_s = f"≤{r['max_stable']}" if r['max_stable'] else "N/A"
+        min_u = f"≥{r['min_unstable']}" if r['min_unstable'] else "N/A"
+        thresh = f"~{r['threshold']:.2f}" if r['threshold'] else "N/A"
+        print(f"║ {name:<30} ║ {max_s:>12} ║ {min_u:>12} ║ {thresh:>12} ║")
+    
+    print("╚" + "═" * 32 + "╩" + "═" * 14 + "╩" + "═" * 14 + "╩" + "═" * 14 + "╝")
+    
+    print("\n✅ 振荡幅度阈值估计测试完成!")
+    return threshold_results
+
+
+# ============================================================
+# 目标4: Lambda 整定验证 (run_lambda_tuning_test)
+# ============================================================
+def run_lambda_tuning_test():
+    """目标4: Lambda 整定验证
+    
+    常规扰动下用模型辨识+Lambda整定在不同生产场景下验证能否回稳态
+    """
+    print("=" * 80)
+    print("目标4: Lambda 整定验证")
+    print("常规扰动下用模型辨识+Lambda整定在不同生产场景下验证能否回稳态")
+    print("=" * 80)
+    
+    scenarios = MODEL_ID_SCENARIOS
+    print(f"\n📊 测试场景总数: {len(scenarios)}")
+    
+    results = []
+    stable_count = 0
+    
+    # 按回路类型统计
+    by_loop_type = {}
+    
+    for i, scenario in enumerate(scenarios, 1):
+        print(f"\n{'─'*70}")
+        print(f"场景 {i}/{len(scenarios)}: {scenario['name']}")
+        print(f"描述: {scenario['description']}")
+        print(f"过程: K={scenario['process']['K']}, T1={scenario['process']['T1']}, L={scenario['process']['L']}")
+        print("─" * 70)
+        
+        try:
+            # 生成阶跃响应数据
+            data, metadata = generate_step_response_scenario_data(scenario)
+            
+            change_time = metadata['change_time']
+            start_time = data[0]['timestamp']
+            end_time = data[-1]['timestamp']
+            
+            window_start_idx = 50
+            window_start_time = data[window_start_idx]['timestamp']
+            qualified_windows = [{'start_time': window_start_time, 'end_time': end_time}]
+            
+            # 运行整定
+            Config.OSCILLATION_TUNING['enable_llm'] = False
+            selector = ModelSelector(verbose=False)
+            result = selector.run({
+                'history_data': data,
+                'params': {},
+                'qualified_windows': qualified_windows,
+            })
+            
+            pid_new = result.get('pid_parameters', {})
+            model_params = result.get('model_parameters', {})
+            fusion_info = result.get('fusion_info', {})
+            tuning_method = fusion_info.get('method', 'unknown')
+            
+            # 模型辨识精度
+            true_K = scenario['process']['K']
+            true_T1 = scenario['process']['T1']
+            true_L = scenario['process']['L']
+            
+            id_K = model_params.get('K', 0)
+            id_T1 = model_params.get('T1', 0)
+            id_L = model_params.get('L', model_params.get('delay', 0))
+            
+            K_error = abs(id_K - true_K) / true_K * 100 if true_K != 0 else 0
+            T1_error = abs(id_T1 - true_T1) / true_T1 * 100 if true_T1 != 0 else 0
+            L_error = abs(id_L - true_L) / true_L * 100 if true_L != 0 else 0
+            
+            print(f"   整定方法: {tuning_method}")
+            print(f"   模型辨识: K误差={K_error:.1f}%, T1误差={T1_error:.1f}%, L误差={L_error:.1f}%")
+            
+            # 仿真验证
+            sim = simulate_with_new_pid(scenario['process'], pid_new, metadata['sv'], duration=400)
+            is_stable = sim['is_stable']
+            
+            if is_stable:
+                stable_count += 1
+            
+            print(f"   稳态验证: {'✅ 是' if is_stable else '❌ 否'} (Ts={sim['settling_time']:.0f}s)")
+            
+            # ===== 生成可视化图表 =====
+            print("   📊 生成可视化图表...")
+            fig, axes = plt.subplots(2, 1, figsize=(12, 8))
+            
+            # 上图：原始数据
+            ax1 = axes[0]
+            pv_data = [d['pv'] for d in data]
+            mv_data = [d['mv'] for d in data]
+            sv_data = [d['sv'] for d in data]
+            time_data = np.arange(len(pv_data))
+            
+            ax1.plot(time_data, pv_data, 'b-', label='PV', alpha=0.8)
+            ax1.plot(time_data, sv_data, 'g--', label='SV', alpha=0.8)
+            ax1.set_ylabel('PV / SV')
+            ax1.legend(loc='upper left')
+            ax1.set_title(f'{scenario["name"]} - 原始阶跃响应数据')
+            ax1.grid(True, alpha=0.3)
+            
+            ax1_mv = ax1.twinx()
+            ax1_mv.plot(time_data, mv_data, 'r-', label='MV', alpha=0.5)
+            ax1_mv.set_ylabel('MV', color='r')
+            ax1_mv.legend(loc='upper right')
+            
+            # 下图：新 PID 仿真响应
+            ax2 = axes[1]
+            ax2.plot(sim['t'], sim['pv'], 'b-', label='PV (新PID)', linewidth=2)
+            ax2.axhline(y=metadata['sv'], color='g', linestyle='--', label='SV', alpha=0.8)
+            ax2.fill_between(sim['t'], 
+                           metadata['sv'] * 0.95, metadata['sv'] * 1.05, 
+                           alpha=0.2, color='green', label='±5%误差带')
+            ax2.set_xlabel('Time (s)')
+            ax2.set_ylabel('PV')
+            status = '✅ 稳态' if is_stable else '❌ 未稳态'
+            ax2.set_title(f'新PID仿真响应 - {status} (Ts={sim["settling_time"]:.0f}s)')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            
+            # 添加信息文字
+            info_text = f"PID: Kp={pid_new.get('Kp', 0):.4f}, Ki={pid_new.get('Ki', 0):.4f}, Kd={pid_new.get('Kd', 0):.4f}\n"
+            info_text += f"模型: K={id_K:.3f}(误差{K_error:.1f}%), T1={id_T1:.1f}(误差{T1_error:.1f}%), L={id_L:.1f}(误差{L_error:.1f}%)\n"
+            info_text += f"方法: {tuning_method}"
+            ax2.text(0.02, 0.98, info_text, transform=ax2.transAxes, fontsize=9,
+                    verticalalignment='top', fontfamily='monospace',
+                    bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+            
+            plt.tight_layout()
+            
+            # 保存图片到 lambda 子目录
+            lambda_dir = os.path.join(CONFIG['output_dir'], 'lambda')
+            os.makedirs(lambda_dir, exist_ok=True)
+            safe_name = scenario['name'].replace(' ', '_').replace('/', '_')
+            filename = f'lambda_{i:02d}_{safe_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
+            filepath = os.path.join(lambda_dir, filename)
+            plt.savefig(filepath, dpi=150, bbox_inches='tight')
+            print(f"   ✅ 图表已保存: {filepath}")
+            plt.close()
+            
+            # 按回路类型统计
+            loop_type = scenario.get('loop_type', 'unknown')
+            if loop_type not in by_loop_type:
+                by_loop_type[loop_type] = {'total': 0, 'stable': 0}
+            by_loop_type[loop_type]['total'] += 1
+            if is_stable:
+                by_loop_type[loop_type]['stable'] += 1
+            
+            results.append({
+                'scenario': scenario['name'],
+                'loop_type': loop_type,
+                'tuning_method': tuning_method,
+                'K_error': K_error,
+                'T1_error': T1_error,
+                'L_error': L_error,
+                'is_stable': is_stable,
+                'settling_time': sim['settling_time'],
+            })
+            
+        except Exception as e:
+            print(f"   ❌ 错误: {e}")
+            results.append({'scenario': scenario['name'], 'error': str(e)})
+    
+    # 计算统计
+    valid_results = [r for r in results if 'error' not in r]
+    total = len(valid_results)
+    
+    if total > 0:
+        avg_K_err = np.mean([r['K_error'] for r in valid_results])
+        avg_T1_err = np.mean([r['T1_error'] for r in valid_results])
+        avg_L_err = np.mean([r['L_error'] for r in valid_results])
+    
+    # 打印汇总报告
+    print("\n")
+    print("╔" + "═" * 78 + "╗")
+    print("║" + "Lambda 整定验证报告".center(70) + "║")
+    print("╠" + "═" * 78 + "╣")
+    if total > 0:
+        print(f"║ 模型辨识精度:                                                            ║")
+        print(f"║   K 平均误差:  {avg_K_err:>6.1f}%                                                    ║")
+        print(f"║   T1 平均误差: {avg_T1_err:>6.1f}%                                                    ║")
+        print(f"║   L 平均误差:  {avg_L_err:>6.1f}%                                                    ║")
+        print("╠" + "═" * 78 + "╣")
+        print(f"║ 稳态达成率 (按回路类型):                                                  ║")
+        for lt, stats in sorted(by_loop_type.items()):
+            rate = stats['stable'] / stats['total'] * 100 if stats['total'] > 0 else 0
+            print(f"║   {lt:<12}: {stats['stable']}/{stats['total']} ({rate:.0f}%)                                               ║")
+        print(f"║   总体:        {stable_count}/{total} ({stable_count/total*100:.0f}%)                                               ║")
+    print("╚" + "═" * 78 + "╝")
+    
+    print("\n✅ Lambda 整定验证测试完成!")
+    return results
+
+
+# ============================================================
+# 运行所有测试
+# ============================================================
+def run_all_tests():
+    """运行所有四个验证目标的测试并生成汇总报告"""
+    print("=" * 80)
+    print("运行所有验证目标测试")
+    print("=" * 80)
+    
+    all_results = {}
+    
+    print("\n" + "▶" * 40)
+    print("开始目标1: 振荡场景稳态验证")
+    print("▶" * 40)
+    all_results['stability'] = run_stability_test()
+    
+    print("\n" + "▶" * 40)
+    print("开始目标2: LLM 优化效果对比")
+    print("▶" * 40)
+    all_results['llm_compare'] = run_llm_comparison_test()
+    
+    print("\n" + "▶" * 40)
+    print("开始目标3: 振荡幅度阈值估计")
+    print("▶" * 40)
+    all_results['amplitude'] = run_amplitude_threshold_test()
+    
+    print("\n" + "▶" * 40)
+    print("开始目标4: Lambda 整定验证")
+    print("▶" * 40)
+    all_results['lambda'] = run_lambda_tuning_test()
+    
+    # 汇总报告
+    print("\n")
+    print("╔" + "═" * 78 + "╗")
+    print("║" + "全部测试完成 - 汇总报告".center(70) + "║")
+    print("╠" + "═" * 78 + "╣")
+    print("║ 目标1 (振荡稳态验证): 完成                                              ║")
+    print("║ 目标2 (LLM优化效果): 完成                                               ║")
+    print("║ 目标3 (幅度阈值估计): 完成                                              ║")
+    print("║ 目标4 (Lambda整定): 完成                                                ║")
+    print("╚" + "═" * 78 + "╝")
+    
+    return all_results
+
+
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == 'batch':
+    
+    # 优先使用文件内的 TEST_MODE 变量
+    # 如果命令行有参数，则命令行参数优先
+    mode = 'stability'
+    if len(sys.argv) > 1:
+        mode = sys.argv[1]
+    
+    # 新的三个验证目标 (llm_compare 已合并到 stability)
+    if mode == 'stability':
+        run_stability_test()
+    elif mode == 'amplitude':
+        run_amplitude_threshold_test()
+    elif mode == 'lambda':
+        run_lambda_tuning_test()
+    elif mode == 'all':
+        run_all_tests()
+    # 向后兼容旧模式
+    elif mode == 'batch':
         run_batch_test()
+    elif mode == 'model_id':
+        run_model_id_test()
     else:
+        # default 模式
         main()

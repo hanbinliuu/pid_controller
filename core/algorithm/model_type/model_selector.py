@@ -367,10 +367,23 @@ class ModelSelector(LoggerMixin):
             segments_for_fitting = tuning_segs
             results_for_fitting = tuning_results
         else:
-            # 没有整定段：使用全部段，后续可能走振荡整定
-            self.log(f"⚠️ 无整定段，使用全部 {len(valid_segments)} 个段")
-            segments_for_fitting = valid_segments
-            results_for_fitting = segment_results
+            # 没有整定段：检查是否应该使用原始扰动段
+            # 如果 valid_segments 是短段（<100点）且有振荡，使用原始扰动段
+            use_disturbance = False
+            if osc_segs and len(osc_segs) > 0:
+                # 检查振荡段是否太短
+                total_osc_points = sum(len(seg.pv) for seg in osc_segs)
+                if total_osc_points < 100 and disturbance_segs:
+                    # 振荡段太短，使用原始扰动段
+                    self.log(f"⚠️ 振荡段太短({total_osc_points}点)，使用原始扰动段({sum(len(s.pv) for s in disturbance_segs)}点)")
+                    segments_for_fitting = disturbance_segs
+                    results_for_fitting = disturbance_results
+                    use_disturbance = True
+            
+            if not use_disturbance:
+                self.log(f"⚠️ 无整定段，使用全部 {len(valid_segments)} 个段")
+                segments_for_fitting = valid_segments
+                results_for_fitting = segment_results
         
         # Step 2: 对有效段尝试多种模型拟合（使用 SegmentFitter）
         segment_results_fitted = self._segment_fitter.fit_all_segments(segments_for_fitting, results_for_fitting)
@@ -744,9 +757,14 @@ class ModelSelector(LoggerMixin):
                     valid_segment_idx += 1
                     continue
                 
-                # 跳过数据点数太少的段（防止过拟合）
-                min_fusion_points = Config.SEGMENT_PROCESSING.get('min_fusion_points', 100)
-                if result.data_points < min_fusion_points:
+                # 跳过数据点数太少的段（根据质量动态调整阈值）
+                min_fusion_points = Config.SEGMENT_PROCESSING.get('min_fusion_points', 50)
+                min_fusion_points_hq = Config.SEGMENT_PROCESSING.get('min_fusion_points_high_quality', 30)
+                
+                # 高质量段（R²>0.8）允许更少的数据点
+                if r2 > 0.8 and result.data_points >= min_fusion_points_hq:
+                    pass  # 高质量段，允许使用
+                elif result.data_points < min_fusion_points:
                     self.log(f"      段{result.segment_idx+1}: 数据点数={result.data_points} < {min_fusion_points}，跳过融合")
                     valid_segment_idx += 1
                     continue
@@ -1731,13 +1749,28 @@ class ModelSelector(LoggerMixin):
             step_score = result.step_response_score
             osc_ratio = result.oscillation_ratio
             
-            # 分类：阶跃特征好且振荡不严重 → 整定段
-            if step_score >= step_threshold and osc_ratio < osc_threshold:
+            # 额外检查：段内PV是否仍在振荡
+            # 即使阶跃特征好，如果段内PV标准差相对于PV范围较大，说明仍在振荡
+            pv_array = np.array(seg.pv)
+            pv_std = np.std(pv_array)
+            pv_range = np.ptp(pv_array)
+            sv_mean = np.mean(seg.sv) if len(seg.sv) > 0 else 50.0
+            
+            # 相对振荡度：PV标准差 / SV均值
+            relative_oscillation = pv_std / sv_mean if sv_mean > 0 else 0
+            
+            # 如果相对振荡度 > 5%，认为仍在振荡
+            still_oscillating = relative_oscillation > 0.05
+            
+            # 分类：阶跃特征好且振荡不严重且段内不振荡 → 整定段
+            if step_score >= step_threshold and osc_ratio < osc_threshold and not still_oscillating:
                 tuning_segments.append(seg)
                 tuning_results.append(result)
             else:
                 oscillation_segments.append(seg)
                 oscillation_results.append(result)
+                if still_oscillating and step_score >= step_threshold:
+                    self.log(f"   ⚠️ 段内仍在振荡 (PV_std/SV={relative_oscillation:.1%})，归类为振荡段")
         
         self.log(f"\n{'='*60}")
         self.log("📊 Step 1.8: 整定段/振荡段分类")
