@@ -212,7 +212,7 @@ class LLMOscillationTuningAdvisor:
         nonlinearity: float, valve_issues: Dict,
         confidence: float, loop_type: str, loop_name: str
     ) -> str:
-        """构建策略选择 Prompt（LLM 选择策略代码而非数值参数）"""
+        """构建策略选择 Prompt（注入人类专家启发式思维）"""
         
         # 阀门问题
         has_deadband = valve_issues.get('has_deadband', False) if valve_issues else False
@@ -226,54 +226,94 @@ class LLMOscillationTuningAdvisor:
         }
         loop_type_cn = loop_type_map.get(loop_type, '流量')
         
-        # 系统速度分类
-        if Pu > 30:
-            speed_class = "慢系统"
-        elif Pu > 10:
-            speed_class = "中速系统"
-        else:
-            speed_class = "快系统"
+        # --- 1. 人类视角：看图说话 (Qualitative Analysis) ---
+        # 估算滞后 L (基于 Ziegler-Nichols 经验: Pu ≈ 4L)
+        estimated_L = Pu / 4.0
+        T1_approx = Pu  # 粗略假设
         
-        # Ku/K 比值（稳定裕度）
+        # 振荡速度判断 (Human heuristic: Fast vs Slow)
+        # 如果 Pu 相对滞后很小，说明是高频P振荡；如果很大，说明是低频I振荡
+        if estimated_L > 0:
+            period_ratio = Pu / estimated_L
+        else:
+            period_ratio = 4.0
+            
+        osc_speed_desc = "中速振荡"
+        if period_ratio < 3.0:
+            osc_speed_desc = "极快振荡 (可能是微分噪音或P过强)"
+        elif period_ratio > 10.0:
+            osc_speed_desc = "慢速浪涌 (典型积分I过强)"
+        
+        # 稳定裕度判断
         ku_k_ratio = Ku / K_approx if K_approx > 0.01 else 10.0
-        if ku_k_ratio < 2:
-            margin = "小（容易不稳定）"
-        elif ku_k_ratio < 4:
-            margin = "中等"
-        else:
-            margin = "大（容易稳定）"
-        
-        prompt = f"""你是工业PID整定专家。根据过程特征选择最合适的整定策略。
+        margin_desc = "高裕度"
+        if ku_k_ratio < 2.0:
+            margin_desc = "极低裕度 (系统濒临失稳)"
+        elif ku_k_ratio < 4.0:
+            margin_desc = "中等裕度"
+            
+        # --- 2. 人类视角：懂对象 (Context Awareness) ---
+        loop_hint = ""
+        if loop_type == 'temperature':
+            loop_hint = "提示：温度对象滞后大，严禁使用过小的Ti（积分太强），否则会引发大幅度低频振荡。优先选择保守策略。"
+        elif loop_type == 'flow':
+            loop_hint = "提示：流量对象响应快，噪声大。通常不需要微分D。如果振荡，多半是增益K太大了。"
+        elif loop_type == 'level':
+            loop_hint = "提示：液位对象是积分过程。允许一定的波动，不要过度调节。Ti可以适当加大。"
+        elif loop_type == 'pressure':
+            loop_hint = "提示：压力对象反应灵敏，类似于流量，注意噪音影响。"
 
-## 当前过程特征
-- 回路类型: {loop_type_cn}
-- 系统速度: {speed_class}（临界周期Pu={Pu:.0f}秒）
-- 过程增益: K={K_approx:.2f}，临界增益Ku={Ku:.2f}
-- 稳定裕度: Ku/K={ku_k_ratio:.1f}（{margin}）
-- 数据质量: {data_quality:.0%}
-- 估计置信度: {confidence:.0%}
-- 振荡程度: {oscillation_ratio:.0%}
-- 阀门问题: {valve_problem}
+        # --- 3. 构建 Prompt ---
+        prompt = f"""你是工业PID整定专家。请像一位经验丰富的工程师那样思考，根据过程特征选择最合适的整定策略。
 
-## 可选策略
-A - 标准整定：适用于一般场景，数据质量好，过程稳定
-B - 保守整定：适用于不确定场景，数据质量中等或置信度低
-C - 快速整定：适用于响应速度优先，数据质量好，稳定裕度大
-D - 抗扰动整定：适用于存在外部扰动，需要更稳健的控制
-E - 阀门问题整定：适用于阀门死区或粘滞问题
+## 1. 现场观察 (Observation)
+- **对象类型**: {loop_type_cn} ({loop_type})
+- **振荡特征**: {osc_speed_desc} (Pu={Pu:.1f}s)
+- **振荡强度**: 衰减比 {oscillation_ratio:.2f} ({"发散/等幅" if oscillation_ratio >= 0.9 else "收敛"})
+- **模型参数**: 增益 K≈{K_approx:.2f}
+- **稳定裕度**: {margin_desc} (Ku/K={ku_k_ratio:.1f})
+- **数据质量**: {data_quality:.1f}/1.0 ({confidence*100:.0f}% 置信度)
+- **阀门状态**: {valve_problem}
 
-## 选择指南
-- 数据质量>80% + 稳定裕度大 → C（快速）
-- 数据质量>60% + 无特殊问题 → A（标准）
-- 数据质量<60% 或 置信度<60% → B（保守）
-- 振荡程度>70% → D（抗扰动）
-- 阀门问题 → E（阀门）
+## 2. 专家经验法则 (Heuristics)
+1. **慢速振荡 (Pu很大)**: 通常是 **积分作用(I)过强** 导致的。必须显著增大 Ti (减弱积分)。
+2. **快速振荡 (Pu很小)**: 通常是 **比例作用(P)过强** 导致的。必须减小 Kp (增大 PB)。
+3. **高增益系统 (K大)**: 如果开环增益 K > 5，系统极度敏感。务必使用超保守的 PB。
+4. **低数据质量**: 如果置信度低，不要尝试激进策略，安全第一。
 
-## 输出格式
-只输出一个字母（A/B/C/D/E），代表你选择的策略。
+## 3. 你的任务
+{loop_hint}
+请分析以上信息，从下方策略库中选择一个最合适的策略代码（A-F）。
 
-你的选择:"""
-        
+### 策略库 (Strategy Library)
+*   **A**: **标准保守** (Standard Conservative)
+    *   适用：常规场景，稍微求稳。
+    *   参数：Safety=1.5
+*   **B**: **高抑制** (High Damping)
+    *   适用：振荡较强，或者需要强力压制超调。
+    *   参数：Safety=2.0 + 额外PB增加
+*   **C**: **去积分** (De-Integration)
+    *   适用：**慢速浪涌/长周期振荡**。确认是积分过强导致。
+    *   参数：**Ti 大幅增加 (2.5倍)**
+*   **D**: **噪声/微分抑制** (Noise Suppression)
+    *   适用：**极快振荡**，且怀疑有噪音。
+    *   参数：禁用微分 D，适度增加保守度。
+*   **E**: **容忍模式** (Loose Control)
+    *   适用：液位(Level)控制，或者阀门有问题的场景。
+    *   参数：极度保守，允许波动。
+*   **F**: **极端防御** (Extreme Defense)
+    *   适用：**系统极不稳定 (发散)**，或者模型完全不可信。
+    *   参数：Safety=3.0+，Ti=3.0倍。救火专用。
+
+## 4. 输出格式
+请仅输出 JSON 格式，包含 `reasoning` (思考过程) 和 `selection` (策略代码 A/B/C/D/E/F)。
+
+示例:
+{{
+  "reasoning": "观察到 Pu=120s 且是温度回路，属于典型的慢速积分振荡。根据经验法则 1，如果是温度回路且振荡慢，必须大幅削弱积分。普通保守策略可能不够，需要选择去积分策略。",
+  "selection": "C"
+}}
+"""
         return prompt
     
     def _parse_response(self, response: str) -> ConservativeStrategyParams:

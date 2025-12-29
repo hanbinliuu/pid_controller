@@ -27,6 +27,9 @@ import requests
 from core.algorithm.model_type.model_selector import ModelSelector
 from core.algorithm.model_type.config import Config
 
+# 导入测试场景
+from core.algorithm.model_type.tests.test_scenarios import TEST_SCENARIOS
+
 
 # ============================================================
 # Ollama 客户端
@@ -97,6 +100,7 @@ CONFIG = {
     # Ollama 配置
     'ollama_model': 'qwen3-vl:8b',
     'ollama_base_url': 'http://localhost:11434',
+    'skip_llm_test': False,  # 设为 True 可跳过 LLM 测试，只运行规则引擎
     
     # 原始过程模型参数（稳态时）
     'process_original': {
@@ -1093,476 +1097,6 @@ def main():
 # 多场景批量测试
 # ============================================================
 
-# 定义多种测试场景（设计原则：Old PID 必须在变化后的系统上振荡）
-TEST_SCENARIOS = [
-    # ========== 典型振荡场景（Old PID 必须振荡）==========
-    {
-        'name': 'Severe Gain Increase',
-        'description': '增益大幅增加（K: 1→4）- Old PID 必振荡',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 4.0, 'T1': 15.0, 'L': 6.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Aggressive PID + Gain Up',
-        'description': '激进PID + 增益翻倍 - 典型振荡',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 2.2, 'T1': 22.0, 'L': 5.0},  # 稍微减小变化
-        'original_pid': {'Kp': 2.2, 'Ki': 0.12, 'Kd': 0.0},  # 稍微减小激进程度
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Large Delay Increase',
-        'description': '滞后大幅增加（L: 2→12）- 滞后敏感',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 1.5, 'T1': 25.0, 'L': 12.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.08, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    # ========== 不同回路类型 ==========
-    {
-        'name': 'Temperature Loop Oscillation',
-        'description': '温度回路振荡（增益+滞后同时增加）',
-        'process_original': {'K': 0.8, 'T1': 60.0, 'L': 5.0},
-        'process_changed': {'K': 2.5, 'T1': 35.0, 'L': 12.0},  # 更大的变化
-        'original_pid': {'Kp': 2.0, 'Ki': 0.08, 'Kd': 0.0},  # 更激进的PID
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Pressure Loop Oscillation',
-        'description': '压力回路振荡（快速+高增益）',
-        'process_original': {'K': 1.2, 'T1': 20.0, 'L': 1.0},
-        'process_changed': {'K': 3.0, 'T1': 15.0, 'L': 5.0},
-        'original_pid': {'Kp': 2.5, 'Ki': 0.15, 'Kd': 0.0},
-        'loop_type': 'pressure',
-    },
-    {
-        'name': 'Level Loop Oscillation',
-        'description': '液位回路振荡（积分特性+增益增加）',
-        'process_original': {'K': 1.0, 'T1': 40.0, 'L': 3.0},
-        'process_changed': {'K': 3.0, 'T1': 25.0, 'L': 8.0},  # 更大的增益变化
-        'original_pid': {'Kp': 1.8, 'Ki': 0.1, 'Kd': 0.0},  # 更激进的PID
-        'loop_type': 'level',
-    },
-    # ========== 数据质量挑战 ==========
-    {
-        'name': 'High Noise Oscillation',
-        'description': '高噪声环境下的振荡',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 3.0, 'T1': 18.0, 'L': 6.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
-        'noise_std': 1.0,
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Moderate Oscillation',
-        'description': '中等振荡（适中的系统变化）',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 2.5, 'T1': 18.0, 'L': 6.0},  # 更大的变化
-        'original_pid': {'Kp': 2.2, 'Ki': 0.1, 'Kd': 0.0},  # 更激进的PID
-        'noise_std': 0.3,
-        'loop_type': 'flow',
-    },
-    # ========== 边界情况 ==========
-    {
-        'name': 'Fast System Oscillation',
-        'description': '快速系统振荡（T1小+高增益）',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 3.5, 'T1': 12.0, 'L': 5.0},  # 适中的快速系统
-        'original_pid': {'Kp': 2.2, 'Ki': 0.12, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Slow System Oscillation',
-        'description': '慢速系统振荡（大滞后+激进PID）',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 2.5, 'T1': 50.0, 'L': 12.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.08, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    # ========== 新增场景：更多边界情况 ==========
-    {
-        'name': 'Very High Gain',
-        'description': '极高增益（K: 1→5）- 极端振荡',
-        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 3.0},
-        'process_changed': {'K': 5.0, 'T1': 12.0, 'L': 6.0},  # 更激进的变化
-        'original_pid': {'Kp': 2.5, 'Ki': 0.12, 'Kd': 0.0},  # 更激进的PID
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Small Gain Change',
-        'description': '小幅增益变化（K: 1→1.8）- 轻微振荡',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 1.8, 'T1': 25.0, 'L': 4.0},
-        'original_pid': {'Kp': 2.2, 'Ki': 0.12, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Delay Dominant',
-        'description': '滞后主导（L/T1 > 0.5）',
-        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 2.0},
-        'process_changed': {'K': 2.0, 'T1': 15.0, 'L': 10.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Time Constant Dominant',
-        'description': '时间常数主导（L/T1 < 0.1）',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 3.5, 'T1': 40.0, 'L': 3.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.08, 'Kd': 0.0},
-        'loop_type': 'level',
-    },
-    # ========== 新增场景：工业常见情况 ==========
-    {
-        'name': 'Catalyst Deactivation',
-        'description': '催化剂失活后恢复（增益突增）',
-        'process_original': {'K': 0.5, 'T1': 40.0, 'L': 5.0},
-        'process_changed': {'K': 2.5, 'T1': 25.0, 'L': 8.0},  # 更大的增益变化
-        'original_pid': {'Kp': 3.5, 'Ki': 0.12, 'Kd': 0.0},  # 更激进的PID
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Valve Aging',
-        'description': '阀门老化（滞后增加+增益变化）',
-        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 2.0},
-        'process_changed': {'K': 1.8, 'T1': 30.0, 'L': 10.0},  # 更大的滞后
-        'original_pid': {'Kp': 2.8, 'Ki': 0.15, 'Kd': 0.0},  # 更激进的PID
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Heat Exchanger Fouling',
-        'description': '换热器结垢（增益+滞后增加）',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 5.0},
-        'process_changed': {'K': 2.0, 'T1': 45.0, 'L': 12.0},  # 增益增加+滞后增加
-        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},  # 更激进的PID
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Product Grade Change',
-        'description': '产品牌号切换（系统特性突变）',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
-        'process_changed': {'K': 2.8, 'T1': 22.0, 'L': 6.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Compressor Surge',
-        'description': '压缩机喘振（压力回路快速振荡）',
-        'process_original': {'K': 1.5, 'T1': 15.0, 'L': 1.0},
-        'process_changed': {'K': 4.0, 'T1': 8.0, 'L': 3.0},  # 更快的系统
-        'original_pid': {'Kp': 2.0, 'Ki': 0.15, 'Kd': 0.0},  # 更激进的PID
-        'loop_type': 'pressure',
-    },
-    {
-        'name': 'Tank Level Sloshing',
-        'description': '储罐液位晃动（液位回路振荡）',
-        'process_original': {'K': 1.0, 'T1': 50.0, 'L': 5.0},
-        'process_changed': {'K': 2.0, 'T1': 30.0, 'L': 10.0},  # 更大的变化
-        'original_pid': {'Kp': 2.2, 'Ki': 0.1, 'Kd': 0.0},  # 更激进的PID
-        'loop_type': 'level',
-    },
-    # ========== 新增：更多实际工业场景 ==========
-    {
-        'name': 'Gain Ratio Change',
-        'description': '增益比变化（小增益变大增益）',
-        'process_original': {'K': 0.8, 'T1': 30.0, 'L': 3.0},  # 小增益
-        'process_changed': {'K': 2.2, 'T1': 22.0, 'L': 6.0},   # 增益变大约3倍
-        'original_pid': {'Kp': 2.5, 'Ki': 0.12, 'Kd': 0.0},    # 针对小增益整定的PID
-        'loop_type': 'level',
-    },
-    {
-        'name': 'Load Disturbance',
-        'description': '负荷扰动（进料流量突变）',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
-        'process_changed': {'K': 2.5, 'T1': 20.0, 'L': 5.0},
-        'original_pid': {'Kp': 1.8, 'Ki': 0.08, 'Kd': 0.0},
-        'noise_std': 0.5,  # 中等噪声
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Sensor Drift',
-        'description': '传感器漂移（测量偏差）',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 2.0},
-        'process_changed': {'K': 1.3, 'T1': 28.0, 'L': 4.0},  # 小幅变化
-        'original_pid': {'Kp': 2.5, 'Ki': 0.12, 'Kd': 0.0},  # 激进PID
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Cascade Inner Loop',
-        'description': '串级内环（快速响应要求）',
-        'process_original': {'K': 1.5, 'T1': 10.0, 'L': 1.0},
-        'process_changed': {'K': 3.0, 'T1': 8.0, 'L': 2.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.2, 'Kd': 0.0},  # 快速响应
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Batch Process Transition',
-        'description': '间歇过程切换（反应阶段变化）',
-        'process_original': {'K': 0.8, 'T1': 40.0, 'L': 5.0},
-        'process_changed': {'K': 2.2, 'T1': 25.0, 'L': 8.0},
-        'original_pid': {'Kp': 2.5, 'Ki': 0.1, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Startup Condition',
-        'description': '开车工况（冷态到热态）',
-        'process_original': {'K': 0.5, 'T1': 60.0, 'L': 10.0},  # 冷态：慢
-        'process_changed': {'K': 1.8, 'T1': 30.0, 'L': 5.0},   # 热态：快
-        'original_pid': {'Kp': 3.0, 'Ki': 0.08, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Nonlinear Valve',
-        'description': '非线性阀门特性（等百分比阀）',
-        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 2.0},
-        'process_changed': {'K': 2.0, 'T1': 22.0, 'L': 5.0},  # 适中的变化
-        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Interacting Loops',
-        'description': '耦合回路（温度-压力耦合）',
-        'process_original': {'K': 1.0, 'T1': 35.0, 'L': 4.0},
-        'process_changed': {'K': 1.8, 'T1': 28.0, 'L': 7.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
-        'noise_std': 0.4,  # 耦合带来的扰动
-        'loop_type': 'temperature',
-    },
-    # ========== 新增场景：特殊系统类型 ==========
-    {
-        'name': 'Reverse Action Cooling',
-        'description': '反向作用系统（制冷回路，MV增→PV减）',
-        # 反向作用：K为负，MV增加导致PV减少（如制冷阀开大→温度下降）
-        # 对于 K < 0 的系统，需要 Kp < 0 才能形成负反馈
-        'process_original': {'K': -1.0, 'T1': 30.0, 'L': 3.0},
-        'process_changed': {'K': -2.5, 'T1': 18.0, 'L': 6.0},  # 增益变大+滞后增加
-        'original_pid': {'Kp': -1.5, 'Ki': -0.08, 'Kd': 0.0},  # 负Kp/Ki（反向作用PID）
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Integrating Process',
-        'description': '积分过程（液位控制，增益大幅变化）',
-        'process_original': {'K': 0.6, 'T1': 45.0, 'L': 3.0},
-        'process_changed': {'K': 2.0, 'T1': 25.0, 'L': 6.0},  # 增益变化3倍+，确保振荡
-        'original_pid': {'Kp': 2.5, 'Ki': 0.1, 'Kd': 0.0},  # 更激进的PID
-        'loop_type': 'level',
-    },
-    {
-        'name': 'Underdamped System',
-        'description': '欠阻尼二阶系统（自带振荡特性）',
-        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 2.0},
-        'process_changed': {'K': 2.5, 'T1': 12.0, 'L': 4.0},  # 更快+更高增益
-        'original_pid': {'Kp': 1.8, 'Ki': 0.1, 'Kd': 0.0},
-        'loop_type': 'pressure',
-    },
-    # ========== 新增场景：极端条件 ==========
-    {
-        'name': 'Extreme Delay',
-        'description': '大滞后系统（L/T1 接近 1）',
-        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 5.0},
-        'process_changed': {'K': 1.8, 'T1': 15.0, 'L': 12.0},  # L/T1 = 0.8，更合理
-        'original_pid': {'Kp': 1.8, 'Ki': 0.06, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Very Small Gain',
-        'description': '小增益系统（K < 0.5）',
-        'process_original': {'K': 0.3, 'T1': 35.0, 'L': 4.0},  # 增大K使其更可辨识
-        'process_changed': {'K': 0.8, 'T1': 25.0, 'L': 7.0},
-        'original_pid': {'Kp': 5.0, 'Ki': 0.2, 'Kd': 0.0},  # 适中的高Kp
-        'loop_type': 'level',
-    },
-    {
-        'name': 'Very Large Gain',
-        'description': '极大增益系统（K > 5）',
-        'process_original': {'K': 3.0, 'T1': 20.0, 'L': 2.0},
-        'process_changed': {'K': 8.0, 'T1': 12.0, 'L': 4.0},
-        'original_pid': {'Kp': 0.8, 'Ki': 0.05, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Multi-mode Extreme',
-        'description': '多模态极端变化（参数变化>5倍）',
-        'process_original': {'K': 0.5, 'T1': 60.0, 'L': 8.0},
-        'process_changed': {'K': 3.5, 'T1': 12.0, 'L': 3.0},  # 极端变化
-        'original_pid': {'Kp': 3.5, 'Ki': 0.1, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    # ========== 新增场景：噪声与扰动 ==========
-    {
-        'name': 'Very High Noise',
-        'description': '极高噪声环境（noise_std=1.5）',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
-        'process_changed': {'K': 2.5, 'T1': 20.0, 'L': 6.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
-        'noise_std': 1.5,
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Low Noise Precision',
-        'description': '低噪声精密控制（noise_std=0.05）',
-        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 2.0},
-        'process_changed': {'K': 2.2, 'T1': 18.0, 'L': 5.0},
-        'original_pid': {'Kp': 2.5, 'Ki': 0.12, 'Kd': 0.0},
-        'noise_std': 0.05,
-        'loop_type': 'temperature',
-    },
-    # ========== 新增场景：工业特殊情况 ==========
-    {
-        'name': 'Reactor Runaway',
-        'description': '反应器飞温（增益大幅增加）',
-        'process_original': {'K': 1.0, 'T1': 35.0, 'L': 4.0},
-        'process_changed': {'K': 4.0, 'T1': 18.0, 'L': 6.0},  # 增益变化4倍，更合理
-        'original_pid': {'Kp': 2.0, 'Ki': 0.08, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Distillation Column',
-        'description': '精馏塔温度控制（大滞后+耦合）',
-        'process_original': {'K': 0.8, 'T1': 50.0, 'L': 10.0},
-        'process_changed': {'K': 1.8, 'T1': 35.0, 'L': 15.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.06, 'Kd': 0.0},
-        'noise_std': 0.3,
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Furnace Temperature',
-        'description': '加热炉温度（慢响应+滞后）',
-        'process_original': {'K': 0.8, 'T1': 50.0, 'L': 8.0},  # 减小T1和L
-        'process_changed': {'K': 1.8, 'T1': 35.0, 'L': 12.0},
-        'original_pid': {'Kp': 2.5, 'Ki': 0.06, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'pH Control',
-        'description': 'pH控制（高度非线性+快速）',
-        'process_original': {'K': 2.0, 'T1': 10.0, 'L': 1.0},
-        'process_changed': {'K': 5.0, 'T1': 8.0, 'L': 2.0},  # pH曲线陡峭区
-        'original_pid': {'Kp': 1.0, 'Ki': 0.15, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Steam Header Pressure',
-        'description': '蒸汽母管压力（多源扰动）',
-        'process_original': {'K': 1.5, 'T1': 15.0, 'L': 2.0},
-        'process_changed': {'K': 3.0, 'T1': 10.0, 'L': 4.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.15, 'Kd': 0.0},
-        'noise_std': 0.6,
-        'loop_type': 'pressure',
-    },
-    {
-        'name': 'Blending Control',
-        'description': '调合控制（多组分混合）',
-        'process_original': {'K': 1.2, 'T1': 20.0, 'L': 3.0},
-        'process_changed': {'K': 2.5, 'T1': 15.0, 'L': 6.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    
-    # ========== 极端挑战场景（测试算法鲁棒性边界）==========
-    {
-        'name': 'Ultra Fast Flow',
-        'description': '超快流量回路 - 极小时间常数',
-        'process_original': {'K': 1.0, 'T1': 3.0, 'L': 0.5},
-        'process_changed': {'K': 2.0, 'T1': 2.0, 'L': 1.5},
-        'original_pid': {'Kp': 8.0, 'Ki': 0.5, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Very Slow Temperature',
-        'description': '极慢温度回路 - 大时间常数',
-        'process_original': {'K': 0.6, 'T1': 200.0, 'L': 30.0},
-        'process_changed': {'K': 1.0, 'T1': 180.0, 'L': 50.0},
-        'original_pid': {'Kp': 1.5, 'Ki': 0.005, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'High Noise Flow',
-        'description': '高噪声流量回路 - 测噪声鲁棒性',
-        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 3.0},
-        'process_changed': {'K': 1.8, 'T1': 18.0, 'L': 6.0},
-        'original_pid': {'Kp': 3.0, 'Ki': 0.1, 'Kd': 0.0},
-        'noise_std': 0.8,
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Extreme Gain Change',
-        'description': '极高增益变化 - K从1变到6',
-        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
-        'process_changed': {'K': 6.0, 'T1': 25.0, 'L': 8.0},
-        'original_pid': {'Kp': 2.5, 'Ki': 0.08, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Very Large Delay',
-        'description': '极大滞后 - L/T1 接近1',
-        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 5.0},
-        'process_changed': {'K': 1.2, 'T1': 18.0, 'L': 15.0},
-        'original_pid': {'Kp': 2.0, 'Ki': 0.05, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Integrating Level',
-        'description': '积分液位回路 - 大时间常数模拟积分',
-        'process_original': {'K': 0.8, 'T1': 150.0, 'L': 5.0},
-        'process_changed': {'K': 1.2, 'T1': 140.0, 'L': 10.0},
-        'original_pid': {'Kp': 1.0, 'Ki': 0.003, 'Kd': 0.0},
-        'loop_type': 'level',
-    },
-    {
-        'name': 'Reverse Acting Flow',
-        'description': '反向作用流量 - 负增益系统',
-        'process_original': {'K': -1.0, 'T1': 25.0, 'L': 2.0},
-        'process_changed': {'K': -2.0, 'T1': 20.0, 'L': 5.0},
-        'original_pid': {'Kp': -3.0, 'Ki': -0.1, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'Fast Pressure Disturbance',
-        'description': '快速压力扰动 - 小时间常数',
-        'process_original': {'K': 1.2, 'T1': 8.0, 'L': 1.0},
-        'process_changed': {'K': 2.5, 'T1': 6.0, 'L': 3.0},
-        'original_pid': {'Kp': 5.0, 'Ki': 0.3, 'Kd': 0.0},
-        'loop_type': 'pressure',
-    },
-    {
-        'name': 'Coupled Temperature',
-        'description': '强耦合温度回路 - 增益和滞后同时变化',
-        'process_original': {'K': 1.0, 'T1': 60.0, 'L': 8.0},
-        'process_changed': {'K': 3.0, 'T1': 40.0, 'L': 20.0},
-        'original_pid': {'Kp': 1.2, 'Ki': 0.015, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Low Gain System',
-        'description': '小增益系统 - K < 0.5',
-        'process_original': {'K': 0.3, 'T1': 40.0, 'L': 5.0},
-        'process_changed': {'K': 0.6, 'T1': 35.0, 'L': 10.0},
-        'original_pid': {'Kp': 10.0, 'Ki': 0.2, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-    {
-        'name': 'High Gain Temperature',
-        'description': '高增益温度系统 - K > 3',
-        'process_original': {'K': 3.0, 'T1': 50.0, 'L': 5.0},
-        'process_changed': {'K': 5.0, 'T1': 45.0, 'L': 12.0},
-        'original_pid': {'Kp': 0.5, 'Ki': 0.008, 'Kd': 0.0},
-        'loop_type': 'temperature',
-    },
-    {
-        'name': 'Minimal Delay',
-        'description': '极小滞后 - L接近0',
-        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 0.5},
-        'process_changed': {'K': 2.0, 'T1': 18.0, 'L': 2.0},
-        'original_pid': {'Kp': 4.0, 'Ki': 0.15, 'Kd': 0.0},
-        'loop_type': 'flow',
-    },
-]
-
-
-# ============================================================
 # 幅度变化场景生成器
 # ============================================================
 
@@ -2101,11 +1635,13 @@ def generate_step_response_scenario_data(scenario: Dict) -> Tuple[List[Dict], Di
     return history_data, metadata
 
 
-def generate_scenario_data(scenario: Dict) -> Tuple[List[Dict], Dict]:
+def generate_scenario_data(scenario: Dict, seed: int = None) -> Tuple[List[Dict], Dict]:
     # 固定随机种子，确保每次运行结果一致
-    # 使用场景名称的哈希值作为种子，这样不同场景有不同但可重复的随机序列
-    seed = hash(scenario['name']) % (2**32)
-    np.random.seed(seed)
+    # 注意：不使用 hash()，因为 Python 3.3+ 默认每次运行 hash 结果不同
+    if seed is not None:
+        np.random.seed(seed)
+    else:
+        np.random.seed(42)  # 默认种子
     
     dt = 1.0
     sv = 50.0
@@ -2143,7 +1679,8 @@ def generate_scenario_data(scenario: Dict) -> Tuple[List[Dict], Dict]:
     osc_steps = 500
     total_steps = steady_steps + osc_steps
     
-    start_time = datetime.now() - timedelta(seconds=total_steps * dt)
+    # 使用固定的基准时间确保可重复性（不使用 datetime.now()）
+    start_time = datetime(2024, 1, 1, 0, 0, 0) - timedelta(seconds=total_steps * dt)
     history_data = []
     change_time = None
     pv = sv
@@ -3196,6 +2733,9 @@ def run_stability_test():
     
     验证现有算法和LLM+算法能否在不同生产振荡场景中让控制器达到稳态
     """
+    # 全局随机种子重置，确保可重复性
+    np.random.seed(25)
+    
     print("=" * 80)
     print("目标1: 振荡场景稳态验证")
     print("验证现有算法和LLM+算法能否在不同生产振荡场景中让控制器达到稳态")
@@ -3204,17 +2744,23 @@ def run_stability_test():
     # 检查 LLM 连接
     print("\n📡 检查 Ollama 连接...")
     llm_available = False
-    try:
-        llm_client = OllamaClient(
-            model=CONFIG['ollama_model'],
-            base_url=CONFIG['ollama_base_url']
-        )
-        llm_client.chat("test")
-        print(f"   ✅ Ollama 连接成功 (模型: {CONFIG['ollama_model']})")
-        llm_available = True
-    except Exception as e:
-        print(f"   ⚠️ Ollama 连接失败: {e}")
+    
+    # 如果配置中明确跳过 LLM 测试
+    if CONFIG.get('skip_llm_test', False):
+        print("   ⚠️ 配置中已设置 skip_llm_test=True，跳过 LLM 测试")
         print("   将只测试规则引擎模式")
+    else:
+        try:
+            llm_client = OllamaClient(
+                model=CONFIG['ollama_model'],
+                base_url=CONFIG['ollama_base_url']
+            )
+            llm_client.chat("test")
+            print(f"   ✅ Ollama 连接成功 (模型: {CONFIG['ollama_model']})")
+            llm_available = True
+        except Exception as e:
+            print(f"   ⚠️ Ollama 连接失败: {e}")
+            print("   将只测试规则引擎模式")
     
     # 使用振荡场景
     scenarios = TEST_SCENARIOS
@@ -3225,14 +2771,19 @@ def run_stability_test():
     llm_stable_count = 0
     
     for idx, scenario in enumerate(scenarios, 1):
+        # 每个场景使用固定种子确保可重复性
+        # 注意：不使用 hash()，因为 Python 3.3+ 默认每次运行 hash 结果不同
+        scenario_seed = idx * 1000  # 使用场景索引作为种子基础
+        np.random.seed(scenario_seed)
+        
         print(f"\n{'─'*70}")
         print(f"场景 {idx}/{len(scenarios)}: {scenario['name']}")
         print(f"描述: {scenario['description']}")
         print("─" * 70)
         
         try:
-            # 生成振荡数据
-            data, metadata = generate_scenario_data(scenario)
+            # 生成振荡数据，传入固定种子
+            data, metadata = generate_scenario_data(scenario, seed=scenario_seed)
             
             # 检测扰动窗口
             change_time = metadata['change_time']
@@ -3251,17 +2802,24 @@ def run_stability_test():
             
             # 动态仿真时长：极慢系统需要更长时间
             T1_changed = process_changed.get('T1', 30)
-            sim_duration = max(400, int(T1_changed * 3))  # 至少 3 倍时间常数
+            L_changed = process_changed.get('L', 5)
+            # 使用 5 倍时间常数确保极慢系统有足够时间稳定
+            sim_duration = max(400, int((T1_changed + L_changed) * 5))
             
             # ===== 规则引擎整定 =====
             print("   🔧 规则引擎整定...")
+            # 重置种子确保 ModelSelector 内部的 scipy.optimize 也可重复
+            np.random.seed(scenario_seed + 100)
             Config.OSCILLATION_TUNING['enable_llm'] = False
             selector_rule = ModelSelector(verbose=False)
             result_rule = selector_rule.run(input_data)
             pid_rule = result_rule.get('pid_parameters', {})
             
+            # 重置种子用于仿真
+            np.random.seed(scenario_seed + 200)
+            
             # 仿真规则引擎参数（使用固定种子确保可重复）
-            sim_seed = hash(scenario['name']) % (2**32) + 1  # +1 区分规则引擎
+            sim_seed = scenario_seed + 300  # 使用 scenario_seed 而非 hash()
             sim_rule = simulate_with_new_pid(process_changed, pid_rule, sv, duration=sim_duration, seed=sim_seed)
             rule_stable = sim_rule['is_stable']
             if rule_stable:

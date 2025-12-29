@@ -675,37 +675,11 @@ class OscillationTuner(LoggerMixin):
             pb_base *= level_slow_factor
             self.log(f"   ⚠️ Level极慢系统(Pu={Pu:.0f}s): 保守因子 ×{level_slow_factor:.2f}")
         
-        # 9.3 【新增】Level 回路通用保守因子
-        # 液位回路具有积分特性，需要整体更保守的参数
-        if self._loop_type == 'level':
-            level_pb_boost = osc_config.get('level_pb_boost_factor', 1.3)
-            level_gain_th = osc_config.get('level_gain_threshold', 1.5)
-            level_very_high_gain = osc_config.get('level_very_high_gain_threshold', 3.0)
-            
-            # 根据增益调整保守因子
-            if K_approx > level_very_high_gain:
-                # 极高增益液位：更大的保守因子
-                level_gain_boost = 1.0 + (K_approx - level_very_high_gain) * 0.2
-                level_gain_boost = min(level_gain_boost, 1.5)
-                level_pb_boost *= level_gain_boost
-                self.log(f"   📊 液位极高增益(K={K_approx:.1f}): pb保守 ×{level_pb_boost:.2f}")
-            elif K_approx > level_gain_th:
-                # 中高增益液位：适度增加保守
-                level_gain_boost = 1.0 + (K_approx - level_gain_th) * 0.15
-                level_gain_boost = min(level_gain_boost, 1.3)
-                level_pb_boost *= level_gain_boost
-                self.log(f"   📊 液位高增益(K={K_approx:.1f}): pb保守 ×{level_pb_boost:.2f}")
-            else:
-                self.log(f"   📊 液位回路基础保守: ×{level_pb_boost:.2f}")
-            
-            pb_base *= level_pb_boost
-        
-        # 10. 【优化】大滞后比因子 - 使用更准确的估算
-        # Ziegler-Nichols: Pu ≈ 4L，所以 L ≈ Pu/4
-        # T1 可以从 Pu 和 K 估算：T1 ≈ Pu * (1 + 1/K) / 4 (经验公式)
-        estimated_L = Pu / 4.0
-        # 改进的 T1 估算：考虑增益影响
-        T1_approx = Pu * (1.0 + 1.0 / max(K_approx, 0.5)) / 4.0
+        # 10. 大滞后比因子（L/T1 > 0.3 时）- 从 Pu 估算 L/T1
+        # Ziegler-Nichols: Pu ≈ 4L 对于低阻尼系统
+        # 如果 Pu > T1_approx，说明滞后可能较大
+        estimated_L = Pu / 4.0  # 粗略估计
+        T1_approx = Pu * 0.7  # 粗略估计（经验值）
         delay_ratio = estimated_L / max(T1_approx, 1.0)
         if delay_ratio > 0.3:
             delay_factor = 1.0 + (delay_ratio - 0.3) * 0.8  # 滞后比>0.3时增加保守度
@@ -858,54 +832,11 @@ class OscillationTuner(LoggerMixin):
         if llm_strategy is None:
             # 液位回路：积分过程特性，需要更大 Ti 避免积分饱和
             if self._loop_type == 'level':
-                level_ti_multiplier = osc_config.get('level_ti_multiplier', 2.0)
-                level_integrating_t1_threshold = osc_config.get('level_integrating_t1_threshold', 60.0)
-                level_integrating_ti_max = osc_config.get('level_integrating_ti_max', 3.0)
-                level_slow_pu = osc_config.get('level_slow_system_pu', 60.0)
-                level_gain_threshold = osc_config.get('level_gain_threshold', 1.5)
-                level_very_high_gain = osc_config.get('level_very_high_gain_threshold', 3.0)
-                
-                # 估算T1（基于Pu和K）
-                T1_approx = Pu * (1.0 + 1.0 / max(K_approx, 0.5)) / 4.0
-                
-                # 液位高增益场景：需要更保守的Ti
-                if K_approx > level_very_high_gain:
-                    # 极高增益液位：大幅增加Ti
-                    level_gain_ti_factor = 1.0 + (K_approx - level_very_high_gain) * 0.3
-                    level_gain_ti_factor = min(level_gain_ti_factor, 1.8)
-                    level_ti_multiplier *= level_gain_ti_factor
-                    self.log(f"   📊 液位极高增益(K={K_approx:.1f}): Ti乘数×{level_gain_ti_factor:.2f}")
-                elif K_approx > level_gain_threshold:
-                    # 中高增益液位：适度增加Ti
-                    level_gain_ti_factor = 1.0 + (K_approx - level_gain_threshold) * 0.2
-                    level_gain_ti_factor = min(level_gain_ti_factor, 1.5)
-                    level_ti_multiplier *= level_gain_ti_factor
-                    self.log(f"   📊 液位高增益(K={K_approx:.1f}): Ti乘数×{level_gain_ti_factor:.2f}")
-                
-                if T1_approx > level_integrating_t1_threshold:
-                    # 近似积分过程：Ti需要更大，但使用渐进策略避免过大
-                    # T1越大，Ti增幅越小（渐进收敛）
-                    integrating_factor = 1.0 + min((T1_approx - level_integrating_t1_threshold) / 80.0, 0.5)
-                    level_ti_multiplier *= integrating_factor
-                    level_ti_multiplier = min(level_ti_multiplier, level_integrating_ti_max)
-                    self.log(f"   📊 液位积分过程(T1≈{T1_approx:.0f}s): Ti乘数={level_ti_multiplier:.2f}")
-                elif Pu > level_slow_pu:
-                    # 慢系统但非积分：适度增加Ti
-                    slow_factor = 1.0 + (Pu - level_slow_pu) / 100.0
-                    slow_factor = min(slow_factor, 1.5)
-                    level_ti_multiplier *= slow_factor
-                    self.log(f"   📊 液位慢系统(Pu={Pu:.0f}s): Ti乘数={level_ti_multiplier:.2f}")
-                else:
-                    self.log(f"   📊 液位回路Ti调整: ×{level_ti_multiplier:.2f}")
-                
-                # 液位回路高振荡时额外增加Ti（避免积分饱和导致的持续振荡）
-                if oscillation_ratio > 0.5:
-                    level_osc_ti_factor = 1.0 + (oscillation_ratio - 0.5) * 0.6
-                    level_osc_ti_factor = min(level_osc_ti_factor, 1.5)
-                    level_ti_multiplier *= level_osc_ti_factor
-                    level_ti_multiplier = min(level_ti_multiplier, level_integrating_ti_max)
-                    self.log(f"   📊 液位高振荡Ti增强: ×{level_osc_ti_factor:.2f}, 总乘数={level_ti_multiplier:.2f}")
-                
+                level_ti_multiplier = osc_config.get('level_ti_multiplier', 1.4)
+                # 【新增】极慢液位系统(Pu>100)：减小 Ti 增幅，加快响应
+                if Pu > 100.0:
+                    level_ti_multiplier = min(level_ti_multiplier, 1.2)  # 限制增幅
+                    self.log(f"   📊 极慢液位Ti限制: ×{level_ti_multiplier}")
                 ti_multiplier *= level_ti_multiplier
             
             # 【新增】Flow 极高增益场景(K>6)：增加 Ti 避免积分过冲
@@ -922,8 +853,8 @@ class OscillationTuner(LoggerMixin):
                 ti_multiplier *= temp_high_gain_ti
                 self.log(f"   📊 Temperature高增益Ti调整(K={K_approx:.1f}): ×{temp_high_gain_ti:.2f}")
             
-            # 高振荡情况下，进一步增加 Ti（非液位回路，液位已单独处理）
-            if self._loop_type != 'level' and K_approx > 0 and oscillation_ratio > 0.5:
+            # 高振荡情况下，进一步增加 Ti
+            if K_approx > 0 and oscillation_ratio > 0.5:
                 delay_factor = osc_config.get('high_delay_ti_factor', 1.2)
                 ti_multiplier *= delay_factor
                 self.log(f"   📊 高振荡Ti调整: ×{delay_factor}")
