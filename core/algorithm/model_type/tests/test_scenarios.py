@@ -693,3 +693,236 @@ TEST_SCENARIOS = [
     },
 ]
 
+# 预定义的幅度测试场景（选择几个典型场景）
+# ============================================================
+# 工业实际场景测试配置
+# ============================================================
+# 设计原则：
+# 1. 基于实际工业场景的系统变化特点
+# 2. Old PID 参数是针对原系统合理整定的（不是故意激进）
+# 3. 系统变化后 Old PID 会振荡，需要重新整定
+# 4. 幅度变化模拟实际工况波动（如负荷变化、季节变化等）
+
+# 实际工业场景
+REALISTIC_SCENARIOS = [
+    # ========== 流量回路 ==========
+    # 特点：响应快，滞后小，但阀门特性会随时间变化
+    {
+        'name': 'Flow - Valve Stiction',
+        'description': '流量回路 - 阀门粘滞（增益非线性+滞后增加）',
+        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 2.0},
+        'process_changed': {'K': 1.6, 'T1': 22.0, 'L': 8.0},
+        'original_pid': {'Kp': 3.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'flow',
+        # 扩展幅度范围：0.7 ~ 1.4
+        'amplitude_factors': [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4],
+    },
+    {
+        'name': 'Flow - Pump Cavitation',
+        'description': '流量回路 - 泵气蚀（增益下降+响应变慢）',
+        'process_original': {'K': 1.2, 'T1': 20.0, 'L': 1.5},
+        'process_changed': {'K': 1.6, 'T1': 18.0, 'L': 5.0},
+        'original_pid': {'Kp': 3.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
+    },
+    
+    # ========== 温度回路 ==========
+    # 特点：响应慢，滞后大，受换热效率影响
+    {
+        'name': 'Temp - Heat Exchanger Fouling',
+        'description': '温度回路 - 换热器结垢（传热系数下降）',
+        'process_original': {'K': 0.8, 'T1': 50.0, 'L': 10.0},
+        'process_changed': {'K': 1.3, 'T1': 55.0, 'L': 18.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2],
+    },
+    {
+        'name': 'Temp - Ambient Change',
+        'description': '温度回路 - 环境温度变化（季节性）',
+        'process_original': {'K': 0.9, 'T1': 45.0, 'L': 8.0},
+        'process_changed': {'K': 1.3, 'T1': 40.0, 'L': 12.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [0.7, 0.8, 0.85, 0.9, 0.95, 1.0, 1.1, 1.2, 1.3],
+    },
+    
+    # ========== 压力回路 ==========
+    # 特点：响应快，对增益变化敏感
+    {
+        'name': 'Press - Compressor Surge',
+        'description': '压力回路 - 压缩机喘振边界变化',
+        'process_original': {'K': 1.0, 'T1': 15.0, 'L': 1.0},
+        'process_changed': {'K': 1.6, 'T1': 12.0, 'L': 4.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.2, 'Kd': 0.0},
+        'loop_type': 'pressure',
+        'amplitude_factors': [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4],
+    },
+    {
+        'name': 'Press - Upstream Disturbance',
+        'description': '压力回路 - 上游压力波动',
+        'process_original': {'K': 1.2, 'T1': 18.0, 'L': 2.0},
+        'process_changed': {'K': 1.5, 'T1': 15.0, 'L': 5.0},
+        'original_pid': {'Kp': 3.5, 'Ki': 0.15, 'Kd': 0.0},
+        'loop_type': 'pressure',
+        'amplitude_factors': [0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2],
+    },
+    
+    # ========== 液位回路 ==========
+    # 特点：积分特性，对滞后敏感
+    {
+        'name': 'Level - Tank Geometry',
+        'description': '液位回路 - 储罐液面形状变化（锥形底）',
+        'process_original': {'K': 1.0, 'T1': 40.0, 'L': 5.0},
+        'process_changed': {'K': 1.5, 'T1': 35.0, 'L': 10.0},
+        'original_pid': {'Kp': 4.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'level',
+        'amplitude_factors': [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
+    },
+    {
+        'name': 'Level - Outflow Change',
+        'description': '液位回路 - 出口流量变化（下游负荷）',
+        'process_original': {'K': 1.0, 'T1': 35.0, 'L': 4.0},
+        'process_changed': {'K': 1.4, 'T1': 38.0, 'L': 9.0},
+        'original_pid': {'Kp': 4.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'level',
+        'amplitude_factors': [0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2],
+    },
+    
+    # ========== 极端挑战场景 ==========
+    # 专门测试算法鲁棒性的边界情况
+    
+    # 1. 极快系统（响应时间 < 5s）
+    {
+        'name': 'Ultra Fast Flow',
+        'description': '超快流量回路 - 极小时间常数',
+        'process_original': {'K': 1.0, 'T1': 3.0, 'L': 0.5},
+        'process_changed': {'K': 2.0, 'T1': 2.0, 'L': 1.5},
+        'original_pid': {'Kp': 8.0, 'Ki': 0.5, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 2. 极慢系统（响应时间 > 200s）
+    {
+        'name': 'Very Slow Temperature',
+        'description': '极慢温度回路 - 大时间常数',
+        'process_original': {'K': 0.6, 'T1': 200.0, 'L': 30.0},
+        'process_changed': {'K': 1.0, 'T1': 180.0, 'L': 50.0},
+        'original_pid': {'Kp': 1.5, 'Ki': 0.005, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 3. 高噪声环境
+    {
+        'name': 'High Noise Flow',
+        'description': '高噪声流量回路 - 测噪声鲁棒性',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 3.0},
+        'process_changed': {'K': 1.8, 'T1': 18.0, 'L': 6.0},
+        'original_pid': {'Kp': 3.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'noise_std': 0.8,  # 高噪声
+        'amplitude_factors': [1.0],
+    },
+    
+    # 4. 极高增益变化（5倍以上）
+    {
+        'name': 'Extreme Gain Change',
+        'description': '极高增益变化 - K从1变到6',
+        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
+        'process_changed': {'K': 6.0, 'T1': 25.0, 'L': 8.0},
+        'original_pid': {'Kp': 2.5, 'Ki': 0.08, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 5. 极大滞后（L/T1 > 0.5）
+    {
+        'name': 'Very Large Delay',
+        'description': '极大滞后 - L/T1 接近1',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 5.0},
+        'process_changed': {'K': 1.2, 'T1': 18.0, 'L': 15.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.05, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 6. 积分过程（液位）
+    {
+        'name': 'Integrating Level',
+        'description': '积分液位回路 - 大时间常数模拟积分',
+        'process_original': {'K': 0.8, 'T1': 150.0, 'L': 5.0},
+        'process_changed': {'K': 1.2, 'T1': 140.0, 'L': 10.0},
+        'original_pid': {'Kp': 1.0, 'Ki': 0.003, 'Kd': 0.0},
+        'loop_type': 'level',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 7. 反向作用（负增益）
+    {
+        'name': 'Reverse Acting Flow',
+        'description': '反向作用流量 - 负增益系统',
+        'process_original': {'K': -1.0, 'T1': 25.0, 'L': 2.0},
+        'process_changed': {'K': -2.0, 'T1': 20.0, 'L': 5.0},
+        'original_pid': {'Kp': -3.0, 'Ki': -0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 8. 压力回路 - 快速扰动
+    {
+        'name': 'Fast Pressure Disturbance',
+        'description': '快速压力扰动 - 小时间常数',
+        'process_original': {'K': 1.2, 'T1': 8.0, 'L': 1.0},
+        'process_changed': {'K': 2.5, 'T1': 6.0, 'L': 3.0},
+        'original_pid': {'Kp': 5.0, 'Ki': 0.3, 'Kd': 0.0},
+        'loop_type': 'pressure',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 9. 温度回路 - 强耦合
+    {
+        'name': 'Coupled Temperature',
+        'description': '强耦合温度回路 - 增益和滞后同时变化',
+        'process_original': {'K': 1.0, 'T1': 60.0, 'L': 8.0},
+        'process_changed': {'K': 3.0, 'T1': 40.0, 'L': 20.0},
+        'original_pid': {'Kp': 1.2, 'Ki': 0.015, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 10. 小增益系统
+    {
+        'name': 'Low Gain System',
+        'description': '小增益系统 - K < 0.5',
+        'process_original': {'K': 0.3, 'T1': 40.0, 'L': 5.0},
+        'process_changed': {'K': 0.6, 'T1': 35.0, 'L': 10.0},
+        'original_pid': {'Kp': 10.0, 'Ki': 0.2, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 11. 高增益系统
+    {
+        'name': 'High Gain Temperature',
+        'description': '高增益温度系统 - K > 3',
+        'process_original': {'K': 3.0, 'T1': 50.0, 'L': 5.0},
+        'process_changed': {'K': 5.0, 'T1': 45.0, 'L': 12.0},
+        'original_pid': {'Kp': 0.5, 'Ki': 0.008, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'amplitude_factors': [1.0],
+    },
+    
+    # 12. 边界条件 - 极小滞后
+    {
+        'name': 'Minimal Delay',
+        'description': '极小滞后 - L接近0',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 0.5},
+        'process_changed': {'K': 2.0, 'T1': 18.0, 'L': 2.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.15, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'amplitude_factors': [1.0],
+    },
+]
