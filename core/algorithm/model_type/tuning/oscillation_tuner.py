@@ -19,12 +19,15 @@
 """
 
 import numpy as np
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
+
+from .types import ValveIssues, ConservativePIDParams
 
 from ..config import Config, ModelType
 from ..data_models import SegmentResult, HistoricalData, FusionResult
 from ..utils import calculate_r2, calculate_rmse
 from ..logger import LoggerMixin
+from .loop_type_strategies import get_loop_strategy, LoopTypeStrategy
 
 
 class OscillationTuner(LoggerMixin):
@@ -59,6 +62,7 @@ class OscillationTuner(LoggerMixin):
         self._llm_advisor = None
         self._loop_type = loop_type
         self._loop_name = loop_name
+        self._strategy = get_loop_strategy(loop_type)
         
         if llm_client is not None:
             self._init_llm_advisor(llm_client)
@@ -75,6 +79,7 @@ class OscillationTuner(LoggerMixin):
         self._llm_client = llm_client
         self._loop_type = loop_type
         self._loop_name = loop_name
+        self._strategy = get_loop_strategy(loop_type)
         self._init_llm_advisor(llm_client)
     
     def _init_llm_advisor(self, llm_client):
@@ -487,139 +492,126 @@ class OscillationTuner(LoggerMixin):
             'valve_issues': valve_issues
         }
     
-    def _get_conservative_pid_params(self, Pu: float, Ku: float, 
-                                      K_approx: float = 1.0,
-                                      reason: str = 'generic',
-                                      oscillation_ratio: float = 0.0,
-                                      data_quality: float = 0.5,
-                                      nonlinearity: float = 0.0,
-                                      valve_issues: Dict = None,
-                                      confidence: float = 0.5) -> Dict[str, Any]:
+    # ========== 辅助方法：拆分自 _get_conservative_pid_params ==========
+    
+    def _get_llm_strategy(self, Pu: float, Ku: float, K_approx: float,
+                          oscillation_ratio: float, data_quality: float,
+                          nonlinearity: float, valve_issues: Dict,
+                          confidence: float) -> Tuple[Any, Optional[Dict]]:
         """
-        获取保守PID参数（动态计算pb，借鉴大模型调参经验）
-        
-        改进点（基于大模型调参经验）：
-        1. 严重振荡时使用更保守的pb
-        2. 自适应添加微分作用抑制振荡
-        3. pb范围扩展，允许更保守的参数
-        4. 数据质量越差，参数越保守
-        5. 考虑阀门问题（死区、粘滞、卡涩）
-        6. 基于置信度动态调整pb_max（鲁棒性策略）
-        7. 支持 LLM 决策保守策略参数（当 llm_client 可用时）
-        
-        Args:
-            Pu: 临界周期
-            Ku: 临界增益
-            K_approx: 估计的过程增益
-            reason: 使用保守参数的原因
-            oscillation_ratio: 振荡比（用于自适应调整）
-            data_quality: 数据质量评分 (0-1)，越低越需要保守
-            nonlinearity: 非线性程度 (0-1)
-            valve_issues: 阀门问题检测结果
-            confidence: Ku/Pu估计的置信度 (0-1)，越高允许更激进
+        获取 LLM 策略参数（如果启用且适用）
         
         Returns:
-            保守PID参数字典
+            (llm_strategy, llm_decision_info) 元组
         """
-        if valve_issues is None:
-            valve_issues = {}
         osc_config = Config.OSCILLATION_TUNING
-        
-        # ========== LLM 决策保守策略参数 ==========
-        # LLM 返回的是策略参数（调整因子），而不是直接的 PID 参数
-        # 这些策略参数会用于调整下面规则引擎的计算
-        llm_strategy = None
-        llm_decision_info = None
-        
-        # 检查配置开关是否启用 LLM
         enable_llm = osc_config.get('enable_llm', True)
         
-        if enable_llm and self._llm_advisor is not None:
-            # ========== 条件性 LLM 调用（仅困难场景）==========
-            # 判断是否为困难场景，只在复杂情况下启用 LLM
-            has_valve_issues = valve_issues.get('has_deadband', False) or valve_issues.get('has_stiction', False)
-            is_low_quality = data_quality < 0.5
-            is_high_nonlinearity = nonlinearity > 0.5
-            is_low_confidence = confidence < 0.5
-            is_high_oscillation = oscillation_ratio > 0.7
-            
-            should_use_llm = (
-                has_valve_issues or 
-                is_low_quality or 
-                is_high_nonlinearity or 
-                is_low_confidence or
-                is_high_oscillation
+        if not enable_llm or self._llm_advisor is None:
+            return None, None
+        
+        # 判断是否为困难场景
+        has_valve_issues = valve_issues.get('has_deadband', False) or valve_issues.get('has_stiction', False)
+        should_use_llm = (
+            has_valve_issues or 
+            data_quality < 0.5 or 
+            nonlinearity > 0.5 or 
+            confidence < 0.5 or
+            oscillation_ratio > 0.7
+        )
+        
+        if not should_use_llm:
+            self.log(f"   📊 场景简单（质量={data_quality:.2f}, 置信={confidence:.2f}），跳过LLM，使用规则引擎")
+            return None, None
+        
+        self.log(f"   🤖 困难场景（阀门={has_valve_issues}, 质量={data_quality:.2f}, 置信={confidence:.2f}），启用LLM")
+        try:
+            llm_strategy = self._llm_advisor.decide_conservative_strategy(
+                Pu=Pu, Ku=Ku, K_approx=K_approx,
+                oscillation_ratio=oscillation_ratio,
+                data_quality=data_quality,
+                nonlinearity=nonlinearity,
+                valve_issues=valve_issues,
+                confidence=confidence,
+                loop_type=self._loop_type,
+                loop_name=self._loop_name
             )
             
-            if not should_use_llm:
-                self.log(f"   📊 场景简单（质量={data_quality:.2f}, 置信={confidence:.2f}），跳过LLM，使用规则引擎")
-            else:
-                self.log(f"   🤖 困难场景（阀门={has_valve_issues}, 质量={data_quality:.2f}, 置信={confidence:.2f}），启用LLM")
-                try:
-                    llm_strategy = self._llm_advisor.decide_conservative_strategy(
-                        Pu=Pu,
-                        Ku=Ku,
-                        K_approx=K_approx,
-                        oscillation_ratio=oscillation_ratio,
-                        data_quality=data_quality,
-                        nonlinearity=nonlinearity,
-                        valve_issues=valve_issues,
-                        confidence=confidence,
-                        loop_type=self._loop_type,
-                        loop_name=self._loop_name
-                    )
-                    
-                    if llm_strategy is not None:
-                        llm_decision_info = {
-                            'strategy_params': {
-                                'safety_factor': llm_strategy.safety_factor,
-                                'pb_extra_factor': llm_strategy.pb_extra_factor,
-                                'ti_multiplier': llm_strategy.ti_multiplier,
-                                'enable_derivative': llm_strategy.enable_derivative,
-                                'td_factor': llm_strategy.td_factor,
-                            },
-                            'reasoning': llm_strategy.reasoning,
-                            'confidence': llm_strategy.confidence,
-                            'risk_factors': llm_strategy.risk_factors,
-                            'recommendations': llm_strategy.recommendations
-                        }
-                except Exception as e:
-                    self.log(f"   ⚠️ LLM 策略决策失败: {e}，使用规则引擎默认参数")
+            if llm_strategy is not None:
+                llm_decision_info = {
+                    'strategy_params': {
+                        'safety_factor': llm_strategy.safety_factor,
+                        'pb_extra_factor': llm_strategy.pb_extra_factor,
+                        'ti_multiplier': llm_strategy.ti_multiplier,
+                        'enable_derivative': llm_strategy.enable_derivative,
+                        'td_factor': llm_strategy.td_factor,
+                    },
+                    'reasoning': llm_strategy.reasoning,
+                    'confidence': llm_strategy.confidence,
+                    'risk_factors': llm_strategy.risk_factors,
+                    'recommendations': llm_strategy.recommendations
+                }
+                return llm_strategy, llm_decision_info
+        except Exception as e:
+            self.log(f"   ⚠️ LLM 策略决策失败: {e}，使用规则引擎默认参数")
         
-        # ========== 规则引擎计算（使用 LLM 策略参数调整）==========
-        # 1. 基于过程增益的基础 pb
+        return None, None
+    
+    def _calculate_base_pb(self, Ku: float, K_approx: float, Pu: float) -> Tuple[float, float, float, float]:
+        """
+        计算基础 pb 值
+        
+        Returns:
+            (pb_base, pb_from_K, pb_from_Ku, slow_factor) 元组
+        """
+        osc_config = Config.OSCILLATION_TUNING
+        
+        # 1. 基于过程增益的 pb
         pb_from_k_factor = osc_config.get('pb_from_k_factor', 1.5)
         if K_approx > 0.01:
             pb_from_K = 100.0 * K_approx * pb_from_k_factor
         else:
-            pb_from_K = 80.0  # 增益过小时的默认值
+            pb_from_K = 80.0
         
-        # 2. 基于临界参数的 pb（Ziegler-Nichols 变体）
+        # 2. 基于临界参数的 pb
         kp_from_ku_factor = osc_config.get('kp_from_ku_factor', 0.2)
         if Ku > 0.1:
             Kp_from_Ku = kp_from_ku_factor * Ku
             pb_from_Ku = 100.0 / max(Kp_from_Ku, 0.1)
         else:
-            pb_from_Ku = 100.0  # Ku 不可靠时的默认值
+            pb_from_Ku = 100.0
         
-        # 3. 基于临界周期的调整因子（从配置读取）
+        # 3. 慢系统调整因子
         pu_thresholds = osc_config.get('slow_system_pu_thresholds', [30.0, 15.0])
         slow_factors = osc_config.get('slow_system_factors', [1.3, 1.15, 1.0])
-        slow_factor = slow_factors[-1]  # 默认值
+        slow_factor = slow_factors[-1]
         for i, threshold in enumerate(pu_thresholds):
             if Pu > threshold:
                 slow_factor = slow_factors[i]
                 break
         
-        # 4. 综合计算：取较大值（更保守）并应用慢系统因子
+        # 4. 综合计算
         pb_base = max(pb_from_K, pb_from_Ku) * slow_factor
         
-        # 5. 根据原因微调（从配置读取）
-        high_gain_factor = osc_config.get('high_gain_extra_factor', 1.1)
+        return pb_base, pb_from_K, pb_from_Ku, slow_factor
+    
+    def _apply_quality_factors(self, pb_base: float, reason: str,
+                               data_quality: float, nonlinearity: float,
+                               valve_issues: Dict) -> float:
+        """
+        应用数据质量、非线性、阀门问题等因子
+        
+        Returns:
+            调整后的 pb 值
+        """
+        osc_config = Config.OSCILLATION_TUNING
+        
+        # 1. 原因微调
         if reason == 'high_gain':
+            high_gain_factor = osc_config.get('high_gain_extra_factor', 1.1)
             pb_base *= high_gain_factor
         
-        # 6. 数据质量因子（从配置读取阈值）
+        # 2. 数据质量因子
         quality_threshold = osc_config.get('quality_adjustment_threshold', 0.5)
         quality_adj_factor = osc_config.get('quality_adjustment_factor', 0.6)
         if data_quality < quality_threshold:
@@ -627,7 +619,7 @@ class OscillationTuner(LoggerMixin):
             pb_base *= quality_factor
             self.log(f"   📊 数据质量调整: 质量={data_quality:.2f}, 因子=×{quality_factor:.2f}")
         
-        # 7. 非线性因子（从配置读取阈值）
+        # 3. 非线性因子
         nonlin_threshold = osc_config.get('nonlinearity_threshold', 0.5)
         nonlin_adj_factor = osc_config.get('nonlinearity_factor', 0.4)
         if nonlinearity > nonlin_threshold:
@@ -635,7 +627,7 @@ class OscillationTuner(LoggerMixin):
             pb_base *= nonlin_factor
             self.log(f"   📊 非线性调整: 非线性={nonlinearity:.2f}, 因子=×{nonlin_factor:.2f}")
         
-        # 8. 阀门问题因子（从配置读取）
+        # 4. 阀门问题因子
         valve_deadband_f = osc_config.get('valve_deadband_factor', 1.15)
         valve_stiction_f = osc_config.get('valve_stiction_factor', 1.2)
         valve_saturation_f = osc_config.get('valve_saturation_factor', 1.1)
@@ -651,90 +643,81 @@ class OscillationTuner(LoggerMixin):
             self.log(f"   ⚠️ 检测到阀门饱和，增加保守度 ×{valve_saturation_f}")
         pb_base *= valve_factor
         
-        # ========== 新增：极端场景处理（针对失败场景优化 v2）==========
-        # 9. 极高增益因子（K > 4 时使用更保守策略）
-        # 【优化】K>6 时增强斜率，K>8 时提高上限
+        return pb_base
+    
+    def _apply_extreme_factors(self, pb_base: float, K_approx: float, 
+                               Pu: float, oscillation_ratio: float) -> Tuple[float, float]:
+        """
+        应用极端场景因子（高增益、大滞后、极端振荡）
+        
+        Returns:
+            (调整后的 pb, delay_ratio) 元组
+        """
+        # 1. 极高增益因子
         if K_approx > 4.0:
             if K_approx > 6.0:
-                # 高增益区域：斜率 0.25，上限 3.0
                 extreme_gain_factor = 1.0 + (K_approx - 4.0) * 0.25
                 extreme_gain_factor = min(extreme_gain_factor, 3.0)
             else:
-                # 中等增益区域：斜率 0.15，上限 2.0
                 extreme_gain_factor = 1.0 + (K_approx - 4.0) * 0.15
                 extreme_gain_factor = min(extreme_gain_factor, 2.0)
             pb_base *= extreme_gain_factor
             self.log(f"   ⚠️ 极高增益场景(K={K_approx:.1f}): 保守因子 ×{extreme_gain_factor:.2f}")
         
-        # 9.1 【新增】Flow 回路极高增益 (K>6) 特殊处理
-        # 针对场景 #34 (K=8) 和 #47 (K=6)
-        if self._loop_type == 'flow' and K_approx > 6.0:
-            flow_extreme_gain_factor = 1.0 + (K_approx - 6.0) * 0.4  # K>6 时额外增加
-            flow_extreme_gain_factor = min(flow_extreme_gain_factor, 2.0)
-            pb_base *= flow_extreme_gain_factor
-            self.log(f"   ⚠️ Flow极高增益(K={K_approx:.1f}): 额外保守 ×{flow_extreme_gain_factor:.2f}")
+        # 2. 回路类型特定调整
+        pb_base = self._strategy.adjust_pb_for_extreme(pb_base, K_approx, Pu, log_func=self.log)
         
-        # 9.2 【新增】Level 回路极慢系统 (Pu>100) 特殊处理
-        # 针对场景 #49 (T1=140, level)
-        if self._loop_type == 'level' and Pu > 100.0:
-            level_slow_factor = 1.0 + (Pu - 100.0) / 100.0  # Pu>100 时增加保守
-            level_slow_factor = min(level_slow_factor, 1.8)
-            pb_base *= level_slow_factor
-            self.log(f"   ⚠️ Level极慢系统(Pu={Pu:.0f}s): 保守因子 ×{level_slow_factor:.2f}")
-        
-        # 10. 【优化】大滞后比因子 - 使用更准确的估算
-        # Ziegler-Nichols: Pu ≈ 4L，所以 L ≈ Pu/4
-        # T1 可以从 Pu 和 K 估算：T1 ≈ Pu * (1 + 1/K) / 4 (经验公式)
+        # 3. 大滞后比因子
         estimated_L = Pu / 4.0
-        # 改进的 T1 估算：考虑增益影响
         T1_approx = Pu * (1.0 + 1.0 / max(K_approx, 0.5)) / 4.0
         delay_ratio = estimated_L / max(T1_approx, 1.0)
         
-        # 【优化】分层滞后比处理
         if delay_ratio > 0.8:
-            # 极大滞后比：极端保守
             delay_factor = 2.5
             self.log(f"   ⚠️ 极大滞后比(L/T1≈{delay_ratio:.2f}): 极端保守 ×{delay_factor:.2f}")
         elif delay_ratio > 0.6:
-            # 大滞后比：显著保守
-            delay_factor = 1.6 + (delay_ratio - 0.6) * 4.0  # 0.6→1.6, 0.8→2.4
+            delay_factor = 1.6 + (delay_ratio - 0.6) * 4.0
             delay_factor = min(delay_factor, 2.4)
             self.log(f"   ⚠️ 大滞后比(L/T1≈{delay_ratio:.2f}): 显著保守 ×{delay_factor:.2f}")
         elif delay_ratio > 0.4:
-            # 中等滞后比：适度保守
-            delay_factor = 1.3 + (delay_ratio - 0.4) * 1.5  # 0.4→1.3, 0.6→1.6
+            delay_factor = 1.3 + (delay_ratio - 0.4) * 1.5
             self.log(f"   ⚠️ 中等滞后比(L/T1≈{delay_ratio:.2f}): 适度保守 ×{delay_factor:.2f}")
         else:
             delay_factor = 1.0
         pb_base *= delay_factor
         
-        # 11. 极端振荡场景（振荡比>0.85）额外保守
+        # 4. 极端振荡场景
         if oscillation_ratio > 0.85:
             extreme_osc_factor = 1.2 + (oscillation_ratio - 0.85) * 2.0
             extreme_osc_factor = min(extreme_osc_factor, 1.6)
             pb_base *= extreme_osc_factor
             self.log(f"   ⚠️ 极端振荡场景(ratio={oscillation_ratio:.2f}): 保守因子 ×{extreme_osc_factor:.2f}")
         
-        # ========== 渐进式振荡保守调整（核心改进，使用渐近函数） ==========
-        # 使用渐近函数避免高振荡时pb线性爆炸
-        # pb_multiplier = 1 + k * sqrt(osc - start)，增长放缓
+        return pb_base, delay_ratio
+    
+    def _apply_oscillation_adjustment(self, pb_base: float, oscillation_ratio: float,
+                                      llm_strategy: Any) -> Tuple[float, float]:
+        """
+        应用振荡比自适应调整（渐进式策略）
+        
+        Returns:
+            (调整后的 pb, safety_factor) 元组
+        """
+        osc_config = Config.OSCILLATION_TUNING
+        
         pb_gradient = osc_config.get('pb_gradient', 2.0)
         pb_osc_start = osc_config.get('pb_oscillation_start', 0.4)
-        base_safety_factor = osc_config.get('critical_method_safety_factor', 1.4)
-        
-        # 自适应安全系数（从配置读取阈值和斜率，或使用 LLM 策略）
         safety_base = osc_config.get('safety_factor_base', 1.4)
         safety_thresholds = osc_config.get('safety_factor_thresholds', [0.5, 0.7, 0.85])
         safety_slopes = osc_config.get('safety_factor_slopes', [0.5, 1.0, 2.0])
         
-        # ========== 如果有 LLM 策略，使用 LLM 决策的安全系数 ==========
+        # 计算安全系数
         if llm_strategy is not None:
             safety_factor = llm_strategy.safety_factor
             self.log(f"   🤖 LLM 策略: safety_factor={safety_factor:.2f}, "
                     f"pb_extra={llm_strategy.pb_extra_factor:.2f}, "
                     f"ti_mult={llm_strategy.ti_multiplier:.2f}")
         else:
-            # 规则引擎计算安全系数
             if oscillation_ratio < safety_thresholds[0]:
                 safety_factor = safety_base
             elif oscillation_ratio < safety_thresholds[1]:
@@ -747,22 +730,17 @@ class OscillationTuner(LoggerMixin):
                 prev_value += (safety_thresholds[2] - safety_thresholds[1]) * safety_slopes[1]
                 safety_factor = prev_value + (oscillation_ratio - safety_thresholds[2]) * safety_slopes[2]
         
-        # 计算综合保守乘数（将安全系数合并，避免多重乘数叠加）
-        total_multiplier = safety_factor  # 自适应安全系数
+        # 计算综合保守乘数
+        total_multiplier = safety_factor
         
-        # 应用 LLM 的 pb_extra_factor
         if llm_strategy is not None:
             total_multiplier *= llm_strategy.pb_extra_factor
         
         if oscillation_ratio > pb_osc_start:
-            # 使用平方根函数，高振荡时增长放缓
-            # effective_osc ∈ [0, 0.6]（振荡比最高1.0）
             effective_osc = oscillation_ratio - pb_osc_start
-            # sqrt(0.6) ≈ 0.77，乘以gradient=1.0 → 0.77
             osc_multiplier = 1.0 + np.sqrt(effective_osc) * pb_gradient
             total_multiplier *= osc_multiplier
             
-            # 限制总乘数上限（从配置读取）
             max_mult_normal = osc_config.get('max_multiplier_normal', 2.5)
             max_mult_high = osc_config.get('max_multiplier_high_osc', 3.0)
             if oscillation_ratio > safety_thresholds[2]:
@@ -780,42 +758,48 @@ class OscillationTuner(LoggerMixin):
         
         pb_base *= total_multiplier
         
-        # 6. 限制在合理范围（动态调整边界）
+        return pb_base, safety_factor
+    
+    def _apply_pb_bounds(self, pb_base: float, K_approx: float,
+                        confidence: float, reason: str,
+                        pb_from_K: float, pb_from_Ku: float,
+                        Pu: float, Ku: float, slow_factor: float,
+                        delay_ratio: float = 0.0) -> float:
+        """
+        应用 pb 边界限制（动态调整）
+        
+        Returns:
+            限制后的 pb 值
+        """
+        osc_config = Config.OSCILLATION_TUNING
+        
         pb_min_base = osc_config.get('pb_min', 80.0)
         pb_max_config = osc_config.get('pb_max', 600.0)
         
-        # ========== 基于置信度的 pb_max 分级策略（鲁棒性优化）==========
-        # 高置信度：允许更激进（pb_max 较低）
-        # 低置信度：强制保守（pb_max 较高）
+        # 基于置信度的 pb_max 分级
         if confidence >= 0.8:
-            # 高置信度：Ku/Pu 估计可靠，允许更激进控制
             pb_max = min(pb_max_config, 400.0)
             self.log(f"   📊 高置信度({confidence:.2f}): pb_max=400")
         elif confidence >= 0.5:
-            # 中等置信度：适度保守
             pb_max = min(pb_max_config, 600.0)
         else:
-            # 低置信度：Ku/Pu 估计不可靠，强制保守
             pb_max = min(pb_max_config * 1.3, 800.0)
             self.log(f"   📊 低置信度({confidence:.2f}): pb_max={pb_max:.0f}")
         
-        # 动态调整pb边界（基于过程增益K）
-        # 小增益系统需要更高的pb下限，大增益系统可以更激进
-        # pb_min = pb_min_base * (1 + factor/K), K越小pb下限越高
+        # 动态调整pb下限
         pb_k_factor = osc_config.get('pb_k_adjustment_factor', 0.3)
         if K_approx > 0.01:
             pb_min_dynamic = pb_min_base * (1.0 + pb_k_factor / K_approx)
-            pb_min_dynamic = min(pb_min_dynamic, 400.0)  # 绝对上限400%
+            pb_min_dynamic = min(pb_min_dynamic, 400.0)
         else:
             pb_min_dynamic = 400.0
         pb_min = max(pb_min_base, pb_min_dynamic)
         
-        # 优化：当reason为low_gain时（Ku/K比值过大），进一步提高pb下限
-        # 这种情况说明系统可能已经在振荡边缘，需要更保守的参数
+        # low_gain 模式额外处理
         if reason == 'low_gain':
             ku_k_extreme_factor = osc_config.get('ku_k_extreme_pb_factor', 1.5)
             pb_min = pb_min * ku_k_extreme_factor
-            pb_min = min(pb_min, 500.0)  # 绝对上限500%
+            pb_min = min(pb_min, 500.0)
             self.log(f"   📊 Ku/K异常模式: pb下限={pb_min:.0f}% (K={K_approx:.3f})")
         else:
             self.log(f"   📊 动态pb下限: {pb_min:.0f}% (K={K_approx:.3f})")
@@ -826,13 +810,23 @@ class OscillationTuner(LoggerMixin):
                 f"Ku={Ku:.3f}→pb={pb_from_Ku:.1f}, Pu={Pu:.1f}s(×{slow_factor}), "
                 f"最终pb={pb_safe:.1f}")
         
-        conservative_Kp = 100.0 / pb_safe
+        return pb_safe
+    
+    def _calculate_conservative_ti_td(self, Pu: float, oscillation_ratio: float,
+                                      K_approx: float, llm_strategy: Any) -> Tuple[float, float, float, float]:
+        """
+        计算保守的 Ti 和 Td 值
         
-        # ========== 自适应 Ti 计算（从配置读取参数，或使用 LLM 策略） ==========
+        Returns:
+            (Ti, Td, ti_multiplier, td_multiplier) 元组
+        """
+        osc_config = Config.OSCILLATION_TUNING
+        
+        # Ti 计算
         ti_min_base = osc_config.get('ti_min_base', 1.5)
         base_Ti = max(Pu / 2, ti_min_base) if Pu > 0 else 2.0
         
-        # 振荡调整因子（从配置读取）
+        # 振荡调整因子
         ti_osc_start = osc_config.get('ti_osc_start', 0.6)
         ti_osc_factor = osc_config.get('ti_osc_factor', 0.5)
         if oscillation_ratio > ti_osc_start:
@@ -840,7 +834,7 @@ class OscillationTuner(LoggerMixin):
         else:
             ti_multiplier = 1.0
         
-        # 慢系统调整（从配置读取）
+        # 慢系统调整
         ti_slow_thresholds = osc_config.get('ti_slow_pu_thresholds', [20.0, 10.0])
         ti_slow_factors = osc_config.get('ti_slow_factors', [1.1, 1.05, 1.0])
         for i, threshold in enumerate(ti_slow_thresholds):
@@ -848,99 +842,75 @@ class OscillationTuner(LoggerMixin):
                 ti_multiplier *= ti_slow_factors[i]
                 break
         
-        # ========== 回路类型特定调整（鲁棒性优化）==========
-        # 注意：这些调整只在没有 LLM 策略时应用，避免与 LLM 调整叠加过度
+        # 回路类型特定调整
         if llm_strategy is None:
-            # 液位回路：积分过程特性，需要更大 Ti 避免积分饱和
-            if self._loop_type == 'level':
-                level_ti_multiplier = osc_config.get('level_ti_multiplier', 1.4)
-                # 【新增】极慢液位系统(Pu>100)：减小 Ti 增幅，加快响应
-                if Pu > 100.0:
-                    level_ti_multiplier = min(level_ti_multiplier, 1.2)  # 限制增幅
-                    self.log(f"   📊 极慢液位Ti限制: ×{level_ti_multiplier}")
-                ti_multiplier *= level_ti_multiplier
-            
-            # 【新增】Flow 极高增益场景(K>6)：增加 Ti 避免积分过冲
-            if self._loop_type == 'flow' and K_approx > 6.0:
-                flow_high_gain_ti = 1.0 + (K_approx - 6.0) * 0.3  # K>6时增加Ti
-                flow_high_gain_ti = min(flow_high_gain_ti, 1.8)
-                ti_multiplier *= flow_high_gain_ti
-                self.log(f"   📊 Flow高增益Ti调整(K={K_approx:.1f}): ×{flow_high_gain_ti:.2f}")
-            
-            # 【新增】Temperature 高增益场景(K>4)：增加 Ti 避免振荡
-            if self._loop_type == 'temperature' and K_approx > 4.0:
-                temp_high_gain_ti = 1.0 + (K_approx - 4.0) * 0.25
-                temp_high_gain_ti = min(temp_high_gain_ti, 1.5)
-                ti_multiplier *= temp_high_gain_ti
-                self.log(f"   📊 Temperature高增益Ti调整(K={K_approx:.1f}): ×{temp_high_gain_ti:.2f}")
-            
-            # 高振荡情况下，进一步增加 Ti
-            if K_approx > 0 and oscillation_ratio > 0.5:
-                delay_factor = osc_config.get('high_delay_ti_factor', 1.2)
-                ti_multiplier *= delay_factor
-                self.log(f"   📊 高振荡Ti调整: ×{delay_factor}")
+            ti_multiplier = self._strategy.adjust_ti_multiplier(
+                ti_multiplier, K_approx, Pu, oscillation_ratio, osc_config, log_func=self.log
+            )
         else:
-            # 有 LLM 策略时，应用 LLM 的 ti_multiplier
             ti_multiplier *= llm_strategy.ti_multiplier
             self.log(f"   🤖 LLM Ti调整: 基础乘数×LLM乘数={ti_multiplier:.2f}")
         
         conservative_Ti = base_Ti * ti_multiplier
-        # Ti范围限制（从配置读取）
         ti_range = osc_config.get('ti_range', [1.5, 10.0])
         conservative_Ti = np.clip(conservative_Ti, ti_range[0], ti_range[1])
-        conservative_Ki = conservative_Kp / conservative_Ti
         
-        # ========== 自适应 Td 计算（基于Pu和振荡比，或使用 LLM 策略） ==========
-        conservative_Kd = 0.0
+        # Td 计算
         conservative_Td = 0.0
+        td_multiplier = 0.0
         enable_derivative = osc_config.get('enable_adaptive_derivative', True)
         derivative_threshold = osc_config.get('derivative_oscillation_threshold', 0.5)
         
-        # 如果有 LLM 策略，使用 LLM 决策是否启用微分
         if llm_strategy is not None:
             enable_derivative = llm_strategy.enable_derivative
         
         if enable_derivative and (oscillation_ratio > derivative_threshold or (llm_strategy and llm_strategy.enable_derivative)):
-            # 基础Td（从配置读取）
             td_base_divisor = osc_config.get('td_base_divisor', 8.0)
             base_Td = Pu / td_base_divisor if Pu > 0 else 0.5
             
-            # Td乘数（从配置读取）
             td_mult_factor = osc_config.get('td_multiplier_factor', 1.5)
             effective_osc = max(0, oscillation_ratio - derivative_threshold)
             td_multiplier = 1.0 + np.sqrt(effective_osc) * td_mult_factor
             
-            # 如果有 LLM 策略，应用 LLM 的 td_factor
             if llm_strategy is not None and llm_strategy.td_factor > 0:
                 td_multiplier *= llm_strategy.td_factor
                 self.log(f"   🤖 LLM Td调整: td_factor={llm_strategy.td_factor:.2f}")
             
             conservative_Td = base_Td * td_multiplier
-            # Td范围限制（从配置读取）
             td_range = osc_config.get('td_range', [0.3, 3.0])
             conservative_Td = np.clip(conservative_Td, td_range[0], td_range[1])
-            conservative_Kd = conservative_Kp * conservative_Td
             
             self.log(f"   📊 自适应Ti/Td: Ti={conservative_Ti:.2f}s(×{ti_multiplier:.2f}), "
                     f"Td={conservative_Td:.2f}s(×{td_multiplier:.2f})")
-            self.log(f"   📊 添加微分作用: Kd={conservative_Kd:.4f} (Kp×Td，用于抑制振荡)")
         else:
             self.log(f"   📊 自适应Ti: Ti={conservative_Ti:.2f}s(×{ti_multiplier:.2f})")
         
-        # 构建返回结果
+        return conservative_Ti, conservative_Td, ti_multiplier, td_multiplier
+    
+    def _build_conservative_pid_result(self, pb: float, Ti: float, Td: float,
+                                       Pu: float, Ku: float, reason: str,
+                                       llm_strategy: Any,
+                                       llm_decision_info: Optional[Dict]) -> Dict[str, Any]:
+        """构建保守 PID 参数结果"""
+        conservative_Kp = 100.0 / pb
+        conservative_Ki = conservative_Kp / Ti
+        conservative_Kd = conservative_Kp * Td if Td > 0 else 0.0
+        
+        if Td > 0:
+            self.log(f"   📊 添加微分作用: Kd={conservative_Kd:.4f} (Kp×Td，用于抑制振荡)")
+        
         result = {
             'Kp': round(conservative_Kp, 2),
             'Ki': round(conservative_Ki, 2),
             'Kd': round(conservative_Kd, 2),
-            'Ti': round(conservative_Ti, 4),  # 精确的Ti值
-            'Td': round(conservative_Td, 4) if conservative_Td > 0 else 0.0,  # 精确的Td值
+            'Ti': round(Ti, 4),
+            'Td': round(Td, 4) if Td > 0 else 0.0,
             'method': f'{reason}_llm' if llm_strategy else f'{reason}_adaptive',
             'Pu': round(Pu, 2),
             'Ku': round(Ku, 2),
-            'pb': round(pb_safe, 2)
+            'pb': round(pb, 2)
         }
         
-        # 如果有 LLM 决策信息，添加到结果中
         if llm_decision_info is not None:
             result['llm_decision'] = llm_decision_info
             self.log(f"   🤖 LLM 决策理由: {llm_decision_info['reasoning']}")
@@ -950,6 +920,256 @@ class OscillationTuner(LoggerMixin):
                 self.log(f"      建议: {', '.join(llm_decision_info['recommendations'])}")
         
         return result
+    
+    # ========== 重构后的主方法 ==========
+    
+    def _get_conservative_pid_params(self, Pu: float, Ku: float, 
+                                      K_approx: float = 1.0,
+                                      reason: str = 'generic',
+                                      oscillation_ratio: float = 0.0,
+                                      data_quality: float = 0.5,
+                                      nonlinearity: float = 0.0,
+                                      valve_issues: Dict = None,
+                                      confidence: float = 0.5) -> Dict[str, Any]:
+        """
+        获取保守PID参数（动态计算pb，借鉴大模型调参经验）
+        
+        本方法已重构为调用多个辅助方法，提高可读性和可维护性。
+        
+        Args:
+            Pu: 临界周期
+            Ku: 临界增益
+            K_approx: 估计的过程增益
+            reason: 使用保守参数的原因
+            oscillation_ratio: 振荡比（用于自适应调整）
+            data_quality: 数据质量评分 (0-1)，越低越需要保守
+            nonlinearity: 非线性程度 (0-1)
+            valve_issues: 阀门问题检测结果
+            confidence: Ku/Pu估计的置信度 (0-1)，越高允许更激进
+        
+        Returns:
+            保守PID参数字典
+        """
+        if valve_issues is None:
+            valve_issues = {}
+        
+        # 1. 获取 LLM 策略（如果启用）
+        llm_strategy, llm_decision_info = self._get_llm_strategy(
+            Pu, Ku, K_approx, oscillation_ratio, data_quality,
+            nonlinearity, valve_issues, confidence
+        )
+        
+        # 2. 计算基础 pb
+        pb_base, pb_from_K, pb_from_Ku, slow_factor = self._calculate_base_pb(Ku, K_approx, Pu)
+        
+        # 3. 应用质量因子（数据质量、非线性、阀门问题）
+        pb_base = self._apply_quality_factors(pb_base, reason, data_quality, nonlinearity, valve_issues)
+        
+        # 4. 应用极端场景因子（高增益、大滞后、极端振荡）
+        pb_base, delay_ratio = self._apply_extreme_factors(pb_base, K_approx, Pu, oscillation_ratio)
+        
+        # 5. 应用振荡比自适应调整
+        pb_base, safety_factor = self._apply_oscillation_adjustment(pb_base, oscillation_ratio, llm_strategy)
+        
+        # 6. 应用 pb 边界限制
+        pb_safe = self._apply_pb_bounds(
+            pb_base, K_approx, confidence, reason,
+            pb_from_K, pb_from_Ku, Pu, Ku, slow_factor, delay_ratio
+        )
+        
+        # 7. 计算 Ti/Td
+        Ti, Td, ti_multiplier, td_multiplier = self._calculate_conservative_ti_td(
+            Pu, oscillation_ratio, K_approx, llm_strategy
+        )
+        
+        # 8. 构建并返回结果
+        return self._build_conservative_pid_result(
+            pb_safe, Ti, Td, Pu, Ku, reason, llm_strategy, llm_decision_info
+        )
+    
+    def _calculate_oscillation_rating(self, is_stable: bool, cl_metrics: Any,
+                                       pid_params: Dict, osc_info: Dict,
+                                       osc_result: Dict) -> Tuple[float, Dict, List[str]]:
+        """
+        计算振荡整定的综合评分
+        
+        Args:
+            is_stable: 闭环是否稳定
+            cl_metrics: 闭环性能指标
+            pid_params: PID参数
+            osc_info: 振荡信息
+            osc_result: 振荡整定结果
+            
+        Returns:
+            (model_rating, rating_details, warnings) 元组
+        """
+        rating_details = {}
+        
+        # 1. 闭环稳定性评分 (0-10) - 权重 35%
+        stability_score = 6.0 if is_stable else 2.0
+        if is_stable:
+            # 超调量评分
+            if cl_metrics.overshoot <= 5:
+                stability_score += 1.5
+            elif cl_metrics.overshoot <= 15:
+                stability_score += 1.0
+            elif cl_metrics.overshoot <= 30:
+                stability_score += 0.5
+            elif cl_metrics.overshoot > 50:
+                stability_score -= 1.0
+            
+            # 调节时间评分
+            if cl_metrics.settling_time < float('inf'):
+                if cl_metrics.settling_time <= 30:
+                    stability_score += 1.0
+                elif cl_metrics.settling_time <= 60:
+                    stability_score += 0.5
+                elif cl_metrics.settling_time > 120:
+                    stability_score -= 0.5
+            
+            # 振荡次数
+            if cl_metrics.oscillation_count <= 2:
+                stability_score += 0.5
+            elif cl_metrics.oscillation_count > 5:
+                stability_score -= 0.5
+        
+        stability_score = min(10.0, max(0.0, stability_score))
+        rating_details['stability_score'] = round(stability_score, 2)
+        
+        # 2. 数据质量评分 (0-10) - 权重 25%
+        oscillation_ratio = osc_info.get('oscillation_ratio', 0.5)
+        raw_data_quality = osc_result.get('data_quality', 0.5)
+        nonlinearity = osc_result.get('nonlinearity', 0.0)
+        
+        # 基于振荡比的评分
+        if oscillation_ratio < 0.4:
+            osc_score = 8.0
+        elif oscillation_ratio < 0.6:
+            osc_score = 7.0 - (oscillation_ratio - 0.4) * 5
+        elif oscillation_ratio < 0.8:
+            osc_score = 6.0 - (oscillation_ratio - 0.6) * 7.5
+        else:
+            osc_score = 4.5 - (oscillation_ratio - 0.8) * 15
+        
+        # 原始数据质量因子
+        quality_penalty = max(0, (0.4 - raw_data_quality) * 3)
+        nonlin_penalty = max(0, (nonlinearity - 0.5) * 2)
+        
+        data_quality_score = osc_score - quality_penalty - nonlin_penalty
+        data_quality_score = max(1.0, min(8.0, data_quality_score))
+        
+        rating_details['data_quality_score'] = round(data_quality_score, 2)
+        rating_details['oscillation_ratio'] = round(oscillation_ratio, 2)
+        rating_details['raw_data_quality'] = round(raw_data_quality, 2)
+        rating_details['nonlinearity'] = round(nonlinearity, 2)
+        
+        # 3. 参数边界距离评分 (0-10) - 权重 20%
+        pb = pid_params.get('pb', 200)
+        pb_min = Config.OSCILLATION_TUNING.get('pb_min', 120.0)
+        pb_max = Config.OSCILLATION_TUNING.get('pb_max', 600.0)
+        pb_range = pb_max - pb_min
+        pb_margin = min(pb - pb_min, pb_max - pb) / (pb_range / 2)
+        
+        boundary_score = 5.0 + pb_margin * 5.0
+        if pb <= pb_min * 1.05 or pb >= pb_max * 0.95:
+            boundary_score = 3.0
+        
+        Ti = pid_params.get('Ti', 2.5)
+        if Ti <= 1.6 or Ti >= 9.5:
+            boundary_score -= 1.0
+        
+        boundary_score = min(10.0, max(0.0, boundary_score))
+        rating_details['boundary_score'] = round(boundary_score, 2)
+        rating_details['pb'] = round(pb, 2)
+        
+        # 4. 整定方法评分 (0-10) - 权重 20%
+        method = pid_params.get('method', 'unknown')
+        if 'low_gain' in method or 'high_gain' in method:
+            method_score = 5.0
+        elif 'oscillation' in method:
+            method_score = 6.0
+        else:
+            method_score = 5.5
+        
+        if pid_params.get('Kd', 0) > 0:
+            method_score += 0.5
+        
+        rating_details['method_score'] = round(method_score, 2)
+        rating_details['method'] = method
+        
+        # 综合评分
+        weights = {
+            'stability': 0.35,
+            'data_quality': 0.25,
+            'boundary': 0.20,
+            'method': 0.20
+        }
+        
+        model_rating = (
+            weights['stability'] * stability_score +
+            weights['data_quality'] * data_quality_score +
+            weights['boundary'] * boundary_score +
+            weights['method'] * method_score
+        )
+        
+        # 特殊情况限制
+        warnings = []
+        
+        if not is_stable:
+            model_rating = min(model_rating, 4.0)
+            warnings.append('闭环仿真不稳定')
+        
+        if oscillation_ratio > 0.9:
+            model_rating = min(model_rating, 6.0)
+            warnings.append(f'极高振荡({oscillation_ratio:.0%})，建议人工排查根因')
+        elif oscillation_ratio > 0.85:
+            model_rating = min(model_rating, 6.5)
+            warnings.append(f'高振荡({oscillation_ratio:.0%})')
+        
+        if pb <= pb_min * 1.02 or pb >= pb_max * 0.98:
+            model_rating = min(model_rating, 5.5)
+            warnings.append('PID参数触达边界')
+        
+        if raw_data_quality < 0.3:
+            model_rating = min(model_rating, 5.5)
+            warnings.append(f'数据质量极差({raw_data_quality:.2f})')
+        
+        if nonlinearity > 0.6:
+            model_rating = min(model_rating, 6.0)
+            warnings.append(f'高非线性({nonlinearity:.2f})，可能存在阀门问题')
+        
+        # 阀门问题检测
+        valve_issues = osc_result.get('valve_issues', {})
+        if valve_issues.get('has_deadband', False):
+            model_rating = min(model_rating, 6.0)
+            warnings.append(f"检测到阀门死区({valve_issues.get('deadband_size', 0):.0%})")
+        if valve_issues.get('has_stiction', False):
+            model_rating = min(model_rating, 5.5)
+            warnings.append(f"检测到阀门粘滞({valve_issues.get('stiction_severity', 0):.0%})")
+        if valve_issues.get('has_saturation', False):
+            model_rating = min(model_rating, 6.0)
+            warnings.append(f"检测到阀门饱和({valve_issues.get('saturation_ratio', 0):.0%})")
+        
+        # 综合风险等级
+        risk_factors = 0
+        if oscillation_ratio > 0.85:
+            risk_factors += 1
+        if raw_data_quality < 0.35:
+            risk_factors += 1
+        if valve_issues.get('has_stiction', False) or valve_issues.get('has_deadband', False):
+            risk_factors += 1
+        
+        if risk_factors >= 2:
+            model_rating = min(model_rating, 5.0)
+            warnings.append('❗多重风险因素，强烈建议人工排查')
+        
+        model_rating = round(min(10.0, max(0.0, model_rating)), 1)
+        rating_details['weights'] = weights
+        rating_details['warnings'] = warnings
+        rating_details['risk_factors'] = risk_factors
+        rating_details['valve_issues'] = valve_issues
+        
+        return model_rating, rating_details, warnings
     
     def build_oscillation_output(self, osc_result: Dict, hist_data: HistoricalData,
                                  time_range: Dict, tuning_windows: List,
@@ -1088,182 +1308,14 @@ class OscillationTuner(LoggerMixin):
                 self.log(f"   ✅ 第{fallback_attempt}次fallback成功，闭环稳定")
                 break
         
-        # ========== 综合评分策略（更精确反映参数可用性） ==========
-        rating_details = {}
-        
-        # 1. 闭环稳定性评分 (0-10) - 权重 35%
-        stability_score = 6.0 if is_stable else 2.0
-        if is_stable:
-            # 超调量评分
-            if cl_metrics.overshoot <= 5:
-                stability_score += 1.5
-            elif cl_metrics.overshoot <= 15:
-                stability_score += 1.0
-            elif cl_metrics.overshoot <= 30:
-                stability_score += 0.5
-            elif cl_metrics.overshoot > 50:
-                stability_score -= 1.0
-            
-            # 调节时间评分
-            if cl_metrics.settling_time < float('inf'):
-                if cl_metrics.settling_time <= 30:
-                    stability_score += 1.0
-                elif cl_metrics.settling_time <= 60:
-                    stability_score += 0.5
-                elif cl_metrics.settling_time > 120:
-                    stability_score -= 0.5
-            
-            # 振荡次数
-            if cl_metrics.oscillation_count <= 2:
-                stability_score += 0.5
-            elif cl_metrics.oscillation_count > 5:
-                stability_score -= 0.5
-        
-        stability_score = min(10.0, max(0.0, stability_score))
-        rating_details['stability_score'] = round(stability_score, 2)
-        
-        # 2. 数据质量评分 (0-10) - 权重 25%
-        # 综合考虑振荡比、原始数据质量、非线性
-        oscillation_ratio = osc_info.get('oscillation_ratio', 0.5)
-        raw_data_quality = osc_result.get('data_quality', 0.5)
-        nonlinearity = osc_result.get('nonlinearity', 0.0)
-        
-        # 基于振荡比的评分
-        if oscillation_ratio < 0.4:
-            osc_score = 8.0
-        elif oscillation_ratio < 0.6:
-            osc_score = 7.0 - (oscillation_ratio - 0.4) * 5
-        elif oscillation_ratio < 0.8:
-            osc_score = 6.0 - (oscillation_ratio - 0.6) * 7.5
-        else:
-            # 极高振荡(>0.8)，数据质量较差
-            osc_score = 4.5 - (oscillation_ratio - 0.8) * 15  # 加大惩罚
-        
-        # 原始数据质量因子（quality_score < 0.4 时开始扣分）
-        quality_penalty = max(0, (0.4 - raw_data_quality) * 3)  # 最多扣1.2分
-        
-        # 非线性因子（nonlinearity > 0.5 时开始扣分）
-        nonlin_penalty = max(0, (nonlinearity - 0.5) * 2)  # 最多扣1分
-        
-        data_quality_score = osc_score - quality_penalty - nonlin_penalty
-        data_quality_score = max(1.0, min(8.0, data_quality_score))  # 上限为8，下限为1
-        
-        rating_details['data_quality_score'] = round(data_quality_score, 2)
-        rating_details['oscillation_ratio'] = round(oscillation_ratio, 2)
-        rating_details['raw_data_quality'] = round(raw_data_quality, 2)
-        rating_details['nonlinearity'] = round(nonlinearity, 2)
-        
-        # 3. 参数边界距离评分 (0-10) - 权重 20%
-        # pb距离边界越近，得分越低
-        pb = pid_params.get('pb', 200)
-        pb_min = Config.OSCILLATION_TUNING.get('pb_min', 120.0)
-        pb_max = Config.OSCILLATION_TUNING.get('pb_max', 600.0)
-        pb_range = pb_max - pb_min
-        pb_margin = min(pb - pb_min, pb_max - pb) / (pb_range / 2)  # 0~1，离中间越近越好
-        
-        boundary_score = 5.0 + pb_margin * 5.0  # 5~10分
-        if pb <= pb_min * 1.05 or pb >= pb_max * 0.95:
-            boundary_score = 3.0  # 触边界扣分
-        
-        # Ti边界检查
-        Ti = pid_params.get('Ti', 2.5)
-        if Ti <= 1.6 or Ti >= 9.5:  # 接近[1.5, 10.0]边界
-            boundary_score -= 1.0
-        
-        boundary_score = min(10.0, max(0.0, boundary_score))
-        rating_details['boundary_score'] = round(boundary_score, 2)
-        rating_details['pb'] = round(pb, 2)
-        
-        # 4. 整定方法评分 (0-10) - 权重 20%
-        # 临界法本身是fallback方法，基础分较低
-        method = pid_params.get('method', 'unknown')
-        if 'low_gain' in method or 'high_gain' in method:
-            method_score = 5.0  # 极端增益场景
-        elif 'oscillation' in method:
-            method_score = 6.0  # 正常振荡整定
-        else:
-            method_score = 5.5
-        
-        # 有微分作用时加分（有助于抑制振荡）
-        if pid_params.get('Kd', 0) > 0:
-            method_score += 0.5
-        
-        rating_details['method_score'] = round(method_score, 2)
-        rating_details['method'] = method
-        
-        # ========== 综合评分 ==========
-        weights = {
-            'stability': 0.35,
-            'data_quality': 0.25,
-            'boundary': 0.20,
-            'method': 0.20
-        }
-        
-        model_rating = (
-            weights['stability'] * stability_score +
-            weights['data_quality'] * data_quality_score +
-            weights['boundary'] * boundary_score +
-            weights['method'] * method_score
+        # ========== 综合评分策略 ==========
+        model_rating, rating_details, warnings = self._calculate_oscillation_rating(
+            is_stable=is_stable,
+            cl_metrics=cl_metrics,
+            pid_params=pid_params,
+            osc_info=osc_info,
+            osc_result=osc_result
         )
-        
-        # 特殊情况限制
-        warnings = []
-        
-        if not is_stable:
-            model_rating = min(model_rating, 4.0)  # 不稳定最高4分
-            warnings.append('闭环仿真不稳定')
-        
-        if oscillation_ratio > 0.9:
-            model_rating = min(model_rating, 6.0)  # 极高振荡最高6分（从6.5降低）
-            warnings.append(f'极高振荡({oscillation_ratio:.0%})，建议人工排查根因')
-        elif oscillation_ratio > 0.85:
-            model_rating = min(model_rating, 6.5)
-            warnings.append(f'高振荡({oscillation_ratio:.0%})')
-        
-        if pb <= pb_min * 1.02 or pb >= pb_max * 0.98:
-            model_rating = min(model_rating, 5.5)  # 触边界最高5.5分
-            warnings.append('PID参数触达边界')
-        
-        # 数据质量极差时进一步限制
-        if raw_data_quality < 0.3:
-            model_rating = min(model_rating, 5.5)
-            warnings.append(f'数据质量极差({raw_data_quality:.2f})')
-        
-        # 非线性过高时限制
-        if nonlinearity > 0.6:
-            model_rating = min(model_rating, 6.0)
-            warnings.append(f'高非线性({nonlinearity:.2f})，可能存在阀门问题')
-        
-        # 阀门问题检测影响评分
-        valve_issues = osc_result.get('valve_issues', {})
-        if valve_issues.get('has_deadband', False):
-            model_rating = min(model_rating, 6.0)
-            warnings.append(f"检测到阀门死区({valve_issues.get('deadband_size', 0):.0%})")
-        if valve_issues.get('has_stiction', False):
-            model_rating = min(model_rating, 5.5)
-            warnings.append(f"检测到阀门粘滞({valve_issues.get('stiction_severity', 0):.0%})")
-        if valve_issues.get('has_saturation', False):
-            model_rating = min(model_rating, 6.0)
-            warnings.append(f"检测到阀门饱和({valve_issues.get('saturation_ratio', 0):.0%})")
-        
-        # 综合风险等级（极高振荡+低质量+阀门问题）
-        risk_factors = 0
-        if oscillation_ratio > 0.85:
-            risk_factors += 1
-        if raw_data_quality < 0.35:
-            risk_factors += 1
-        if valve_issues.get('has_stiction', False) or valve_issues.get('has_deadband', False):
-            risk_factors += 1
-        
-        if risk_factors >= 2:
-            model_rating = min(model_rating, 5.0)
-            warnings.append('❗多重风险因素，强烈建议人工排查')
-        
-        model_rating = round(min(10.0, max(0.0, model_rating)), 1)
-        rating_details['weights'] = weights
-        rating_details['warnings'] = warnings
-        rating_details['risk_factors'] = risk_factors
-        rating_details['valve_issues'] = valve_issues
         
         closed_loop_info = {
             'is_stable': is_stable,
@@ -1357,186 +1409,14 @@ class OscillationTuner(LoggerMixin):
                 })
         return segment_info
 
-    def _level_loop_fallback(self, oscillating_segments: List, 
-                              segments: List[HistoricalData],
-                              segment_results: List[SegmentResult]) -> Optional[Dict]:
-        """
-        液位回路fallback机制
-        
-        当振荡分析无法提取有效特征时（如周期太长、振荡不明显），
-        使用数据特征估算保守的PID参数。
-        
-        液位回路特点：
-        1. 积分特性 - 需要更大的Ti
-        2. 大时间常数 - 响应慢，需要更保守的Kp
-        3. 对滞后敏感 - 需要适当的微分作用
-        
-        Args:
-            oscillating_segments: 振荡段列表 [(idx, seg, result), ...]
-            segments: 原始段数据列表
-            segment_results: 段结果列表
-        
-        Returns:
-            fallback整定结果，如果无法估算则返回 None
-        """
-        osc_config = Config.OSCILLATION_TUNING
-        
-        # 选择数据量最大的段进行分析
-        best_seg = None
-        best_result = None
-        max_points = 0
-        
-        for idx, seg, result in oscillating_segments:
-            if len(seg.pv) > max_points:
-                max_points = len(seg.pv)
-                best_seg = seg
-                best_result = result
-        
-        if best_seg is None or max_points < 50:
-            self.log("   ⚠️ 液位fallback: 数据量不足")
-            return None
-        
-        # 估算过程增益 K
-        pv_range = np.ptp(best_seg.pv)
-        mv_range = np.ptp(best_seg.mv)
-        
-        if mv_range < 0.1 or pv_range < 0.01:
-            self.log("   ⚠️ 液位fallback: MV或PV变化范围过小")
-            return None
-        
-        K_approx = pv_range / mv_range
-        K_approx = np.clip(K_approx, 0.1, 10.0)
-        
-        # 估算时间常数 T1（基于数据长度和采样周期）
-        dt = 1.0
-        if len(best_seg.timestamp) > 1:
-            dt = (best_seg.timestamp[1] - best_seg.timestamp[0]) / 1000
-        
-        data_duration = len(best_seg.pv) * dt
-        
-        # 液位回路通常有较大的时间常数，估算 T1 ≈ 数据时长 / 3
-        T1_approx = max(data_duration / 3, 30.0)  # 至少30秒
-        
-        # 估算滞后 L（基于PV响应延迟）
-        # 简化估算：L ≈ T1 / 5
-        L_approx = T1_approx / 5
-        
-        # 估算临界周期 Pu（基于T1和L）
-        # Ziegler-Nichols: Pu ≈ 4L for FOPDT
-        Pu_approx = max(4 * L_approx, 20.0)  # 至少20秒
-        
-        # 估算临界增益 Ku（基于K和T1/L比）
-        # 经验公式：Ku ≈ 1.2 * T1 / (K * L)
-        if L_approx > 0.1:
-            Ku_approx = 1.2 * T1_approx / (K_approx * L_approx)
-        else:
-            Ku_approx = 2.0 / K_approx
-        Ku_approx = np.clip(Ku_approx, 0.1, 20.0)
-        
-        self.log(f"   📊 液位fallback估算: K≈{K_approx:.2f}, T1≈{T1_approx:.0f}s, "
-                f"L≈{L_approx:.1f}s, Pu≈{Pu_approx:.0f}s, Ku≈{Ku_approx:.2f}")
-        
-        # 获取数据质量信息
-        oscillation_ratio = best_result.oscillation_ratio if best_result else 0.5
-        data_quality = best_result.quality_score if best_result else 0.4
-        nonlinearity = best_result.nonlinearity_score if best_result else 0.3
-        
-        # 使用液位专用的保守参数
-        level_fallback_pb = osc_config.get('level_fallback_pb', 250.0)
-        level_fallback_ti_factor = osc_config.get('level_fallback_ti_factor', 2.5)
-        
-        # 基于K调整pb
-        if K_approx > 2.0:
-            # 高增益液位：更保守
-            pb_base = level_fallback_pb * (1.0 + (K_approx - 2.0) * 0.2)
-        else:
-            pb_base = level_fallback_pb
-        
-        # 基于T1调整pb（大时间常数需要更保守）
-        if T1_approx > 80:
-            pb_base *= 1.0 + (T1_approx - 80) / 200
-        
-        # 限制pb范围
-        pb_min = osc_config.get('pb_min', 120.0)
-        pb_max = osc_config.get('pb_max', 500.0)
-        pb_safe = np.clip(pb_base, pb_min, pb_max)
-        
-        conservative_Kp = 100.0 / pb_safe
-        
-        # Ti计算：液位回路需要更大的Ti
-        base_Ti = max(Pu_approx / 2, 10.0)  # 至少10秒
-        conservative_Ti = base_Ti * level_fallback_ti_factor
-        
-        # 基于T1进一步调整Ti
-        if T1_approx > 100:
-            conservative_Ti *= 1.0 + (T1_approx - 100) / 200
-        
-        # Ti范围限制
-        ti_range = osc_config.get('ti_range', [1.5, 25.0])
-        conservative_Ti = np.clip(conservative_Ti, ti_range[0], ti_range[1])
-        
-        conservative_Ki = conservative_Kp / conservative_Ti
-        
-        # Td计算：液位回路适度使用微分
-        level_kd_threshold = osc_config.get('level_kd_enable_threshold', 0.6)
-        if oscillation_ratio > level_kd_threshold:
-            conservative_Td = Pu_approx / 10  # 保守的微分时间
-            td_range = osc_config.get('td_range', [0.3, 3.0])
-            conservative_Td = np.clip(conservative_Td, td_range[0], td_range[1])
-            conservative_Kd = conservative_Kp * conservative_Td
-        else:
-            conservative_Td = 0.0
-            conservative_Kd = 0.0
-        
-        self.log(f"   ✅ 液位fallback整定:")
-        self.log(f"      PB={pb_safe:.1f}%, Ti={conservative_Ti:.1f}s, Td={conservative_Td:.1f}s")
-        self.log(f"      Kp={conservative_Kp:.4f}, Ki={conservative_Ki:.4f}, Kd={conservative_Kd:.4f}")
-        
-        pid_params = {
-            'Kp': round(conservative_Kp, 4),
-            'Ki': round(conservative_Ki, 4),
-            'Kd': round(conservative_Kd, 4),
-            'Ti': round(conservative_Ti, 2),
-            'Td': round(conservative_Td, 2),
-            'method': 'level_fallback',
-            'Pu': round(Pu_approx, 2),
-            'Ku': round(Ku_approx, 2),
-            'pb': round(pb_safe, 2)
-        }
-        
-        # 构造模拟的振荡信息（用于后续处理）
-        osc_info = {
-            'Pu': Pu_approx,
-            'Ku': Ku_approx,
-            'amplitude': pv_range / 2,
-            'mv_amplitude': mv_range / 2,
-            'decay_ratio': 1.0,
-            'oscillation_type': 'estimated',
-            'n_cycles': 1,
-            'is_valid': True,
-            'confidence': 0.3,  # 低置信度
-            'oscillation_ratio': oscillation_ratio
-        }
-        
-        return {
-            'success': True,
-            'pid_params': pid_params,
-            'oscillation_info': osc_info,
-            'segment_idx': 0,
-            'method': 'level_fallback',
-            'data_quality': data_quality,
-            'nonlinearity': nonlinearity,
-            'valve_issues': {}
-        }
-
-    def _generic_fallback(self, oscillating_segments: List, 
+    def _fallback_tuning(self, oscillating_segments: List, 
                           segments: List[HistoricalData],
                           segment_results: List[SegmentResult]) -> Optional[Dict]:
         """
-        通用fallback机制
+        统一的 fallback 整定机制
         
-        当振荡分析无法提取有效特征时，使用数据特征估算保守的PID参数。
-        适用于所有回路类型。
+        当振荡分析无法提取有效特征时，使用数据特征和策略模式
+        获取回路特定参数进行保守整定。
         
         Args:
             oscillating_segments: 振荡段列表 [(idx, seg, result), ...]
@@ -1546,11 +1426,17 @@ class OscillationTuner(LoggerMixin):
         Returns:
             fallback整定结果，如果无法估算则返回 None
         """
-        # 液位回路使用专用fallback
-        if self._loop_type == 'level':
-            return self._level_loop_fallback(oscillating_segments, segments, segment_results)
-        
         osc_config = Config.OSCILLATION_TUNING
+        
+        # 获取策略参数
+        fallback_params = self._strategy.get_fallback_params()
+        pb_base = fallback_params['pb_base']
+        t1_divisor = fallback_params['t1_divisor']
+        t1_min = fallback_params['t1_min']
+        ti_multiplier = fallback_params['ti_multiplier']
+        
+        # 液位回路的最小数据点要求更高
+        min_points = 50 if self._loop_type == 'level' else 30
         
         # 选择数据量最大的段进行分析
         best_seg = None
@@ -1563,8 +1449,8 @@ class OscillationTuner(LoggerMixin):
                 best_seg = seg
                 best_result = result
         
-        if best_seg is None or max_points < 30:
-            self.log("   ⚠️ 通用fallback: 数据量不足")
+        if best_seg is None or max_points < min_points:
+            self.log(f"   ⚠️ {self._loop_type}fallback: 数据量不足({max_points}/{min_points})")
             return None
         
         # 估算过程增益 K
@@ -1572,7 +1458,7 @@ class OscillationTuner(LoggerMixin):
         mv_range = np.ptp(best_seg.mv)
         
         if mv_range < 0.1 or pv_range < 0.01:
-            self.log("   ⚠️ 通用fallback: MV或PV变化范围过小")
+            self.log(f"   ⚠️ {self._loop_type}fallback: MV或PV变化范围过小")
             return None
         
         K_approx = pv_range / mv_range
@@ -1585,24 +1471,38 @@ class OscillationTuner(LoggerMixin):
         
         data_duration = len(best_seg.pv) * dt
         
-        # 根据回路类型估算时间常数
-        if self._loop_type == 'flow':
-            # 流量回路通常较快
-            T1_approx = max(data_duration / 5, 10.0)
-        elif self._loop_type == 'pressure':
-            # 压力回路中等速度
-            T1_approx = max(data_duration / 4, 15.0)
-        elif self._loop_type == 'temperature':
-            # 温度回路通常较慢
-            T1_approx = max(data_duration / 3, 30.0)
-        else:
-            T1_approx = max(data_duration / 4, 20.0)
+        # 使用策略参数估算时间常数 T1
+        T1_approx = max(data_duration / t1_divisor, t1_min)
         
-        # 估算滞后 L
-        L_approx = T1_approx / 5
+        # 估算滞后 L（使用交叉相关法更准确估算）
+        osc_config = Config.OSCILLATION_TUNING
+        large_delay_threshold = osc_config.get('large_delay_absolute_threshold', 15.0)
+        
+        # 基于 MV-PV 交叉相关估算延迟
+        from scipy import signal
+        pv_smooth = np.convolve(best_seg.pv, np.ones(5)/5, mode='same')
+        mv_smooth = np.convolve(best_seg.mv, np.ones(5)/5, mode='same')
+        correlation = signal.correlate(pv_smooth - np.mean(pv_smooth), 
+                                       mv_smooth - np.mean(mv_smooth), mode='full')
+        lags = signal.correlation_lags(len(pv_smooth), len(mv_smooth), mode='full')
+        # 延迟估计：找到最大相关系数对应的滞后
+        max_corr_idx = np.argmax(np.abs(correlation))
+        estimated_delay_samples = lags[max_corr_idx]
+        L_approx = max(abs(estimated_delay_samples) * dt, T1_approx / 5)
+        
+        # 检测是否为大滞后系统
+        delay_ratio = L_approx / max(T1_approx, 1.0)
+        is_large_delay = L_approx > large_delay_threshold or delay_ratio > 0.5
+        
+        if is_large_delay:
+            self.log(f"   📊 检测到大滞后: L≈{L_approx:.1f}s, delay_ratio={delay_ratio:.2f}")
+            # 大滞后时增加 pb 和 Ti 保守度
+            pb_base *= osc_config.get('large_delay_pb_boost', 1.8)
+            ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.5)
         
         # 估算临界周期 Pu
-        Pu_approx = max(4 * L_approx, 10.0)
+        pu_min = 20.0 if self._loop_type == 'level' else 10.0
+        Pu_approx = max(4 * L_approx, pu_min)
         
         # 估算临界增益 Ku
         if L_approx > 0.1:
@@ -1611,7 +1511,7 @@ class OscillationTuner(LoggerMixin):
             Ku_approx = 2.0 / K_approx
         Ku_approx = np.clip(Ku_approx, 0.1, 20.0)
         
-        self.log(f"   📊 通用fallback估算: K≈{K_approx:.2f}, T1≈{T1_approx:.0f}s, "
+        self.log(f"   📊 {self._loop_type}fallback估算: K≈{K_approx:.2f}, T1≈{T1_approx:.0f}s, "
                 f"L≈{L_approx:.1f}s, Pu≈{Pu_approx:.0f}s, Ku≈{Ku_approx:.2f}")
         
         # 获取数据质量信息
@@ -1619,25 +1519,18 @@ class OscillationTuner(LoggerMixin):
         data_quality = best_result.quality_score if best_result else 0.4
         nonlinearity = best_result.nonlinearity_score if best_result else 0.3
         
-        # 根据回路类型设置基础pb
-        if self._loop_type == 'flow':
-            pb_base = 180.0  # 流量回路适中
-        elif self._loop_type == 'pressure':
-            pb_base = 160.0  # 压力回路可以稍激进
-        elif self._loop_type == 'temperature':
-            pb_base = 220.0  # 温度回路更保守
-        else:
-            pb_base = 200.0
-        
         # 基于K调整pb
         if K_approx > 2.0:
-            pb_base *= 1.0 + (K_approx - 2.0) * 0.25
-        elif K_approx < 0.5:
+            k_factor = 0.2 if self._loop_type == 'level' else 0.25
+            pb_base *= 1.0 + (K_approx - 2.0) * k_factor
+        elif K_approx < 0.5 and self._loop_type != 'level':
             pb_base *= 1.5  # 小增益需要更保守
         
         # 基于T1调整pb
-        if T1_approx > 60:
-            pb_base *= 1.0 + (T1_approx - 60) / 150
+        t1_threshold = 80.0 if self._loop_type == 'level' else 60.0
+        if T1_approx > t1_threshold:
+            t1_factor = 200.0 if self._loop_type == 'level' else 150.0
+            pb_base *= 1.0 + (T1_approx - t1_threshold) / t1_factor
         
         # 限制pb范围
         pb_min = osc_config.get('pb_min', 120.0)
@@ -1646,20 +1539,14 @@ class OscillationTuner(LoggerMixin):
         
         conservative_Kp = 100.0 / pb_safe
         
-        # Ti计算
-        base_Ti = max(Pu_approx / 2, 5.0)
-        
-        # 根据回路类型调整Ti
-        if self._loop_type == 'temperature':
-            ti_multiplier = 1.8  # 温度回路需要更大Ti
-        elif self._loop_type == 'flow':
-            ti_multiplier = 1.2
-        elif self._loop_type == 'pressure':
-            ti_multiplier = 1.0
-        else:
-            ti_multiplier = 1.5
-        
+        # Ti计算：使用策略参数
+        ti_base_min = 10.0 if self._loop_type == 'level' else 5.0
+        base_Ti = max(Pu_approx / 2, ti_base_min)
         conservative_Ti = base_Ti * ti_multiplier
+        
+        # 基于T1进一步调整Ti（液位特有）
+        if self._loop_type == 'level' and T1_approx > 100:
+            conservative_Ti *= 1.0 + (T1_approx - 100) / 200
         
         # Ti范围限制
         ti_range = osc_config.get('ti_range', [1.5, 25.0])
@@ -1668,7 +1555,8 @@ class OscillationTuner(LoggerMixin):
         conservative_Ki = conservative_Kp / conservative_Ti
         
         # Td计算：根据振荡程度决定是否使用微分
-        if oscillation_ratio > 0.5:
+        kd_threshold = 0.6 if self._loop_type == 'level' else 0.5
+        if oscillation_ratio > kd_threshold:
             conservative_Td = Pu_approx / 10
             td_range = osc_config.get('td_range', [0.3, 3.0])
             conservative_Td = np.clip(conservative_Td, td_range[0], td_range[1])
@@ -1677,7 +1565,7 @@ class OscillationTuner(LoggerMixin):
             conservative_Td = 0.0
             conservative_Kd = 0.0
         
-        self.log(f"   ✅ 通用fallback整定 ({self._loop_type}):")
+        self.log(f"   ✅ {self._loop_type}fallback整定:")
         self.log(f"      PB={pb_safe:.1f}%, Ti={conservative_Ti:.1f}s, Td={conservative_Td:.1f}s")
         self.log(f"      Kp={conservative_Kp:.4f}, Ki={conservative_Ki:.4f}, Kd={conservative_Kd:.4f}")
         
@@ -1717,3 +1605,17 @@ class OscillationTuner(LoggerMixin):
             'nonlinearity': nonlinearity,
             'valve_issues': {}
         }
+    
+    # 保留旧方法名作为别名以保持兼容性
+    def _level_loop_fallback(self, oscillating_segments: List, 
+                              segments: List[HistoricalData],
+                              segment_results: List[SegmentResult]) -> Optional[Dict]:
+        """液位回路fallback（调用统一方法）"""
+        return self._fallback_tuning(oscillating_segments, segments, segment_results)
+    
+    def _generic_fallback(self, oscillating_segments: List, 
+                          segments: List[HistoricalData],
+                          segment_results: List[SegmentResult]) -> Optional[Dict]:
+        """通用fallback（调用统一方法）"""
+        return self._fallback_tuning(oscillating_segments, segments, segment_results)
+

@@ -1783,11 +1783,31 @@ def run_stability_test():
             process_changed = scenario['process_changed']
             sv = metadata['sv']
             
-            # 动态仿真时长：极慢系统需要更长时间
+            # 动态仿真时长：根据回路类型调整乘数
             T1_changed = process_changed.get('T1', 30)
             L_changed = process_changed.get('L', 5)
-            # 【优化】使用 6 倍时间常数确保极慢系统有足够时间稳定
-            sim_duration = max(400, int((T1_changed + L_changed) * 6))
+            loop_type = scenario.get('loop_type', 'flow')
+            
+            # 【优化】根据回路类型使用不同的仿真时长乘数
+            if loop_type == 'level':
+                # 液位回路：积分特性，需要更长时间验证稳定性
+                sim_factor = 10.0
+                min_duration = 600
+            elif loop_type == 'temperature':
+                # 温度回路：大时间常数，需要较长时间
+                sim_factor = 8.0
+                min_duration = 500
+            else:
+                # 流量/压力回路：响应较快
+                sim_factor = 6.0
+                min_duration = 400
+            
+            # 极慢系统(T1>100s)特殊处理
+            if T1_changed > 100:
+                sim_factor = max(sim_factor, 12.0)
+                min_duration = max(min_duration, 1200)
+            
+            sim_duration = max(min_duration, int((T1_changed + L_changed) * sim_factor))
             
             # ===== 规则引擎整定 =====
             print("   🔧 规则引擎整定...")

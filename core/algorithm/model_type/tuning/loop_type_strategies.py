@@ -141,6 +141,22 @@ class LoopTypeStrategy(ABC):
             调整后的 Ti 乘数
         """
         pass
+    
+    @abstractmethod
+    def get_fallback_params(self) -> Dict[str, float]:
+        """
+        获取 fallback 整定参数（回路特定）
+        
+        当振荡分析无法提取有效特征时，使用这些参数进行保守整定。
+        
+        Returns:
+            Dict with keys:
+            - pb_base: 基础 pb 值
+            - t1_divisor: 数据时长除数（用于估算 T1）
+            - t1_min: T1 最小值
+            - ti_multiplier: Ti 乘数
+        """
+        pass
 
 
 class FlowLoopStrategy(LoopTypeStrategy):
@@ -172,9 +188,9 @@ class FlowLoopStrategy(LoopTypeStrategy):
         reason = None
         
         if scenario.is_very_high_gain:
-            # 极高增益 (K>6): 主导因素
-            factor = 1.0 + (K_approx - 6.0) * 0.15
-            factor = min(factor, 1.8)
+            # 极高增益 (K>6): 主导因素 (Sync with OscillationTuner)
+            factor = 1.0 + (K_approx - 6.0) * 0.4
+            factor = min(factor, 2.0)
             reason = f"极高增益(K={K_approx:.1f})"
         elif scenario.is_high_delay_ratio and scenario.delay_ratio > 0.6:
             # 大滞后比 (L/T1>0.6)
@@ -209,8 +225,8 @@ class FlowLoopStrategy(LoopTypeStrategy):
         reason = None
         
         if scenario.is_very_high_gain:
-            # 极高增益：增加 Ti 避免积分过冲
-            factor = 1.0 + (K_approx - 6.0) * 0.25
+            # 极高增益：增加 Ti 避免积分过冲 (Sync with OscillationTuner)
+            factor = 1.0 + (K_approx - 6.0) * 0.3
             factor = min(factor, 1.8)
             reason = f"高增益(K={K_approx:.1f})"
         elif scenario.is_high_delay_ratio and scenario.delay_ratio > 0.6:
@@ -230,6 +246,15 @@ class FlowLoopStrategy(LoopTypeStrategy):
                 log_func(f"   📊 Flow Ti调整({reason}): ×{factor:.2f}")
         
         return ti_mult
+    
+    def get_fallback_params(self) -> Dict[str, float]:
+        """Flow 回路特定的 fallback 参数"""
+        return {
+            'pb_base': 180.0,
+            't1_divisor': 5.0,
+            't1_min': 10.0,
+            'ti_multiplier': 1.2,
+        }
 
 
 class TemperatureLoopStrategy(LoopTypeStrategy):
@@ -303,8 +328,8 @@ class TemperatureLoopStrategy(LoopTypeStrategy):
         reason = None
         
         if scenario.is_high_gain:
-            # 高增益：增加 Ti 避免振荡
-            factor = 1.0 + (K_approx - 4.0) * 0.2
+            # 高增益：增加 Ti 避免振荡 (Sync with OscillationTuner)
+            factor = 1.0 + (K_approx - 4.0) * 0.25
             factor = min(factor, 1.5)
             reason = f"高增益(K={K_approx:.1f})"
         elif scenario.is_high_delay_ratio and scenario.delay_ratio > 0.4:
@@ -324,6 +349,15 @@ class TemperatureLoopStrategy(LoopTypeStrategy):
                 log_func(f"   📊 Temp Ti调整({reason}): ×{factor:.2f}")
         
         return ti_mult
+    
+    def get_fallback_params(self) -> Dict[str, float]:
+        """温度回路特定的 fallback 参数"""
+        return {
+            'pb_base': 220.0,
+            't1_divisor': 3.0,
+            't1_min': 30.0,
+            'ti_multiplier': 1.8,
+        }
 
 
 class PressureLoopStrategy(LoopTypeStrategy):
@@ -413,6 +447,15 @@ class PressureLoopStrategy(LoopTypeStrategy):
                 log_func(f"   📊 Press Ti调整({reason}): ×{factor:.2f}")
         
         return ti_mult
+    
+    def get_fallback_params(self) -> Dict[str, float]:
+        """压力回路特定的 fallback 参数"""
+        return {
+            'pb_base': 160.0,
+            't1_divisor': 4.0,
+            't1_min': 15.0,
+            'ti_multiplier': 1.0,
+        }
 
 
 class LevelLoopStrategy(LoopTypeStrategy):
@@ -455,9 +498,9 @@ class LevelLoopStrategy(LoopTypeStrategy):
             factor = min(factor, 1.5)
             reason = f"高增益(K={K_approx:.1f})"
         elif scenario.is_very_slow_system:
-            # 极慢系统 (Pu>100) - 液位回路常见
-            factor = 1.0 + (Pu - 100.0) / 200.0
-            factor = min(factor, 1.3)
+            # 极慢系统 (Pu>100) - 液位回路常见 (Sync with OscillationTuner)
+            factor = 1.0 + (Pu - 100.0) / 100.0
+            factor = min(factor, 1.8)
             reason = f"极慢系统(Pu={Pu:.0f}s)"
         
         if factor > 1.0:
@@ -502,6 +545,15 @@ class LevelLoopStrategy(LoopTypeStrategy):
         ti_mult *= level_ti_base
         
         return ti_mult
+    
+    def get_fallback_params(self) -> Dict[str, float]:
+        """液位回路特定的 fallback 参数"""
+        return {
+            'pb_base': 250.0,
+            't1_divisor': 3.0,
+            't1_min': 30.0,
+            'ti_multiplier': 2.5,
+        }
 
 
 class DefaultLoopStrategy(LoopTypeStrategy):
@@ -524,6 +576,15 @@ class DefaultLoopStrategy(LoopTypeStrategy):
                              oscillation_ratio: float, osc_config: Dict,
                              log_func=None) -> float:
         return ti_mult
+    
+    def get_fallback_params(self) -> Dict[str, float]:
+        """默认 fallback 参数"""
+        return {
+            'pb_base': 200.0,
+            't1_divisor': 4.0,
+            't1_min': 20.0,
+            'ti_multiplier': 1.5,
+        }
 
 
 # 策略注册表

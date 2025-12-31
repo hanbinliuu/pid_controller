@@ -178,21 +178,34 @@ class Config:
         
         # ========== pb范围 ==========
         'pb_min': 120.0,                     # pb下限
-        'pb_max': 500.0,                     # pb上限（增大以支持慢液位回路）
+        'pb_max': 600.0,                     # pb上限（增大到600）
+        'pb_max_large_delay': 900.0,         # 大滞后系统pb上限（新增）
         
         # ========== 大滞后系统专用配置（L/T1 > 0.5）==========
         'large_delay_ratio_threshold': 0.5,  # 大滞后比阈值
-        'large_delay_lambda_factor': 2.0,    # 大滞后时Lambda因子（更保守）
-        'large_delay_pb_boost': 1.5,         # 大滞后时pb额外增益
-        'large_delay_ti_boost': 1.3,         # 大滞后时Ti额外增益
+        'large_delay_lambda_factor': 2.5,    # 大滞后时Lambda因子（增大到2.5）
+        'large_delay_pb_boost': 1.8,         # 大滞后时pb额外增益（增大到1.8）
+        'large_delay_ti_boost': 1.5,         # 大滞后时Ti额外增益（增大到1.5）
         'extreme_delay_ratio_threshold': 0.8, # 极大滞后比阈值
-        'extreme_delay_pb_boost': 2.0,       # 极大滞后时pb额外增益
+        'extreme_delay_pb_boost': 2.5,       # 极大滞后时pb额外增益（增大到2.5）
+        'large_delay_absolute_threshold': 15.0, # 绝对滞后阈值（秒）- 新增
         
         # ========== 极慢系统配置（T1 > 100s 或 Pu > 100s）==========
         'very_slow_system_t1_threshold': 100.0,  # 极慢系统T1阈值
         'very_slow_system_pu_threshold': 100.0,  # 极慢系统Pu阈值
-        'very_slow_sim_duration_factor': 10.0,   # 极慢系统仿真时长因子（T1+L的倍数）
-        'very_slow_max_sim_duration': 3000.0,    # 极慢系统最大仿真时长（秒）
+        'very_slow_sim_duration_factor': 12.0,   # 极慢系统仿真时长因子（增大到12倍）
+        'very_slow_max_sim_duration': 3600.0,    # 极慢系统最大仿真时长（增大到3600秒）
+        
+        # ========== 回路类型仿真时长因子（新增）==========
+        'level_sim_duration_factor': 10.0,       # 液位回路仿真时长因子
+        'temperature_sim_duration_factor': 8.0,  # 温度回路仿真时长因子
+        'default_sim_duration_factor': 6.0,      # 默认回路仿真时长因子
+        
+        # ========== 时变特性处理（新增）==========
+        'time_varying_detection': True,          # 是否启用时变特性检测
+        'high_gain_gradient_threshold': 3.0,     # 高增益梯度阈值（K变化超过此值认为时变）
+        'high_gain_gradient_pb_factor': 1.3,     # 高增益梯度时pb额外保守因子
+        'time_varying_ti_boost': 1.2,            # 时变系统Ti增益
         
         # ========== 动态pb边界（基于过程增益K） ==========
         'pb_k_adjustment_factor': 0.3,       # pb下限动态调整系数: pb_min *= (1 + factor/K)
