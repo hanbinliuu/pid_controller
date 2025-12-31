@@ -1,4 +1,4 @@
-# 使用Python 3.10.8官方镜像作为基础镜像
+# 使用Python 3.11官方镜像作为基础镜像
 FROM python:3.11-slim-bullseye
 
 # 设置工作目录

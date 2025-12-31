@@ -22,6 +22,6 @@ sqlalchemy==2.0.23
 greenlet==3.0.3
 
 python-jose==3.3.0
-
+portalocker==3.0.0
 # 定时任务调度
 croniter==2.0.5
