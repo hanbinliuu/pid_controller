@@ -324,7 +324,9 @@ class ClosedLoopSimMixin:
         T_max = max(T1, T2 if T2 > 0 else T1)
         sim_time = max(100, T_max * 20)
         n_steps = int(sim_time / dt)
-        n_steps = min(n_steps, 5000)  # 限制最大步数
+        # 对于慢系统（T_max > 50s），允许更多步数
+        max_steps = 5000 if T_max <= 50 else min(10000, int(T_max * 100))
+        n_steps = min(n_steps, max_steps)
         
         metrics = self.simulate_closed_loop(
             K=K, T1=T1, T2=T2, L=L,

@@ -98,10 +98,25 @@ class OscillationAnalysisMixin:
         # ========== 计算振荡幅度和衰减比 ==========
         peak_indices, peak_values, valley_indices, valley_values = self._find_peaks_valleys(pv_detrend)
         
-        if len(peak_values) < 2 or len(valley_values) < 2:
-            return None
+        # 对于慢系统，放宽峰谷数量要求
+        min_peaks_required = 2
+        if Pu > 60.0:  # 慢系统（周期>60s）
+            min_peaks_required = 1
         
-        amplitude = (np.mean(peak_values) - np.mean(valley_values)) / 2
+        if len(peak_values) < min_peaks_required or len(valley_values) < min_peaks_required:
+            # 尝试使用整体数据估算振幅
+            if Pu > 60.0 and len(pv_detrend) > 20:
+                # 慢系统fallback：使用数据范围估算
+                amplitude = np.ptp(pv_detrend) / 2
+                avg_decay = 1.0  # 假设持续振荡
+                peak_indices = np.array([np.argmax(pv_detrend)])
+                valley_indices = np.array([np.argmin(pv_detrend)])
+                peak_values = np.array([np.max(pv_detrend)])
+                valley_values = np.array([np.min(pv_detrend)])
+            else:
+                return None
+        else:
+            amplitude = (np.mean(peak_values) - np.mean(valley_values)) / 2
         
         # 计算衰减比
         if len(peak_values) >= 3:
@@ -185,6 +200,21 @@ class OscillationAnalysisMixin:
             valid_periods, weights, Ku_estimates, n_cycles, avg_decay, osc_type
         )
         
+        # 判断是否有效：
+        # - 正常情况需要至少2个周期
+        # - 对于慢系统（Pu > 60s），允许1个周期但降低置信度
+        # - 发散振荡不可靠
+        if osc_type == 'diverging':
+            is_valid = False
+        elif n_cycles >= 2:
+            is_valid = True
+        elif n_cycles >= 1 and Pu > 60.0:
+            # 慢系统允许1个周期，但降低置信度
+            is_valid = True
+            confidence = confidence * 0.6  # 降低置信度
+        else:
+            is_valid = False
+        
         return {
             'Pu': round(Pu, 3),              # 临界周期
             'Ku': round(Ku_estimate, 4),     # 临界增益估计
@@ -193,7 +223,7 @@ class OscillationAnalysisMixin:
             'decay_ratio': round(avg_decay, 3),      # 衰减比
             'oscillation_type': osc_type,    # 振荡类型
             'n_cycles': n_cycles,            # 完整振荡周期数
-            'is_valid': n_cycles >= 2 and osc_type != 'diverging',
+            'is_valid': is_valid,
             'confidence': round(confidence, 3),      # 置信度 [0, 1]
             'Ku_std': round(Ku_std, 4) if Ku_std else None,  # Ku 标准差
             'detection_methods': {           # 各方法检测结果（调试用）

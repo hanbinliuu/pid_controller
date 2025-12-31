@@ -83,7 +83,7 @@ class Config:
         
         # 振荡周期检测
         'period_min': 1.0,                   # 最小周期（秒）
-        'period_max': 120.0,                 # 最大周期（秒）
+        'period_max': 200.0,                 # 最大周期（秒）- 增大以支持慢液位回路
         
         # 闭环仿真参数
         'sp_initial': 50.0,                  # 设定值初始值
@@ -148,14 +148,31 @@ class Config:
         # ========== 自适应Ti参数 ==========
         'ti_osc_start': 0.5,                 # Ti振荡调整开始阈值（提前开始）
         'ti_osc_factor': 0.8,                # Ti振荡调整系数（增大，补偿pb减小）
-        'ti_slow_pu_thresholds': [20.0, 10.0],  # Ti慢系统Pu阈值
-        'ti_slow_factors': [1.15, 1.08, 1.0],   # Ti慢系统乘数（增大）
-        'ti_range': [1.5, 15.0],             # Ti范围限制（增大上限）
+        'ti_slow_pu_thresholds': [30.0, 15.0],  # Ti慢系统Pu阈值（增大以更早识别慢系统）
+        'ti_slow_factors': [1.25, 1.12, 1.0],   # Ti慢系统乘数（增大）
+        'ti_range': [1.5, 25.0],             # Ti范围限制（增大上限以支持慢液位回路）
         'ti_min_base': 1.5,                  # Ti基础最小值
+        
+        # ========== 液位回路专用配置（积分过程特性）==========
+        # 液位回路特点：积分特性、大时间常数、对滞后敏感
+        'level_ti_multiplier': 2.2,          # 液位回路Ti基础乘数（从2.0提高到2.2）
+        'level_integrating_ti_max': 3.5,     # 积分过程Ti乘数上限（从3.0提高到3.5）
+        'level_integrating_t1_threshold': 50.0,  # 积分过程T1阈值（从60降低到50，更早识别）
+        'level_gain_threshold': 1.2,         # 液位高增益阈值（从1.5降低到1.2）
+        'level_very_high_gain_threshold': 2.5,  # 液位极高增益阈值（从3.0降低到2.5）
+        'level_slow_system_pu': 50.0,        # 液位慢系统Pu阈值（从60降低到50）
+        'level_mid_gain_range': [1.0, 2.2],  # 液位中等增益范围（扩大范围）
+        'level_mid_gain_factor': 0.18,       # 中等增益pb调整系数（从0.15提高到0.18）
+        'level_large_t1_threshold': 40.0,    # 大时间常数阈值（从50降低到40）
+        'level_large_t1_factor': 100.0,      # 大T1 pb调整除数（从120降低到100）
+        'level_pb_boost_factor': 1.4,        # 液位回路pb额外保守因子（从1.3提高到1.4）
+        'level_kd_enable_threshold': 0.6,    # 液位回路启用微分的振荡阈值（从0.7降低到0.6）
+        'level_fallback_pb': 250.0,          # 液位回路fallback时的默认pb（新增）
+        'level_fallback_ti_factor': 2.5,     # 液位回路fallback时的Ti乘数（新增）
         
         # ========== pb范围 ==========
         'pb_min': 120.0,                     # pb下限
-        'pb_max': 400.0,                     # pb上限（降低以避免过度保守）
+        'pb_max': 500.0,                     # pb上限（增大以支持慢液位回路）
         
         # ========== 动态pb边界（基于过程增益K） ==========
         'pb_k_adjustment_factor': 0.3,       # pb下限动态调整系数: pb_min *= (1 + factor/K)

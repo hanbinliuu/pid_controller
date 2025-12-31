@@ -429,6 +429,22 @@ class ModelSelector(LoggerMixin):
         # Step 5: 验证一致性与仿真匹配度
         fusion_result = self._validate_and_refine(fusion_result, segments_for_fitting, hist_data)
         
+        # Step 5.5: 检查融合参数是否有效，无效则尝试振荡整定fallback
+        if abs(fusion_result.K) < self._epsilon or fusion_result.T1 < self._epsilon:
+            self.log("\n   ⚠️ 参数融合失败（K或T1为0），尝试振荡整定fallback...")
+            # 尝试使用所有段进行振荡整定
+            fallback_result = self._oscillation_tuner.try_oscillation_tuning(
+                segments_for_fitting, segment_results_fitted, current_pid, force=True
+            )
+            if fallback_result is not None:
+                self.log("   ✅ 振荡整定fallback成功")
+                return self._oscillation_tuner.build_oscillation_output(
+                    fallback_result, hist_data, time_range, input_data.tuning_window,
+                    original_segments, original_results
+                )
+            else:
+                self.log("   ❌ 振荡整定fallback也失败")
+        
         # 构建数据质量信息，用于自适应保守PID整定
         quality_info = self._build_quality_info(segments_for_fitting, segment_results_fitted, fusion_result)
         
