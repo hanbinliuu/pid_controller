@@ -9,7 +9,8 @@ import logging
 import threading
 import time
 import os
-import fcntl
+# import fcntl
+import portalocker
 from datetime import datetime
 from typing import Optional, Dict, Any, Callable, List
 
@@ -112,8 +113,9 @@ class CronTask:
             self._lock_fd = open(lock_file_path, 'w')
             
             # 尝试获取文件锁（非阻塞）
-            fcntl.flock(self._lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            
+            # fcntl.flock(self._lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            portalocker.lock(self._lock_fd, portalocker.LOCK_EX | portalocker.LOCK_NB)
+
             # 写入进程ID
             self._lock_fd.truncate(0)
             self._lock_fd.write(str(self.process_id))
@@ -149,7 +151,8 @@ class CronTask:
         
         try:
             # 释放文件锁
-            fcntl.flock(self._lock_fd.fileno(), fcntl.LOCK_UN)
+            # fcntl.flock(self._lock_fd.fileno(), fcntl.LOCK_UN)
+            portalocker.unlock(self._lock_fd)
             # 关闭文件
             self._lock_fd.close()
             self._lock_fd = None
