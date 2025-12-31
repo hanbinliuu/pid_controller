@@ -4,7 +4,8 @@
 """
 import logging
 import os
-import fcntl
+# import fcntl
+import portalocker
 import threading
 
 from api.tasks.loop_perf_stats_task import calc_loop_performance
@@ -39,7 +40,8 @@ def _acquire_init_lock() -> bool:
         _init_lock_fd = open(_INIT_LOCK_FILE, 'w')
         
         # 尝试获取文件锁（非阻塞）
-        fcntl.flock(_init_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # fcntl.flock(_init_lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        portalocker.lock(_init_lock_fd, portalocker.LOCK_EX | portalocker.LOCK_NB)
         
         # 写入进程 ID
         _init_lock_fd.truncate(0)
@@ -78,7 +80,8 @@ def _release_init_lock():
         return
     
     try:
-        fcntl.flock(_init_lock_fd.fileno(), fcntl.LOCK_UN)
+        # fcntl.flock(_init_lock_fd.fileno(), fcntl.LOCK_UN)
+        portalocker.unlock(_init_lock_fd)
         _init_lock_fd.close()
         _init_lock_fd = None
         logger.info(f"成功释放定时任务初始化锁 (PID: {os.getpid()})")

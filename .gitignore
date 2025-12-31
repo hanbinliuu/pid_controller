@@ -8,6 +8,8 @@ out
 
 logs
 
+lock
+
 mesh-table/*.log
 
 .venv
