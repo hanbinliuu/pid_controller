@@ -149,19 +149,19 @@ class PIDDataFile(SQLModel, table=True):
 
     host_port: Optional[str] = Field(
         default=None,
-        description="清理者服务地址",
+        description="执行者服务地址",
         max_length=36,
         sa_column_kwargs={
-            "comment": "清理者服务地址",
+            "comment": "执行者服务地址",
             "nullable": True
         }
     )
 
     version: int = Field(
         default=0,
-        description="清理者控制",
+        description="执行者控制",
         sa_column_kwargs={
-            "comment": "清理者控制",
+            "comment": "执行者控制",
             "nullable": False,
             "server_default": text("0")
         }
