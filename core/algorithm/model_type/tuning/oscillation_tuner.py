@@ -355,11 +355,11 @@ class OscillationTuner(LoggerMixin):
         
         if not oscillation_analyses:
             self.log("   ⚠️ 无法从振荡数据中提取有效特征")
-            # ========== 新增：液位回路fallback机制 ==========
-            # 当振荡分析失败时，对液位回路使用基于数据特征的保守参数
-            if self._loop_type == 'level' and oscillating_segments:
-                self.log("   🔄 液位回路fallback: 使用数据特征估算参数")
-                return self._level_loop_fallback(oscillating_segments, segments, segment_results)
+            # ========== 通用fallback机制 ==========
+            # 当振荡分析失败时，使用基于数据特征的保守参数
+            if oscillating_segments:
+                self.log(f"   🔄 {self._loop_type}回路fallback: 使用数据特征估算参数")
+                return self._generic_fallback(oscillating_segments, segments, segment_results)
             return None
         
         # 选择最佳振荡分析结果（优先使用持续振荡，数据点数最多的段）
@@ -1042,9 +1042,13 @@ class OscillationTuner(LoggerMixin):
             verbose=self._verbose
         )
         
-        # 如果闭环不稳定，尝试更保守的参数
-        if not is_stable:
-            self.log("   ⚠️ 闭环不稳定，尝试更保守的参数...")
+        # 如果闭环不稳定，尝试更保守的参数（最多尝试3次）
+        max_fallback_attempts = 3
+        fallback_attempt = 0
+        
+        while not is_stable and fallback_attempt < max_fallback_attempts:
+            fallback_attempt += 1
+            self.log(f"   ⚠️ 闭环不稳定，尝试更保守的参数 (第{fallback_attempt}次)...")
             
             K_approx = pv_range / mv_range if mv_range > 0.1 and pv_range > 0.01 else 1.0
             
@@ -1054,19 +1058,23 @@ class OscillationTuner(LoggerMixin):
             fallback_valve_issues = osc_result.get('valve_issues', {})
             fallback_osc_ratio = osc_info.get('oscillation_ratio', 0.5)
             
-            # 闭环不稳定时使用低置信度（强制保守）
-            fallback_confidence = osc_info.get('confidence', 0.3) * 0.5
+            # 每次迭代降低置信度，使参数更保守
+            # 第1次: 0.15, 第2次: 0.075, 第3次: 0.0375
+            fallback_confidence = osc_info.get('confidence', 0.3) * (0.5 ** fallback_attempt)
+            
+            # 每次迭代增加振荡比，使参数更保守
+            adjusted_osc_ratio = min(0.95, fallback_osc_ratio + 0.15 * fallback_attempt)
             
             fallback_pid = self._get_conservative_pid_params(
                 Pu, osc_info['Ku'], K_approx=K_approx, reason='data_range',
-                oscillation_ratio=fallback_osc_ratio,
-                data_quality=fallback_data_quality,
+                oscillation_ratio=adjusted_osc_ratio,
+                data_quality=fallback_data_quality * (0.8 ** fallback_attempt),  # 降低数据质量
                 nonlinearity=fallback_nonlinearity,
                 valve_issues=fallback_valve_issues,
                 confidence=fallback_confidence
             )
             
-            self.log(f"   ⚠️ 数据质量差，使用保守参数: pb={fallback_pid['pb']:.1f}, "
+            self.log(f"   ⚠️ 第{fallback_attempt}次fallback: pb={fallback_pid['pb']:.1f}, "
                     f"Kp={fallback_pid['Kp']:.4f}, Ki={fallback_pid['Ki']:.4f}")
             pid_params = fallback_pid
             
@@ -1075,6 +1083,10 @@ class OscillationTuner(LoggerMixin):
                 sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
                 verbose=self._verbose
             )
+            
+            if is_stable:
+                self.log(f"   ✅ 第{fallback_attempt}次fallback成功，闭环稳定")
+                break
         
         # ========== 综合评分策略（更精确反映参数可用性） ==========
         rating_details = {}
@@ -1512,6 +1524,195 @@ class OscillationTuner(LoggerMixin):
             'oscillation_info': osc_info,
             'segment_idx': 0,
             'method': 'level_fallback',
+            'data_quality': data_quality,
+            'nonlinearity': nonlinearity,
+            'valve_issues': {}
+        }
+
+    def _generic_fallback(self, oscillating_segments: List, 
+                          segments: List[HistoricalData],
+                          segment_results: List[SegmentResult]) -> Optional[Dict]:
+        """
+        通用fallback机制
+        
+        当振荡分析无法提取有效特征时，使用数据特征估算保守的PID参数。
+        适用于所有回路类型。
+        
+        Args:
+            oscillating_segments: 振荡段列表 [(idx, seg, result), ...]
+            segments: 原始段数据列表
+            segment_results: 段结果列表
+        
+        Returns:
+            fallback整定结果，如果无法估算则返回 None
+        """
+        # 液位回路使用专用fallback
+        if self._loop_type == 'level':
+            return self._level_loop_fallback(oscillating_segments, segments, segment_results)
+        
+        osc_config = Config.OSCILLATION_TUNING
+        
+        # 选择数据量最大的段进行分析
+        best_seg = None
+        best_result = None
+        max_points = 0
+        
+        for idx, seg, result in oscillating_segments:
+            if len(seg.pv) > max_points:
+                max_points = len(seg.pv)
+                best_seg = seg
+                best_result = result
+        
+        if best_seg is None or max_points < 30:
+            self.log("   ⚠️ 通用fallback: 数据量不足")
+            return None
+        
+        # 估算过程增益 K
+        pv_range = np.ptp(best_seg.pv)
+        mv_range = np.ptp(best_seg.mv)
+        
+        if mv_range < 0.1 or pv_range < 0.01:
+            self.log("   ⚠️ 通用fallback: MV或PV变化范围过小")
+            return None
+        
+        K_approx = pv_range / mv_range
+        K_approx = np.clip(K_approx, 0.1, 10.0)
+        
+        # 估算采样周期
+        dt = 1.0
+        if len(best_seg.timestamp) > 1:
+            dt = (best_seg.timestamp[1] - best_seg.timestamp[0]) / 1000
+        
+        data_duration = len(best_seg.pv) * dt
+        
+        # 根据回路类型估算时间常数
+        if self._loop_type == 'flow':
+            # 流量回路通常较快
+            T1_approx = max(data_duration / 5, 10.0)
+        elif self._loop_type == 'pressure':
+            # 压力回路中等速度
+            T1_approx = max(data_duration / 4, 15.0)
+        elif self._loop_type == 'temperature':
+            # 温度回路通常较慢
+            T1_approx = max(data_duration / 3, 30.0)
+        else:
+            T1_approx = max(data_duration / 4, 20.0)
+        
+        # 估算滞后 L
+        L_approx = T1_approx / 5
+        
+        # 估算临界周期 Pu
+        Pu_approx = max(4 * L_approx, 10.0)
+        
+        # 估算临界增益 Ku
+        if L_approx > 0.1:
+            Ku_approx = 1.2 * T1_approx / (K_approx * L_approx)
+        else:
+            Ku_approx = 2.0 / K_approx
+        Ku_approx = np.clip(Ku_approx, 0.1, 20.0)
+        
+        self.log(f"   📊 通用fallback估算: K≈{K_approx:.2f}, T1≈{T1_approx:.0f}s, "
+                f"L≈{L_approx:.1f}s, Pu≈{Pu_approx:.0f}s, Ku≈{Ku_approx:.2f}")
+        
+        # 获取数据质量信息
+        oscillation_ratio = best_result.oscillation_ratio if best_result else 0.5
+        data_quality = best_result.quality_score if best_result else 0.4
+        nonlinearity = best_result.nonlinearity_score if best_result else 0.3
+        
+        # 根据回路类型设置基础pb
+        if self._loop_type == 'flow':
+            pb_base = 180.0  # 流量回路适中
+        elif self._loop_type == 'pressure':
+            pb_base = 160.0  # 压力回路可以稍激进
+        elif self._loop_type == 'temperature':
+            pb_base = 220.0  # 温度回路更保守
+        else:
+            pb_base = 200.0
+        
+        # 基于K调整pb
+        if K_approx > 2.0:
+            pb_base *= 1.0 + (K_approx - 2.0) * 0.25
+        elif K_approx < 0.5:
+            pb_base *= 1.5  # 小增益需要更保守
+        
+        # 基于T1调整pb
+        if T1_approx > 60:
+            pb_base *= 1.0 + (T1_approx - 60) / 150
+        
+        # 限制pb范围
+        pb_min = osc_config.get('pb_min', 120.0)
+        pb_max = osc_config.get('pb_max', 500.0)
+        pb_safe = np.clip(pb_base, pb_min, pb_max)
+        
+        conservative_Kp = 100.0 / pb_safe
+        
+        # Ti计算
+        base_Ti = max(Pu_approx / 2, 5.0)
+        
+        # 根据回路类型调整Ti
+        if self._loop_type == 'temperature':
+            ti_multiplier = 1.8  # 温度回路需要更大Ti
+        elif self._loop_type == 'flow':
+            ti_multiplier = 1.2
+        elif self._loop_type == 'pressure':
+            ti_multiplier = 1.0
+        else:
+            ti_multiplier = 1.5
+        
+        conservative_Ti = base_Ti * ti_multiplier
+        
+        # Ti范围限制
+        ti_range = osc_config.get('ti_range', [1.5, 25.0])
+        conservative_Ti = np.clip(conservative_Ti, ti_range[0], ti_range[1])
+        
+        conservative_Ki = conservative_Kp / conservative_Ti
+        
+        # Td计算：根据振荡程度决定是否使用微分
+        if oscillation_ratio > 0.5:
+            conservative_Td = Pu_approx / 10
+            td_range = osc_config.get('td_range', [0.3, 3.0])
+            conservative_Td = np.clip(conservative_Td, td_range[0], td_range[1])
+            conservative_Kd = conservative_Kp * conservative_Td
+        else:
+            conservative_Td = 0.0
+            conservative_Kd = 0.0
+        
+        self.log(f"   ✅ 通用fallback整定 ({self._loop_type}):")
+        self.log(f"      PB={pb_safe:.1f}%, Ti={conservative_Ti:.1f}s, Td={conservative_Td:.1f}s")
+        self.log(f"      Kp={conservative_Kp:.4f}, Ki={conservative_Ki:.4f}, Kd={conservative_Kd:.4f}")
+        
+        pid_params = {
+            'Kp': round(conservative_Kp, 4),
+            'Ki': round(conservative_Ki, 4),
+            'Kd': round(conservative_Kd, 4),
+            'Ti': round(conservative_Ti, 2),
+            'Td': round(conservative_Td, 2),
+            'method': f'{self._loop_type}_fallback',
+            'Pu': round(Pu_approx, 2),
+            'Ku': round(Ku_approx, 2),
+            'pb': round(pb_safe, 2)
+        }
+        
+        # 构造模拟的振荡信息
+        osc_info = {
+            'Pu': Pu_approx,
+            'Ku': Ku_approx,
+            'amplitude': pv_range / 2,
+            'mv_amplitude': mv_range / 2,
+            'decay_ratio': 1.0,
+            'oscillation_type': 'estimated',
+            'n_cycles': 1,
+            'is_valid': True,
+            'confidence': 0.3,
+            'oscillation_ratio': oscillation_ratio
+        }
+        
+        return {
+            'success': True,
+            'pid_params': pid_params,
+            'oscillation_info': osc_info,
+            'segment_idx': 0,
+            'method': f'{self._loop_type}_fallback',
             'data_quality': data_quality,
             'nonlinearity': nonlinearity,
             'valve_issues': {}

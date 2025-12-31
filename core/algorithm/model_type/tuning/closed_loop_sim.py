@@ -13,7 +13,7 @@
 import numpy as np
 from typing import Dict, Tuple, Optional
 
-from ..config import ModelType
+from ..config import Config, ModelType
 from ..data_models import FusionResult
 from .data_classes import ClosedLoopMetrics
 
@@ -320,12 +320,37 @@ class ClosedLoopSimMixin:
         dt = min(0.1, T_min / 10)  # 步长不超过最小时间常数的1/10
         dt = max(0.01, dt)         # 但也不要太小
         
+        # ========== 极慢系统自适应仿真时长 ==========
+        osc_config = Config.OSCILLATION_TUNING
+        very_slow_t1_threshold = osc_config.get('very_slow_system_t1_threshold', 100.0)
+        very_slow_pu_threshold = osc_config.get('very_slow_system_pu_threshold', 100.0)
+        very_slow_sim_factor = osc_config.get('very_slow_sim_duration_factor', 10.0)
+        very_slow_max_duration = osc_config.get('very_slow_max_sim_duration', 3000.0)
+        
         # 仿真时长：至少10倍最大时间常数
         T_max = max(T1, T2 if T2 > 0 else T1)
-        sim_time = max(100, T_max * 20)
+        Pu = pid_params.get('Pu', T_max)  # 使用临界周期（如果有）
+        
+        # 判断是否为极慢系统
+        is_very_slow = T_max > very_slow_t1_threshold or Pu > very_slow_pu_threshold
+        
+        if is_very_slow:
+            # 极慢系统：使用更长的仿真时间
+            sim_time = min((T_max + L) * very_slow_sim_factor, very_slow_max_duration)
+            sim_time = max(sim_time, 500)  # 至少500秒
+        else:
+            sim_time = max(100, T_max * 20)
+        
         n_steps = int(sim_time / dt)
-        # 对于慢系统（T_max > 50s），允许更多步数
-        max_steps = 5000 if T_max <= 50 else min(10000, int(T_max * 100))
+        
+        # 对于慢系统，允许更多步数
+        if is_very_slow:
+            max_steps = min(30000, int(sim_time / dt))  # 极慢系统最多30000步
+        elif T_max > 50:
+            max_steps = min(15000, int(T_max * 150))  # 慢系统最多15000步
+        else:
+            max_steps = 5000
+        
         n_steps = min(n_steps, max_steps)
         
         metrics = self.simulate_closed_loop(

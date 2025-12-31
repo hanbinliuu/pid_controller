@@ -55,8 +55,8 @@ class OscillationAnalysisMixin:
         # ========== 方法1: 精确峰值检测法 ==========
         Pu_peaks = self._detect_period_from_peaks(pv_detrend, dt)
         
-        # ========== 方法2: FFT 法 ==========
-        Pu_fft = self._detect_period_from_fft(pv_detrend, dt)
+        # ========== 方法2: FFT 法（增强版，返回能量比）==========
+        Pu_fft, fft_energy_ratio = self._detect_period_from_fft_enhanced(pv_detrend, dt)
         
         # ========== 方法3: 自相关法 ==========
         Pu_autocorr = self._detect_period_from_autocorr(pv_detrend, dt)
@@ -75,11 +75,27 @@ class OscillationAnalysisMixin:
         
         if Pu_fft is not None and MIN_PERIOD < Pu_fft < MAX_PERIOD:
             valid_periods.append(Pu_fft)
-            weights.append(1.0)
+            # FFT权重根据能量比调整：能量比越高，FFT结果越可靠
+            fft_weight = 1.0
+            if fft_energy_ratio is not None:
+                fft_weight = 0.5 + fft_energy_ratio * 1.5  # 能量比0.3→0.95, 0.5→1.25
+                fft_weight = min(fft_weight, 2.0)  # 上限2.0
+            weights.append(fft_weight)
         
         if Pu_autocorr is not None and MIN_PERIOD < Pu_autocorr < MAX_PERIOD:
             valid_periods.append(Pu_autocorr)
             weights.append(1.5)
+        
+        # ========== 弱振荡检测增强 ==========
+        # 如果常规方法都失败，尝试弱振荡检测
+        weak_osc_enabled = osc_config.get('weak_oscillation_detection', True)
+        if not valid_periods and weak_osc_enabled:
+            weak_result = self._detect_weak_oscillation(pv_detrend, dt)
+            if weak_result is not None:
+                Pu_weak, weak_confidence = weak_result
+                if MIN_PERIOD < Pu_weak < MAX_PERIOD:
+                    valid_periods.append(Pu_weak)
+                    weights.append(0.8 * weak_confidence)  # 弱振荡权重较低
         
         if not valid_periods:
             return None
@@ -226,6 +242,7 @@ class OscillationAnalysisMixin:
             'is_valid': is_valid,
             'confidence': round(confidence, 3),      # 置信度 [0, 1]
             'Ku_std': round(Ku_std, 4) if Ku_std else None,  # Ku 标准差
+            'fft_energy_ratio': round(fft_energy_ratio, 3) if fft_energy_ratio else None,  # FFT能量比
             'detection_methods': {           # 各方法检测结果（调试用）
                 'peaks': round(Pu_peaks, 3) if Pu_peaks else None,
                 'fft': round(Pu_fft, 3) if Pu_fft else None,
@@ -270,10 +287,20 @@ class OscillationAnalysisMixin:
         return float(np.median(periods)) if len(periods) > 0 else None
     
     def _detect_period_from_fft(self, pv: np.ndarray, dt: float) -> Optional[float]:
-        """使用 FFT 检测主频（带抛物线插值提高分辨率）"""
+        """使用 FFT 检测主频（带抛物线插值提高分辨率）- 保留用于兼容"""
+        result, _ = self._detect_period_from_fft_enhanced(pv, dt)
+        return result
+    
+    def _detect_period_from_fft_enhanced(self, pv: np.ndarray, dt: float) -> Tuple[Optional[float], Optional[float]]:
+        """
+        使用增强的FFT检测主频，同时返回能量比用于弱振荡判断
+        
+        Returns:
+            (周期, 主频能量占比)
+        """
         n = len(pv)
         if n < 10:
-            return None
+            return None, None
         
         # 加窗减少频谱泄漏
         window = np.hanning(n)
@@ -295,18 +322,29 @@ class OscillationAnalysisMixin:
         
         valid_mask = (freqs > min_freq) & (freqs < max_freq)
         if not np.any(valid_mask):
-            return None
+            return None, None
         
         # 获取有效范围内的索引
         valid_indices = np.where(valid_mask)[0]
         if len(valid_indices) < 3:
-            return None
+            return None, None
+        
+        # 计算主频能量占比（用于弱振荡检测）
+        total_energy = np.sum(magnitude[valid_mask] ** 2)
+        if total_energy < self._epsilon:
+            return None, None
         
         # 找到最大幅度对应的索引
         peak_idx_in_valid = np.argmax(magnitude[valid_mask])
         peak_idx = valid_indices[peak_idx_in_valid]
         
-        # 抛物线插值精化频率（如果峰值不在边界）
+        # 计算主频及其邻近频率的能量占比
+        start_bin = max(0, peak_idx - 2)
+        end_bin = min(len(magnitude), peak_idx + 3)
+        peak_energy = np.sum(magnitude[start_bin:end_bin] ** 2)
+        energy_ratio = peak_energy / total_energy
+        
+        # 抛物线插值精化频率
         if peak_idx > 0 and peak_idx < len(magnitude) - 1:
             y0, y1, y2 = magnitude[peak_idx-1], magnitude[peak_idx], magnitude[peak_idx+1]
             denom = 2 * (y0 - 2*y1 + y2)
@@ -320,7 +358,69 @@ class OscillationAnalysisMixin:
             dominant_freq = freqs[peak_idx]
         
         if dominant_freq > self._epsilon:
-            return 1.0 / dominant_freq
+            return 1.0 / dominant_freq, energy_ratio
+        return None, None
+    
+    def _detect_weak_oscillation(self, pv: np.ndarray, dt: float) -> Optional[Tuple[float, float]]:
+        """
+        弱振荡检测：当常规方法失败时，使用更敏感的方法检测微弱振荡
+        
+        Returns:
+            (周期, 置信度) 或 None
+        """
+        n = len(pv)
+        if n < 30:
+            return None
+        
+        osc_config = Config.OSCILLATION_TUNING
+        fft_threshold = osc_config.get('weak_osc_fft_threshold', 0.15)
+        
+        # 方法1：使用更长的FFT窗口和更低的阈值
+        n_fft = max(n * 8, 2048)  # 更高的频率分辨率
+        window = np.hanning(n)
+        pv_windowed = pv * window
+        
+        fft_result = np.fft.rfft(pv_windowed, n=n_fft)
+        freqs = np.fft.rfftfreq(n_fft, dt)
+        magnitude = np.abs(fft_result)
+        
+        # 扩大频率搜索范围
+        min_freq = 1.0 / (n * dt)  # 允许更长周期
+        max_freq = 1.0 / (3 * dt)  # 至少3个采样点一个周期
+        
+        valid_mask = (freqs > min_freq) & (freqs < max_freq)
+        if not np.any(valid_mask):
+            return None
+        
+        valid_indices = np.where(valid_mask)[0]
+        if len(valid_indices) < 3:
+            return None
+        
+        # 找主频
+        peak_idx_in_valid = np.argmax(magnitude[valid_mask])
+        peak_idx = valid_indices[peak_idx_in_valid]
+        
+        # 计算能量比
+        total_energy = np.sum(magnitude[valid_mask] ** 2)
+        if total_energy < self._epsilon:
+            return None
+        
+        start_bin = max(0, peak_idx - 3)
+        end_bin = min(len(magnitude), peak_idx + 4)
+        peak_energy = np.sum(magnitude[start_bin:end_bin] ** 2)
+        energy_ratio = peak_energy / total_energy
+        
+        # 弱振荡判断：能量比虽低但仍有集中趋势
+        if energy_ratio < fft_threshold * 0.5:  # 太弱，放弃
+            return None
+        
+        dominant_freq = freqs[peak_idx]
+        if dominant_freq > self._epsilon:
+            period = 1.0 / dominant_freq
+            # 置信度基于能量比
+            confidence = min(1.0, energy_ratio / fft_threshold)
+            return period, confidence
+        
         return None
     
     def _detect_period_from_autocorr(self, pv: np.ndarray, dt: float) -> Optional[float]:

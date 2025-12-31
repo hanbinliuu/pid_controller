@@ -78,12 +78,18 @@ class Config:
         'enable_llm': True,                  # 是否启用 LLM 辅助决策保守策略
         
         # 触发振荡整定的条件
-        'oscillation_ratio_threshold': 0.1,  # 振荡比阈值，超过此值认为是高振荡数据
-        'r2_failure_threshold': 0.3,         # R² 阈值，低于此值认为模型拟合失败
+        'oscillation_ratio_threshold': 0.08, # 振荡比阈值，降低以检测弱振荡（从0.1降到0.08）
+        'r2_failure_threshold': 0.35,        # R² 阈值，略微提高以更早触发振荡整定（从0.3提到0.35）
+        
+        # ========== 弱振荡检测增强配置 ==========
+        'weak_oscillation_detection': True,  # 启用弱振荡检测
+        'weak_osc_fft_threshold': 0.15,      # FFT主频能量占比阈值（低于此值认为无明显振荡）
+        'weak_osc_envelope_threshold': 0.3,  # 包络比阈值（低于此值认为振荡幅度小）
+        'weak_osc_combined_threshold': 0.2,  # 综合振荡得分阈值（osc_ratio*0.4 + envelope*0.6）
         
         # 振荡周期检测
         'period_min': 1.0,                   # 最小周期（秒）
-        'period_max': 200.0,                 # 最大周期（秒）- 增大以支持慢液位回路
+        'period_max': 300.0,                 # 最大周期（秒）- 增大以支持极慢系统（从200增到300）
         
         # 闭环仿真参数
         'sp_initial': 50.0,                  # 设定值初始值
@@ -173,6 +179,20 @@ class Config:
         # ========== pb范围 ==========
         'pb_min': 120.0,                     # pb下限
         'pb_max': 500.0,                     # pb上限（增大以支持慢液位回路）
+        
+        # ========== 大滞后系统专用配置（L/T1 > 0.5）==========
+        'large_delay_ratio_threshold': 0.5,  # 大滞后比阈值
+        'large_delay_lambda_factor': 2.0,    # 大滞后时Lambda因子（更保守）
+        'large_delay_pb_boost': 1.5,         # 大滞后时pb额外增益
+        'large_delay_ti_boost': 1.3,         # 大滞后时Ti额外增益
+        'extreme_delay_ratio_threshold': 0.8, # 极大滞后比阈值
+        'extreme_delay_pb_boost': 2.0,       # 极大滞后时pb额外增益
+        
+        # ========== 极慢系统配置（T1 > 100s 或 Pu > 100s）==========
+        'very_slow_system_t1_threshold': 100.0,  # 极慢系统T1阈值
+        'very_slow_system_pu_threshold': 100.0,  # 极慢系统Pu阈值
+        'very_slow_sim_duration_factor': 10.0,   # 极慢系统仿真时长因子（T1+L的倍数）
+        'very_slow_max_sim_duration': 3000.0,    # 极慢系统最大仿真时长（秒）
         
         # ========== 动态pb边界（基于过程增益K） ==========
         'pb_k_adjustment_factor': 0.3,       # pb下限动态调整系数: pb_min *= (1 + factor/K)
