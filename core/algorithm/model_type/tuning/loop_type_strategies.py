@@ -22,7 +22,72 @@ ti_mult = strategy.adjust_ti_multiplier(ti_mult, K_approx, Pu, osc_ratio, config
 
 from abc import ABC, abstractmethod
 from typing import Dict, Optional
+from dataclasses import dataclass
 import numpy as np
+
+
+@dataclass
+class ExtremeScenario:
+    """
+    极端场景检测结果
+    
+    用于识别需要特殊处理的极端工况
+    """
+    is_high_gain: bool = False      # K > 阈值（按回路类型不同）
+    is_very_high_gain: bool = False # K > 高阈值（极端情况）
+    is_slow_system: bool = False    # Pu > 60s
+    is_very_slow_system: bool = False  # Pu > 100s
+    is_fast_system: bool = False    # Pu < 15s
+    is_very_fast_system: bool = False  # Pu < 8s
+    is_high_delay_ratio: bool = False  # 估算 L/T1 > 0.5
+    is_high_oscillation: bool = False  # oscillation_ratio > 0.7
+    delay_ratio: float = 0.0        # 估算的滞后比
+    
+    @property
+    def has_extreme_condition(self) -> bool:
+        """是否存在任何极端条件"""
+        return any([
+            self.is_high_gain, self.is_very_high_gain,
+            self.is_slow_system, self.is_very_slow_system,
+            self.is_fast_system, self.is_very_fast_system,
+            self.is_high_delay_ratio, self.is_high_oscillation
+        ])
+
+
+def detect_extreme_scenario(K_approx: float, Pu: float, 
+                           oscillation_ratio: float = 0.0,
+                           gain_threshold: float = 4.0,
+                           very_high_gain_threshold: float = 6.0) -> ExtremeScenario:
+    """
+    检测极端场景
+    
+    Args:
+        K_approx: 估计的过程增益
+        Pu: 临界周期
+        oscillation_ratio: 振荡比
+        gain_threshold: 高增益阈值（按回路类型调整）
+        very_high_gain_threshold: 极高增益阈值
+        
+    Returns:
+        ExtremeScenario: 极端场景检测结果
+    """
+    # 估算滞后比 L/T1
+    # 使用 Ziegler-Nichols 近似: Pu ≈ 4L, T1 ≈ Pu * (1 + 1/K) / 4
+    estimated_L = Pu / 4.0
+    T1_approx = Pu * (1.0 + 1.0 / max(K_approx, 0.5)) / 4.0
+    delay_ratio = estimated_L / max(T1_approx, 1.0)
+    
+    return ExtremeScenario(
+        is_high_gain=K_approx > gain_threshold,
+        is_very_high_gain=K_approx > very_high_gain_threshold,
+        is_slow_system=Pu > 60.0,
+        is_very_slow_system=Pu > 100.0,
+        is_fast_system=Pu < 15.0,
+        is_very_fast_system=Pu < 8.0,
+        is_high_delay_ratio=delay_ratio > 0.5,
+        is_high_oscillation=oscillation_ratio > 0.7,
+        delay_ratio=delay_ratio
+    )
 
 
 class LoopTypeStrategy(ABC):
@@ -83,9 +148,10 @@ class FlowLoopStrategy(LoopTypeStrategy):
     流量回路策略
     
     特点：响应快，对高增益敏感
-    调整：
-    - K>6 时适度增加 pb
-    - K>6 时增加 Ti 避免积分过冲
+    极端场景处理：
+    - 极高增益 (K>6): pb ×1.2-2.0, Ti ×1.3-1.8
+    - 快速系统 (Pu<10): pb ×1.1-1.3
+    - 大滞后比 (L/T1>0.5): pb ×1.15-1.4, Ti ×1.1-1.3
     """
     
     @property
@@ -94,26 +160,74 @@ class FlowLoopStrategy(LoopTypeStrategy):
     
     def adjust_pb_for_extreme(self, pb_base: float, K_approx: float, Pu: float,
                               log_func=None) -> float:
-        # Flow 回路仅在极高增益 (K>6) 时进行 pb 调整
-        if K_approx > 6.0:
-            flow_gain_factor = 1.0 + (K_approx - 6.0) * 0.2
-            flow_gain_factor = min(flow_gain_factor, 2.0)
-            pb_base *= flow_gain_factor
+        # 检测极端场景
+        scenario = detect_extreme_scenario(
+            K_approx, Pu, 
+            gain_threshold=5.0,  # Flow 对高增益更敏感
+            very_high_gain_threshold=6.0
+        )
+        
+        # 选择性应用：只选择最主导的因子
+        factor = 1.0
+        reason = None
+        
+        if scenario.is_very_high_gain:
+            # 极高增益 (K>6): 主导因素
+            factor = 1.0 + (K_approx - 6.0) * 0.15
+            factor = min(factor, 1.8)
+            reason = f"极高增益(K={K_approx:.1f})"
+        elif scenario.is_high_delay_ratio and scenario.delay_ratio > 0.6:
+            # 大滞后比 (L/T1>0.6)
+            factor = 1.1 + (scenario.delay_ratio - 0.6) * 0.8
+            factor = min(factor, 1.4)
+            reason = f"大滞后比(L/T1={scenario.delay_ratio:.2f})"
+        elif scenario.is_very_fast_system:
+            # 极快系统 (Pu<8)
+            factor = 1.1 + (8.0 - Pu) * 0.03
+            factor = min(factor, 1.3)
+            reason = f"极快系统(Pu={Pu:.1f}s)"
+        
+        if factor > 1.0:
+            pb_base *= factor
             if log_func:
-                log_func(f"   ⚠️ Flow极高增益(K={K_approx:.1f}): pb保守 ×{flow_gain_factor:.2f}")
+                log_func(f"   ⚠️ Flow{reason}: pb保守 ×{factor:.2f}")
         
         return pb_base
     
     def adjust_ti_multiplier(self, ti_mult: float, K_approx: float, Pu: float,
                              oscillation_ratio: float, osc_config: Dict,
                              log_func=None) -> float:
-        # Flow 中极高增益(K>6)：增加 Ti 避免积分过冲
-        if K_approx > 6.0:
-            flow_high_gain_ti = 1.0 + (K_approx - 6.0) * 0.3
-            flow_high_gain_ti = min(flow_high_gain_ti, 1.8)
-            ti_mult *= flow_high_gain_ti
+        # 检测极端场景
+        scenario = detect_extreme_scenario(
+            K_approx, Pu, oscillation_ratio,
+            gain_threshold=5.0,
+            very_high_gain_threshold=6.0
+        )
+        
+        # 选择性应用
+        factor = 1.0
+        reason = None
+        
+        if scenario.is_very_high_gain:
+            # 极高增益：增加 Ti 避免积分过冲
+            factor = 1.0 + (K_approx - 6.0) * 0.25
+            factor = min(factor, 1.8)
+            reason = f"高增益(K={K_approx:.1f})"
+        elif scenario.is_high_delay_ratio and scenario.delay_ratio > 0.6:
+            # 大滞后比：适度增加 Ti
+            factor = 1.0 + (scenario.delay_ratio - 0.6) * 0.6
+            factor = min(factor, 1.3)
+            reason = f"大滞后比(L/T1={scenario.delay_ratio:.2f})"
+        elif scenario.is_high_oscillation:
+            # 高振荡：增加 Ti
+            factor = 1.0 + (oscillation_ratio - 0.7) * 0.8
+            factor = min(factor, 1.4)
+            reason = f"高振荡({oscillation_ratio:.2f})"
+        
+        if factor > 1.0:
+            ti_mult *= factor
             if log_func:
-                log_func(f"   📊 Flow高增益Ti调整(K={K_approx:.1f}): ×{flow_high_gain_ti:.2f}")
+                log_func(f"   📊 Flow Ti调整({reason}): ×{factor:.2f}")
         
         return ti_mult
 
@@ -123,9 +237,10 @@ class TemperatureLoopStrategy(LoopTypeStrategy):
     温度回路策略
     
     特点：响应慢，热惯性大，大滞后
-    调整：
-    - K>4 时适度增加 pb
-    - K>4 时增加 Ti 避免振荡
+    极端场景处理：
+    - 高增益 (K>4): pb ×1.15-1.8, Ti ×1.25-1.5
+    - 极慢系统 (Pu>60): pb ×1.1-1.4, Ti ×1.1-1.3
+    - 大滞后 (L/T1>0.4): pb ×1.2-1.6, Ti ×1.15-1.4
     """
     
     @property
@@ -134,26 +249,79 @@ class TemperatureLoopStrategy(LoopTypeStrategy):
     
     def adjust_pb_for_extreme(self, pb_base: float, K_approx: float, Pu: float,
                               log_func=None) -> float:
-        # 温度回路高增益 (K>4) 适度保守
-        if K_approx > 4.0:
-            temp_gain_factor = 1.0 + (K_approx - 4.0) * 0.15
-            temp_gain_factor = min(temp_gain_factor, 1.8)
-            pb_base *= temp_gain_factor
+        # 检测极端场景（温度回路阈值较低）
+        scenario = detect_extreme_scenario(
+            K_approx, Pu,
+            gain_threshold=4.0,
+            very_high_gain_threshold=6.0
+        )
+        
+        # 选择性应用
+        factor = 1.0
+        reason = None
+        
+        if scenario.is_very_high_gain:
+            # 极高增益 (K>6)
+            factor = 1.2 + (K_approx - 6.0) * 0.15
+            factor = min(factor, 1.8)
+            reason = f"极高增益(K={K_approx:.1f})"
+        elif scenario.is_high_gain:
+            # 高增益 (K>4)
+            factor = 1.0 + (K_approx - 4.0) * 0.1
+            factor = min(factor, 1.5)
+            reason = f"高增益(K={K_approx:.1f})"
+        elif scenario.is_high_delay_ratio and scenario.delay_ratio > 0.4:
+            # 大滞后比 (L/T1>0.4) - 温度回路常见
+            factor = 1.15 + (scenario.delay_ratio - 0.4) * 1.0
+            factor = min(factor, 1.6)
+            reason = f"大滞后比(L/T1={scenario.delay_ratio:.2f})"
+        elif scenario.is_slow_system:
+            # 慢系统 (Pu>60)
+            factor = 1.0 + (Pu - 60.0) / 80.0
+            factor = min(factor, 1.4)
+            reason = f"慢系统(Pu={Pu:.0f}s)"
+        
+        if factor > 1.0:
+            pb_base *= factor
             if log_func:
-                log_func(f"   ⚠️ Temp高增益(K={K_approx:.1f}): pb保守 ×{temp_gain_factor:.2f}")
+                log_func(f"   ⚠️ Temp{reason}: pb保守 ×{factor:.2f}")
         
         return pb_base
     
     def adjust_ti_multiplier(self, ti_mult: float, K_approx: float, Pu: float,
                              oscillation_ratio: float, osc_config: Dict,
                              log_func=None) -> float:
-        # Temperature 中高增益场景(K>4)：增加 Ti 避免振荡
-        if K_approx > 4.0:
-            temp_high_gain_ti = 1.0 + (K_approx - 4.0) * 0.25
-            temp_high_gain_ti = min(temp_high_gain_ti, 1.5)
-            ti_mult *= temp_high_gain_ti
+        # 检测极端场景
+        scenario = detect_extreme_scenario(
+            K_approx, Pu, oscillation_ratio,
+            gain_threshold=4.0,
+            very_high_gain_threshold=6.0
+        )
+        
+        # 选择性应用
+        factor = 1.0
+        reason = None
+        
+        if scenario.is_high_gain:
+            # 高增益：增加 Ti 避免振荡
+            factor = 1.0 + (K_approx - 4.0) * 0.2
+            factor = min(factor, 1.5)
+            reason = f"高增益(K={K_approx:.1f})"
+        elif scenario.is_high_delay_ratio and scenario.delay_ratio > 0.4:
+            # 大滞后比：适度增加 Ti
+            factor = 1.1 + (scenario.delay_ratio - 0.4) * 0.8
+            factor = min(factor, 1.4)
+            reason = f"大滞后比(L/T1={scenario.delay_ratio:.2f})"
+        elif scenario.is_slow_system:
+            # 慢系统：适度增加 Ti
+            factor = 1.0 + (Pu - 60.0) / 100.0
+            factor = min(factor, 1.3)
+            reason = f"慢系统(Pu={Pu:.0f}s)"
+        
+        if factor > 1.0:
+            ti_mult *= factor
             if log_func:
-                log_func(f"   📊 Temp高增益Ti调整(K={K_approx:.1f}): ×{temp_high_gain_ti:.2f}")
+                log_func(f"   📊 Temp Ti调整({reason}): ×{factor:.2f}")
         
         return ti_mult
 
@@ -163,9 +331,10 @@ class PressureLoopStrategy(LoopTypeStrategy):
     压力回路策略
     
     特点：响应快，对增益变化敏感
-    调整：
-    - K>5 时适度增加 pb
-    - Pu<15 额外保守
+    极端场景处理：
+    - 高增益 (K>5): pb ×1.2-1.8, Ti ×1.15-1.5
+    - 快速系统 (Pu<15): pb ×1.1-1.4
+    - 高振荡 (osc>0.7): pb ×1.2-1.5, Ti ×1.2-1.4
     """
     
     @property
@@ -174,34 +343,74 @@ class PressureLoopStrategy(LoopTypeStrategy):
     
     def adjust_pb_for_extreme(self, pb_base: float, K_approx: float, Pu: float,
                               log_func=None) -> float:
-        # 压力回路高增益 (K>5) 保守处理
-        if K_approx > 5.0:
-            press_gain_factor = 1.0 + (K_approx - 5.0) * 0.2
-            press_gain_factor = min(press_gain_factor, 1.8)
-            pb_base *= press_gain_factor
-            if log_func:
-                log_func(f"   ⚠️ Press高增益(K={K_approx:.1f}): pb保守 ×{press_gain_factor:.2f}")
+        # 检测极端场景
+        scenario = detect_extreme_scenario(
+            K_approx, Pu,
+            gain_threshold=5.0,
+            very_high_gain_threshold=7.0
+        )
         
-        # 快速系统 (Pu<15) 保守处理
-        if Pu < 15.0:
-            fast_factor = 1.0 + (15.0 - Pu) * 0.03
-            fast_factor = min(fast_factor, 1.4)
-            pb_base *= fast_factor
+        # 选择性应用（只选最主导因素）
+        factor = 1.0
+        reason = None
+        
+        if scenario.is_very_high_gain:
+            # 极高增益 (K>7)
+            factor = 1.3 + (K_approx - 7.0) * 0.15
+            factor = min(factor, 1.8)
+            reason = f"极高增益(K={K_approx:.1f})"
+        elif scenario.is_high_gain:
+            # 高增益 (K>5)
+            factor = 1.0 + (K_approx - 5.0) * 0.15
+            factor = min(factor, 1.6)
+            reason = f"高增益(K={K_approx:.1f})"
+        elif scenario.is_very_fast_system:
+            # 极快系统 (Pu<8) - 压力回路常见
+            factor = 1.15 + (8.0 - Pu) * 0.04
+            factor = min(factor, 1.4)
+            reason = f"极快系统(Pu={Pu:.1f}s)"
+        elif scenario.is_fast_system:
+            # 快速系统 (Pu<15)
+            factor = 1.0 + (15.0 - Pu) * 0.02
+            factor = min(factor, 1.3)
+            reason = f"快速系统(Pu={Pu:.1f}s)"
+        
+        if factor > 1.0:
+            pb_base *= factor
             if log_func:
-                log_func(f"   ⚠️ Press快速系统(Pu={Pu:.1f}s): pb保守 ×{fast_factor:.2f}")
+                log_func(f"   ⚠️ Press{reason}: pb保守 ×{factor:.2f}")
         
         return pb_base
     
     def adjust_ti_multiplier(self, ti_mult: float, K_approx: float, Pu: float,
                              oscillation_ratio: float, osc_config: Dict,
                              log_func=None) -> float:
-        # 压力回路高增益 (K>5)：增加 Ti
-        if K_approx > 5.0:
-            press_high_gain_ti = 1.0 + (K_approx - 5.0) * 0.15
-            press_high_gain_ti = min(press_high_gain_ti, 1.5)
-            ti_mult *= press_high_gain_ti
+        # 检测极端场景
+        scenario = detect_extreme_scenario(
+            K_approx, Pu, oscillation_ratio,
+            gain_threshold=5.0,
+            very_high_gain_threshold=7.0
+        )
+        
+        # 选择性应用
+        factor = 1.0
+        reason = None
+        
+        if scenario.is_high_oscillation:
+            # 高振荡优先（压力回路最常见问题）
+            factor = 1.1 + (oscillation_ratio - 0.7) * 1.0
+            factor = min(factor, 1.4)
+            reason = f"高振荡({oscillation_ratio:.2f})"
+        elif scenario.is_high_gain:
+            # 高增益：增加 Ti
+            factor = 1.0 + (K_approx - 5.0) * 0.12
+            factor = min(factor, 1.5)
+            reason = f"高增益(K={K_approx:.1f})"
+        
+        if factor > 1.0:
+            ti_mult *= factor
             if log_func:
-                log_func(f"   📊 Press高增益Ti调整(K={K_approx:.1f}): ×{press_high_gain_ti:.2f}")
+                log_func(f"   📊 Press Ti调整({reason}): ×{factor:.2f}")
         
         return ti_mult
 
@@ -210,10 +419,12 @@ class LevelLoopStrategy(LoopTypeStrategy):
     """
     液位回路策略
     
-    特点：积分过程特性，响应慢
-    调整：
-    - 所有液位回路适用基础 Ti 乘数
-    - Pu>100 时限制 Ti 增幅
+    特点：积分过程特性，响应慢，对增益变化敏感
+    极端场景处理：
+    - 高增益 (K>3): pb ×1.2-1.6
+    - 极慢系统 (Pu>100): Ti 限制为 ×1.2
+    - 高振荡: pb ×1.15-1.4
+    - 积分特性: 基础 Ti ×1.4
     """
     
     @property
@@ -222,31 +433,73 @@ class LevelLoopStrategy(LoopTypeStrategy):
     
     def adjust_pb_for_extreme(self, pb_base: float, K_approx: float, Pu: float,
                               log_func=None) -> float:
-        # Level 回路高增益 (K>3) 适度保守处理
-        if K_approx > 3.0:
-            level_gain_factor = 1.0 + (K_approx - 3.0) * 0.2
-            level_gain_factor = min(level_gain_factor, 1.6)
-            pb_base *= level_gain_factor
+        # 检测极端场景（液位对增益非常敏感）
+        scenario = detect_extreme_scenario(
+            K_approx, Pu,
+            gain_threshold=3.0,  # 液位回路阈值最低
+            very_high_gain_threshold=5.0
+        )
+        
+        # 选择性应用
+        factor = 1.0
+        reason = None
+        
+        if scenario.is_very_high_gain:
+            # 极高增益 (K>5)
+            factor = 1.3 + (K_approx - 5.0) * 0.15
+            factor = min(factor, 1.6)
+            reason = f"极高增益(K={K_approx:.1f})"
+        elif scenario.is_high_gain:
+            # 高增益 (K>3)
+            factor = 1.0 + (K_approx - 3.0) * 0.15
+            factor = min(factor, 1.5)
+            reason = f"高增益(K={K_approx:.1f})"
+        elif scenario.is_very_slow_system:
+            # 极慢系统 (Pu>100) - 液位回路常见
+            factor = 1.0 + (Pu - 100.0) / 200.0
+            factor = min(factor, 1.3)
+            reason = f"极慢系统(Pu={Pu:.0f}s)"
+        
+        if factor > 1.0:
+            pb_base *= factor
             if log_func:
-                log_func(f"   ⚠️ Level高增益(K={K_approx:.1f}): pb保守 ×{level_gain_factor:.2f}")
+                log_func(f"   ⚠️ Level{reason}: pb保守 ×{factor:.2f}")
         
         return pb_base
     
     def adjust_ti_multiplier(self, ti_mult: float, K_approx: float, Pu: float,
                              oscillation_ratio: float, osc_config: Dict,
                              log_func=None) -> float:
+        # 检测极端场景
+        scenario = detect_extreme_scenario(
+            K_approx, Pu, oscillation_ratio,
+            gain_threshold=3.0,
+            very_high_gain_threshold=5.0
+        )
+        
         # 液位回路：积分过程特性，需要更大 Ti 避免积分饱和
-        level_ti_multiplier = osc_config.get('level_ti_multiplier', 1.4)
+        # 基础乘数从配置读取
+        level_ti_base = osc_config.get('level_ti_multiplier', 1.4)
         
-        # 极慢液位系统(Pu>100)：减小 Ti 增幅，加快响应
-        if Pu > 100.0:
-            level_ti_multiplier = min(level_ti_multiplier, 1.2)
+        # 根据极端场景调整基础乘数
+        if scenario.is_very_slow_system:
+            # 极慢液位系统(Pu>100)：减小 Ti 增幅，加快响应
+            level_ti_base = min(level_ti_base, 1.2)
             if log_func:
-                log_func(f"   📊 极慢液位Ti限制: ×{level_ti_multiplier}")
+                log_func(f"   📊 Level极慢系统Ti限制: ×{level_ti_base:.2f}")
+        elif scenario.is_high_oscillation:
+            # 高振荡：增加 Ti
+            extra_factor = 1.0 + (oscillation_ratio - 0.7) * 0.5
+            extra_factor = min(extra_factor, 1.3)
+            level_ti_base *= extra_factor
+            level_ti_base = min(level_ti_base, 1.6)
+            if log_func:
+                log_func(f"   📊 Level高振荡Ti增强: ×{level_ti_base:.2f}")
+        else:
+            if log_func:
+                log_func(f"   📊 Level积分特性Ti调整: ×{level_ti_base:.2f}")
         
-        ti_mult *= level_ti_multiplier
-        if log_func:
-            log_func(f"   📊 液位回路Ti调整: ×{level_ti_multiplier}")
+        ti_mult *= level_ti_base
         
         return ti_mult
 
