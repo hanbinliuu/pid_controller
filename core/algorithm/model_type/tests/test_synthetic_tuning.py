@@ -98,7 +98,7 @@ SCENARIO = 'oscillation'  # 'oscillation' 或 'normal_disturbance'
 # ============================================================
 CONFIG = {
     # Ollama 配置
-    'ollama_model': 'qwen3-vl:8b',
+    'ollama_model': 'qwen:7b',
     'ollama_base_url': 'http://localhost:11434',
     'skip_llm_test': True,  # 设为 True 可跳过 LLM 测试，只运行规则引擎
     
@@ -1794,7 +1794,11 @@ def run_stability_test():
             # 重置种子确保 ModelSelector 内部的 scipy.optimize 也可重复
             np.random.seed(scenario_seed + 100)
             Config.OSCILLATION_TUNING['enable_llm'] = False
-            selector_rule = ModelSelector(verbose=False)
+            loop_type = scenario.get('loop_type', 'flow')
+            selector_rule = ModelSelector(
+                verbose=True,
+                process_context={'loop_type': loop_type, 'loop_name': scenario['name']}
+            )
             result_rule = selector_rule.run(input_data)
             pid_rule = result_rule.get('pid_parameters', {})
             
@@ -1804,10 +1808,17 @@ def run_stability_test():
             # 仿真规则引擎参数（使用固定种子确保可重复）
             sim_seed = scenario_seed + 300  # 使用 scenario_seed 而非 hash()
             sim_rule = simulate_with_new_pid(process_changed, pid_rule, sv, duration=sim_duration, seed=sim_seed)
-            rule_stable = sim_rule['is_stable']
+            
+            # 只有整定成功且仿真稳定才算"稳态达成"
+            tuning_success = result_rule.get('success', False)
+            rule_stable = tuning_success and sim_rule['is_stable']
             if rule_stable:
                 rule_stable_count += 1
-            print(f"      稳态: {'✅ 是' if rule_stable else '❌ 否'} (Ts={sim_rule['settling_time']:.0f}s)")
+            
+            if not tuning_success:
+                print(f"      稳态: ❌ 否 (整定失败，无有效参数)")
+            else:
+                print(f"      稳态: {'✅ 是' if sim_rule['is_stable'] else '❌ 否'} (Ts={sim_rule['settling_time']:.0f}s)")
             
             # ===== LLM + 规则引擎整定 =====
             llm_stable = None
@@ -1827,10 +1838,17 @@ def run_stability_test():
                 pid_llm = result_llm.get('pid_parameters', {})
                 
                 sim_llm = simulate_with_new_pid(process_changed, pid_llm, sv, duration=sim_duration, seed=sim_seed+1)  # +1 区分LLM
-                llm_stable = sim_llm['is_stable']
+                
+                # 只有整定成功且仿真稳定才算"稳态达成"
+                llm_tuning_success = result_llm.get('success', False)
+                llm_stable = llm_tuning_success and sim_llm['is_stable']
                 if llm_stable:
                     llm_stable_count += 1
-                print(f"      稳态: {'✅ 是' if llm_stable else '❌ 否'} (Ts={sim_llm['settling_time']:.0f}s)")
+                
+                if not llm_tuning_success:
+                    print(f"      稳态: ❌ 否 (整定失败，无有效参数)")
+                else:
+                    print(f"      稳态: {'✅ 是' if sim_llm['is_stable'] else '❌ 否'} (Ts={sim_llm['settling_time']:.0f}s)")
             
             results.append({
                 'scenario': scenario['name'],

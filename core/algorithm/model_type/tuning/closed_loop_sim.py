@@ -339,14 +339,4 @@ class ClosedLoopSimMixin:
             dt=dt
         )
         
-        if verbose:
-            status = "✅ 稳定" if metrics.is_stable else "❌ 不稳定"
-            print(f"\n🔄 闭环稳定性验证: {status}")
-            print(f"   调节时间: {metrics.settling_time:.1f}s")
-            print(f"   超调量: {metrics.overshoot:.1f}%")
-            print(f"   上升时间: {metrics.rise_time:.1f}s")
-            print(f"   稳态误差: {metrics.steady_state_error:.2f}%")
-            print(f"   振荡次数: {metrics.oscillation_count}")
-            print(f"   衰减比: {metrics.decay_ratio:.3f}")
-        
         return metrics.is_stable, metrics

@@ -210,6 +210,15 @@ class ModelSelector(LoggerMixin):
         if 'llm_decision' in pid_params:
             new_pid_params['llm_decision'] = pid_params['llm_decision']
         
+        # 输出最终 PID 参数（verbose 模式）
+        self.log(f"\n{'='*60}")
+        self.log(f"📋 最终整定参数输出:")
+        self.log(f"   PB = {Pb:.2f}%")
+        self.log(f"   TI = {Ti:.2f}s")
+        self.log(f"   TD = {Td:.2f}s")
+        self.log(f"   (Kp={Kp:.4f}, Ki={Ki:.4f}, Kd={Kd:.4f})")
+        self.log(f"{'='*60}")
+        
         return {
             'success': result.get('success', False),
             'model_type': result.get('model_type', 'FOPDT'),

@@ -539,19 +539,41 @@ class NonlinearFitter(LoggerMixin):
         
         # 边界
         bounds = Config.MODEL_BOUNDS.get('SAT_FOPDT', {})
-        lb = bounds.get('initial', ([-10, 1, 0, 0, 100], [10, 500, 50, 50, 100]))[0]
-        ub = bounds.get('initial', ([-10, 1, 0, 0, 100], [10, 500, 50, 50, 100]))[1]
+        lb = list(bounds.get('initial', ([-10, 1, 0, 0, 50], [10, 500, 50, 50, 100]))[0])
+        ub = list(bounds.get('initial', ([-10, 1, 0, 0, 50], [10, 500, 50, 50, 100]))[1])
         
-        # 调整边界以适应数据
-        lb[3] = min(lb[3], sat_low_guess - 10)
-        ub[4] = max(ub[4], sat_high_guess + 10)
+        # 调整边界以适应数据（使用副本避免修改原始配置）
+        # 确保 sat_low 和 sat_high 的边界合理
+        u_min, u_max = np.min(u), np.max(u)
+        
+        # sat_low 边界: 允许在数据最小值附近
+        lb[3] = max(0, u_min - 10)
+        ub[3] = max(lb[3] + 1, sat_high_guess - 1)  # sat_low 必须小于 sat_high
+        
+        # sat_high 边界: 允许在数据最大值附近  
+        lb[4] = max(ub[3] + 1, sat_low_guess + 1)  # sat_high 必须大于 sat_low
+        ub[4] = max(lb[4] + 1, u_max + 10, 100)
+        
+        # 最终验证：确保所有 lb[i] < ub[i]
+        for i in range(len(lb)):
+            if lb[i] >= ub[i]:
+                # 如果边界无效，使用默认合理值
+                self.log(f"   ⚠️ 边界无效: lb[{i}]={lb[i]} >= ub[{i}]={ub[i]}, 使用默认值")
+                if i == 3:  # sat_low
+                    lb[i], ub[i] = 0, 50
+                elif i == 4:  # sat_high
+                    lb[i], ub[i] = 51, 100
         
         # 初始猜测
         pv_range = np.ptp(y)
         mv_range = np.ptp(u)
         k_guess = pv_range / (mv_range + self._epsilon)
         
-        x0 = [k_guess, 10.0, 1.0, sat_low_guess, sat_high_guess]
+        # 确保初始值在边界内
+        sat_low_init = np.clip(sat_low_guess, lb[3], ub[3])
+        sat_high_init = np.clip(sat_high_guess, lb[4], ub[4])
+        
+        x0 = [k_guess, 10.0, 1.0, sat_low_init, sat_high_init]
         
         try:
             result = least_squares(

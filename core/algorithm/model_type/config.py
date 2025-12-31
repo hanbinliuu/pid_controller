@@ -298,6 +298,12 @@ class Config:
         'fallback_ti': 20.0,
         'fallback_td': 0.0,
         
+        # 保守等级基准值（用于 tuning_methods.py 中的标准化计算）
+        'conservative_level_baseline': 4.0,
+        
+        # Cohen-Coon 法保守因子（降低 Kp）
+        'cohen_coon_conservative_factor': 0.85,
+        
         # 非线性模型补偿因子
         'nonlinear_factors': {
             'default': 1.3,              # 默认非线性补偿

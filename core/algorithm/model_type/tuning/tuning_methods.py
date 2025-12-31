@@ -69,10 +69,15 @@ class TuningMethodsMixin:
         - cohen_coon: Cohen-Coon法（适合L/T1较大）
         - imc_aggressive: IMC激进模式
         """
+        # 从配置读取基准值
+        baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
+        
         if method == 'cohen_coon' and L > self._epsilon:
             # Cohen-Coon 法（适合 L/T1 较大的系统）
+            # 应用保守因子以降低激进程度
+            cc_factor = self._pid_constraints.get('cohen_coon_conservative_factor', 0.85)
             tau = L / T1
-            Kp = (1.35 / K) * (T1 / L + 0.185)
+            Kp = cc_factor * (1.35 / K) * (T1 / L + 0.185)
             Ti = 2.5 * L * (T1 + 0.185 * L) / (T1 + 0.611 * L)
             Td = 0.37 * L * T1 / (T1 + 0.185 * L)
             
@@ -88,7 +93,7 @@ class TuningMethodsMixin:
             
         else:
             # Lambda/IMC 标准法（使用自适应保守因子）
-            lambda_val = T1 * lambda_factor * (conservative_level / 4.0)  # 标准化到基准
+            lambda_val = T1 * lambda_factor * (conservative_level / baseline)  # 标准化到基准
             denom = K * (lambda_val + L / 2)
             if denom < self._epsilon:
                 return self._get_fallback_params(Ti_override=T1 + L / 2)
@@ -107,9 +112,10 @@ class TuningMethodsMixin:
                     lambda_factor: float, conservative_level: float = 4.0,
                     pb_min: float = 60.0) -> Tuple[float, float, float]:
         """二阶系统整定（自适应保守）"""
+        baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
         T_eq = T1 + T2 if T2 > 0 else T1
         # 使用自适应保守因子
-        lambda_val = T_eq * lambda_factor * (conservative_level / 4.0)
+        lambda_val = T_eq * lambda_factor * (conservative_level / baseline)
         
         denom = K * (lambda_val + L / 2) if L > 0 else K * lambda_val
         if denom < self._epsilon:
