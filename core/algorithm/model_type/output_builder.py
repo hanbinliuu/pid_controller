@@ -272,7 +272,7 @@ class OutputBuilder(LoggerMixin):
                 stability_score += 2.0
             elif cl_metrics.overshoot < cl_config['overshoot_acceptable']:
                 stability_score += 1.0
-            if cl_config['rise_time_min'] < cl_metrics.rise_time < cl_config['rise_time_max']:
+            if cl_metrics.rise_time < float('inf') and cl_config['rise_time_min'] < cl_metrics.rise_time < cl_config['rise_time_max']:
                 stability_score += 1.5
             if cl_metrics.oscillation_count <= cl_config['oscillation_count_ideal']:
                 stability_score += 1.5

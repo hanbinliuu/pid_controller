@@ -12,13 +12,15 @@
 配置分组
 --------
 - OSCILLATION_TUNING: 振荡整定相关配置
-- DATA_QUALITY: 数据质量评估阈值
 - MODEL_FITTING: 模型拟合质量阈值
 - CLOSED_LOOP: 闭环稳定性验证配置
 - SEGMENT_PROCESSING: 扰动段处理配置
+- TUNING_SEGMENT: 整定段检测配置
+- PID_CONSTRAINTS: PID参数约束配置
 - OPTIMIZATION: 优化算法配置
-- PARAMETER_CONSTRAINTS: 参数约束配置
 - MODEL_BOUNDS: 各模型的参数边界
+- NONLINEAR_FITTING: 非线性模型配置
+- PREPROCESSING: 数据预处理配置
 """
 
 
@@ -36,6 +38,32 @@ class ModelType:
     HAMMERSTEIN = "HAMMERSTEIN"       # Hammerstein模型 (静态非线性 + 线性动态)
     DEADBAND_FOPDT = "DEADBAND_FOPDT" # 死区 + FOPDT模型
     SATURATION_FOPDT = "SAT_FOPDT"    # 饱和 + FOPDT模型
+    
+    # ============================================================
+    # 统一常量定义（避免各模块重复定义）
+    # ============================================================
+    
+    # 候选模型列表（用于多模型拟合）
+    CANDIDATE_MODELS = [FOPDT, FO, SO, SOPDT, FOPI]
+    
+    # 模型参数数量（用于AIC/BIC计算）
+    MODEL_PARAM_COUNT = {
+        FOPDT: 3,
+        FO: 2,
+        SO: 3,
+        SOPDT: 4,
+        FOPI: 2,
+    }
+    
+    @classmethod
+    def get_bounds(cls, model_type: str) -> tuple:
+        """获取模型参数边界（统一从Config.MODEL_BOUNDS读取）"""
+        from .config import Config
+        bounds_config = Config.MODEL_BOUNDS.get(model_type, {})
+        if 'initial' in bounds_config:
+            return bounds_config['initial']
+        # 默认回退边界
+        return ([-10.0, 1.0, 0.0], [10.0, 500.0, 50.0])
 
 
 class Config:
@@ -71,7 +99,7 @@ class Config:
         
         # ========== 基础pb计算参数 ==========
         'pb_from_k_factor': 1.5,             # 基于K计算pb的保守系数
-        'kp_from_ku_factor': 0.2,            # 基于Ku计算Kp的系数（ZN法是0.45）
+        'kp_from_ku_factor': 0.35,           # 基于Ku计算Kp的系数（ZN法是0.45，保守用0.35）
         
         # ========== 慢系统调整 ==========
         'slow_system_pu_thresholds': [30.0, 15.0],  # Pu阈值
@@ -94,7 +122,7 @@ class Config:
         'valve_saturation_factor': 1.1,      # 饱和调整因子
         
         # ========== 振荡比自适应安全系数 ==========
-        'safety_factor_base': 1.3,           # 基础安全系数 (osc < 0.5)
+        'safety_factor_base': 1.2,           # 基础安全系数 (osc < 0.5)
         'safety_factor_thresholds': [0.5, 0.7, 0.85],  # 振荡比阈值
         'safety_factor_slopes': [0.4, 0.8, 1.5],       # 各区间斜率（降低，转移到Ti）
         
@@ -124,7 +152,7 @@ class Config:
         
         # ========== pb范围 ==========
         'pb_min': 120.0,                     # pb下限
-        'pb_max': 600.0,                     # pb上限
+        'pb_max': 400.0,                     # pb上限（降低以避免过度保守）
         
         # ========== 动态pb边界（基于过程增益K） ==========
         'pb_k_adjustment_factor': 0.3,       # pb下限动态调整系数: pb_min *= (1 + factor/K)
@@ -135,23 +163,12 @@ class Config:
     }
     
     # ============================================================
-    # 数据质量配置
-    # ============================================================
-    DATA_QUALITY = {
-        'noise_threshold': 0.1,              # 噪声比阈值
-        'correlation_threshold': 0.3,        # 相关性阈值
-        'nonlinearity_threshold': 0.5,       # 非线性阈值
-        'oscillation_warning_threshold': 0.3,  # 振荡警告阈值
-        'min_data_points': 30,               # 最小数据点数
-    }
-    
-    # ============================================================
     # 模型拟合配置
     # ============================================================
     MODEL_FITTING = {
         'r2_good_threshold': 0.8,            # R² 良好阈值
         'r2_acceptable_threshold': 0.5,      # R² 可接受阈值
-        'r2_poor_threshold': 0.3,            # R² 较差阈值
+        'r2_poor_threshold': 0.3,            # R² 较差阈值（与OSCILLATION_TUNING.r2_failure_threshold一致）
         'k_min': 0.001,                      # K 最小有效值
         'k_max': 50.0,                       # K 最大合理值
     }
@@ -181,6 +198,97 @@ class Config:
         'severe_nonlinearity': 0.7,      # 严重非线性阈值
         'severe_oscillation': 0.75,      # 严重振荡阈值
         'low_quality_threshold': 0.25,   # 低质量分阈值
+    }
+    
+    # ============================================================
+    # 整定段检测配置（基于MV阶跃变化）
+    # ============================================================
+    TUNING_SEGMENT = {
+        # MV阶跃检测参数
+        'min_step_size': 1.0,            # 最小MV阶跃幅度
+        'stable_window': 10,             # 稳定窗口大小（采样点数）
+        'step_std_ratio': 0.5,           # 阶跃前标准差与阶跃幅度的比值上限
+        
+        # 响应区间参数
+        'min_response_time': 30,         # 最小响应时间（采样点数）
+        'max_response_time': 3000,       # 最大响应时间（采样点数）
+        
+        # PV响应质量评估参数
+        'min_pv_range': 2.0,             # PV最小变化范围
+        'min_pv_std': 0.3,               # PV最小标准差
+        'min_pv_change_ratio': 0.05,     # PV最小变化比例（相对于MV阶跃）
+        'mv_range_threshold': 0.1,       # MV变化范围阈值
+        'large_mv_range': 10.0,          # 大MV变化范围阈值
+        'pv_dynamic_ratio_min': 0.05,    # PV动态变化率下限
+        
+        # 评分阈值
+        'pv_change_ratio_good': 0.1,     # PV变化比例良好阈值
+        'pv_change_abs_good': 0.5,       # PV变化绝对值良好阈值
+        'trend_ratio_good': 0.1,         # 趋势比例良好阈值
+        'trend_ratio_acceptable': 0.05,  # 趋势比例可接受阈值
+        'settling_ratio_good': 0.5,      # 收敛比良好阈值
+        'osc_ratio_good': 0.2,           # 振荡比良好阈值
+        'osc_ratio_acceptable': 0.4,     # 振荡比可接受阈值
+        'corr_good': 0.5,                # 相关性良好阈值
+        'corr_acceptable': 0.2,          # 相关性可接受阈值
+        'front_ratio_good': 0.6,         # 前半段变化比例良好阈值
+        'front_ratio_acceptable': 0.4,   # 前半段变化比例可接受阈值
+        
+        # 综合判定阈值
+        'quality_pass_threshold': 0.6,   # 质量评分通过阈值
+        'osc_ratio_pass': 0.5,           # 振荡比通过阈值
+        
+        # 稳态分析阈值
+        'steady_osc_ratio': 0.3,         # 稳态振荡比阈值
+        'steady_settling_quality': 0.5,  # 稳态收敛质量阈值
+        'steady_r2': 0.4,                # 稳态R²阈值
+    }
+    
+    # ============================================================
+    # PID参数约束配置
+    # ============================================================
+    PID_CONSTRAINTS = {
+        # Kp约束
+        'kp_min': 0.01,                  # Kp最小绝对值
+        'kp_max_from_pb': 100.0,         # Kp上限计算: 100 / pb_min
+        
+        # Ti约束
+        'ti_min': 0.1,                   # Ti最小值（秒）
+        'ti_max': 120.0,                 # Ti最大值（秒）
+        
+        # Td约束
+        'td_max_ratio': 0.25,            # Td最大比例（相对于Ti）
+        
+        # 默认回退参数（当整定失败时使用）
+        'fallback_kp': 1.0,
+        'fallback_ti': 20.0,
+        'fallback_td': 0.0,
+        
+        # 非线性模型补偿因子
+        'nonlinear_factors': {
+            'default': 1.3,              # 默认非线性补偿
+            'HAMMERSTEIN': 1.4,          # Hammerstein模型
+            'DEADBAND_FOPDT': 1.3,       # 死区模型（降低Kp补偿，避免振荡）
+            'SAT_FOPDT': 1.3,            # 饱和模型
+        },
+        
+        # 死区专用补偿：增强积分作用以消除稳态误差
+        'deadband_compensation': {
+            'ti_reduction_factor': 0.7,  # Ti缩减系数（减小Ti加快积分）
+            'ki_boost_factor': 1.3,      # Ki增强系数
+            'enable': True,              # 是否启用死区补偿
+        },
+        
+        # 阀门补偿参数
+        'valve_compensation': {
+            'osc_threshold_high': 0.5,   # 高振荡阈值
+            'osc_threshold_med': 0.6,    # 中振荡阈值
+            'r2_threshold': 0.85,        # R²阈值
+            'factor_high_base': 1.3,     # 高振荡+低R²基础因子
+            'factor_high_slope': 0.6,    # 高振荡+低R²斜率
+            'factor_med_base': 1.2,      # 中振荡基础因子
+            'factor_med_slope': 0.5,     # 中振荡斜率
+        },
     }
     
     # ============================================================
@@ -324,11 +432,35 @@ class Config:
     # 数据预处理配置
     # ============================================================
     PREPROCESSING = {
-        'filter_window': 5,                  # 滤波窗口大小
+        'filter_window': 5,                  # 滤波窗口大小（默认）
         'noise_threshold': 0.02,             # 噪声阈值
         'min_correlation': 0.15,             # 最小相关系数
         'outlier_factor': 2.0,               # 异常值因子（IQR倍数）
         'change_point_threshold': 0.1,       # MV变化点检测阈值
+        
+        # ========== 自适应滤波配置 ==========
+        'adaptive_filter': {
+            'enabled': True,                 # 是否启用自适应滤波
+            # 滤波窗口范围
+            'window_min': 3,                 # 最小窗口（低噪声/低振荡）
+            'window_max': 15,                # 最大窗口（高噪声/高振荡）
+            'window_default': 5,             # 默认窗口
+            # 振荡程度阈值
+            'oscillation_low': 0.3,          # 低振荡阈值
+            'oscillation_high': 0.7,         # 高振荡阈值
+            # 噪声程度阈值
+            'noise_low': 0.05,               # 低噪声阈值
+            'noise_high': 0.15,              # 高噪声阈值
+            # 滤波方法选择
+            'method_by_oscillation': {
+                'low': 'moving_average',     # 低振荡用移动平均
+                'medium': 'moving_average',  # 中振荡用移动平均
+                'high': 'median',            # 高振荡用中值滤波（抗脉冲）
+            },
+            # 保护阶跃响应的配置
+            'preserve_step': True,           # 是否保护阶跃边缘
+            'step_detection_threshold': 0.1, # 阶跃检测阈值（相对MV范围）
+        },
         
         # 质量评分权重
         'quality_weights': {
