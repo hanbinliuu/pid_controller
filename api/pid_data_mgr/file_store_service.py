@@ -18,7 +18,7 @@ class FileStoreService:
         Raises:
             Exception: 写入失败时抛出异常
         """
-        block_file_path = FileStoreService._get_block_file_path(fid, block_name)
+        block_file_path = FileStoreService.get_block_file_path(fid, block_name)
         
         # 确保目录存在
         os.makedirs(os.path.dirname(block_file_path), exist_ok=True)
@@ -37,13 +37,13 @@ class FileStoreService:
             block_name: 块名称(UUID)
         """
         try:
-            block_file_path = FileStoreService._get_block_file_path(fid, block_name)
+            block_file_path = FileStoreService.get_block_file_path(fid, block_name)
             os.remove(block_file_path)
         except:
             pass
 
     @staticmethod
-    def _get_block_file_path(fid: int, block_name: str) -> str:
+    def get_block_file_path(fid: int, block_name: str) -> str:
         """
         获取文件块的存储路径
 

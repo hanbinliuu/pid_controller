@@ -131,6 +131,20 @@ class FileSystemService:
         )
 
     @staticmethod
+    def get_file(session: Session, fid: int) -> Optional[PIDDataFile]:
+        """
+        获取文件详情
+
+        Args:
+            session: 数据库会话
+            fid: 文件编号
+
+        Returns:
+            Optional[PIDDataFile]: 文件详情
+        """
+        return FileMetaService.get_file_by_fid(session, fid)
+
+    @staticmethod
     def delete_file(session: Session, fid: int) -> Tuple[int, str]:
         """
         删除文件（逻辑删除，仅标记为DELETED状态）

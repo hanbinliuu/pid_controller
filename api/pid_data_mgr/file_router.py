@@ -1,12 +1,16 @@
 # --------------
 # PID数据文件管理 API 接口
 # --------------
-from fastapi import APIRouter, Depends, UploadFile, File, Path, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Path, Query, Request, HTTPException
+from fastapi.responses import FileResponse
 from sqlmodel import Session
 from datetime import datetime
+import os
 
 from api.pid_data_mgr.block_util import BlockUtil
 from api.pid_data_mgr.file_system_service import FileSystemService
+from api.pid_data_mgr.file_store_service import FileStoreService
+from api.pid_data_mgr.file_db_models import FileStatus
 from core.database.database import get_db
 from api.pid_data_mgr.file_api_schemas import *
 from api.pid_data_mgr.file_settings import settings
@@ -176,7 +180,6 @@ async def get_file_list(
             FileItemResponse(
                 fid=f.fid,
                 name=f.name,
-                type=f.file_type or "csv",
                 size=f.total_size,
                 create_time=f.create_time.strftime("%Y-%m-%d %H:%M:%S"),
                 description=f.description or ""
@@ -213,3 +216,51 @@ async def delete_file(
     """
     code, message = FileSystemService.delete_file(session, fid)
     return DeleteFileResponse(code=code, message=message)
+
+
+@pid_data_file_router.get("/files/{fid}", summary="下载文件")
+async def download_file(
+        request: Request,
+        fid: int = Path(..., description="文件编号"),
+        session: Session = Depends(get_db)):
+    """
+    下载文件，支持HTTP Range请求
+    
+    参数：
+    - fid: 文件编号
+    
+    限制：
+    - 只支持已合并文件下载
+    - 不支持UPLOADING和DELETED状态的文件下载
+    """
+    # 获取文件信息
+    file = FileSystemService.get_file(session, fid)
+    if not file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    
+    # 检查文件状态
+    if file.status == FileStatus.UPLOADING:
+        raise HTTPException(status_code=400, detail="文件正在上传中，暂不支持下载")
+    
+    if file.status == FileStatus.DELETED:
+        raise HTTPException(status_code=410, detail="文件已被删除")
+    
+    if file.status == FileStatus.UPLOADED:
+        raise HTTPException(status_code=400, detail="只支持已合并的文件下载")
+    
+    # 获取合并后的文件路径
+    merged_file_path = FileStoreService.get_block_file_path(fid, file.upload_id)
+    
+    # 检查文件是否存在
+    if not os.path.exists(merged_file_path):
+        raise HTTPException(status_code=404, detail="合并文件不存在")
+    
+    # 使用 FileResponse 自动支持 HTTP Range
+    return FileResponse(
+        path=merged_file_path,
+        filename=file.name,
+        media_type="application/octet-stream",
+        headers={
+            "Accept-Ranges": "bytes"
+        }
+    )

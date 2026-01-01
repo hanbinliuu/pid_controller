@@ -112,7 +112,6 @@ class FileItemResponse(BaseModel):
     """文件列表项响应模型"""
     fid: int = Field(..., description="文件编号")
     name: str = Field(..., description="文件名")
-    type: str = Field(..., description="文件类型")
     size: int = Field(..., description="文件大小（字节）")
     create_time: str = Field(..., description="创建时间")
     description: str = Field(..., description="文件描述")
@@ -153,7 +152,6 @@ class FileListResponse(BaseModel):
                         {
                             "fid": 10010,
                             "name": "hello.csv",
-                            "type": "csv",
                             "size": 102400,
                             "create_time": "2023-02-07 15:20:49",
                             "description": ""
