@@ -1,0 +1,215 @@
+# --------------
+# PID数据文件管理 API 接口
+# --------------
+from fastapi import APIRouter, Depends, UploadFile, File, Path, Query
+from sqlmodel import Session
+from datetime import datetime
+
+from api.pid_data_mgr.block_util import BlockUtil
+from api.pid_data_mgr.file_system_service import FileSystemService
+from core.database.database import get_db
+from api.pid_data_mgr.file_api_schemas import *
+from api.pid_data_mgr.file_settings import settings
+
+
+pid_data_file_router = APIRouter(tags=["PID文件上传"])
+
+@pid_data_file_router.post("/files", summary="创建文件", response_model=CreateFileResponse)
+async def create_file(request: CreateFileRequest, session: Session = Depends(get_db)):
+    """
+    创建文件上传任务
+    """
+    try:
+        f = FileSystemService.create_file(session, request)
+        
+        # 返回响应
+        return CreateFileResponse(
+            code=0,
+            message="ok",
+            upload_id=f.upload_id,
+            block_size=f.block_size,
+            block_list=BlockUtil.build_block_list(f.total_size, f.block_size)
+        )
+    except Exception as e:
+        # 数据库操作失败，返回错误响应
+        return CreateFileResponse(
+            code=500,
+            message=f"创建文件失败: {str(e)}",
+            upload_id="",
+            block_size=settings.chunk_size,
+            block_list=set()
+        )
+
+
+@pid_data_file_router.put("/files", summary="上传文件块", response_model=UploadFileChunkResponse)
+async def upload_file_chunk(
+        upload_id: str = Query(..., description="上传编号"),
+        block_id: int = Query(..., description="文件块编号"),
+        md5: str = Query(..., description="文件块 MD5"),
+        file: UploadFile = File(...),
+        session: Session = Depends(get_db)):
+    # 验证上传编号
+    upload_id = upload_id.strip()
+    if len(upload_id) != settings.upload_id_length:
+        return UploadFileChunkResponse(
+            code=400,
+            message=f"上传编号长度错误, 必须为{settings.upload_id_length}个字节!",
+            upload_id="",
+            block_size=settings.chunk_size,
+            block_list=set()
+        )
+
+    # 验证文件块编号
+    if block_id < 0:
+        return UploadFileChunkResponse(
+            code=400,
+            message="文件块编号错误, 必须大于等于0!",
+            upload_id=upload_id,
+            block_size=settings.chunk_size,
+            block_list=set()
+        )
+
+    # 验证 MD5
+    md5 = md5.strip()
+    if not md5:
+        return UploadFileChunkResponse(
+            code=400,
+            message="MD5校验码不能为空!",
+            upload_id=upload_id,
+            block_size=settings.chunk_size,
+            block_list=set()
+        )
+
+    if len(md5) != settings.md5_sum_length:
+        return UploadFileChunkResponse(
+            code=400,
+            message=f"MD5校验码长度错误, 必须为{settings.md5_sum_length}个字节!",
+            upload_id=upload_id,
+            block_size=settings.chunk_size,
+            block_list=set()
+        )
+
+    # 将文件块内容转换成字节数组
+    file_chunk = await file.read()
+
+    # 创建 UploadFileRequest 对象
+    request = UploadFileChunkRequest(
+        md5=md5,
+        block_id=block_id,
+        upload_id=upload_id,
+        data=file_chunk
+    )
+
+    code, block_list, message = FileSystemService.upload_file_chunk(session, request)
+    return UploadFileChunkResponse(
+        code=code,
+        message=message,
+        upload_id=upload_id,
+        block_size=settings.chunk_size,
+        block_list=block_list
+    )
+
+
+@pid_data_file_router.get("/files", summary="获取文件列表", response_model=FileListResponse)
+async def get_file_list(
+        file_name: Optional[str] = Query(None, description="文件名过滤"),
+        start_time: Optional[str] = Query(None, description="开始时间，格式: 2023-02-07T10:03:00"),
+        end_time: Optional[str] = Query(None, description="结束时间，格式: 2023-02-07T14:03:00"),
+        page_num: int = Query(1, ge=1, description="页码，从1开始"),
+        page_size: int = Query(10, ge=1, le=100, description="每页大小，最大1，最大100"),
+        session: Session = Depends(get_db)):
+    """
+    获取文件列表
+    
+    查询参数：
+    - file_name: 文件名过滤（模糊查询）
+    - start_time: 开始时间
+    - end_time: 结束时间
+    - page_num: 页码，默认1
+    - page_size: 每页大小，默认10
+    """
+    try:
+        # 转换时间字符串为 datetime 对象
+        start_dt = None
+        end_dt = None
+        
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time)
+            except ValueError:
+                return FileListResponse(
+                    code=400,
+                    message="开始时间格式错误，请使用 ISO 8601 格式，如: 2023-02-07T10:03:00",
+                    data=FileListData(total=0, files=[])
+                )
+        
+        if end_time:
+            try:
+                end_dt = datetime.fromisoformat(end_time)
+            except ValueError:
+                return FileListResponse(
+                    code=400,
+                    message="结束时间格式错误，请使用 ISO 8601 格式，如: 2023-02-07T14:03:00",
+                    data=FileListData(total=0, files=[])
+                )
+        
+        # 验证时间范围：start_time 必须小于 end_time
+        if start_dt and end_dt and start_dt >= end_dt:
+            return FileListResponse(
+                code=400,
+                message="开始时间必须小于结束时间",
+                data=FileListData(total=0, files=[])
+            )
+        
+        # 调用服务层获取文件列表
+        total, files = FileSystemService.get_file_list(
+            session=session,
+            file_name=file_name,
+            start_time=start_dt,
+            end_time=end_dt,
+            page_num=page_num,
+            page_size=page_size
+        )
+        
+        # 转换为响应模型
+        file_items = [
+            FileItemResponse(
+                fid=f.fid,
+                name=f.name,
+                type=f.file_type or "csv",
+                size=f.total_size,
+                create_time=f.create_time.strftime("%Y-%m-%d %H:%M:%S"),
+                description=f.description or ""
+            )
+            for f in files
+        ]
+        
+        return FileListResponse(
+            code=0,
+            message="ok",
+            data=FileListData(
+                total=total,
+                files=file_items
+            )
+        )
+    except Exception as e:
+        # 异常处理
+        return FileListResponse(
+            code=500,
+            message=f"查询文件列表失败: {str(e)}",
+            data=FileListData(total=0, files=[])
+        )
+
+
+@pid_data_file_router.delete("/files/{fid}", summary="删除文件", response_model=DeleteFileResponse)
+async def delete_file(
+        fid: int = Path(..., description="文件编号"),
+        session: Session = Depends(get_db)):
+    """
+    删除文件（逻辑删除，仅标记为DELETED状态）
+    
+    参数：
+    - fid: 文件编号
+    """
+    code, message = FileSystemService.delete_file(session, fid)
+    return DeleteFileResponse(code=code, message=message)

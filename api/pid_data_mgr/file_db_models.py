@@ -175,7 +175,7 @@ class PIDDataFile(SQLModel, table=True):
         }
 
 
-class PIDDataFileBlocks(SQLModel, table=True):
+class PIDDataFileBlock(SQLModel, table=True):
     """
     回路数据文件块表模型 - SQLModel方式
     结合了Pydantic的数据验证和SQLAlchemy的ORM功能

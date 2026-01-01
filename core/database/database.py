@@ -110,7 +110,7 @@ def init_database():
         from api.bean import loop_evaluation
         from api.bean import loop_info
         from api.bean import device_evaluation
-        from api.pid_data_mgr import pid_data_file_model
+        from api.pid_data_mgr import file_db_models
 
         # 创建所有表
         SQLModel.metadata.create_all(engine)
