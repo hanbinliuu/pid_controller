@@ -163,6 +163,12 @@ class FileMetaService:
         # 构建查询
         stmt = select(PIDDataFile)
         
+        # 过滤掉UPLOADING和DELETED状态的文件
+        stmt = stmt.where(
+            PIDDataFile.status != FileStatus.UPLOADING,
+            PIDDataFile.status != FileStatus.DELETED
+        )
+        
         # 添加过滤条件
         if file_name:
             stmt = stmt.where(PIDDataFile.name.like(f"%{file_name}%"))
