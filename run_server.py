@@ -36,6 +36,7 @@ from api.routes.device_evaluation_router import router as device_evaluation_rout
 from api.routes.loop_evaluation_router import router as loop_evaluation_router
 from api.routes.cron_task_router import router as cron_task_router
 from api.routes.home_page_route import home_page_router
+from api.routes.dynamic_config_router import router as dynamic_config_router
 
 # 导入中间件
 from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware,RequestLoggingMiddleware
@@ -174,6 +175,7 @@ app.include_router(loop_evaluation_router, tags=['回路评估'])
 app.include_router(excluded_loop_router, tags=['剔除回路管理'])
 app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
 app.include_router(home_page_router, prefix='/api/home', tags=['首页'])
+app.include_router(dynamic_config_router, tags=['动态配置参数'])
 
 
 @app.get('/health')
