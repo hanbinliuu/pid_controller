@@ -6,15 +6,9 @@ class Settings(BaseModel):
     """
     应用设置类
     """
-    upload_id_length: int = Field(
-        default=36,
-        description="上传ID的长度"
-    )
+    upload_id_length: int = Field(default=36, description="上传ID的长度")
 
-    md5_sum_length: int = Field(
-        default=32,
-        description="MD5校验码的长度"
-    )
+    md5_sum_length: int = Field(default=32, description="MD5校验码的长度")
 
     # 支持的最大文件大小（字节）
     max_file_size: int = Field(
@@ -32,6 +26,16 @@ class Settings(BaseModel):
     storage_dir: str = Field(
         default="./uploads",
         description="文件存储目录路径"
+    )
+
+    retention_hours: int = Field(
+        default=24 * 7,  # 7天
+        description="数据保留时间（小时）"
+    )
+
+    host_port: str = Field(
+        default="",
+        description="服务监听的host和port"
     )
 
     def get_storage_path(self) -> str:

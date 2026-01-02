@@ -3,7 +3,7 @@ from datetime import datetime
 
 from typing import Optional, List, Tuple
 
-from sqlmodel import Session, select, func, update
+from sqlmodel import Session, select, func, update, delete
 
 from api.pid_data_mgr.file_db_models import PIDDataFile, PIDDataFileBlock, FileStatus
 from api.pid_data_mgr.file_api_schemas import CreateFileRequest
@@ -80,8 +80,23 @@ class FileMetaService:
         Returns:
             List[PIDDataFileBlocks]: 已上传的块对象列表
         """
-        stmt = select(PIDDataFileBlock).where(PIDDataFileBlock.fid == fid)
+        stmt = select(PIDDataFileBlock).where(PIDDataFileBlock.fid == fid).order_by(PIDDataFileBlock.block_id)
         return list(session.exec(stmt).all())
+
+    @staticmethod
+    def count_blocks(session: Session, fid: int) -> int:
+        """
+        根据文件编号查询已上传的块数量
+        
+        Args:
+            session: 数据库会话
+            fid: 文件编号
+            
+        Returns:
+            int: 已上传的块数量
+        """
+        stmt = select(func.count()).where(PIDDataFileBlock.fid == fid)
+        return session.exec(stmt).one()
 
     @staticmethod
     def write_block_meta(session: Session, fid: int, block_id: int, block_name: str) -> None:
@@ -106,7 +121,7 @@ class FileMetaService:
         session.commit()
 
     @staticmethod
-    def mark_as(session: Session, fid: int, status: FileStatus) -> None:
+    def mark_as(session: Session, fid: int, status: FileStatus, reason: str = "") -> None:
         """
         更新文件状态
         
@@ -114,11 +129,12 @@ class FileMetaService:
             session: 数据库会话
             fid: 文件编号
             status: 新的文件状态
+            reason: 失败原因
             
         Raises:
             Exception: 数据库操作失败时抛出异常
         """
-        stmt = update(PIDDataFile).where(PIDDataFile.fid == fid).values(status=status)
+        stmt = update(PIDDataFile).where(PIDDataFile.fid == fid).values(status=status, failed_reason=reason)
         session.exec(stmt)
         session.commit()
 
@@ -194,3 +210,184 @@ class FileMetaService:
         files = list(session.exec(stmt).all())
         
         return total, files
+
+    @staticmethod
+    def delete_file_blocks(session: Session, fid: int):
+        """
+        删除文件的所有块记录
+        
+        Args:
+            session: 数据库会话
+            fid: 文件编号
+
+        Raises:
+            Exception: 数据库操作失败时抛出异常
+        """
+        # 直接使用DELETE语句删除所有块记录
+        stmt = delete(PIDDataFileBlock).where(PIDDataFileBlock.fid == fid)
+        session.exec(stmt)
+        session.commit()
+
+    @staticmethod
+    def delete_file(session: Session, fid: int) -> bool:
+        """
+        删除文件记录（标记为已删除状态）
+        
+        Args:
+            session: 数据库会话
+            fid: 文件编号
+            
+        Returns:
+            bool: 删除成功返回True，文件不存在返回False
+            
+        Raises:
+            Exception: 数据库操作失败时抛出异常
+        """
+        # 先查询文件是否存在
+        file = FileMetaService.get_file_by_fid(session, fid)
+        if not file:
+            return False
+        
+        # 标记文件为已删除状态
+        stmt = update(PIDDataFile).where(PIDDataFile.fid == fid).values(
+            status=FileStatus.DELETED
+        )
+        session.exec(stmt)
+        session.commit()
+        return True
+
+    @staticmethod
+    def delete_file_completely(session: Session, fid: int) -> bool:
+        """
+        完全删除文件及其所有块记录（物理删除）
+        
+        Args:
+            session: 数据库会话
+            fid: 文件编号
+            
+        Returns:
+            bool: 删除成功返回True，文件不存在返回False
+            
+        Raises:
+            Exception: 数据库操作失败时抛出异常
+        """
+        # 先查询文件是否存在
+        file = FileMetaService.get_file_by_fid(session, fid)
+        if not file:
+            return False
+        
+        # 先删除所有块记录
+        FileMetaService.delete_file_blocks(session, fid)
+        
+        # 再删除文件记录
+        session.delete(file)
+        session.commit()
+        return True
+
+    @staticmethod
+    def set_host_port(session: Session, fid: int, host_port: str) -> bool:
+        """
+        设置文件的操作实例IP端口，并递增版本号
+        用于记录当前执行操作的实例信息
+        使用版本号进行乐观锁控制，防止并发冲突
+        
+        Args:
+            session: 数据库会话
+            fid: 文件编号
+            host_port: 实例的IP端口，格式如 "192.168.1.100:8001"
+            
+        Returns:
+            bool: 设置成功返回True，文件不存在或版本冲突返回False
+            
+        Raises:
+            Exception: 数据库操作失败时抛出异常
+        """
+        # 先查询文件是否存在并获取当前version
+        file = FileMetaService.get_file_by_fid(session, fid)
+        if not file:
+            return False
+        
+        current_version = file.version
+        
+        # 更新host_port并递增version，同时检查version是否匹配（乐观锁）
+        stmt = update(PIDDataFile).where(
+            PIDDataFile.fid == fid,
+            PIDDataFile.version == current_version
+        ).values(
+            host_port=host_port,
+            version=current_version + 1
+        )
+        result = session.exec(stmt)
+        session.commit()
+        
+        # 检查是否有行被更新，如果没有则说明版本冲突
+        return result.rowcount > 0
+
+    @staticmethod
+    def reset_host_port(session: Session, fid: int) -> bool:
+        """
+        清除文件的操作实例IP端口和版本号
+        用于释放文件的实例绑定
+        
+        Args:
+            session: 数据库会话
+            fid: 文件编号
+            
+        Returns:
+            bool: 清除成功返回True，文件不存在返回False
+            
+        Raises:
+            Exception: 数据库操作失败时抛出异常
+        """
+        # 先查询文件是否存在
+        file = FileMetaService.get_file_by_fid(session, fid)
+        if not file:
+            return False
+        
+        # 清除host_port并重置version为0
+        stmt = update(PIDDataFile).where(PIDDataFile.fid == fid).values(
+            host_port=None
+        )
+        session.exec(stmt)
+        session.commit()
+        return True
+
+    @staticmethod
+    def get_files_by_status(session: Session, status: FileStatus) -> List[PIDDataFile]:
+        """
+        根据文件状态查询所有文件
+        
+        Args:
+            session: 数据库会话
+            status: 文件状态
+            
+        Returns:
+            List[PIDDataFile]: 文件列表
+        """
+        stmt = select(PIDDataFile).where(PIDDataFile.status == status)
+        return list(session.exec(stmt).all())
+
+    @staticmethod
+    def select_expired_uploading_files(session: Session) -> List[PIDDataFile]:
+        """
+        查询过期的上传中文件
+        过期时间由 settings.retention_hours 配置（默认7天）
+        
+        Args:
+            session: 数据库会话
+            
+        Returns:
+            List[PIDDataFile]: 过期的上传中文件列表
+        """
+        from datetime import timedelta
+        
+        # 计算最早的允许时间（当前时间 - 保留时长）
+        earliest_time = datetime.now() - timedelta(hours=settings.retention_hours)
+        
+        # 查询状态为UPLOADING且创建时间早于最早允许时间的文件
+        stmt = select(PIDDataFile).where(
+            PIDDataFile.status == FileStatus.UPLOADING,
+            PIDDataFile.create_time < earliest_time
+        )
+        
+        return list(session.exec(stmt).all())
