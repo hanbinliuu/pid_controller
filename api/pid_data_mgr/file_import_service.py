@@ -6,8 +6,8 @@
 import logging
 import requests
 from sqlmodel import Session
-from typing import List
 
+from api.pid_data_mgr.addressing import Addressing
 from api.pid_data_mgr.block_util import BlockUtil
 from api.pid_data_mgr.file_meta_dao import FileMetaService
 from api.pid_data_mgr.file_db_models import PIDDataFile, FileStatus
@@ -332,8 +332,13 @@ class FileImportService:
         每10秒调用一次 do_import_file，该函数将被一个独立的进程调用
         """
         import time
+
+        # 设置主机端口
+        host = Addressing.get_ipv4_address()
+        port = 8001
+        settings.host_port = Addressing.create_host_and_port_str(host, port)
         
-        logger.info("开始运行文件导入定期维护任务")
+        logger.info(f"开始运行文件导入定期维护任务, 主机端口: {settings.host_port}")
         
         while True:
             try:

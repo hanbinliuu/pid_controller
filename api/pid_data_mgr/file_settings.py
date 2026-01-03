@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 import os
+import multiprocessing as mp
 
 
 class Settings(BaseModel):
@@ -12,13 +13,13 @@ class Settings(BaseModel):
 
     # 支持的最大文件大小（字节）
     max_file_size: int = Field(
-        default=10 * 1024 * 1024 * 1024,  # 10GB
+        default=1 * 1024 * 1024 * 1024,  # 1GB
         description="支持的最大文件大小（字节）"
     )
 
     # 每个块的大小（字节）
     chunk_size: int = Field(
-        default=10 * 1024 * 1024,  # 10MB
+        default=4 * 1024 * 1024,  # 4MB
         description="每个分块的大小（字节）"
     )
 
@@ -36,6 +37,11 @@ class Settings(BaseModel):
     host_port: str = Field(
         default="",
         description="服务监听的host和port"
+    )
+
+    queue: mp.Queue = Field(
+        default=mp.Queue(),
+        description="任务队列"
     )
 
     def get_storage_path(self) -> str:
