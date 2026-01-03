@@ -71,7 +71,8 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
                   model_type: str, lambda_factor: float,
                   method: str = 'lambda',
                   quality_info: Optional[DataQualityInfo] = None,
-                  response_mode: str = 'balanced') -> Dict[str, float]:
+                  response_mode: str = 'balanced',
+                  loop_type: str = None) -> Dict[str, float]:
         """
         根据模型类型和整定方法计算PID参数
         
@@ -91,6 +92,8 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
                 - 'fast': 快速响应（允许10-20%超调，调节时间短）
                 - 'balanced': 平衡模式（默认，小超调，较快响应）
                 - 'conservative': 保守模式（无超调，响应较慢）
+            loop_type: 回路类型（flow/level/pressure/temperature）
+                - 用于混合策略：Flow/Level 用 SIMC，Pressure/Temperature 用 Lambda
         
         Returns:
             PID参数字典 {Kp, Ki, Kd}，Kp符号与K一致
@@ -111,12 +114,12 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         if model_type == ModelType.FO:
             # ========== 一阶无滞后 (FO) ==========
             Kp, Ti, Td = self._tune_fo(K_abs, T1, lambda_factor, method,
-                                        conservative_level, pb_min)
+                                        conservative_level, pb_min, loop_type)
             
         elif model_type == ModelType.FOPDT:
             # ========== 一阶加纯滞后 (FOPDT) ==========
             Kp, Ti, Td = self._tune_fopdt(K_abs, T1, L, lambda_factor, method,
-                                           conservative_level, pb_min)
+                                           conservative_level, pb_min, loop_type)
             
         elif model_type in [ModelType.SO, ModelType.SOPDT]:
             # ========== 二阶系统 (SO/SOPDT) ==========

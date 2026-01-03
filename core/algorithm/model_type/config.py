@@ -2,12 +2,26 @@
 模型配置模块 (Model Configuration Module)
 =========================================
 
-本模块定义了模型辨识所需的全局配置参数，包括：
+本模块定义了模型辨识所需的全局配置参数。
 
-1. **模型类型枚举**: 支持的过程模型类型定义
-2. **参数边界**: 各模型参数的优化边界和约束
-3. **阈值配置**: 数据质量、拟合评估等阈值参数
-4. **整定配置**: 振荡整定、闭环验证等配置
+🔥 核心参数（重点关注）
+---------------------
+OSCILLATION_TUNING:
+    pb_min/pb_max: 比例带范围(%)，控制整定的保守程度
+    ti_range: 积分时间范围(秒)
+    enable_llm: 是否启用LLM辅助整定
+    
+按场景调整
+---------
+1. 液位回路效果差 → 增大 level_ti_multiplier (2.2→2.5)
+2. 温度回路仿真不收敛 → 增大 temperature_sim_duration_factor (8→10)
+3. 振荡压制不足 → 增大 safety_factor_base (1.2→1.4)
+4. 大滞后系统失败 → 增大 large_delay_pb_boost (1.8→2.2)
+
+一般无需修改的参数
+-----------------
+ku_k_ratio_*, quality_adjustment_*, valve_*_factor,
+pb_gradient, derivative_* 等（已经过调优）
 
 配置分组
 --------
@@ -75,7 +89,7 @@ class Config:
     # ============================================================
     OSCILLATION_TUNING = {
         # ========== LLM 辅助决策开关 ==========
-        'enable_llm': True,                  # 是否启用 LLM 辅助决策保守策略
+        'enable_llm': False,                  # 是否启用 LLM 辅助决策保守策略
         
         # 触发振荡整定的条件
         'oscillation_ratio_threshold': 0.08, # 振荡比阈值，降低以检测弱振荡（从0.1降到0.08）
@@ -219,6 +233,32 @@ class Config:
         # 真正的反向作用系统（制冷、减压）通常不会有剧烈震荡
         'negative_k_oscillation_threshold': 0.3,  # 中等震荡阈值，超过此值开始检查负K
         'negative_k_severe_threshold': 0.5,       # 剧烈震荡阈值，超过此值直接取abs(K)
+    }
+    
+    # ============================================================
+    # SIMC 整定配置 (Skogestad Internal Model Control)
+    # ============================================================
+    # SIMC 是工业界广泛认可的整定方法，核心特点：
+    # 1. 只有一个调节参数 τc（闭环时间常数）
+    # 2. Ti 有上限约束，防止慢系统积分时间过长
+    # 3. 统一处理各类过程模型
+    SIMC_TUNING = {
+        'enable': True,                       # 启用 SIMC 整定
+        'tau_c_factor': 2.0,                  # 最优值：τc = T1 * 2.0（保守）
+        'tau_c_min_factor': 2.0,              # τc 最小值：τc >= L * 2.0
+        'integrating_tau_c_factor': 4.0,      # 积分过程 τc = L * 4.0
+        'ti_limit_factor': 10.0,              # Ti 上限：Ti <= 10 * (τc + L)
+        'use_half_rule': True,                # 二阶系统使用 SIMC 半规则
+        
+        # 按回路类型选择整定方法（混合策略）
+        # True = SIMC, False = Lambda
+        'loop_type_method': {
+            'flow': True,         # Flow 用 SIMC（快速/积分过程）
+            'level': True,        # Level 用 SIMC（积分过程）
+            'pressure': False,    # Pressure 用 Lambda（需要微分）
+            'temperature': False, # Temperature 用 Lambda（慢速系统）
+            'default': True,      # 未知类型默认用 SIMC
+        },
     }
     
     # ============================================================

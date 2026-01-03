@@ -21,85 +21,131 @@ class TuningMethodsMixin:
     需要宿主类提供 _epsilon, _pid_constraints, _get_fallback_params, _get_max_kp 属性/方法。
     """
     
+    def _should_use_simc(self, loop_type: str = None) -> bool:
+        """根据回路类型决定是否使用 SIMC（混合策略）"""
+        simc_cfg = getattr(Config, 'SIMC_TUNING', {})
+        
+        # 如果全局禁用 SIMC，直接返回 False
+        if not simc_cfg.get('enable', True):
+            return False
+        
+        # 如果有 loop_type，按配置选择
+        if loop_type:
+            loop_methods = simc_cfg.get('loop_type_method', {})
+            loop_type_lower = loop_type.lower()
+            return loop_methods.get(loop_type_lower, loop_methods.get('default', True))
+        
+        # 无 loop_type 时使用全局设置
+        return simc_cfg.get('enable', True)
+    
     def _tune_fo(self, K: float, T1: float, lambda_factor: float, 
                  method: str, conservative_level: float = 4.0,
-                 pb_min: float = 60.0) -> Tuple[float, float, float]:
+                 pb_min: float = 60.0, loop_type: str = None) -> Tuple[float, float, float]:
         """
-        一阶无滞后系统整定（自适应保守）
-        
-        Args:
-            K: 过程增益
-            T1: 时间常数
-            lambda_factor: Lambda系数
-            method: 整定方法
-            conservative_level: 保守因子 (3.0~8.0)
-            pb_min: pb最小值 (50~100)
-        
-        Returns:
-            (Kp, Ti, Td) 元组
+        一阶无滞后系统整定（根据回路类型选择 SIMC 或 Lambda）
         """
-        # 使用自适应保守因子
-        lambda_val = T1 * lambda_factor * conservative_level
+        simc_cfg = getattr(Config, 'SIMC_TUNING', {})
+        baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
         
-        denom = K * lambda_val
-        if denom < self._epsilon:
-            return self._get_fallback_params(Ti_override=T1)
+        # 根据回路类型选择整定方法
+        use_simc = self._should_use_simc(loop_type)
         
-        Kp = T1 / denom
+        if use_simc:
+            # SIMC 模式
+            tau_c_factor = simc_cfg.get('tau_c_factor', 1.0)
+            tau_c = T1 * lambda_factor * tau_c_factor * (conservative_level / baseline)
+            
+            denom = K * tau_c
+            if denom < self._epsilon:
+                return self._get_fallback_params(Ti_override=T1)
+            
+            Kp = T1 / denom
+            
+            # SIMC Ti 上限约束
+            ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
+            Ti = min(T1, ti_limit_factor * tau_c)
+        else:
+            # Lambda 模式
+            lambda_val = T1 * lambda_factor * conservative_level
+            
+            denom = K * lambda_val
+            if denom < self._epsilon:
+                return self._get_fallback_params(Ti_override=T1)
+            
+            Kp = T1 / denom
+            Ti = T1
         
         # 根据pb_min计算max_Kp
         max_Kp = self._get_max_kp(pb_min)
         if Kp > max_Kp:
             Kp = max_Kp
         
-        Ti = T1
-        Td = 0.0  # 无滞后时不需要微分
+        Td = 0.0
         
         return Kp, Ti, Td
     
     def _tune_fopdt(self, K: float, T1: float, L: float, 
                     lambda_factor: float, method: str,
                     conservative_level: float = 4.0,
-                    pb_min: float = 60.0) -> Tuple[float, float, float]:
+                    pb_min: float = 60.0, loop_type: str = None) -> Tuple[float, float, float]:
         """
-        一阶加纯滞后系统整定（自适应保守）
+        一阶加纯滞后系统整定（根据回路类型选择 SIMC 或 Lambda）
         
         支持多种整定方法：
-        - lambda: Lambda/IMC标准法
+        - lambda/simc: 根据回路类型自动选择
         - cohen_coon: Cohen-Coon法（适合L/T1较大）
         - imc_aggressive: IMC激进模式
         """
-        # 从配置读取基准值
+        simc_cfg = getattr(Config, 'SIMC_TUNING', {})
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
         
         if method == 'cohen_coon' and L > self._epsilon:
-            # Cohen-Coon 法（适合 L/T1 较大的系统）
-            # 应用保守因子以降低激进程度
+            # Cohen-Coon 法
             cc_factor = self._pid_constraints.get('cohen_coon_conservative_factor', 0.85)
-            tau = L / T1
             Kp = cc_factor * (1.35 / K) * (T1 / L + 0.185)
             Ti = 2.5 * L * (T1 + 0.185 * L) / (T1 + 0.611 * L)
             Td = 0.37 * L * T1 / (T1 + 0.185 * L)
             
         elif method == 'imc_aggressive':
-            # IMC 激进模式（lambda = L）
-            lambda_val = max(L, T1 * 0.1)
-            denom = K * (lambda_val + L / 2)
+            # IMC 激进模式
+            tau_c = max(L, T1 * 0.1)
+            denom = K * (tau_c + L)
             if denom < self._epsilon:
                 return self._get_fallback_params(Ti_override=T1)
-            Kp = (T1 + L / 2) / denom
-            Ti = T1 + L / 2
-            Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
+            Kp = T1 / denom
+            Ti = min(T1, 4 * (tau_c + L))
+            Td = 0.0
             
         else:
-            # Lambda/IMC 标准法（使用自适应保守因子）
-            lambda_val = T1 * lambda_factor * (conservative_level / baseline)  # 标准化到基准
-            denom = K * (lambda_val + L / 2)
-            if denom < self._epsilon:
-                return self._get_fallback_params(Ti_override=T1 + L / 2)
-            Kp = (T1 + L / 2) / denom
-            Ti = T1 + L / 2
-            Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
+            # 根据回路类型选择整定方法
+            use_simc = self._should_use_simc(loop_type)
+            
+            if use_simc:
+                # ========== SIMC 模式 ==========
+                tau_c_factor = simc_cfg.get('tau_c_factor', 1.0)
+                tau_c = T1 * lambda_factor * tau_c_factor * (conservative_level / baseline)
+                
+                tau_c_min_factor = simc_cfg.get('tau_c_min_factor', 0.5)
+                tau_c = max(tau_c, L * tau_c_min_factor)
+                
+                denom = K * (tau_c + L)
+                if denom < self._epsilon:
+                    return self._get_fallback_params(Ti_override=T1)
+                
+                Kp = T1 / denom
+                
+                ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
+                Ti = min(T1, ti_limit_factor * (tau_c + L))
+                Td = 0.0
+            else:
+                # ========== Lambda 模式 ==========
+                lambda_val = T1 * lambda_factor * (conservative_level / baseline)
+                denom = K * (lambda_val + L / 2)
+                if denom < self._epsilon:
+                    return self._get_fallback_params(Ti_override=T1 + L / 2)
+                Kp = (T1 + L / 2) / denom
+                Ti = T1 + L / 2
+                Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
         
         # 应用pb下限
         max_Kp = self._get_max_kp(pb_min)
@@ -111,20 +157,46 @@ class TuningMethodsMixin:
     def _tune_sopdt(self, K: float, T1: float, T2: float, L: float,
                     lambda_factor: float, conservative_level: float = 4.0,
                     pb_min: float = 60.0) -> Tuple[float, float, float]:
-        """二阶系统整定（自适应保守）"""
+        """
+        二阶系统整定（SIMC 半规则）
+        
+        SIMC 半规则 (Skogestad 2003):
+        - T_eff = T1 + T2/2（等效时间常数）
+        - L_eff = L + T2/2（等效滞后）
+        - τc = T_eff * lambda_factor
+        - Kp = T_eff / (K * (τc + L_eff))
+        - Ti = min(T_eff, 4 * (τc + L_eff))
+        """
+        simc_cfg = getattr(Config, 'SIMC_TUNING', {})
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
-        T_eq = T1 + T2 if T2 > 0 else T1
-        # 使用自适应保守因子
-        lambda_val = T_eq * lambda_factor * (conservative_level / baseline)
+        use_half_rule = simc_cfg.get('use_half_rule', True)
         
-        denom = K * (lambda_val + L / 2) if L > 0 else K * lambda_val
+        if use_half_rule and T2 > 0:
+            # SIMC 半规则：将二阶近似为一阶
+            T_eff = T1 + T2 / 2
+            L_eff = L + T2 / 2
+        else:
+            # 传统方法
+            T_eff = T1 + T2 if T2 > 0 else T1
+            L_eff = L
+        
+        # 计算闭环时间常数 τc
+        tau_c_factor = simc_cfg.get('tau_c_factor', 1.0)
+        tau_c = T_eff * lambda_factor * tau_c_factor * (conservative_level / baseline)
+        
+        # SIMC 公式
+        denom = K * (tau_c + L_eff)
         if denom < self._epsilon:
-            return self._get_fallback_params(Ti_override=T_eq)
+            return self._get_fallback_params(Ti_override=T_eff)
         
-        Kp = T_eq / denom
-        Ti = T_eq
-        # 二阶系统的微分时间：串联时间常数的几何平均
-        Td = (T1 * T2) / T_eq if T_eq > self._epsilon and T2 > 0 else 0.0
+        Kp = T_eff / denom
+        
+        # SIMC Ti 上限约束
+        ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
+        Ti = min(T_eff, ti_limit_factor * (tau_c + L_eff))
+        
+        # SIMC 推荐 PI 控制，但二阶系统可选加微分
+        Td = 0.0
         
         # 应用pb下限
         max_Kp = self._get_max_kp(pb_min)
@@ -137,21 +209,36 @@ class TuningMethodsMixin:
                          lambda_factor: float, conservative_level: float = 4.0,
                          pb_min: float = 60.0) -> Tuple[float, float, float]:
         """
-        积分过程整定（自适应保守）
+        积分过程整定（SIMC 方法）
         
-        积分过程: G(s) = K / (T1*s + 1) / s
-        使用 SIMC 规则
+        积分过程: G(s) = K' / s（典型液位回路）
+        
+        SIMC 公式 (Skogestad 2003):
+        - τc = 4 * T1（T1 作为等效滞后）
+        - Kp = 1 / (K * (τc + T1))
+        - Ti = 4 * (τc + T1)
         """
-        if K < self._epsilon:
+        if abs(K) < self._epsilon:
             return self._get_fallback_params()
         
-        # 使用自适应保守因子
-        lambda_val = max(T1 * lambda_factor * (conservative_level / 4.0), 0.2)
+        simc_cfg = getattr(Config, 'SIMC_TUNING', {})
+        baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
+        
+        # 积分过程的 τc 计算（T1 作为等效滞后）
+        int_tau_c_factor = simc_cfg.get('integrating_tau_c_factor', 4.0)
+        tau_c = T1 * int_tau_c_factor * lambda_factor * (conservative_level / baseline)
+        tau_c = max(tau_c, 0.2)  # 确保最小值
         
         # SIMC 积分过程公式
-        Kp = T1 / (K * lambda_val) if T1 > 0 else 1.0 / (K * lambda_val)
-        Ti = 4 * lambda_val  # 积分时间 = 4 * 闭环时间常数
-        Td = 0.0  # 积分过程一般不用微分
+        # Kp = 1 / (K * (τc + T1))，这里 T1 作为等效滞后
+        denom = K * (tau_c + T1) if T1 > 0 else K * tau_c
+        Kp = 1.0 / denom if denom > self._epsilon else self._get_max_kp(pb_min)
+        
+        # Ti = 4 * (τc + T1)
+        ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
+        Ti = ti_limit_factor * (tau_c + T1) if T1 > 0 else ti_limit_factor * tau_c
+        
+        Td = 0.0  # 积分过程不用微分
         
         # 应用pb下限
         max_Kp = self._get_max_kp(pb_min)
