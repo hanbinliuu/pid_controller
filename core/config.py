@@ -163,6 +163,11 @@ class Config:
         'bff.model.device_model_uri',
         '/system/401'
     )
+
+    # ==================== PID 数据文件导入配置 ====================
+    PID_DATA_FILE_DIR: str = _get_config('pid.data.import.storage.dir', 'data/pid_data')
+    PID_DATA_DB_BASE_URL = _get_config('pid.data.import.db.base_url', 'http://tsdb-store-svc:8080')
+    PID_DATA_DB_NAME = _get_config('pid.data.import.db.name', 'platform')
     
     # PID控制字段与模型browse_name名称映射关系
     @classmethod
