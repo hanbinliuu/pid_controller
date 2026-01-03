@@ -14,6 +14,7 @@ from api.pid_data_mgr.file_db_models import PIDDataFile, FileStatus
 from api.pid_data_mgr.file_settings import settings
 from api.pid_data_mgr.file_store_service import FileStoreService
 from core.database.database import get_db as get_session
+from core.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -337,9 +338,20 @@ class FileImportService:
         host = Addressing.get_ipv4_address()
         port = 8001
         settings.host_port = Addressing.create_host_and_port_str(host, port)
+
+        # 设置存储目录
+        settings.storage_dir = config.PID_DATA_FILE_DIR
+
+        # 设置数据库信息
+        settings.db_url = config.DB_URL
+        settings.db_name = config.DB_NAME
+
+        # 输出配置信息
+        logger.info(f"PID文件导入配置信息: {settings}")
         
-        logger.info(f"开始运行文件导入定期维护任务, 主机端口: {settings.host_port}")
-        
+        logger.info(f"开始运行PID文件导入定期维护任务")
+
+        # TODO: 添加任务队列
         while True:
             try:
                 # 执行文件导入维护任务

@@ -3,7 +3,7 @@
 启动PID Agent API服务器的脚本 (优化版)
 将API服务和后台定时任务进程分离，便于一致性控制
 """
-
+import multiprocessing
 import sys
 import os
 import logging
@@ -40,6 +40,7 @@ from api.routes.home_page_route import home_page_router
 from api.routes.dynamic_config_router import router as dynamic_config_router
 from api.pid_data_mgr.file_router import pid_data_file_router
 from api.pid_data_mgr.ping_router import router as ping_router
+from api.pid_data_mgr.file_import_service import FileImportService
 
 # 导入中间件
 from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware, RequestLoggingMiddleware
@@ -230,22 +231,56 @@ def start_api_server():
     )
 
 
+def _start_cron_tasks():
+    """启动定时任务"""
+    from api.tasks import init_cron_tasks
+    logger.info("初始化定时任务...")
+    try:
+        init_cron_tasks()
+        logger.info("✓ 定时任务初始化成功")
+        return True
+    except Exception as e:
+        logger.error(f"✗ 定时任务初始化失败: {str(e)}")
+        return False
+
+
+def _start_file_import_service():
+    """启动PID文件导入服务进程"""
+    logger.info("启动PID文件导入服务...")
+    try:
+        file_import_process = multiprocessing.Process(
+            target=FileImportService.run_import,
+            name="FileImportService",
+            daemon=True  # 设置为守护进程
+        )
+        file_import_process.start()
+        logger.info(f"✓ PID文件导入服务进程已启动 (PID: {file_import_process.pid})")
+        return file_import_process
+    except Exception as e:
+        logger.error(f"✗ PID文件导入服务启动失败: {str(e)}")
+        return None
+
+
 def start_background_worker():
     """启动后台任务进程（仅负责定时任务）"""
     import signal
     import time
-    from api.tasks import init_cron_tasks, shutdown_cron_tasks
+    from api.tasks import shutdown_cron_tasks
     
     logger.info("="*60)
     logger.info("启动 PID 整定后台任务进程")
     logger.info("="*60)
-    
-    # 初始化定时任务
-    try:
-        init_cron_tasks()
-        logger.info("✓ 后台定时任务初始化成功")
-    except Exception as e:
-        logger.error(f"✗ 后台定时任务初始化失败: {str(e)}")
+
+    # 启动定时任务
+    cron_tasks_success = _start_cron_tasks()
+    if not cron_tasks_success:
+        logger.error("定时任务启动失败，退出进程")
+        sys.exit(1)
+
+    # 启动PID文件导入服务
+    file_import_process = _start_file_import_service()
+    if file_import_process is None:
+        logger.error("PID文件导入服务启动失败，退出进程")
         sys.exit(1)
     
     logger.info("="*60)
@@ -256,6 +291,17 @@ def start_background_worker():
     # 定义信号处理函数
     def signal_handler(sig, frame):
         logger.info("\n收到停止信号，正在关闭后台任务...")
+
+        # 终止文件导入进程
+        if 'file_import_process' in locals() and file_import_process.is_alive():
+            file_import_process.terminate()
+            file_import_process.join(timeout=5)
+            if file_import_process.is_alive():
+                logger.warning("PID文件导入进程未能正常停止，强制终止")
+                file_import_process.kill()
+            logger.info("✓ PID文件导入进程已停止")
+
+        # 终止定时任务
         shutdown_cron_tasks()
         logger.info("✓ 后台任务已停止")
         sys.exit(0)
@@ -270,6 +316,15 @@ def start_background_worker():
             time.sleep(1)
     except KeyboardInterrupt:
         logger.info("\n收到键盘中断，正在关闭后台任务...")
+        # 终止文件导入进程
+        if file_import_process and file_import_process.is_alive():
+            file_import_process.terminate()
+            file_import_process.join(timeout=5)
+            if file_import_process.is_alive():
+                logger.warning("PID文件导入进程未能正常停止，强制终止")
+                file_import_process.kill()
+            logger.info("✓ PID文件导入进程已停止")
+
         shutdown_cron_tasks()
         logger.info("✓ 后台任务已停止")
 

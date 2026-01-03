@@ -44,6 +44,16 @@ class Settings(BaseModel):
         description="任务队列"
     )
 
+    db_base_url: str = Field(
+        default="",
+        description="数据库连接地址"
+    )
+
+    db_name: str = Field(
+        default="",
+        description="数据库名称"
+    )
+
     def get_storage_path(self) -> str:
         """
         获取完整的存储路径，确保目录存在
