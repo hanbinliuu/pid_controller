@@ -2,7 +2,8 @@
 """
 启动PID Agent API服务器的脚本
 """
-
+import argparse
+import multiprocessing
 import sys
 import os
 import logging
@@ -17,6 +18,7 @@ from fastapi.openapi.docs import (
 )
 from fastapi.responses import FileResponse
 
+from api.pid_data_mgr.file_import_service import FileImportService
 from core.config import Config
 
 # 添加项目根目录到Python路径
@@ -80,8 +82,12 @@ def setup_logging():
     # 根据日志级别调整uvicorn的详细程度
     if log_level == 'DEBUG':
         logging.getLogger('uvicorn.access').setLevel(logging.DEBUG)
+        logging.getLogger('fastapi').setLevel(logging.DEBUG)
+
     else:
         logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+        logging.getLogger('fastapi').setLevel(logging.WARNING)
+
     
     logger = logging.getLogger(__name__)
     return logger
@@ -224,31 +230,26 @@ async def redoc_html():
 # app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
-
-
-if __name__ == "__main__":
+def start_api_server():
+    """启动API服务器（纯API服务，不包含后台任务）"""
     # 获取日志级别并转换为uvicorn格式
     log_level = os.getenv('LOG_LEVEL', 'INFO').lower()
     # 是否启用热加载（开发环境可设置为True，生产环境应为False）
     enable_reload = os.getenv('ENABLE_RELOAD', 'False').lower() == 'true'
-    # 获取worker数量，默认为1（单进程），在生产环境中可以设置为CPU核心数
-    # 注意：在调试器环境中强制使用单worker以避免进程重启问题
-    workers_env = os.getenv('WORKERS', '3')
+    # 获取worker数量，默认为3
+    workers_env = os.getenv('WORKERS', '1')
     workers = int(workers_env) if not enable_reload else 1
-    
-    # 在调试器环境中强制使用单worker
-    # if os.getenv('PYCHARM_HOSTED') or os.getenv('VSCODE_PID'):
-    #     logger.info("检测到调试器环境，强制使用单worker模式")
-    #     workers = 1
-    
-    logger.info("启动PID整定软件 API服务器...")
-    logger.info(f"API文档地址: http://localhost:{Config.SERVER_PORT}/docs")
+
+    logger.info("=" * 60)
+    logger.info("启动 PID 整定 API 服务器 (API Only)")
+    logger.info("=" * 60)
+    logger.info("API文档地址: http://localhost:8001/docs")
     logger.info(f"Uvicorn日志级别: {log_level}")
     logger.info(f"热加载状态: {'启用' if enable_reload else '禁用'}")
     logger.info(f"Worker数量: {workers}")
-    
-    # 在多worker环境下，使用分布式锁确保定时任务只被一个worker执行
-    
+    logger.info("注意: 后台定时任务需要单独启动 (--mode=worker)")
+    logger.info("=" * 60)
+
     # 设置anyio的后端选项以提高稳定性
     import anyio
     anyio.BACKEND_OPTIONS = {
@@ -256,12 +257,169 @@ if __name__ == "__main__":
             'use_uvloop': False  # 在某些环境下禁用uvloop可以提高稳定性
         }
     }
-    
+
     uvicorn.run(
         "run_server:app",
-        host="0.0.0.0", 
+        host="0.0.0.0",
         port=Config.SERVER_PORT,
         reload=enable_reload,
         workers=workers,
         log_level=log_level
     )
+
+
+def _start_cron_tasks():
+    """启动定时任务"""
+    from api.tasks import init_cron_tasks
+    logger.info("初始化定时任务...")
+    try:
+        init_cron_tasks()
+        logger.info("✓ 定时任务初始化成功")
+        return True
+    except Exception as e:
+        logger.error(f"✗ 定时任务初始化失败: {str(e)}")
+        return False
+
+
+def _start_file_import_service():
+    """启动PID文件导入服务进程"""
+    logger.info("启动PID文件导入服务...")
+    try:
+        file_import_process = multiprocessing.Process(
+            target=FileImportService.run_import,
+            name="FileImportService",
+            daemon=True  # 设置为守护进程
+        )
+        file_import_process.start()
+        logger.info(f"✓ PID文件导入服务进程已启动 (PID: {file_import_process.pid})")
+        return file_import_process
+    except Exception as e:
+        logger.error(f"✗ PID文件导入服务启动失败: {str(e)}")
+        return None
+
+
+def start_background_worker():
+    """启动后台任务进程（仅负责定时任务）"""
+    import signal
+    import time
+    from api.tasks import shutdown_cron_tasks
+
+    logger.info("=" * 60)
+    logger.info("启动 PID 整定后台任务进程")
+    logger.info("=" * 60)
+
+    # 启动定时任务
+    cron_tasks_success = _start_cron_tasks()
+    if not cron_tasks_success:
+        logger.error("定时任务启动失败，退出进程")
+        sys.exit(1)
+
+    # 启动PID文件导入服务
+    file_import_process = _start_file_import_service()
+    if file_import_process is None:
+        logger.error("PID文件导入服务启动失败，退出进程")
+        sys.exit(1)
+
+    logger.info("=" * 60)
+    logger.info("后台任务进程正在运行...")
+    logger.info("按 Ctrl+C 停止")
+    logger.info("=" * 60)
+
+    # 定义信号处理函数
+    def signal_handler(sig, frame):
+        logger.info("\n收到停止信号，正在关闭后台任务...")
+
+        # 终止文件导入进程
+        if 'file_import_process' in locals() and file_import_process.is_alive():
+            file_import_process.terminate()
+            file_import_process.join(timeout=5)
+            if file_import_process.is_alive():
+                logger.warning("PID文件导入进程未能正常停止，强制终止")
+                file_import_process.kill()
+            logger.info("✓ PID文件导入进程已停止")
+
+        # 终止定时任务
+        shutdown_cron_tasks()
+        logger.info("✓ 后台任务已停止")
+        sys.exit(0)
+
+    # 注册信号处理器
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    # 保持进程运行
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("\n收到键盘中断，正在关闭后台任务...")
+        # 终止文件导入进程
+        if file_import_process and file_import_process.is_alive():
+            file_import_process.terminate()
+            file_import_process.join(timeout=5)
+            if file_import_process.is_alive():
+                logger.warning("PID文件导入进程未能正常停止，强制终止")
+                file_import_process.kill()
+            logger.info("✓ PID文件导入进程已停止")
+
+        shutdown_cron_tasks()
+        logger.info("✓ 后台任务已停止")
+
+
+def start_all():
+    """启动所有服务（API + 后台任务）- 使用多进程"""
+    import multiprocessing
+
+    logger.info("=" * 60)
+    logger.info("启动 PID 整定完整服务 (API + Worker)")
+    logger.info("=" * 60)
+
+    # 创建后台任务进程
+    worker_process = multiprocessing.Process(
+        target=start_background_worker,
+        name="BackgroundWorker",
+        daemon=False
+    )
+
+    # 启动后台任务进程
+    worker_process.start()
+    logger.info(f"✓ 后台任务进程已启动 (PID: {worker_process.pid})")
+
+    # 启动API服务器（阻塞）
+    try:
+        start_api_server()
+    except KeyboardInterrupt:
+        logger.info("\n收到键盘中断，正在关闭服务...")
+    finally:
+        # 停止后台任务进程
+        if worker_process.is_alive():
+            logger.info("正在停止后台任务进程...")
+            worker_process.terminate()
+            worker_process.join(timeout=10)
+            if worker_process.is_alive():
+                logger.warning("后台任务进程未能正常停止，强制终止")
+                worker_process.kill()
+            logger.info("✓ 后台任务进程已停止")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='PID Agent API Server')
+    parser.add_argument(
+        '--mode',
+        type=str,
+        choices=['api', 'worker', 'all'],
+        default='api',
+        help='启动模式: api=仅API服务, worker=仅后台任务, all=全部启动 (默认: all)'
+    )
+
+    args = parser.parse_args()
+    print(f"参数：{args}")
+    if args.mode == 'api':
+        # 仅启动API服务
+        start_api_server()
+    elif args.mode == 'worker':
+        # 仅启动后台任务进程
+        start_background_worker()
+    else:
+        # 启动所有服务
+        start_all()

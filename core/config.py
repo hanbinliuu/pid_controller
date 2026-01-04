@@ -360,7 +360,7 @@ class Config:
 
 
 # 创建全局配置实例
-config = Config()
+# config = Config()
 
 
 if __name__ == "__main__":

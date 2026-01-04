@@ -25,14 +25,7 @@ echo "  PYTHONPATH: ${PYTHONPATH:-未设置}"
 echo "  LOG_LEVEL: ${LOG_LEVEL:-INFO}"
 echo "  DB_HOST: ${DB_HOST:-未设置}"
 echo "  DB_NAME: ${DB_NAME:-未设置}"
-
-# 检查数据目录
-DATA_DIR="/app/data/simulated"
-if [ ! -d "$DATA_DIR" ]; then
-    echo ""
-    echo "创建数据目录: $DATA_DIR"
-    mkdir -p "$DATA_DIR"
-fi
+echo "  SERVER_START_MODE: ${SERVER_START_MODE:-未设置}"
 
 # 等待数据库就绪（可选）
 if [ -n "$DB_HOST" ] && [ -n "$DB_PORT" ]; then
@@ -54,12 +47,17 @@ if [ -n "$DB_HOST" ] && [ -n "$DB_PORT" ]; then
         fi
     done
 fi
+#启动模式初始化
+
+
+START_MODE=${SERVER_START_MODE:-"all"}
 
 echo ""
 echo "=========================================="
 echo "启动 PID Agent API 服务器..."
 echo "=========================================="
 echo ""
+echo "  启动模式: $START_MODE"
 
 # 启动应用
-exec python run_server.py
+exec python run_server.py --mode "$START_MODE"
