@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 # 从配置获取数据库URL
 DATABASE_URL = Config.DATABASE_URL
+DATABASE_INFO = DATABASE_URL.split('@')[-1]
 
 # 创建数据库引擎 - SQLModel方式
 connect_args = {}
@@ -110,11 +111,12 @@ def init_database():
         from api.bean import loop_evaluation
         from api.bean import loop_info
         from api.bean import device_evaluation
+
         from api.pid_data_mgr import file_db_models
 
         # 创建所有表
         SQLModel.metadata.create_all(engine)
-        logger.info(f"数据库初始化成功: {DATABASE_URL}")
+        logger.info(f"数据库初始化成功: {DATABASE_INFO}")
     except Exception as e:
         logger.error(f"数据库初始化失败: {str(e)}")
         raise

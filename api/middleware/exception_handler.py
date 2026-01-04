@@ -178,4 +178,4 @@ def register_exception_handlers(app: FastAPI):
             )
         )
     
-    logger.info("全局异常处理器注册完成")
+    # logger.info("全局异常处理器注册完成")

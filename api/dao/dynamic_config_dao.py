@@ -35,28 +35,13 @@ class DynamicConfigDAO:
             db.commit()
             db.refresh(config)
             
-            logger.info(f"创建配置参数成功: ID={config.id}, key={config.config_key}")
+            logger.info(f"创建配置参数成功: key={config.config_key}")
             return config
             
         except Exception as e:
             db.rollback()
             logger.error(f"创建配置参数失败: {str(e)}")
             raise
-    
-    @staticmethod
-    def get_by_id(db: Session, config_id: str) -> Optional[DynamicConfig]:
-        """
-        根据ID查询配置 - SQLModel方式
-        
-        Args:
-            db: 数据库会话
-            config_id: 配置ID
-        
-        Returns:
-            Optional[DynamicConfig]: 配置对象，不存在则返回None
-        """
-        statement = select(DynamicConfig).where(DynamicConfig.id == config_id)
-        return db.exec(statement).first()
     
     @staticmethod
     def get_by_key(db: Session, config_key: str) -> Optional[DynamicConfig]:
@@ -74,38 +59,37 @@ class DynamicConfigDAO:
         return db.exec(statement).first()
     
     @staticmethod
-    def get_by_group(db: Session, config_group: str, include_disabled: bool = False) -> List[DynamicConfig]:
+    def get_by_group(db: Session, config_group: str) -> List[DynamicConfig]:
         """
         根据配置分组查询配置列表
         
         Args:
             db: 数据库会话
             config_group: 配置分组
-            include_disabled: 是否包含已禁用的配置，默认False
         
         Returns:
             List[DynamicConfig]: 配置对象列表
         """
-        statement = select(DynamicConfig).where(DynamicConfig.config_group == config_group)
-        if not include_disabled:
-            statement = statement.where(DynamicConfig.is_enabled == True)
-        statement = statement.order_by(DynamicConfig.config_key)
+        statement = select(DynamicConfig).where(
+            DynamicConfig.config_group == config_group
+        ).order_by(DynamicConfig.config_key)
         return db.exec(statement).all()
     
     @staticmethod
-    def get_all_enabled(db: Session) -> List[DynamicConfig]:
+    def get_all(db: Session) -> List[DynamicConfig]:
         """
-        查询所有启用的配置
+        查询所有配置
         
         Args:
             db: 数据库会话
         
         Returns:
-            List[DynamicConfig]: 启用的配置列表
+            List[DynamicConfig]: 所有配置列表
         """
-        statement = select(DynamicConfig).where(
-            DynamicConfig.is_enabled == True
-        ).order_by(DynamicConfig.config_group, DynamicConfig.config_key)
+        statement = select(DynamicConfig).order_by(
+            DynamicConfig.config_group, 
+            DynamicConfig.config_key
+        )
         return db.exec(statement).all()
     
     @staticmethod
@@ -113,8 +97,6 @@ class DynamicConfigDAO:
         db: Session,
         config_key: Optional[str] = None,
         config_group: Optional[str] = None,
-        config_type: Optional[str] = None,
-        is_enabled: Optional[bool] = None,
         page_no: int = 1,
         page_size: int = 10
     ) -> Dict[str, Any]:
@@ -125,8 +107,6 @@ class DynamicConfigDAO:
             db: 数据库会话
             config_key: 配置键筛选（模糊匹配）
             config_group: 配置分组筛选
-            config_type: 配置类型筛选
-            is_enabled: 是否启用筛选
             page_no: 页码
             page_size: 每页数量
         
@@ -145,14 +125,6 @@ class DynamicConfigDAO:
             if config_group:
                 statement = statement.where(DynamicConfig.config_group == config_group)
             
-            # 配置类型筛选
-            if config_type:
-                statement = statement.where(DynamicConfig.config_type == config_type)
-            
-            # 启用状态筛选
-            if is_enabled is not None:
-                statement = statement.where(DynamicConfig.is_enabled == is_enabled)
-            
             # 按创建时间倒序排列
             statement = statement.order_by(desc(DynamicConfig.created_time))
             
@@ -163,10 +135,6 @@ class DynamicConfigDAO:
                 count_statement = count_statement.where(DynamicConfig.config_key.like(f"%{config_key}%"))
             if config_group:
                 count_statement = count_statement.where(DynamicConfig.config_group == config_group)
-            if config_type:
-                count_statement = count_statement.where(DynamicConfig.config_type == config_type)
-            if is_enabled is not None:
-                count_statement = count_statement.where(DynamicConfig.is_enabled == is_enabled)
             
             total = db.exec(count_statement).one()
             
@@ -194,47 +162,6 @@ class DynamicConfigDAO:
             logger.error(f"查询配置参数列表失败: {str(e)}")
             raise
 
-    @staticmethod
-    def update(db: Session, config_id: str, update_data: Dict[str, Any]) -> Optional[DynamicConfig]:
-        """
-        更新配置 - SQLModel方式
-        
-        Args:
-            db: 数据库会话
-            config_id: 配置ID
-            update_data: 更新数据字典
-        
-        Returns:
-            Optional[DynamicConfig]: 更新后的配置对象
-        """
-        try:
-            statement = select(DynamicConfig).where(DynamicConfig.id == config_id)
-            config = db.exec(statement).first()
-            
-            if not config:
-                logger.warning(f"未找到ID为 {config_id} 的配置")
-                return None
-            
-            # 更新字段
-            for key, value in update_data.items():
-                if hasattr(config, key):
-                    setattr(config, key, value)
-            
-            # 更新updated_time
-            config.updated_time = datetime.now()
-            
-            db.add(config)
-            db.commit()
-            db.refresh(config)
-            
-            logger.info(f"更新配置参数成功: ID={config_id}, key={config.config_key}")
-            return config
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"更新配置参数失败: {str(e)}")
-            raise
-    
     @staticmethod
     def update_by_key(db: Session, config_key: str, update_data: Dict[str, Any]) -> Optional[DynamicConfig]:
         """
@@ -274,99 +201,6 @@ class DynamicConfigDAO:
         except Exception as e:
             db.rollback()
             logger.error(f"更新配置参数失败: {str(e)}")
-            raise
-    
-    @staticmethod
-    def delete(db: Session, config_id: str) -> bool:
-        """
-        删除配置 - SQLModel方式
-        
-        Args:
-            db: 数据库会话
-            config_id: 配置ID
-        
-        Returns:
-            bool: 是否删除成功
-        """
-        try:
-            statement = select(DynamicConfig).where(DynamicConfig.id == config_id)
-            config = db.exec(statement).first()
-            
-            if not config:
-                logger.warning(f"未找到ID为 {config_id} 的配置")
-                return False
-            
-            db.delete(config)
-            db.commit()
-            
-            logger.info(f"删除配置参数成功: ID={config_id}, key={config.config_key}")
-            return True
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"删除配置参数失败: {str(e)}")
-            raise
-    
-    @staticmethod
-    def delete_by_key(db: Session, config_key: str) -> bool:
-        """
-        根据配置键删除配置
-        
-        Args:
-            db: 数据库会话
-            config_key: 配置键
-        
-        Returns:
-            bool: 是否删除成功
-        """
-        try:
-            statement = select(DynamicConfig).where(DynamicConfig.config_key == config_key)
-            config = db.exec(statement).first()
-            
-            if not config:
-                logger.warning(f"未找到key为 {config_key} 的配置")
-                return False
-            
-            db.delete(config)
-            db.commit()
-            
-            logger.info(f"删除配置参数成功: key={config_key}")
-            return True
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"删除配置参数失败: {str(e)}")
-            raise
-    
-    @staticmethod
-    def batch_create(db: Session, config_list: List[Dict[str, Any]]) -> List[DynamicConfig]:
-        """
-        批量创建配置
-        
-        Args:
-            db: 数据库会话
-            config_list: 配置数据列表
-        
-        Returns:
-            List[DynamicConfig]: 创建的配置对象列表
-        """
-        try:
-            created_configs = []
-            for config_data in config_list:
-                config = DynamicConfig(**config_data)
-                db.add(config)
-                created_configs.append(config)
-            
-            db.commit()
-            for config in created_configs:
-                db.refresh(config)
-            
-            logger.info(f"批量创建配置参数成功，共创建 {len(created_configs)} 条记录")
-            return created_configs
-            
-        except Exception as e:
-            db.rollback()
-            logger.error(f"批量创建配置参数失败: {str(e)}")
             raise
 
 

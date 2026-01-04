@@ -45,12 +45,13 @@ def success_response(data: Any = None, message: str = "success") -> dict:
     Returns:
         标准化的成功响应字典
     """
-    return {
-        "code": 0,
-        "message": message,
-        "data": data,
-        "success": True
-    }
+    response = ApiResponse(
+        code=0,
+        message=message,
+        data=data,
+        success=True
+    )
+    return response.model_dump()
 
 
 def error_response(code: int = 500, message: str = "error", data: Any = None) -> dict:
@@ -65,9 +66,10 @@ def error_response(code: int = 500, message: str = "error", data: Any = None) ->
     Returns:
         标准化的错误响应字典
     """
-    return {
-        "code": code,
-        "message": message,
-        "data": data,
-        "success": False
-    }
+    response = ApiResponse(
+        code=code,
+        message=message,
+        data=data,
+        success=False
+    )
+    return response.model_dump()
