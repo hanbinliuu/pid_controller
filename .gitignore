@@ -10,6 +10,8 @@ logs
 
 lock
 
+data/pid_data
+
 mesh-table/*.log
 
 .venv

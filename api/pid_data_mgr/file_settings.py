@@ -19,7 +19,7 @@ class Settings(BaseModel):
 
     # 每个块的大小（字节）
     chunk_size: int = Field(
-        default=4 * 1024 * 1024,  # 4MB
+        default=1 * 1024 * 1024,  # 1MB
         description="每个分块的大小（字节）"
     )
 
