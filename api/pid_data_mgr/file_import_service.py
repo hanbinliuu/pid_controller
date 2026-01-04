@@ -13,8 +13,8 @@ from api.pid_data_mgr.file_meta_dao import FileMetaService
 from api.pid_data_mgr.file_db_models import PIDDataFile, FileStatus
 from api.pid_data_mgr.file_settings import settings
 from api.pid_data_mgr.file_store_service import FileStoreService
-from core.database.database import get_db as get_session
-from core.config import config
+from core.database.database import get_db_session as get_session
+from core.config import Config as config
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,9 @@ class FileImportService:
         2. 合并已上传完成的文件
         3. 清理已合并的文件块
         """
-        logger.info("开始执行文件维护任务")
+        logger.info("=" * 60)
+        logger.info("开始执行PID文件维护任务")
+        logger.info("=" * 60)
         
         try:
             with get_session() as session:
@@ -117,10 +119,10 @@ class FileImportService:
                 count = FileImportService._clean_merged_file_blocks(session)
                 logger.info(f"清理已合并的文件块完成，共清理 {count} 个文件块")
                 
-            logger.info("文件维护任务执行完成")
+            logger.info("PID文件维护任务执行完成")
             
         except Exception as e:
-            logger.error(f"文件维护任务执行失败: {str(e)}")
+            logger.error(f"PID文件维护任务执行失败: {str(e)}")
     
     @staticmethod
     def _clean_expired_files(session: Session):
@@ -283,8 +285,6 @@ class FileImportService:
         Raises:
             Exception: 合并失败时抛出异常
         """
-        import os
-        
         # 获取所有块
         blocks = FileMetaService.get_blocks(session, file.fid)
         if blocks:

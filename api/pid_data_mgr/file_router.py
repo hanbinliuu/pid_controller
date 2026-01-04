@@ -11,7 +11,7 @@ from api.pid_data_mgr.block_util import BlockUtil
 from api.pid_data_mgr.file_system_service import FileSystemService
 from api.pid_data_mgr.file_store_service import FileStoreService
 from api.pid_data_mgr.file_db_models import FileStatus
-from core.config import config
+from core.config import Config as config
 from core.database.database import get_db
 from api.pid_data_mgr.file_api_schemas import *
 from api.pid_data_mgr.file_settings import settings

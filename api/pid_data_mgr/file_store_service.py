@@ -92,7 +92,7 @@ class FileStoreService:
             block_names: 文件块名称列表
         """
         # 生成合并后的文件路径
-        merged_file_path_tmp = os.path.join(settings.get_storage_path(), str(file.fid), file.upload_id, ".tmp")
+        merged_file_path_tmp = os.path.join(settings.get_storage_path(), str(file.fid), f"{file.upload_id}.tmp")
 
         # 删除临时文件(可能不存在)
         try:
