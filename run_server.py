@@ -41,31 +41,34 @@ from api.routes.loop_evaluation_router import router as loop_evaluation_router
 from api.routes.cron_task_router import router as cron_task_router
 from api.routes.home_page_route import home_page_router
 from api.routes.dynamic_config_router import router as dynamic_config_router
+from api.routes.device_manage_router import router as device_manage_router
 
 # 导入中间件
-from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware,RequestLoggingMiddleware
+from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware, \
+    RequestLoggingMiddleware
 
 # 导入数据库初始化函数
-from core.database.database import init_database
+from core.database.database import init_database, get_db_session
 # 导入定时任务初始化函数
 from api.tasks import init_cron_tasks, shutdown_cron_tasks
+# 导入动态配置服务
+from api.services.dynamic_config_service import DynamicConfigService
 
-# ... existing code ...
 
 # 配置日志
 def setup_logging():
     """设置日志配置"""
     # 从环境变量获取日志级别，默认为INFO
     log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
-    
+
     # 验证日志级别
     valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
     if log_level not in valid_levels:
         log_level = 'INFO'
-    
+
     # 配置日志格式
     log_format = os.getenv('LOG_FORMAT', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
+
     # 基础日志配置
     logging.basicConfig(
         level=getattr(logging, log_level),
@@ -74,11 +77,11 @@ def setup_logging():
             logging.StreamHandler(sys.stdout)
         ]
     )
-    
+
     # 设置第三方库的日志级别
     logging.getLogger('uvicorn').setLevel(logging.INFO)
     logging.getLogger('fastapi').setLevel(logging.INFO)
-    
+
     # 根据日志级别调整uvicorn的详细程度
     if log_level == 'DEBUG':
         logging.getLogger('uvicorn.access').setLevel(logging.DEBUG)
@@ -88,24 +91,17 @@ def setup_logging():
         logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
         logging.getLogger('fastapi').setLevel(logging.WARNING)
 
-    
     logger = logging.getLogger(__name__)
     return logger
+
 
 # 设置日志
 logger = setup_logging()
 
-# 初始化数据库
-try:
-    init_database()
-    logger.info("数据库初始化成功")
-except Exception as e:
-    logger.error(f"数据库初始化失败: {str(e)}")
-    logger.warning("服务将继续启动，但数据库功能可能不可用")
-
 # ========== 定义 Lifespan 上下文管理器 ==========
 # 需要在创建 FastAPI 应用之前定义
 _cron_tasks_initialized = False
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -114,24 +110,15 @@ async def lifespan(app: FastAPI):
     支持 startup 和 shutdown 事件
     """
     global _cron_tasks_initialized
-    
-    # ========== Startup Event ==========
-    if not _cron_tasks_initialized:
-        try:
-            init_cron_tasks()
-            logger.info("定时任务初始化成功")
-            _cron_tasks_initialized = True
-        except Exception as e:
-            logger.error(f"定时任务初始化失败: {str(e)}")
-            logger.warning("应用将继续运行，但定时任务功能可能不可用")
-    
+
     yield  # 应用主体运行
-    
+
     # ========== Shutdown Event ==========
-    try:
-        shutdown_cron_tasks()
-    except Exception as e:
-        logger.error(f"关闭定时任务失败: {str(e)}")
+    # try:
+    #     shutdown_cron_tasks()
+    # except Exception as e:
+    #     logger.error(f"关闭定时任务失败: {str(e)}")
+
 
 # 创建 FastAPI 应用（使用 lifespan 上下文管理器）
 app = FastAPI(
@@ -140,7 +127,7 @@ app = FastAPI(
     version='1.0.0',
     docs_url=None,  # 禁用默认的docs路由
     redoc_url=None,  # 禁用默认的redoc路由
-    lifespan=lifespan  # 使用 lifespan 上下文管理器
+    # lifespan=lifespan  # 使用 lifespan 上下文管理器
 )
 
 # 挂载静态文件目录
@@ -167,7 +154,6 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-
 # 注册所有路由
 app.include_router(analysis_router, prefix='/api/analysis', tags=['大模型整定'])
 app.include_router(expert_tuning_router, prefix='/api/expert', tags=['专家整定'])
@@ -180,10 +166,11 @@ app.include_router(loop_monitoring_router, prefix='/api/monitoring', tags=['回�
 app.include_router(loop_info_router, tags=['回路信息'])
 app.include_router(device_evaluation_router, tags=['装置评估'])
 app.include_router(loop_evaluation_router, tags=['回路评估'])
-app.include_router(excluded_loop_router, tags=['剔除回路管理'])
+app.include_router(excluded_loop_router, tags=['剮除回路管理'])
 app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
 app.include_router(home_page_router, prefix='/api/home', tags=['首页'])
 app.include_router(dynamic_config_router, tags=['动态配置参数'])
+app.include_router(device_manage_router, tags=['装置管理'])
 
 
 @app.get('/health')
@@ -200,7 +187,8 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs"
     }
-    
+
+
 @app.get("/monitoring")
 async def monitoring_page():
     """回路监控页面"""
@@ -217,6 +205,7 @@ async def custom_swagger_ui_html():
         swagger_css_url="/static/swagger-ui/swagger-ui.css"
     )
 
+
 @app.get("/redoc", include_in_schema=False)
 async def redoc_html():
     return get_redoc_html(
@@ -226,18 +215,46 @@ async def redoc_html():
         redoc_js_url="/static/swagger-ui/swagger-ui.css"
     )
 
-# 添加GZip压缩中间件
-# app.add_middleware(GZipMiddleware, minimum_size=1000)
-
 
 def start_api_server():
     """启动API服务器（纯API服务，不包含后台任务）"""
+    logger.info("=" * 30+" 服务初始化 "+"=" * 30)
+
+    # ========== 初始化操作 ==========
+    # 1.初始化数据库
+    try:
+        logger.info("数据库初始化...")
+        init_database()
+    except Exception as e:
+        logger.error(f"数据库初始化失败: {str(e)}")
+        logger.warning("服务将继续启动，但数据库功能可能不可用")
+    # 2.动态配置参数初始化
+    try:
+        logger.info("动态配置参数初始化...")
+        with get_db_session() as db:
+            result = DynamicConfigService.initialize_fixed_configs(db)
+            logger.info(f"动态配置参数初始化完成: 创建 {result['created_count']} 个, 跳过 {result['skipped_count']} 个")
+    except Exception as e:
+        logger.error(f"动态配置参数初始化失败: {str(e)}")
+        logger.warning("应用将继续运行，但配置可能需要手动创建")
+
+    # 3.初始化装置监控定时任务
+    # try:
+    #     logger.info("性能评估定时任务初始化...")
+    #     init_cron_tasks()
+    #     logger.info("性能评估定时任务初始化成功")
+    # except Exception as e:
+    #     logger.error(f"性能评估定时任务初始化失败: {str(e)}")
+    #     logger.warning("应用将继续运行，但定时任务功能不可用")
+
+    logger.info("服务初始化完成! ")
+
     # 获取日志级别并转换为uvicorn格式
     log_level = os.getenv('LOG_LEVEL', 'INFO').lower()
     # 是否启用热加载（开发环境可设置为True，生产环境应为False）
     enable_reload = os.getenv('ENABLE_RELOAD', 'False').lower() == 'true'
     # 获取worker数量，默认为3
-    workers_env = os.getenv('WORKERS', '1')
+    workers_env = os.getenv('WORKERS', '3')
     workers = int(workers_env) if not enable_reload else 1
 
     logger.info("=" * 60)
@@ -340,7 +357,7 @@ def start_background_worker():
 
         # 终止定时任务
         shutdown_cron_tasks()
-        logger.info("✓ 后台任务已停止")
+        logger.info("✓ 后台定时任务已停止")
         sys.exit(0)
 
     # 注册信号处理器
@@ -352,7 +369,7 @@ def start_background_worker():
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        logger.info("\n收到键盘中断，正在关闭后台任务...")
+        logger.info("\n收到进程中断，正在关闭后台任务...")
         # 终止文件导入进程
         if file_import_process and file_import_process.is_alive():
             file_import_process.terminate()
@@ -413,7 +430,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    print(f"参数：{args}")
+    print(f"启动模式：{args}")
     if args.mode == 'api':
         # 仅启动API服务
         start_api_server()

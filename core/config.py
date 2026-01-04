@@ -59,7 +59,7 @@ _properties = {}
 for _config_file in _config_paths:
     if _config_file.exists():
         _properties = PropertiesLoader.load_properties(str(_config_file))
-        print(f"成功加载配置文件: {_config_file}")
+        # print(f"成功加载配置文件: {_config_file}")
         break
 else:
     print("警告: 未找到配置文件，将使用默认配置")
@@ -171,6 +171,8 @@ class Config:
         'http://model-core-modelling-model-product-infra-system.sit-cloud.ieccloud.hollicube.com'
     )
     MODEL_CORE_TIMEOUT: int = _get_config('model.core.timeout', '30', int)
+    
+
 
     # ==================== PID 数据文件导入配置 ====================
     PID_DATA_FILE_DIR: str = _get_config('pid.data.import.storage.dir', 'data/pid_data')
@@ -283,7 +285,24 @@ class Config:
     LOOP_AUTO_CONTROL_THRESHOLD: float = _get_config('loop.auto_control.threshold', '0.8', float)
     # 平稳率阈值（高于此值认为是平稳回路）
     LOOP_STABLE_THRESHOLD: float = _get_config('loop.stable.threshold', '0.8', float)
-    
+
+    # ==================== 动态参数配置默认值 ====================
+    # 虚拟网关设备ID
+    DEFAULT_VIRTUAL_GATEWAY_DEVICE_ID: str = _get_config(
+        'default.resource.space',
+        ''
+    )
+
+    # 产品（设备模型）ID
+    DEFAULT_PRODUCT_MODEL_ID: str = _get_config(
+        'default.product.model.id',
+        ''
+    )
+    # 默认资源空间
+    DEFAULT_RESOURCE_SPACE: str = _get_config(
+        'default.resource.space',
+        ''
+    )
     @classmethod
     def get_bff_model_config(cls) -> dict:
         """

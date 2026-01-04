@@ -59,7 +59,7 @@ def _acquire_init_lock() -> bool:
         logger.info(f"无法获取定时任务初始化锁，不执行初始化 (PID: {os.getpid()})")
         return False
     except Exception as e:
-        logger.warning(f"获取定时任务初始化锁時發生異常: {str(e)}")
+        logger.warning(f"获取定时任务初始化锁時发生异常: {str(e)}")
         # 确保在任何异常情况下都正确关闭文件描述符
         if _init_lock_fd:
             try:
@@ -101,12 +101,12 @@ def init_cron_tasks():
     
     # 尝试获取初始化锁
     if not _acquire_init_lock():
-        # 没有获取锁，読仁老其他 worker 应该已经进行初始化
+        # 没有获取锁，其他 worker 应该已经进行初始化
         logger.info("不是第一个获取锁的 worker，不执行定时任务初始化")
         return
     
     try:
-        # 检查是否已经初始化（防止重複初始化）
+        # 检查是否已经初始化（防止重复初始化）
         if len(task_manager.tasks) > 0:
             logger.info("定时任务已经初始化过，跳过")
             return
