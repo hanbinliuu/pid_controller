@@ -13,7 +13,7 @@ class Settings(BaseModel):
 
     # 支持的最大文件大小（字节）
     max_file_size: int = Field(
-        default=1 * 1024 * 1024 * 1024,  # 1GB
+        default=100 * 1024 * 1024,  # 100MB
         description="支持的最大文件大小（字节）"
     )
 

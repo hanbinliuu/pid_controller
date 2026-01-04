@@ -247,12 +247,9 @@ class FileMetaService:
         file = FileMetaService.get_file_by_fid(session, fid)
         if not file:
             return False
-        
-        # 标记文件为已删除状态
-        stmt = update(PIDDataFile).where(PIDDataFile.fid == fid).values(
-            status=FileStatus.DELETED
-        )
-        session.exec(stmt)
+
+        # 物理删除文件记录
+        session.delete(file)
         session.commit()
         return True
 

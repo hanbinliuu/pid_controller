@@ -14,7 +14,8 @@ class FileStatus(str, Enum):
     CLEANED = "CLEANED"
     IMPORTING = "IMPORTING"
     IMPORTED = "IMPORTED"
-    FAILED = "FAILED"
+    MERGE_FAILED = "MERGE_FAILED"
+    IMPORT_FAILED = "IMPORT_FAILED"
     DELETED = "DELETED"
 
 
@@ -129,7 +130,7 @@ class PIDDataFile(SQLModel, table=True):
     failed_reason: str = Field(
         default="",
         description="失败原因",
-        max_length=255,
+        max_length=512,
         sa_column_kwargs={
             "comment": "失败原因",
             "nullable": True,

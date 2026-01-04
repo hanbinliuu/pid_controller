@@ -4,6 +4,9 @@
 用于检查目标服务状态和连通性，以及文件的定期维护任务
 """
 import logging
+import os
+import pandas as pd
+
 import requests
 from sqlmodel import Session
 
@@ -100,6 +103,7 @@ class FileImportService:
         1. 清理过期文件（超过保留时间的上传中文件）
         2. 合并已上传完成的文件
         3. 清理已合并的文件块
+        4. 将合并后的文件写入时序数据库
         """
         logger.info("=" * 60)
         logger.info("开始执行PID文件维护任务")
@@ -118,7 +122,10 @@ class FileImportService:
                 # 任务3: 清理已合并的文件块
                 count = FileImportService._clean_merged_file_blocks(session)
                 logger.info(f"清理已合并的文件块完成，共清理 {count} 个文件块")
-                
+
+                # 任务4: 将合并后的文件写入时序数据库
+                FileImportService._import_cleaned_file_to_tsdb(session)
+
             logger.info("PID文件维护任务执行完成")
             
         except Exception as e:
@@ -161,8 +168,6 @@ class FileImportService:
                             # 上传完成
                             FileMetaService.mark_as(session, file.fid, FileStatus.UPLOADED)
                             continue
-
-                    logger.info(f"清理过期文件: {file.name} (fid={file.fid}, upload_id={file.upload_id})")
 
                     if settings.host_port == file.host_port:
                         FileImportService._delete_blocks_and_file(session, file)
@@ -290,7 +295,12 @@ class FileImportService:
         if blocks:
             logger.debug(f"正在合并文件块: {file.name} (fid={file.fid})")
             block_names = [b.block_name for b in blocks]
-            FileStoreService.merge_blocks(file, block_names)
+            try:
+                FileStoreService.merge_blocks(file, block_names)
+            except Exception as e:
+                msg = f"文件块合并失败 (fid={file.fid}): {str(e)}"
+                FileMetaService.mark_as(session, file.fid, FileStatus.MERGE_FAILED, msg[:512])
+                raise e
         FileMetaService.mark_as(session, file.fid, FileStatus.MERGED)
         
         logger.debug(f"文件块合并完成: {file.name} (fid={file.fid})")
@@ -325,6 +335,158 @@ class FileImportService:
         except Exception as e:
             logger.error(f"清理文件块失败 (fid={file.fid}): {str(e)}")
         pass
+
+    @staticmethod
+    def _import_cleaned_file_to_tsdb(session: Session):
+        """
+        将数据文件导入 TSDB
+
+        Args:
+            session: 数据库会话
+        """
+        # 查询所有状态为CLEANED的文件
+        cleaned_files = FileMetaService.get_files_by_status(session, FileStatus.CLEANED)
+
+        if not cleaned_files:
+            logger.info("没有状态为CLEANED的文件需要导入到时序数据库")
+            return
+
+        logger.info(f"发现 {len(cleaned_files)} 个CLEANED状态的文件需要导入到时序数据库")
+
+        for file in cleaned_files:
+            try:
+                # 构建文件路径
+                file_path = FileStoreService.get_block_file_path(file.fid, file.upload_id)
+
+                # 检查文件是否存在
+                if not os.path.exists(file_path):
+                    logger.error(f"文件不存在: {file_path}")
+                    continue
+
+                # 读取CSV文件
+                try:
+                    df = pd.read_csv(file_path)
+                except Exception as e:
+                    msg = f"读取CSV文件失败 (fid={file.fid}): {str(e)}"
+                    FileMetaService.mark_as(session, file.fid, FileStatus.IMPORT_FAILED, msg[:512])
+                    logger.error(msg)
+                    continue
+
+                # 验证表头
+                expected_columns = ["timestamp", "loop_tag", "SV", "PV", "MV", "PB", "TI", "TD"]
+                if list(df.columns) != expected_columns:
+                    msg = f"CSV文件表头不正确 (fid={file.fid})，期望: {expected_columns}，实际: {list(df.columns)}"
+                    FileMetaService.mark_as(session, file.fid, FileStatus.IMPORT_FAILED, msg[:512])
+                    logger.error(msg)
+                    continue
+
+                # 处理数据导入
+                FileImportService._send_data_to_tsdb(session, df)
+
+                # 成功导入后，将文件状态更新为IMPORTED
+                FileMetaService.mark_as(session, file.fid, FileStatus.IMPORTED)
+                logger.info(f"文件成功导入到时序数据库: {file.name} (fid={file.fid})")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"导入文件到时序数据库失败 (fid={file.fid}): {str(e)}")
+            except Exception as e:
+                logger.error(f"导入文件到时序数据库失败 (fid={file.fid}): {str(e)}")
+                # 发生异常时，可以考虑将文件状态更新为导入失败
+                FileMetaService.mark_as(session, file.fid, FileStatus.IMPORT_FAILED, str(e))
+
+        pass
+
+    @staticmethod
+    def _send_data_to_tsdb(session, df):
+        """
+        将DataFrame数据发送到时序数据库
+
+        Args:
+            session: 数据库会话
+            df: 包含PID数据的DataFrame
+            file: 文件对象，用于获取设备信息
+        """
+        # 处理时间戳格式 - 智能识别时间戳单位
+        FileImportService._process_timestamps(df)
+
+        # 按设备（loop_tag）分组处理数据
+        for device_name in df['loop_tag'].unique():
+            device_data = df[df['loop_tag'] == device_name]
+
+            # 按1000条记录为一批次处理数据
+            batch_size = 1000
+            num_records = len(device_data)
+
+            for start_idx in range(0, num_records, batch_size):
+                end_idx = min(start_idx + batch_size, num_records)
+                batch_data = device_data.iloc[start_idx:end_idx]
+
+                # 获取批次的毫秒时间戳
+                timestamps = [ts for ts in batch_data['ts']]
+
+                # 定义测量值和数据类型
+                measurements = ["SV", "PV", "MV", "PB", "TI", "TD"]
+                data_types = ["DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE"]
+
+                # 组装values数组
+                values = []
+                for measurement in measurements:
+                    measurement_values = batch_data[measurement].tolist()
+                    # 处理空值
+                    processed_values = []
+                    for val in measurement_values:
+                        if pd.isna(val):
+                            processed_values.append(None)
+                        else:
+                            processed_values.append(val)
+                    values.append(processed_values)
+
+                # 构建请求体
+                request_body = {
+                    "timestamps": timestamps,
+                    "measurements": measurements,
+                    "data_types": data_types,
+                    "values": values,
+                    "is_aligned": False,
+                    "device": f"{device_name}default"
+                }
+
+                # 发送HTTP请求
+                db_name = settings.db_name
+                url = f"{settings.db_base_url}/api/v1/telemetry/insertTablet?db={db_name}"
+
+                response = requests.post(
+                    url,
+                    json=request_body,
+                    headers={"Content-Type": "application/json"},
+                    timeout=30  # 设置超时时间
+                )
+
+                if response.status_code != 200:
+                    logger.error(f"发送数据到时序数据库失败, 响应: {response.text}")
+
+    @staticmethod
+    def _process_timestamps(df):
+        """
+        处理时间戳格式，将timestamp列转换为毫秒时间戳并存储到ts列
+
+        Args:
+            df: 包含timestamp列的DataFrame
+
+        Returns:
+            处理后的时间戳DataFrame
+        """
+        # 处理timestamp列，将其转换为毫秒时间戳
+        processed_timestamps = []
+
+        for ts_str in df['timestamp']:
+            # 使用pandas解析时间戳，支持 "2026-01-04 15:20:30.000" 和 "2026-01-04 15:20:30" 两种格式
+            parsed_ts = pd.to_datetime(ts_str).tz_localize('Asia/Shanghai')
+            # 转换为毫秒时间戳
+            timestamp_ms = int(parsed_ts.timestamp() * 1000)
+            processed_timestamps.append(timestamp_ms)
+
+        # 添加新的ts列（毫秒时间戳）
+        df['ts'] = processed_timestamps
 
     @staticmethod
     def run_import():

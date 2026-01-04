@@ -121,8 +121,8 @@ def split_and_upload_file(file_path: str, base_url: str, chunk_size: int = 1024*
 if __name__ == "__main__":
     # 配置参数
     # 替换为你要上传的文件路径
-    # file_to_upload = "D:/AAPL.csv"
-    file_to_upload = "D:/杂项/timescaledb/tutorial_sample_tick.csv"
+    file_to_upload = "D:/pid_test_data.csv"
+    # file_to_upload = "D:/杂项/timescaledb/tutorial_sample_tick.csv"
     server_base_url = "http://127.0.0.1:8001"  # 替换为你的服务器地址
     chunk_size = 1024 * 1024  # 1MB per chunk
 
