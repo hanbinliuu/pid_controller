@@ -122,3 +122,4 @@ class DynamicConfig(SQLModel, table=True):
     def __repr__(self) -> str:
         return f"<DynamicConfig(id={self.id}, config_key={self.config_key}, config_group={self.config_group})>"
 
+

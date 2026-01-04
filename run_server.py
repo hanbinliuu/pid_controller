@@ -17,6 +17,8 @@ from fastapi.openapi.docs import (
 )
 from fastapi.responses import FileResponse
 
+from core.config import Config
+
 # 添加项目根目录到Python路径
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
@@ -240,7 +242,7 @@ if __name__ == "__main__":
     #     workers = 1
     
     logger.info("启动PID整定软件 API服务器...")
-    logger.info("API文档地址: http://localhost:8001/docs")
+    logger.info(f"API文档地址: http://localhost:{Config.SERVER_PORT}/docs")
     logger.info(f"Uvicorn日志级别: {log_level}")
     logger.info(f"热加载状态: {'启用' if enable_reload else '禁用'}")
     logger.info(f"Worker数量: {workers}")
@@ -258,7 +260,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "run_server:app",
         host="0.0.0.0", 
-        port=8001, 
+        port=Config.SERVER_PORT,
         reload=enable_reload,
         workers=workers,
         log_level=log_level

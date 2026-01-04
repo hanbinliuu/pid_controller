@@ -7,7 +7,8 @@
 log.level=INFO
 # 日志格式
 log.format=%(asctime)s - %(name)s - %(levelname)s - %(message)s
-
+# 服务端口
+server.port=8001
 # ==================== TSDB时序数据库配置 ====================
 # TSDB服务地址
 tsdb.base_url=http://tsdb-select-infra-system.sit-cloud.ieccloud.hollicube.com
@@ -61,6 +62,12 @@ bff.model.pid_point.pb=PB
 bff.model.pid_point.ti=TI
 bff.model.pid_point.td=TD
 bff.model.pid_point.auto=AUTO
+
+# ==================== 模型核心建模配置 ====================
+# 模型核心建模服务地址
+model.core.base_url=http://model-core-modelling-model-product-infra-system.sit-cloud.ieccloud.hollicube.com
+# 请求超时时间（秒）
+model.core.timeout=30
 
 # ==================== 定时任务配置 ====================
 # 启用回路性能计算定时任务

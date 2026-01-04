@@ -18,6 +18,8 @@ from fastapi.openapi.docs import (
 )
 from fastapi.responses import FileResponse
 
+from core.config import Config
+
 # 添加项目根目录到Python路径
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
@@ -224,7 +226,7 @@ def start_api_server():
     uvicorn.run(
         "run_server_ex:app",
         host="0.0.0.0",
-        port=8001,
+        port=Config.SERVER_PORT,
         reload=enable_reload,
         workers=workers,
         log_level=log_level

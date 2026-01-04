@@ -109,6 +109,7 @@ class Config:
         'log.format',
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+    SERVER_PORT: int = _get_config('server.port', '8001',int)
     
     # ==================== TSDB配置 ====================
     TSDB_BASE_URL: str = _get_config(
@@ -163,6 +164,13 @@ class Config:
         'bff.model.device_model_uri',
         '/system/401'
     )
+
+    # ==================== 模型核心建模配置 ====================
+    MODEL_CORE_BASE_URL: str = _get_config(
+        'model.core.base_url',
+        'http://model-core-modelling-model-product-infra-system.sit-cloud.ieccloud.hollicube.com'
+    )
+    MODEL_CORE_TIMEOUT: int = _get_config('model.core.timeout', '30', int)
 
     # ==================== PID 数据文件导入配置 ====================
     PID_DATA_FILE_DIR: str = _get_config('pid.data.import.storage.dir', 'data/pid_data')
@@ -324,6 +332,19 @@ class Config:
         }
     
     @classmethod
+    def get_model_core_config(cls) -> dict:
+        """
+        获取模型核心建模相关配置
+        
+        Returns:
+            包含模型核心配置的字典
+        """
+        return {
+            'base_url': cls.MODEL_CORE_BASE_URL,
+            'timeout': cls.MODEL_CORE_TIMEOUT
+        }
+    
+    @classmethod
     def display_config(cls):
         """打印当前配置（隐藏敏感信息）"""
         print("=" * 60)
@@ -333,6 +354,7 @@ class Config:
         print(f"TSDB_BASE_URL: {cls.TSDB_BASE_URL}")
         print(f"BFF_MODEL_BASE_URL: {cls.BFF_MODEL_BASE_URL}")
         print(f"BFF_MODEL_LOOP_URI: {cls.BFF_MODEL_DEFULT_LOOP_URI}")
+        print(f"MODEL_CORE_BASE_URL: {cls.MODEL_CORE_BASE_URL}")
         print(f"WORKFLOW_BASE_URL: {cls.WORKFLOW_BASE_URL}")
         print("=" * 60)
 
@@ -353,3 +375,6 @@ if __name__ == "__main__":
     
     print("\n工作流配置:")
     print(Config.get_workflow_config())
+    
+    print("\n模型核心配置:")
+    print(Config.get_model_core_config())
