@@ -63,9 +63,13 @@ class ModelCoreClient:
     DEFAULT_BASE_URL = Config.MODEL_CORE_BASE_URL
     DEFAULT_TIMEOUT = Config.MODEL_CORE_TIMEOUT
     # 接口路径（固定路径，不需要配置）
+    #装置创建
     DRAG_TO_WITH_ATTRIBUTES_PATH = "/model/modelling/drag/dragToWithAttributes"
+    #文件夹更新
     FOLDER_UPDATE_PATH = "/model/modelling/folder/update"
+    #节点删除
     TREE_DELETE_PATH = "/model/modelling/tree/delete"
+    #工程列表
     PROJECT_LIST_PATH = "/model/modelling/project/list"
 
     def __init__(self, base_url: Optional[str] = None, timeout: int = None):
@@ -101,7 +105,7 @@ class ModelCoreClient:
             table_name: str = ""
     ) -> Dict[str, Any]:
         """
-        拖拽到目标位置并设置属性
+        拖拽到目标位置并设置属性(创建对象)
         
         Args:
             creator: 创建者
@@ -114,7 +118,17 @@ class ModelCoreClient:
             table_name: 表名，默认为空字符串
             
         Returns:
-            接口响应结果
+            接口响应结果:
+            {
+                "success": true,
+                "message": "操作成功",
+                "result": {
+                    "browseName": null,
+                    "displayName": null,
+                    "uri": "/pid_zd/eb65b27e4ff94a4da9a82d577f5cf3d9"
+                },
+                "code": 0
+            }
             
         Raises:
             requests.exceptions.RequestException: 请求失败时抛出

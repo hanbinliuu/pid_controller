@@ -59,7 +59,7 @@ _properties = {}
 for _config_file in _config_paths:
     if _config_file.exists():
         _properties = PropertiesLoader.load_properties(str(_config_file))
-        print(f"成功加载配置文件: {_config_file}")
+        # print(f"成功加载配置文件: {_config_file}")
         break
 else:
     print("警告: 未找到配置文件，将使用默认配置")

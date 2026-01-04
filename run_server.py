@@ -41,6 +41,7 @@ from api.routes.loop_evaluation_router import router as loop_evaluation_router
 from api.routes.cron_task_router import router as cron_task_router
 from api.routes.home_page_route import home_page_router
 from api.routes.dynamic_config_router import router as dynamic_config_router
+from api.routes.device_manage_router import router as device_manage_router
 
 # 导入中间件
 from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware,RequestLoggingMiddleware
@@ -180,10 +181,11 @@ app.include_router(loop_monitoring_router, prefix='/api/monitoring', tags=['回�
 app.include_router(loop_info_router, tags=['回路信息'])
 app.include_router(device_evaluation_router, tags=['装置评估'])
 app.include_router(loop_evaluation_router, tags=['回路评估'])
-app.include_router(excluded_loop_router, tags=['剔除回路管理'])
+app.include_router(excluded_loop_router, tags=['剮除回路管理'])
 app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
 app.include_router(home_page_router, prefix='/api/home', tags=['首页'])
 app.include_router(dynamic_config_router, tags=['动态配置参数'])
+app.include_router(device_manage_router, tags=['装置管理'])
 
 
 @app.get('/health')
@@ -237,7 +239,7 @@ def start_api_server():
     # 是否启用热加载（开发环境可设置为True，生产环境应为False）
     enable_reload = os.getenv('ENABLE_RELOAD', 'False').lower() == 'true'
     # 获取worker数量，默认为3
-    workers_env = os.getenv('WORKERS', '1')
+    workers_env = os.getenv('WORKERS', '3')
     workers = int(workers_env) if not enable_reload else 1
 
     logger.info("=" * 60)
@@ -315,10 +317,10 @@ def start_background_worker():
         sys.exit(1)
 
     # 启动PID文件导入服务
-    file_import_process = _start_file_import_service()
-    if file_import_process is None:
-        logger.error("PID文件导入服务启动失败，退出进程")
-        sys.exit(1)
+    # file_import_process = _start_file_import_service()
+    # if file_import_process is None:
+    #     logger.error("PID文件导入服务启动失败，退出进程")
+    #     sys.exit(1)
 
     logger.info("=" * 60)
     logger.info("后台任务进程正在运行...")
@@ -330,17 +332,17 @@ def start_background_worker():
         logger.info("\n收到停止信号，正在关闭后台任务...")
 
         # 终止文件导入进程
-        if 'file_import_process' in locals() and file_import_process.is_alive():
-            file_import_process.terminate()
-            file_import_process.join(timeout=5)
-            if file_import_process.is_alive():
-                logger.warning("PID文件导入进程未能正常停止，强制终止")
-                file_import_process.kill()
-            logger.info("✓ PID文件导入进程已停止")
+        # if 'file_import_process' in locals() and file_import_process.is_alive():
+        #     file_import_process.terminate()
+        #     file_import_process.join(timeout=5)
+        #     if file_import_process.is_alive():
+        #         logger.warning("PID文件导入进程未能正常停止，强制终止")
+        #         file_import_process.kill()
+        #     logger.info("✓ PID文件导入进程已停止")
 
         # 终止定时任务
         shutdown_cron_tasks()
-        logger.info("✓ 后台任务已停止")
+        logger.info("✓ 后台定时任务已停止")
         sys.exit(0)
 
     # 注册信号处理器
@@ -354,13 +356,13 @@ def start_background_worker():
     except KeyboardInterrupt:
         logger.info("\n收到键盘中断，正在关闭后台任务...")
         # 终止文件导入进程
-        if file_import_process and file_import_process.is_alive():
-            file_import_process.terminate()
-            file_import_process.join(timeout=5)
-            if file_import_process.is_alive():
-                logger.warning("PID文件导入进程未能正常停止，强制终止")
-                file_import_process.kill()
-            logger.info("✓ PID文件导入进程已停止")
+        # if file_import_process and file_import_process.is_alive():
+        #     file_import_process.terminate()
+        #     file_import_process.join(timeout=5)
+        #     if file_import_process.is_alive():
+        #         logger.warning("PID文件导入进程未能正常停止，强制终止")
+        #         file_import_process.kill()
+        #     logger.info("✓ PID文件导入进程已停止")
 
         shutdown_cron_tasks()
         logger.info("✓ 后台任务已停止")
@@ -408,12 +410,12 @@ if __name__ == "__main__":
         '--mode',
         type=str,
         choices=['api', 'worker', 'all'],
-        default='api',
+        default='all',
         help='启动模式: api=仅API服务, worker=仅后台任务, all=全部启动 (默认: all)'
     )
 
     args = parser.parse_args()
-    print(f"参数：{args}")
+    print(f"启动模式：{args}")
     if args.mode == 'api':
         # 仅启动API服务
         start_api_server()
