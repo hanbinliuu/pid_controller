@@ -336,15 +336,15 @@ class FileImportService:
 
         # 设置主机端口
         host = Addressing.get_ipv4_address()
-        port = 8001
+        port = config.SERVER_PORT
         settings.host_port = Addressing.create_host_and_port_str(host, port)
 
         # 设置存储目录
         settings.storage_dir = config.PID_DATA_FILE_DIR
 
         # 设置数据库信息
-        settings.db_url = config.DB_URL
-        settings.db_name = config.DB_NAME
+        settings.db_base_url = config.PID_DATA_DB_BASE_URL
+        settings.db_name = config.PID_DATA_DB_NAME
 
         # 输出配置信息
         logger.info(f"PID文件导入配置信息: {settings}")

@@ -21,9 +21,10 @@ class FileStoreService:
             Exception: 写入失败时抛出异常
         """
         block_file_path = FileStoreService.get_block_file_path(fid, block_name)
-        
-        # 确保目录存在
-        os.makedirs(os.path.dirname(block_file_path), exist_ok=True)
+
+        # 确保目录存在 - 获取文件所在目录的路径
+        directory_path = os.path.dirname(block_file_path)
+        os.makedirs(directory_path, exist_ok=True)
         
         # 写入文件块
         with open(block_file_path, 'wb') as block_file:

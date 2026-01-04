@@ -11,10 +11,14 @@ from api.pid_data_mgr.block_util import BlockUtil
 from api.pid_data_mgr.file_system_service import FileSystemService
 from api.pid_data_mgr.file_store_service import FileStoreService
 from api.pid_data_mgr.file_db_models import FileStatus
+from core.config import config
 from core.database.database import get_db
 from api.pid_data_mgr.file_api_schemas import *
 from api.pid_data_mgr.file_settings import settings
 
+
+# 设置存储目录
+settings.storage_dir = config.PID_DATA_FILE_DIR
 
 pid_data_file_router = APIRouter(prefix="/api/v1/history/data", tags=["PID文件上传"])
 
