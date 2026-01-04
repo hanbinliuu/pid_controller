@@ -1,0 +1,17 @@
+### 创建文件
+POST http://127.0.0.1:8001/api/v1/history/data/files
+Content-Type: application/json
+
+{
+  "file_name": "Manning.Pipeline.as.Code.2021.9.csv",
+  "file_size": 100,
+  "desc": "Pipeline as Code"
+}
+
+
+### 获取文件列表
+GET http://127.0.0.1:8001/api/v1/history/data/files
+
+
+### 删除文件
+DELETE http://127.0.0.1:8001/api/v1/history/data/files/1
