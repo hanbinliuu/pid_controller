@@ -39,11 +39,6 @@ class Settings(BaseModel):
         description="服务监听的host和port"
     )
 
-    queue: mp.Queue = Field(
-        default=mp.Queue(),
-        description="任务队列"
-    )
-
     db_base_url: str = Field(
         default="",
         description="数据库连接地址"
