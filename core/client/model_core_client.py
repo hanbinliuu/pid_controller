@@ -159,9 +159,9 @@ class ModelCoreClient:
         }
         
         try:
-            logger.info(f"调用拖拽接口，目标URI: {target_uri}")
-            logger.debug(f"请求URL: {url}")
-            logger.debug(f"请求体: {payload}")
+            # logger.info(f"调用拖拽接口，目标URI: {target_uri}")
+            # logger.debug(f"请求URL: {url}")
+            # logger.debug(f"请求体: {payload}")
             
             response = self.session.post(
                 url,
@@ -171,8 +171,6 @@ class ModelCoreClient:
             
             response.raise_for_status()
             result = response.json()
-            
-            logger.info(f"拖拽接口调用成功")
             return result
             
         except requests.exceptions.Timeout:

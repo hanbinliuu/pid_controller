@@ -130,12 +130,9 @@ class BFFService:
         try:
             with BFFModelClient() as client:
                 result = client.get_next_level_submodel(identifier)
-                
-                logger.info(f"查询下一级子模型成功，标识符: {identifier}, 数量: {result.get('total', 0)}")
-                
                 return result
         except Exception as e:
-            logger.error(f"查询下一级子模型失败: {str(e)}")
+            logger.error(f"查询子模型列表失败: {str(e)}")
             raise
 
     @staticmethod

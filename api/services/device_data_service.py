@@ -15,7 +15,7 @@ from pydantic import Field, BaseModel
 
 from core.agent.tools import process_query_tsdb_data_interpolated, process_query_tsdb_data_raw
 from core.client.bff_model_client import BFFModelClient
-from core.client.real_tsdb_client import query_raw_data, get_default_database
+from core.client.select_tsdb_client import query_raw_data, get_default_database
 from api.commond.time_util import parse_time_to_milliseconds
 from api.middleware.exceptions import RuntimeException
 

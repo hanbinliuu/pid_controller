@@ -163,20 +163,6 @@ class DynamicConfigService:
         return DynamicConfigDAO.get_by_key(db, config_key)
 
     @staticmethod
-    def get_config_by_id(db: Session, config_id: str) -> Optional[DynamicConfig]:
-        """
-        根据ID获取配置
-
-        Args:
-            db: 数据库会话
-            config_id: 配置ID
-
-        Returns:
-            Optional[DynamicConfig]: 配置对象
-        """
-        return DynamicConfigDAO.get_by_id(db, config_id)
-
-    @staticmethod
     def get_configs_by_group(db: Session, config_group: str) -> List[DynamicConfig]:
         """
         根据配置分组获取配置列表
@@ -202,9 +188,22 @@ class DynamicConfigService:
             List[DynamicConfig]: 所有配置列表
         """
         return DynamicConfigDAO.get_all(db)
+    @staticmethod
+    def get_all_configs_map(db: Session) -> Dict[str, str]:
+        """
+        获取所有配置
+
+        Args:
+            db: 数据库会话
+
+        Returns:
+            List[DynamicConfig]: 所有配置列表
+        """
+        configs = DynamicConfigDAO.get_all(db)
+        return {config.config_key: config.config_value for config in configs}
 
     @staticmethod
-    def list_configs(
+    def list_configs_page(
         db: Session,
         config_key: Optional[str] = None,
         config_group: Optional[str] = None,

@@ -19,7 +19,7 @@ from core.algorithm.ktl_simulator import KTLSimulator
 from api.services.expert_tuning_service import ExpertTuningService
 from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
 from core.client.bff_model_client import BFFModelClient
-from core.client.real_tsdb_client import get_default_database
+from core.client.select_tsdb_client import get_default_database
 from core.config import Config
 from core.utils.idass import UserInfo, get_current_user
 from core.utils.model_type import ModelType

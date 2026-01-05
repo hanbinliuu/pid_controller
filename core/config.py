@@ -5,7 +5,7 @@
 """
 
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Type
 from pathlib import Path
 
 
@@ -112,13 +112,18 @@ class Config:
     SERVER_PORT: int = _get_config('server.port', '8001',int)
     
     # ==================== TSDB配置 ====================
-    TSDB_BASE_URL: str = _get_config(
-        'tsdb.base_url',
+    TSDB_SELECT_BASE_URL: str = _get_config(
+        'tsdb.select_base_url',
         'http://tsdb-select-infra-system.sit-cloud.ieccloud.hollicube.com'
     )
+    TSDB_CORE_BASE_URL: str = _get_config(
+        'tsdb.core_base_url',
+        'http://core-iotda-infra-system.sit-cloud.ieccloud.hollicube.com'
+    )
+
     TSDB_TIMEOUT: int = _get_config('tsdb.timeout', '30', int)
     TSDB_MAX_RETRIES: int = _get_config('tsdb.max_retries', '3', int)
-    TSDB_AUTH_TOKEN: Optional[str] = _get_config('tsdb.auth_token', None)
+    TSDB_AUTH_TOKEN: Optional[str] = _get_config('tsdb.auth_token', 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJyZWFsTmFtZSI6IueuoeeQhuWRmCIsImF1ZCI6WyJvYXV0aDItcmVzb3VyY2UiXSwidXNlcl9uYW1lIjoicm9vdCIsInNjb3BlIjpbImFsbCJdLCJyb2xlcyI6WyJhZG1pbiJdLCJleHAiOjE3NjcxNzI2NjAsInJlc291cmNlX2lkcyI6WyJvYXV0aDItcmVzb3VyY2UiXSwidXNlcklkIjoiMTI1ODk1NzIxOTI1MTAzMjA2NiIsImp0aSI6IjFlYmZiYjAxLTE4OGMtNDVmYy1iODdhLTY4ZDdiOWU5NGM1MSIsImNsaWVudF9pZCI6ImluZnJhLXN5c3RlbV9tb2RlbC1jb3JlLXRvb2wiLCJ1c2VybmFtZSI6InJvb3QiLCJhdHRycyI6e319.Ny7gq7HWE5kx1zi6BHfkodsAZ_jLs18Is1qPswwx32aEYlxL90l6aaGf8C5SCEtWMxZvP1oe68HH8EJxOabBbBQTsjhAid-P5auoQyw5t3IMJM9eg8Pm1p9e4Aa9qjXB64mRcVc3Mr6m52KMjiGfTz0bYixTCOogebhfufGWhdNBxrXi2pfKCU6Pg9DMGgygKSoPTAOEugdIPtlAeIgyvO8cX2fyKsNk-x_8b3dtJf0VmRI66LIxne2u0fJX2PmuqD5XbBYI0fhrMxQ5JF8NbFaM6Yegg4VMkb7npCkvDe-D4UIgk-fhpxx3oc4avKXClqsjQBlgqKhdYS7LrfwmDA')
     DEFAULT_TSDB_DATABASE: str = _get_config('tsdb.database', 'platform')
 
 
@@ -165,13 +170,21 @@ class Config:
         '/system/401'
     )
 
-    # ==================== 模型核心建模配置 ====================
+    # ==================== 模型建模相关配置 ====================
     MODEL_CORE_BASE_URL: str = _get_config(
         'model.core.base_url',
         'http://model-core-modelling-model-product-infra-system.sit-cloud.ieccloud.hollicube.com'
     )
     MODEL_CORE_TIMEOUT: int = _get_config('model.core.timeout', '30', int)
-    
+    # BFF装置模型URI（通用文件夹类型）
+    MODEL_DEFULT_PROJECT_URI: str = _get_config(
+        'model.default.project.uri',
+        '/pid_zd/root'
+    )
+    MODEL_DATASOURCE_BASE_URL: str = _get_config(
+        'model.datasource.base_url',
+        'http://model-core-datasource-model-product-infra-system.sit-cloud.ieccloud.hollicube.com'
+    )
 
 
     # ==================== PID 数据文件导入配置 ====================
@@ -289,7 +302,7 @@ class Config:
     # ==================== 动态参数配置默认值 ====================
     # 虚拟网关设备ID
     DEFAULT_VIRTUAL_GATEWAY_DEVICE_ID: str = _get_config(
-        'default.resource.space',
+        'default.virtual.gateway.device_id',
         ''
     )
 
@@ -327,7 +340,7 @@ class Config:
             包含TSDB配置的字典
         """
         return {
-            'base_url': cls.TSDB_BASE_URL,
+            'base_url': cls.TSDB_SELECT_BASE_URL,
             'timeout': cls.TSDB_TIMEOUT,
             'max_retries': cls.TSDB_MAX_RETRIES,
             'auth_token': cls.TSDB_AUTH_TOKEN,
@@ -370,12 +383,15 @@ class Config:
         print("当前配置:")
         print("=" * 60)
         print(f"LOG_LEVEL: {cls.LOG_LEVEL}")
-        print(f"TSDB_BASE_URL: {cls.TSDB_BASE_URL}")
+        print(f"TSDB_BASE_URL: {cls.TSDB_SELECT_BASE_URL}")
         print(f"BFF_MODEL_BASE_URL: {cls.BFF_MODEL_BASE_URL}")
         print(f"BFF_MODEL_LOOP_URI: {cls.BFF_MODEL_DEFULT_LOOP_URI}")
         print(f"MODEL_CORE_BASE_URL: {cls.MODEL_CORE_BASE_URL}")
         print(f"WORKFLOW_BASE_URL: {cls.WORKFLOW_BASE_URL}")
         print("=" * 60)
+    @classmethod
+    def get_config(cls, key: str, default: Any = None, type_: Type = str) -> Any:
+        return _get_config(key, default, type_)
 
 
 # 创建全局配置实例

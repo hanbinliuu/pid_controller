@@ -13,7 +13,7 @@ import matplotlib
 from api.commond.time_util import parse_time_to_milliseconds
 from core.algorithm.detector import StabilityDetector
 from core.client.bff_model_client import BFFModelClient
-from core.client.real_tsdb_client import query_raw_data, query_read_interpolated
+from core.client.select_tsdb_client import query_raw_data, query_read_interpolated
 from core.utils import pid_converter
 from core.utils.model_type import ModelType
 from core.utils.pid_converter import process_lists_optimized

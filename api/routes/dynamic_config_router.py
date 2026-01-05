@@ -133,7 +133,7 @@ async def list_configs(
     - config_group: 配置分组精确匹配
     """
     try:
-        result = DynamicConfigService.list_configs(
+        result = DynamicConfigService.list_configs_page(
             db,
             config_key=config_key,
             config_group=config_group,

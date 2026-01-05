@@ -98,11 +98,11 @@ def init_cron_tasks():
     其他 worker 会与待，需要下次启动时重新尝试
     """
     from core.config import Config
-    
+    logger.info("性能评估定时任务初始化...")
     # 尝试获取初始化锁
     if not _acquire_init_lock():
         # 没有获取锁，其他 worker 应该已经进行初始化
-        logger.info("不是第一个获取锁的 worker，不执行定时任务初始化")
+        logger.info("未获取到任务锁，不执行定时任务初始化")
         return
     
     try:
@@ -110,10 +110,9 @@ def init_cron_tasks():
         if len(task_manager.tasks) > 0:
             logger.info("定时任务已经初始化过，跳过")
             return
-        
-        logger.info(f"初始化定时任务... (多进程，使用了决策锁)")
-        
+
         try:
+            logger.info(f"初始化定时任务... (多进程，使用了决策锁)")
             # 注册模型树加载任务
             if Config.TASK_LOAD_MODEL_TREE_ENABLE:
                 logger.info(f"注册模型树加载任务, Cron: {Config.TASK_LOAD_MODEL_TREE_CRON}")

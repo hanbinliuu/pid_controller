@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import logging
 
 from api.commond.time_util import format_time_to_string
-from core.client.tsdb_data_source import DataPoint, TSDBDataSource
+from core.client.bean.tsdb_data_source import DataPoint, TSDBDataSource
 from core.config import Config
 
 # 设置日志
@@ -69,7 +69,7 @@ class RealTSDBDataSource(TSDBDataSource):
     def _load_config_from_env(self) -> TSDBConfig:
         """从环境变量加载配置"""
         # 优先从环境变量读取
-        base_url = Config.TSDB_BASE_URL
+        base_url = Config.TSDB_SELECT_BASE_URL
         
         # 如果环境变量没有设置，使用默认配置
         if not base_url:
@@ -468,7 +468,7 @@ class TSDBClientFactory:
             RealTSDBDataSource: 实际TSDB数据源
         """
         if base_url is None:
-            base_url = Config.TSDB_BASE_URL
+            base_url = Config.TSDB_SELECT_BASE_URL
         
         config = TSDBConfig(
             base_url=base_url,

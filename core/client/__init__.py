@@ -8,7 +8,13 @@ from .model_core_client import (
     list_projects,
 )
 from .bff_model_client import BFFModelClient
-from .real_tsdb_client import RealTSDBDataSource
+from .select_tsdb_client import RealTSDBDataSource
+from .iotda_client import IoTDAClient, CreateSubDeviceRequest
+from .model_datasource_client import (
+    ModelDataSourceClient,
+    DeviceBindInfo,
+    BatchBindDeviceRequest
+)
 
 __all__ = [
     'ModelCoreClient',
@@ -19,5 +25,10 @@ __all__ = [
     'delete_tree',
     'list_projects',
     'BFFModelClient',
-    'RealTSDBDataSource'
+    'RealTSDBDataSource',
+    'IoTDAClient',
+    'CreateSubDeviceRequest',
+    'ModelDataSourceClient',
+    'DeviceBindInfo',
+    'BatchBindDeviceRequest'
 ]

@@ -22,7 +22,7 @@ from core.algorithm.model_type import ModelSelector
 from core.utils import PIDConverter
 from core.utils.model_type import ModelType
 from core.client.bff_model_client import BFFModelClient
-from core.client.real_tsdb_client import get_default_database
+from core.client.select_tsdb_client import get_default_database
 from core.database.database import get_db_session
 from api.commond.time_util import parse_time_to_milliseconds, format_time_to_string
 from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier

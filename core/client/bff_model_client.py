@@ -162,6 +162,7 @@ class BFFModelClient:
     DEFAULT_GET_NEXT_LEVEL_SUBMODEL_PATH = "/bff/v2/model/getNextLevelSubModel"
     DEFAULT_QUERY_NODES_BY_URIS_PATH = "/bff/aggquery/v2/model/queryNodesByUris"
     DEFAULT_QUERY_INSTANCE_TREE_PATH = "/bff/v2/instance/searchByModels"
+    DEFAULT_IDENTIFIER_TO_URI_PATH = "/bff/v2/identifier/toUri"
     DEFAULT_TIMEOUT = Config.BFF_MODEL_TIMEOUT
     DEFAULT_LOOP_URI = Config.BFF_MODEL_DEFULT_LOOP_URI
     DEFAULT_POINT_PATH = Config.BFF_MODEL_POINT_PATH
@@ -1060,6 +1061,84 @@ class BFFModelClient:
             raise
         except requests.exceptions.RequestException as e:
             logger.error(f"BFF节点查询失败: {str(e)}")
+            raise
+
+    def identifier_to_uri(
+            self,
+            identifiers: list[str]
+    ) -> List[str]:
+        """
+        将标识符路径转换为URI
+        
+        Args:
+            identifiers: 标识符(支持uri，uriPath，aid，aidPath及fullPath)路径列表，如 ["/pid_zd/554fa2015bfd4104886dd6cbe64b8b3b/loop_state_parameters"]
+            return_map: 是否返回Map格式，默认True。如果为True，返回 {identifier: uri} 映射；如果为False，返回原始响应
+        
+        Returns:
+            当 return_map=True 时，返回 Map 格式:
+            {
+                '/pid_zd/554fa2015bfd4104886dd6cbe64b8b3b/loop_state_parameters': '/pid_zd/xxx',
+                '/pid_zd/abc123/temp_params': '/pid_zd/yyy'
+            }
+            
+            当 return_map=False 时，返回原始响应:
+            {
+              "code": 200,
+              "subCode": null,
+              "message": "请求正常",
+              "result": [
+                "/pid_zd/f8358af79c4e4a4db3a58b41d3220a6f"
+              ],
+              "timestamp": 1767594675539
+            }
+        
+        Example:
+            ["/pid_zd/6779c45763e2492c88d10dbb4376c8cb"]
+        """
+        url = f"{self.base_url}{self.DEFAULT_IDENTIFIER_TO_URI_PATH}"
+        
+        try:
+            logger.info(f"将标识符转换为URI，数量: {len(identifiers)}")
+            logger.debug(f"请求URL: {url}")
+            logger.debug(f"标识符列表: {identifiers[:3]}..." if len(identifiers) > 3 else f"标识符列表: {identifiers}")
+            
+            response = self.session.post(
+                url,
+                json=identifiers,
+                timeout=self.timeout
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            # 检查响应状态（code为200表示成功）
+            if result.get('code') != 200:
+                logger.error(f"BFF标识符转换异常: {result.get('message')}")
+                # 如果失败，返回空字典或原始响应
+                return []
+            
+            # 根据参数返回Map格式或原始响应
+            # result 是 URI 字符串数组，与 identifiers 一一对应
+            result_uris = result.get('result', [])
+            return result_uris
+            # identifier_uri_map = {}
+            # # 按照顺序对应
+            # for i, identifier in enumerate(identifiers):
+            #     if i < len(result_uris):
+            #         uri = result_uris[i]
+            #         if uri:  # 确保URI不为空
+            #             identifier_uri_map[identifier] = uri
+            #     else:
+            #         logger.warning(f"标识符 {identifier} 没有对应的URI")
+            #
+            # logger.debug(f"返回Map格式，键值对数量: {len(identifier_uri_map)}")
+            # return identifier_uri_map
+            
+        except requests.exceptions.Timeout:
+            logger.error(f"请求超时（{self.timeout}秒）")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"BFF标识符转换失败: {str(e)}")
             raise
 
     def query_instance_tree(

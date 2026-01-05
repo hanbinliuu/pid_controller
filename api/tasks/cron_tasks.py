@@ -237,6 +237,7 @@ class CronTask:
                 if self.is_running:
                     # 在多worker环境下尝试获取分布式锁
                     if not self._acquire_multiprocess_lock():
+                        logger.info(f"任务 [{self.task_id}] 未获取分布式锁 (PID: {self.process_id})，跳过执行")
                         continue  # 无法获取锁，跳过本次执行
                     
                     try:

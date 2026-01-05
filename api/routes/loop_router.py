@@ -40,6 +40,24 @@ class PointValuesRequest(BaseModel):
         }
 
 
+class InstantiateLoopRequest(BaseModel):
+    """回路实例化请求模型"""
+    loop_type: str = Field(..., description="回路类型，如：流量、温度、压力等")
+    loop_display_name: str = Field(..., description="回路显示名称")
+    loop_browse_name: str = Field(..., description="回路标识（唯一）")
+    parent_uri: str = Field(..., description="父节点URI（装置URI）")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "loop_type": "流量",
+                "loop_display_name": "FIC101A流量控制回路",
+                "loop_browse_name": "FIC101A",
+                "parent_uri": "/pid_zd/1f59615dc9d44b4388e29829f95a49c6"
+            }
+        }
+
+
 class LoopValuesResponse(BaseModel):
     """回路测点值响应模型"""
     PB: Optional[float] = Field(None, description="比例带")
@@ -312,4 +330,69 @@ async def get_next_loop_type(
         raise HTTPException(
             status_code=500,
             detail=f"查询回路子类型失败: {str(e)}"
+        )
+
+
+@router.post(
+    "/instantiate-loop",
+    summary="实例化回路",
+    operation_id="实例化回路",
+    description="根据回路类型创建一个新的回路实例",
+    response_model=Dict[str, Any]
+)
+async def instantiate_loop(
+        request: InstantiateLoopRequest
+) -> Dict[str, Any]:
+    """
+    实例化回路
+    
+    功能说明：
+    - 根据回路类型（流量、温度等）创建回路实例
+    - 在指定的父节点（装置）下创建回路
+    - 返回创建结果和新回路的URI
+    
+    请求参数：
+    - loop_type: 回路类型，如"流量"、"温度"、"压力"等
+    - loop_display_name: 回路的显示名称
+    - loop_browse_name: 回路的浏览名称（唯一标识）
+    - parent_uri: 父节点URI（通常是装置URI）
+    
+    返回格式：
+    {
+        "success": true,
+        "message": "操作成功",
+        "result": {
+            "uri": "/pid_zd/xxx",
+            "browseName": "FIC101A",
+            "displayName": "FIC101A流量控制回路"
+        },
+        "code": 0
+    }
+    """
+    try:
+        # 调用Service层实例化回路
+        loop_service = LoopService()
+        result = loop_service.instantiate_loop(
+            loop_type=request.loop_type,
+            loop_displayName=request.loop_display_name,
+            loop_browseName=request.loop_browse_name,
+            parent_uri=request.parent_uri
+        )
+        
+        if result.get("success"):
+            logger.info(
+                f"回路实例化成功: 类型={request.loop_type}, "
+                f"名称={request.loop_display_name}, "
+                f"URI={result.get('data', {}).get('loop_uri')}"
+            )
+        else:
+            logger.error(f"回路实例化失败: {result.get('message')}")
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"回路实例化失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"回路实例化失败: {str(e)}"
         )

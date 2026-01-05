@@ -99,7 +99,7 @@ def setup_logging():
 logger = setup_logging()
 
 # ========== 定义 Lifespan 上下文管理器 ==========
-# 需要在创建 FastAPI 应用之前定义
+# 定时任务是否初始化
 _cron_tasks_initialized = False
 
 
@@ -109,8 +109,8 @@ async def lifespan(app: FastAPI):
     FastAPI 应用的生命周期管理
     支持 startup 和 shutdown 事件
     """
-    global _cron_tasks_initialized
-
+    # global _cron_tasks_initialized
+    print("服务启动.....")
     yield  # 应用主体运行
 
     # ========== Shutdown Event ==========
@@ -127,7 +127,7 @@ app = FastAPI(
     version='1.0.0',
     docs_url=None,  # 禁用默认的docs路由
     redoc_url=None,  # 禁用默认的redoc路由
-    # lifespan=lifespan  # 使用 lifespan 上下文管理器
+    lifespan=lifespan  # 使用 lifespan 上下文管理器
 )
 
 # 挂载静态文件目录
@@ -166,7 +166,7 @@ app.include_router(loop_monitoring_router, prefix='/api/monitoring', tags=['回�
 app.include_router(loop_info_router, tags=['回路信息'])
 app.include_router(device_evaluation_router, tags=['装置评估'])
 app.include_router(loop_evaluation_router, tags=['回路评估'])
-app.include_router(excluded_loop_router, tags=['剮除回路管理'])
+app.include_router(excluded_loop_router, tags=['剔除回路管理'])
 app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
 app.include_router(home_page_router, prefix='/api/home', tags=['首页'])
 app.include_router(dynamic_config_router, tags=['动态配置参数'])
@@ -240,9 +240,7 @@ def start_api_server():
 
     # 3.初始化装置监控定时任务
     # try:
-    #     logger.info("性能评估定时任务初始化...")
     #     init_cron_tasks()
-    #     logger.info("性能评估定时任务初始化成功")
     # except Exception as e:
     #     logger.error(f"性能评估定时任务初始化失败: {str(e)}")
     #     logger.warning("应用将继续运行，但定时任务功能不可用")
@@ -388,7 +386,7 @@ def start_all():
     import multiprocessing
 
     logger.info("=" * 60)
-    logger.info("启动 PID 整定完整服务 (API + Worker)")
+    logger.info("启动 PID 整定ALL服务 (API + Worker)")
     logger.info("=" * 60)
 
     # 创建后台任务进程
