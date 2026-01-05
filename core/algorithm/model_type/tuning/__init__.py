@@ -48,6 +48,16 @@ from .oscillation.oscillation_rating import OscillationRatingCalculator
 # ============================================================
 from .strategies.loop_type_strategies import get_loop_strategy, LoopTypeStrategy
 
+# ============================================================
+# 方法选择器 (自动选择整定方法)
+# ============================================================
+from .method_selector import TuningMethodSelector, TuningMethod, DataCharacteristics, TuningMethodResult
+
+# ============================================================
+# 验证 (稳定性分析)
+# ============================================================
+from .verification.stability_analyzer import StabilityAnalyzer, StabilityMargins
+
 __all__ = [
     # 核心
     'PIDCalculator', 
@@ -60,4 +70,12 @@ __all__ = [
     # 策略
     'get_loop_strategy',
     'LoopTypeStrategy',
+    # 方法选择器
+    'TuningMethodSelector',
+    'TuningMethod',
+    'DataCharacteristics',
+    'TuningMethodResult',
+    # 验证
+    'StabilityAnalyzer',
+    'StabilityMargins',
 ]

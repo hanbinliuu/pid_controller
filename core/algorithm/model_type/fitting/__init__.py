@@ -16,6 +16,7 @@ from .fusion_strategy import PIDFusionStrategy, WindowResult, FusionResult as St
 from .type_selector import UnifiedModelSelector, SegmentModelFit
 from .step_response_identifier import StepResponseIdentifier
 from .frequency_domain_identifier import FrequencyDomainIdentifier
+from .relay_identifier import RelayIdentifier, RelayResult, LimitCycleInfo
 
 __all__ = [
     'ModelIdentifier',
@@ -28,5 +29,8 @@ __all__ = [
     'SegmentModelFit',
     'StepResponseIdentifier',
     'FrequencyDomainIdentifier',
+    'RelayIdentifier',
+    'RelayResult',
+    'LimitCycleInfo',
 ]
 

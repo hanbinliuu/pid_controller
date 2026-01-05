@@ -16,7 +16,7 @@ from .fitting import (
     ModelIdentifier, SegmentFitter, PIDFusionStrategy, 
     WindowResult as FusionWindowResult, UnifiedModelSelector, SegmentModelFit
 )
-from .tuning import PIDCalculator, DataQualityInfo, OscillationTuner
+from .tuning import PIDCalculator, DataQualityInfo, OscillationTuner, TuningMethodSelector, StabilityAnalyzer
 from .simulation import ModelSimulator
 
 # 其他模块
@@ -93,6 +93,11 @@ class ModelSelector(LoggerMixin):
         self._oscillation_tuner = OscillationTuner(
             self._pid_calculator, self._simulator, verbose,
             llm_client=llm_client, loop_type=loop_type, loop_name=loop_name
+        )
+        
+        # 整定方法选择器（自动选择模型辨识法/继电反馈法/混合方法）
+        self._method_selector = TuningMethodSelector(
+            self._pid_calculator, self._simulator, verbose
         )
     
     def set_llm_client(self, llm_client, process_context: dict = None):
@@ -407,7 +412,6 @@ class ModelSelector(LoggerMixin):
         )
         if oscillation_result is not None:
             # 使用振荡分析结果，跳过后续的模型融合
-            # 使用原始段数据（降采样前）用于可视化
             return self._oscillation_tuner.build_oscillation_output(
                 oscillation_result, hist_data, time_range, input_data.tuning_window,
                 original_segments, original_results
@@ -416,10 +420,8 @@ class ModelSelector(LoggerMixin):
         # Step 2.6: 检查模型拟合是否全部失败
         all_fitting_failed = self._check_all_fitting_failed(segment_results_fitted)
         if all_fitting_failed:
-            # 如果整定段拟合失败，尝试回退使用扰动段进行临界法整定
             if use_tuning_segments and disturbance_segs:
                 self.log("🔄 整定段拟合失败，回退使用扰动段尝试临界法整定")
-                # 使用扰动段重新尝试振荡整定
                 fallback_result = self._oscillation_tuner.try_oscillation_tuning(
                     disturbance_segs, disturbance_results, current_pid, force=True
                 )
@@ -431,7 +433,7 @@ class ModelSelector(LoggerMixin):
             self.log("❌ 所有模型拟合和振荡检测均失败，无法整定")
             return self._empty_result(input_data)
         
-        # Step 3: 基于AIC/RSS/形状特征选择最优模型结构（支持全量数据验证）
+        # Step 3: 基于AIC/RSS/形状特征选择最优模型结构
         best_model_type = self._select_best_model_type(segment_results_fitted, hist_data)
         self.log(f"🎯 选择模型类型: {best_model_type}")
         
@@ -441,10 +443,9 @@ class ModelSelector(LoggerMixin):
         # Step 5: 验证一致性与仿真匹配度
         fusion_result = self._validate_and_refine(fusion_result, segments_for_fitting, hist_data)
         
-        # Step 5.5: 检查融合参数是否有效，无效则尝试振荡整定fallback
+        # Step 5.5: 检查融合参数是否有效
         if abs(fusion_result.K) < self._epsilon or fusion_result.T1 < self._epsilon:
             self.log("\n   ⚠️ 参数融合失败（K或T1为0），尝试振荡整定fallback...")
-            # 尝试使用所有段进行振荡整定
             fallback_result = self._oscillation_tuner.try_oscillation_tuning(
                 segments_for_fitting, segment_results_fitted, current_pid, force=True
             )
@@ -456,6 +457,28 @@ class ModelSelector(LoggerMixin):
                 )
             else:
                 self.log("   ❌ 振荡整定fallback也失败")
+        
+        # Step 5.6: 使用方法选择器验证稳定性，必要时使用继电反馈法
+        model_params = {
+            'K': fusion_result.K, 'T1': fusion_result.T1,
+            'T2': fusion_result.T2, 'L': fusion_result.L
+        }
+        method_result = self._method_selector.select_and_tune(
+            segments_for_fitting, segment_results_fitted,
+            model_params=model_params, lambda_factor=lambda_factor
+        )
+        
+        # 只有当继电反馈法的稳定性明显更好时才使用
+        from .tuning import TuningMethod
+        if (method_result.method == TuningMethod.RELAY_FEEDBACK and 
+            method_result.stability_margins and 
+            method_result.stability_margins.is_stable and
+            method_result.stability_margins.phase_margin > 50):
+            self.log(f"\n🎯 继电反馈法稳定性更好 (PM={method_result.stability_margins.phase_margin:.1f}°)")
+            return self._build_method_selector_output(
+                method_result, fusion_result, hist_data, time_range,
+                input_data.tuning_window, original_segments, original_results
+            )
         
         # 构建数据质量信息，用于自适应保守PID整定
         quality_info = self._build_quality_info(segments_for_fitting, segment_results_fitted, fusion_result)
@@ -1247,6 +1270,96 @@ class ModelSelector(LoggerMixin):
     def _get_bounds(self, model_type: str) -> Tuple[List, List]:
         """获取参数边界（委托给 ModelType.get_bounds）"""
         return ModelType.get_bounds(model_type)
+    
+    def _build_method_selector_output(self, method_result, fusion_result: FusionResult,
+                                       hist_data: HistoricalData, time_range: Dict,
+                                       tuning_windows: List, segments: List,
+                                       segment_results: List) -> Dict[str, Any]:
+        """
+        构建方法选择器的输出结果
+        
+        当继电反馈法或混合方法的稳定性更好时使用
+        """
+        from .tuning import TuningMethod
+        from .utils import calculate_r2, calculate_rmse
+        
+        pid_params = method_result.pid_params
+        model_params = method_result.model_params or {
+            'K': fusion_result.K, 'T1': fusion_result.T1,
+            'T2': fusion_result.T2, 'L': fusion_result.L
+        }
+        
+        valid_mask = hist_data.pv != 0
+        y = hist_data.pv[valid_mask]
+        u = hist_data.mv[valid_mask]
+        ts = np.array(hist_data.timestamp[valid_mask], dtype=np.int64)
+        sv = hist_data.sv[valid_mask]
+        
+        # 使用模型参数进行仿真
+        params = (model_params.get('K', 1.0), model_params.get('T1', 10.0), model_params.get('L', 1.0))
+        pv_model = self._simulator.simulate_segmented(
+            params, 'FOPDT', y, u, reset_on_sv_change=True, sv=sv,
+            enable_smooth=True, enable_amplitude_calibration=True,
+            enable_offset_correction=True, enable_oscillation_overlay=True
+        )
+        
+        r2 = calculate_r2(y, pv_model)
+        rmse = calculate_rmse(y, pv_model)
+        
+        # 稳定性信息
+        margins = method_result.stability_margins
+        stability_info = {
+            'is_stable': margins.is_stable if margins else False,
+            'gain_margin': margins.gain_margin if margins else 0,
+            'gain_margin_db': margins.gain_margin_db if margins else 0,
+            'phase_margin': margins.phase_margin if margins else 0,
+        }
+        
+        # 评分：基于稳定性裕度
+        if margins and margins.is_stable:
+            gm_score = min(10, margins.gain_margin * 2)  # GM=2 -> 4分, GM=5 -> 10分
+            pm_score = min(10, margins.phase_margin / 9)  # PM=45 -> 5分, PM=90 -> 10分
+            model_rating = round((gm_score + pm_score) / 2, 1)
+        else:
+            model_rating = 3.0
+        
+        return {
+            'success': True,
+            'model_type': 'FOPDT',
+            'model_rating': model_rating,
+            'start_time': time_range.get('start_time'),
+            'end_time': time_range.get('end_time'),
+            'model_parameters': {
+                'K': round(model_params.get('K', 0), 4),
+                'T1': round(model_params.get('T1', 0), 4),
+                'T2': round(model_params.get('T2', 0), 4),
+                'L': round(model_params.get('L', 0), 4)
+            },
+            'pid_parameters': pid_params,
+            'fitting_result': {
+                'timestamp': ts.tolist(),
+                'sv': sv.tolist(),
+                'pv': y.tolist(),
+                'mv': u.tolist(),
+                'pv_model': pv_model.tolist(),
+                'r_squared': round(r2, 4),
+                'rmse': round(rmse, 4)
+            },
+            'fusion_info': {
+                'method': method_result.method.value,
+                'n_segments': len(segments) if segments else 0,
+                'consistency_score': method_result.confidence,
+                'tuning_method': method_result.method.value,
+                'critical_params': method_result.critical_params
+            },
+            'closed_loop_verification': stability_info,
+            'rating_details': {
+                'method': method_result.method.value,
+                'reasoning': method_result.reasoning,
+                'warnings': method_result.warnings
+            },
+            'segment_info': OutputBuilder.build_segment_info(segments, segment_results) if segments else []
+        }
     
     def _build_output(self, fusion: FusionResult, hist_data: HistoricalData,
                       time_range: Dict, lambda_factor: float,
