@@ -373,7 +373,7 @@ if __name__ == "__main__":
         '--mode',
         type=str,
         choices=['api', 'worker', 'all'],
-        default='api',
+        default='all',
         help='启动模式: api=仅API服务, worker=仅后台任务, all=全部启动 (默认: all)'
     )
     
