@@ -19,7 +19,7 @@ sys.path.insert(0, project_root)
 # 导入项目根目录的模块
 from api.routes.analysis_router import _query_tsdb_data_zhongkong
 from api.routes.util import parse_time_to_milliseconds
-from core.algorithm.detector import StabilityDetector
+from core.algorithm.tmp_algo.detector import StabilityDetector
 
 # 使用importlib导入system_tuning的evaluator模块（避免core模块冲突）
 import importlib.util

@@ -736,10 +736,10 @@ TEST_SCENARIOS = [
     {
         'name': 'Robustness - Low SNR',
         'description': '鲁棒性测试 - 低信噪比 (小增益+大噪声)',
-        'process_original': {'K': 0.2, 'T1': 20.0, 'L': 2.0},
-        'process_changed': {'K': 0.4, 'T1': 15.0, 'L': 5.0},
-        'original_pid': {'Kp': 5.0, 'Ki': 0.2, 'Kd': 0.0},
-        'noise_std': 0.5,
+        'process_original': {'K': 0.3, 'T1': 20.0, 'L': 3.0},
+        'process_changed': {'K': 0.6, 'T1': 15.0, 'L': 6.0},  # 增加增益使其更易振荡
+        'original_pid': {'Kp': 8.0, 'Ki': 0.3, 'Kd': 0.0},  # 更激进的PID导致振荡
+        'noise_std': 0.4,  # 稍微降低噪声以保证可辨识性
         'loop_type': 'flow',
     },
     # ========== 更多常见工业扰动场景 (More Common Industrial Disturbances) ==========

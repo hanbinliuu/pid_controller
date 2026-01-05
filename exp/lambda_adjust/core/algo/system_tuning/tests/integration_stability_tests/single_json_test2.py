@@ -19,7 +19,7 @@ sys.path.insert(0, system_tuning_dir)
 
 from api.routes.analysis_router import _query_tsdb_data_zhongkong
 from api.routes.util import parse_time_to_milliseconds
-from core.algorithm.detector import StabilityDetector
+from core.algorithm.tmp_algo.detector import StabilityDetector
 
 
 def load_json(data_list: List[Dict]):

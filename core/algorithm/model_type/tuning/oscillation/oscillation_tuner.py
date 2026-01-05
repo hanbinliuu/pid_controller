@@ -378,7 +378,18 @@ class OscillationTuner(LoggerMixin):
             L_approx = T1_approx / 5
         
         delay_ratio = L_approx / max(T1_approx, 1.0)
-        if L_approx > osc_config.get('large_delay_absolute_threshold', 15.0) or delay_ratio > 0.5:
+        
+        # 大滞后系统处理（分级）
+        extreme_delay_threshold = osc_config.get('extreme_delay_ratio_threshold', 0.8)
+        large_delay_threshold = osc_config.get('large_delay_ratio_threshold', 0.5)
+        
+        if delay_ratio > extreme_delay_threshold or L_approx > 30.0:
+            # 极大滞后：应用最保守的pb增益
+            pb_base *= osc_config.get('extreme_delay_pb_boost', 2.5)
+            ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.5) * 1.2
+            self.log(f"   ⚠️ 检测到极大滞后系统 (L/T={delay_ratio:.2f})")
+        elif delay_ratio > large_delay_threshold or L_approx > osc_config.get('large_delay_absolute_threshold', 15.0):
+            # 大滞后：标准保守
             pb_base *= osc_config.get('large_delay_pb_boost', 1.8)
             ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.5)
         

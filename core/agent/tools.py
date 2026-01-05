@@ -11,7 +11,7 @@ import numpy as np
 import matplotlib
 
 from api.commond.time_util import parse_time_to_milliseconds
-from core.algorithm.detector import StabilityDetector
+from core.algorithm.tmp_algo.detector import StabilityDetector
 from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import query_raw_data, query_read_interpolated
 from core.utils import pid_converter
@@ -21,8 +21,8 @@ from core.utils.pid_converter import process_lists_optimized
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
 
-from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
-from core.algorithm.ktl_simulator import KTLSimulator
+from core.algorithm.tmp_algo.ls_pid_autotune_v5 import SystemIdentifier
+from core.algorithm.tmp_algo.ktl_simulator import KTLSimulator
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 logger = logging.getLogger(__name__)

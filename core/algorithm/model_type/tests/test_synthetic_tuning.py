@@ -640,14 +640,40 @@ def detect_disturbance_windows(data: List[Dict]) -> List[Dict]:
                 'end_idx': len(data) - 1,
             }]
     
-    # 方法3: 检测PV振荡（振荡场景）
+    # 方法3: 检测PV振荡（振荡场景）- 使用自适应阈值
     window_size = 50
-    std_threshold = 1.0
+    
+    # 自适应阈值：基于前100点"平静期"噪声水平
+    baseline_samples = min(100, len(pv_array) // 4)
+    baseline_noise = np.std(pv_array[:baseline_samples])
+    
+    # 自适应阈值 = max(固定最小值, k倍噪声水平)
+    # k=3 表示需要超过3倍噪声才认为是真实振荡
+    std_threshold = max(0.3, 3.0 * baseline_noise)
     
     for i in range(window_size, len(pv_array)):
         window_std = np.std(pv_array[i-window_size:i])
         if window_std > std_threshold:
             start_idx = max(0, i - window_size - 20)
+            return [{
+                'start_time': timestamps[start_idx],
+                'end_time': timestamps[-1],
+                'start_idx': start_idx,
+                'end_idx': len(data) - 1,
+            }]
+    
+    # 方法4: 低信噪比场景 - 使用更敏感的检测
+    # 检查全局PV变化趋势（即使噪声较大也能检测到系统变化）
+    pv_smooth = np.convolve(pv_array, np.ones(10)/10, mode='same')  # 平滑
+    pv_diff = np.abs(np.diff(pv_smooth))
+    
+    # 寻找突变点（平滑后的趋势变化）
+    for i in range(50, len(pv_diff)):
+        # 检测趋势变化：当前段vs前一段的均值差异
+        prev_mean = np.mean(pv_smooth[i-50:i-25])
+        curr_mean = np.mean(pv_smooth[i-25:i])
+        if abs(curr_mean - prev_mean) > max(0.5, 2.0 * baseline_noise):
+            start_idx = max(0, i - 50)
             return [{
                 'start_time': timestamps[start_idx],
                 'end_time': timestamps[-1],

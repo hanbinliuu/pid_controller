@@ -46,11 +46,27 @@ class OscillationAnalysisMixin:
         if len(pv) < 20:
             return None
         
+        # 估计噪声水平（高频分量）
+        noise_estimate = np.std(np.diff(pv)) / np.sqrt(2)
+        signal_range = np.ptp(pv)
+        snr = signal_range / (noise_estimate + 1e-6)
+        
+        # 高噪声场景预平滑（SNR < 10）
+        if snr < 10 and len(pv) > 30:
+            # 使用自适应窗口大小的移动平均
+            window_size = min(max(5, int(len(pv) / 50)), 15)
+            pv_smooth = np.convolve(pv, np.ones(window_size)/window_size, mode='same')
+            # 边界处理
+            pv_smooth[:window_size//2] = pv[:window_size//2]
+            pv_smooth[-window_size//2:] = pv[-window_size//2:]
+        else:
+            pv_smooth = pv
+        
         # 去趋势（使用线性去趋势更好）
-        x = np.arange(len(pv))
-        coeffs = np.polyfit(x, pv, 1)
+        x = np.arange(len(pv_smooth))
+        coeffs = np.polyfit(x, pv_smooth, 1)
         trend = np.polyval(coeffs, x)
-        pv_detrend = pv - trend
+        pv_detrend = pv_smooth - trend
         
         # ========== 方法1: 精确峰值检测法 ==========
         Pu_peaks = self._detect_period_from_peaks(pv_detrend, dt)
@@ -451,8 +467,25 @@ class OscillationAnalysisMixin:
         
         return None
     
-    def _find_peaks_valleys(self, pv: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """找到峰值和谷值的位置和值"""
+    def _find_peaks_valleys(self, pv: np.ndarray, min_prominence: float = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """找到峰值和谷值的位置和值
+        
+        Args:
+            pv: 过程变量数组（需已去趋势）
+            min_prominence: 最小突出度阈值（用于过滤噪声峰）
+                            如果为None，自动根据信号特性计算
+        """
+        # 计算自适应噪声阈值
+        if min_prominence is None:
+            # 使用信号的高频分量估计噪声水平
+            if len(pv) > 10:
+                # 一阶差分的标准差近似噪声水平
+                noise_estimate = np.std(np.diff(pv)) / np.sqrt(2)
+                # 峰值需要突出于噪声的2倍以上
+                min_prominence = max(noise_estimate * 2.0, np.ptp(pv) * 0.05)
+            else:
+                min_prominence = 0
+        
         peak_indices = []
         peak_values = []
         valley_indices = []
@@ -460,11 +493,21 @@ class OscillationAnalysisMixin:
         
         for i in range(1, len(pv) - 1):
             if pv[i] > pv[i-1] and pv[i] > pv[i+1]:
-                peak_indices.append(i)
-                peak_values.append(pv[i])
+                # 检查突出度
+                left_depth = pv[i] - pv[i-1]
+                right_depth = pv[i] - pv[i+1]
+                prominence = min(left_depth, right_depth)
+                if prominence >= min_prominence:
+                    peak_indices.append(i)
+                    peak_values.append(pv[i])
             elif pv[i] < pv[i-1] and pv[i] < pv[i+1]:
-                valley_indices.append(i)
-                valley_values.append(pv[i])
+                # 检查突出度
+                left_depth = pv[i-1] - pv[i]
+                right_depth = pv[i+1] - pv[i]
+                prominence = min(left_depth, right_depth)
+                if prominence >= min_prominence:
+                    valley_indices.append(i)
+                    valley_values.append(pv[i])
         
         return (np.array(peak_indices), np.array(peak_values), 
                 np.array(valley_indices), np.array(valley_values))
