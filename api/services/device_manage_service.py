@@ -60,7 +60,7 @@ class DeviceManageService:
             # 装置模型类型-文件夹(/system/401)
             source_uri=Config.BFF_MODEL_DEVICE_MODEL_URI
             # 工程URI
-            project_uri="/pid_zd/root"
+            project_uri=Config.MODEL_DEFULT_PROJECT_URI
 
             # 调用模型核心客户端创建装置
             result = self.model_core_client.drag_to_with_attributes(
