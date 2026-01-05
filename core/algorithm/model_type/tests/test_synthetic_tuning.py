@@ -32,6 +32,95 @@ from core.algorithm.model_type.tests.test_scenarios import TEST_SCENARIOS, REALI
 
 
 # ============================================================
+# 场景难度计算
+# ============================================================
+def calculate_scenario_difficulty(scenario: Dict) -> Tuple[float, str, List[str]]:
+    """
+    计算场景难度评分
+    
+    Returns:
+        (score, level, reasons)
+        - score: 难度分数 (1-10)
+        - level: 难度等级 (EASY/MEDIUM/HARD/EXTREME)
+        - reasons: 难度原因列表
+    """
+    score = 1.0
+    reasons = []
+    
+    po = scenario['process_original']
+    pc = scenario['process_changed']
+    
+    # 1. 滞后特性 (Delay Characteristics)
+    delay_ratio_changed = pc['L'] / pc['T1'] if pc['T1'] > 0 else 0
+    
+    if delay_ratio_changed > 2.0:
+        score += 3.0
+        reasons.append(f"极大滞后(L/T={delay_ratio_changed:.1f})")
+    elif delay_ratio_changed > 1.0:
+        score += 2.0
+        reasons.append(f"大滞后(L/T={delay_ratio_changed:.1f})")
+    elif delay_ratio_changed > 0.5:
+        score += 1.0
+        reasons.append(f"中等滞后")
+        
+    # 2. 增益变化 (Gain Change)
+    if po['K'] != 0:
+        gain_ratio = abs(pc['K'] / po['K'])
+        if gain_ratio > 10.0:
+            score += 3.0
+            reasons.append(f"增益剧变(x{gain_ratio:.0f})")
+        elif gain_ratio > 5.0:
+            score += 2.0
+            reasons.append(f"增益大变(x{gain_ratio:.0f})")
+        elif gain_ratio > 2.0:
+            score += 1.0
+            reasons.append(f"增益变化")
+            
+    # 3. 噪声水平 (Noise Level)
+    noise = scenario.get('noise_std', 0.2)
+    if noise >= 1.5:
+        score += 3.0
+        reasons.append(f"极高噪声")
+    elif noise >= 0.8:
+        score += 2.0
+        reasons.append(f"高噪声")
+    elif noise >= 0.4:
+        score += 1.0
+        reasons.append(f"中噪声")
+        
+    # 4. 特殊过程特性 (Special Characteristics)
+    if pc['K'] < 0:
+        if po['K'] > 0:
+            score += 4.0
+            reasons.append("反向突变")
+        else:
+            score += 1.0
+            reasons.append("反向系统")
+            
+    if pc['T1'] > 100:
+        score += 2.0
+        reasons.append(f"积分/慢系统")
+        
+    if pc['T1'] < 5:
+        score += 1.0
+        reasons.append(f"快系统")
+    
+    # 确定难度等级
+    if score >= 7:
+        level = "EXTREME"
+    elif score >= 5:
+        level = "HARD"
+    elif score >= 3:
+        level = "MEDIUM"
+    else:
+        level = "EASY"
+    
+    return score, level, reasons
+
+
+
+
+# ============================================================
 # Ollama 客户端
 # ============================================================
 class OllamaClient:
@@ -1871,7 +1960,8 @@ def run_stability_test():
                     print(f"      稳态: {'✅ 是' if sim_llm['is_stable'] else '❌ 否'} (Ts={sim_llm['settling_time']:.0f}s)")
             
             results.append({
-                'scenario': scenario['name'],
+                'scenario': scenario,  # 完整场景对象用于难度计算
+                'scenario_name': scenario['name'],
                 'loop_type': scenario.get('loop_type', 'unknown'),
                 'rule_stable': rule_stable,
                 'rule_ts': sim_rule['settling_time'],
@@ -2014,6 +2104,34 @@ def run_stability_test():
         lt_llm_wins = sum(1 for r in lt_results 
                          if r.get('llm_stable') and r.get('llm_ts', 9999) < r.get('rule_ts', 9999) * 0.95)
         print(f"{lt:<15} {lt_rule_stable}/{len(lt_results):<10} {lt_llm_stable}/{len(lt_results):<10} {lt_llm_wins}/{len(lt_results)}")
+    
+    # 按难度等级统计
+    print("\n【按难度等级统计】")
+    print(f"{'难度等级':<10} {'场景数':<8} {'规则稳态':<12} {'通过率':<10}")
+    print("-" * 45)
+    
+    # 计算每个场景的难度
+    difficulty_stats = {'EASY': {'total': 0, 'stable': 0}, 
+                       'MEDIUM': {'total': 0, 'stable': 0},
+                       'HARD': {'total': 0, 'stable': 0},
+                       'EXTREME': {'total': 0, 'stable': 0}}
+    
+    for r in valid_results:
+        scenario = r.get('scenario')
+        if scenario:
+            _, level, _ = calculate_scenario_difficulty(scenario)
+            difficulty_stats[level]['total'] += 1
+            if r.get('rule_stable'):
+                difficulty_stats[level]['stable'] += 1
+    
+    level_order = ['EASY', 'MEDIUM', 'HARD', 'EXTREME']
+    level_emoji = {'EASY': '🟢', 'MEDIUM': '🟡', 'HARD': '🟠', 'EXTREME': '🔴'}
+    
+    for level in level_order:
+        stats = difficulty_stats[level]
+        if stats['total'] > 0:
+            rate = stats['stable'] / stats['total'] * 100
+            print(f"{level_emoji[level]} {level:<8} {stats['total']:<8} {stats['stable']}/{stats['total']:<10} {rate:.1f}%")
     
     print("\n✅ 稳态验证测试完成!")
     return results
