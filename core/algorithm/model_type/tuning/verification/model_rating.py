@@ -14,8 +14,8 @@
 
 from typing import Dict, Tuple
 
-from ..data_models import FusionResult
-from .data_classes import ClosedLoopMetrics
+from ...data_models import FusionResult
+from ..core.data_classes import ClosedLoopMetrics
 
 
 class ModelRatingMixin:
@@ -39,9 +39,6 @@ class ModelRatingMixin:
         3. 参数物理合理性        - 15%
         4. 数据覆盖度            - 10%
         5. 闭环稳定性            - 25%
-        
-        Returns:
-            (model_rating, score_details)
         """
         score_details = {}
         
@@ -69,13 +66,11 @@ class ModelRatingMixin:
         if fusion.n_segments_used > 1:
             k_mean = abs(fusion.K) + self._epsilon
             k_cv = fusion.K_std / k_mean
-            
             t1_mean = abs(fusion.T1) + self._epsilon
             t1_cv = fusion.T1_std / t1_mean
             
             k_consistency = max(0, 10 - k_cv * 15)
             t1_consistency = max(0, 10 - t1_cv * 15)
-            
             consistency_score = 0.6 * k_consistency + 0.4 * t1_consistency
             
             if fusion.consistency_score > 0:
@@ -159,76 +154,70 @@ class ModelRatingMixin:
         score_details['total_data_points'] = total_data_points
         
         # 5. 闭环稳定性评分 (0-10) - 权重 25%
-        stability_score = 5.0  # 默认中等分数
+        stability_score = 5.0
         
         if cl_metrics is not None:
-            # 基础分：是否稳定
             if cl_metrics.is_stable:
                 stability_score = 6.0
             else:
                 stability_score = 1.0
             
-            # 1. 超调量评分（越小越好，权重最高）
             overshoot = cl_metrics.overshoot
             if overshoot <= 5:
-                stability_score += 1.5  # 优秀
+                stability_score += 1.5
             elif overshoot <= 15:
-                stability_score += 1.0  # 良好
+                stability_score += 1.0
             elif overshoot <= 30:
-                stability_score += 0.5  # 可接受
+                stability_score += 0.5
             elif overshoot <= 50:
-                stability_score -= 0.5  # 较差
+                stability_score -= 0.5
             else:
-                stability_score -= 1.5  # 严重超调
+                stability_score -= 1.5
             
-            # 2. 上升时间评分（适中为好）
             rise_time = cl_metrics.rise_time
             if rise_time < float('inf'):
                 if 1.0 <= rise_time <= 10.0:
-                    stability_score += 1.0  # 理想范围
+                    stability_score += 1.0
                 elif 0.5 <= rise_time < 1.0 or 10.0 < rise_time <= 20.0:
-                    stability_score += 0.5  # 可接受
+                    stability_score += 0.5
                 elif rise_time < 0.5:
-                    stability_score -= 0.5  # 太快，可能不稳定
+                    stability_score -= 0.5
                 else:
-                    stability_score -= 0.5  # 太慢
+                    stability_score -= 0.5
             
-            # 3. 稳态误差评分（越小越好）
             sse = cl_metrics.steady_state_error
             if sse <= 1:
-                stability_score += 1.0  # 优秀
+                stability_score += 1.0
             elif sse <= 2:
-                stability_score += 0.5  # 良好
+                stability_score += 0.5
             elif sse <= 5:
-                pass  # 可接受
+                pass
             elif sse <= 10:
-                stability_score -= 0.5  # 较差
+                stability_score -= 0.5
             else:
-                stability_score -= 1.0  # 严重偏差
+                stability_score -= 1.0
             
-            # 4. 振荡次数评分（越少越好）
             osc_count = cl_metrics.oscillation_count
             if osc_count == 0:
-                stability_score += 0.5  # 无振荡
+                stability_score += 0.5
             elif osc_count <= 2:
-                stability_score += 1.0  # 理想
+                stability_score += 1.0
             elif osc_count <= 4:
-                stability_score += 0.5  # 可接受
+                stability_score += 0.5
             elif osc_count <= 6:
-                stability_score -= 0.5  # 振荡较多
+                stability_score -= 0.5
             else:
-                stability_score -= 1.0  # 持续振荡
+                stability_score -= 1.0
             
-            # 5. 衰减比评分
             decay_ratio = cl_metrics.decay_ratio
             if decay_ratio <= 0.25:
-                stability_score += 1.0  # 快速衰减
+                stability_score += 1.0
             elif decay_ratio <= 0.5:
-                stability_score += 0.5  # 良好衰减
+                stability_score += 0.5
             elif decay_ratio <= 1.0:
-                pass  # 临界阻尼
+                pass
             else:
-                stability_score -= 1.0  # 发散
+                stability_score -= 1.0
             
             stability_score = min(10.0, max(0.0, stability_score))
         
@@ -251,13 +240,11 @@ class ModelRatingMixin:
             weights['stability'] * stability_score
         )
         
-        # R²过低时限制最高分
         if r2 < 0.3:
             final_score = min(final_score, 3.0)
         elif r2 < 0.5:
             final_score = min(final_score, 5.0)
         
-        # 闭环不稳定时限制最高分
         if cl_metrics is not None and not cl_metrics.is_stable:
             final_score = min(final_score, 5.0)
         

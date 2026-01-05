@@ -11,6 +11,7 @@
 3. **空结果生成**: 当辨识失败时生成默认输出
 4. **闭环验证**: 对PID参数进行闭环稳定性验证
 5. **评分计算**: 计算模型综合评分 (model_rating)
+6. **段信息构建**: 构建段信息用于可视化（统一方法）
 
 输出结构
 --------
@@ -23,6 +24,7 @@
 - fusion_info: 融合信息
 - closed_loop_verification: 闭环验证结果
 - rating_details: 评分详情
+- segment_info: 段信息（用于可视化）
 """
 
 import numpy as np
@@ -42,6 +44,7 @@ class OutputBuilder(LoggerMixin):
     1. 构建常规整定输出
     2. 构建振荡整定输出
     3. 生成空结果
+    4. 构建段信息（统一方法）
     """
     
     def __init__(self, simulator, pid_calculator, verbose: bool = False):
@@ -49,6 +52,87 @@ class OutputBuilder(LoggerMixin):
         self._epsilon = Config.EPSILON
         self._simulator = simulator
         self._pid_calculator = pid_calculator
+    
+    @staticmethod
+    def build_segment_info(segments: List, segment_results: List) -> List[Dict]:
+        """
+        构建段信息用于可视化（统一方法）
+        
+        Args:
+            segments: 段数据列表 (HistoricalData)
+            segment_results: 段结果列表 (SegmentResult)
+            
+        Returns:
+            段信息列表
+        """
+        segment_info = []
+        if not segments or not segment_results:
+            return segment_info
+            
+        for i, (seg, result) in enumerate(zip(segments, segment_results)):
+            if len(seg.timestamp) > 0:
+                # 获取属性值，兼容对象和字典
+                if hasattr(result, 'step_response_score'):
+                    step_score = result.step_response_score
+                    osc_ratio = result.oscillation_ratio
+                else:
+                    step_score = result.get('step_response_score', 0.5)
+                    osc_ratio = result.get('oscillation_ratio', 0.5)
+                
+                # 判断段类型：阶跃特征好且振荡低 → 整定段
+                is_tuning = (step_score >= 0.5 and osc_ratio < 0.5)
+                
+                segment_info.append({
+                    'index': i,
+                    'start_time': int(seg.timestamp[0]),
+                    'end_time': int(seg.timestamp[-1]),
+                    'data_points': len(seg.pv),
+                    'step_response_score': round(step_score, 2),
+                    'oscillation_ratio': round(osc_ratio, 2),
+                    'type': 'tuning' if is_tuning else 'oscillation'
+                })
+        return segment_info
+    
+    @staticmethod
+    def create_empty_result(input_data: Optional[TuningInput] = None,
+                            model_type: str = None) -> Dict[str, Any]:
+        """
+        创建空结果（统一方法）
+        
+        Args:
+            input_data: 整定输入（可选）
+            model_type: 模型类型（可选）
+            
+        Returns:
+            空结果字典
+        """
+        return {
+            'success': False,
+            'model_type': model_type or ModelType.FOPDT,
+            'model_rating': 0.0,
+            'start_time': getattr(input_data, 'start_time', None) if input_data else None,
+            'end_time': getattr(input_data, 'end_time', None) if input_data else None,
+            'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
+            'pid_parameters': {'Kp': 1.0, 'Ki': 0.05, 'Kd': 0.0},
+            'fitting_result': {
+                'timestamp': [], 'sv': [], 'pv': [], 'mv': [],
+                'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0
+            },
+            'fusion_info': {
+                'method': 'none',
+                'n_segments': 0,
+                'consistency_score': 0.0
+            },
+            'rating_details': {
+                'r2_score': 0.0,
+                'consistency_score': 0.0,
+                'validity_score': 0.0,
+                'coverage_score': 0.0,
+                'n_segments': 0,
+                'total_data_points': 0
+            },
+            'segment_info': []
+        }
     
     def build_output(self, fusion: FusionResult, hist_data: HistoricalData,
                      time_range: Dict, lambda_factor: float,

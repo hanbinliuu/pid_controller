@@ -14,7 +14,7 @@
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 
-from ..config import Config
+from ...config import Config
 
 
 class OscillationAnalysisMixin:
