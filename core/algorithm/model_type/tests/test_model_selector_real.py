@@ -36,15 +36,15 @@ from core.algorithm.model_type.model_selector import ModelSelector
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951",
-    'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
-    # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
+    # 'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
+    'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        # {'start_time': '2025-12-31 08:11:00', 'end_time': '2025-12-31 14:11:00'},
-        {'start_time': '2025-12-31 00:39:41', 'end_time': '2025-12-31 23:39:41'},
+        {'start_time': '2025-12-16 10:39:00', 'end_time': '2025-12-16 14:58:00'},
+        # {'start_time': '2026-01-04 00:39:41', 'end_time': '2026-01-04 18:39:41'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
@@ -494,7 +494,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         ax4 = fig.add_subplot(n_plots, 1, 4)
         
         # 重新进行闭环仿真以获取曲线数据
-        from core.algorithm.model_type.tuning.pid_calculator import PIDCalculator
+        from core.algorithm.model_type.tuning.core.pid_calculator import PIDCalculator
         from core.algorithm.model_type.data_models import FusionResult
         
         model_params = fitting_result.get('model_parameters', {})
