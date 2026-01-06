@@ -6,14 +6,16 @@
 
 
 import logging
-from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Query, Depends
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional, Dict, Any, List, Union
+from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
 from sqlmodel import Session
 
 from api.response.loop_response import LoopListResponse, LoopInfoResponse
 from api.response.bff_response import SubmodelListResponse
 from api.services.loop_info_service import LoopInfoService
 from api.services.loop_service import LoopService
+from api.services.loop_import_service import LoopImportService
 from core.config import Config
 from pydantic import BaseModel, Field
 
@@ -45,15 +47,13 @@ class InstantiateLoopRequest(BaseModel):
     loop_type: str = Field(..., description="回路类型，如：流量、温度、压力等")
     loop_display_name: str = Field(..., description="回路显示名称")
     loop_browse_name: str = Field(..., description="回路标识（唯一）")
-    parent_uri: str = Field(..., description="父节点URI（装置URI）")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "loop_type": "流量",
                 "loop_display_name": "FIC101A流量控制回路",
-                "loop_browse_name": "FIC101A",
-                "parent_uri": "/pid_zd/1f59615dc9d44b4388e29829f95a49c6"
+                "loop_browse_name": "FIC101A"
             }
         }
 
@@ -337,11 +337,22 @@ async def get_next_loop_type(
     "/instantiate-loop",
     summary="实例化回路",
     operation_id="实例化回路",
-    description="根据回路类型创建一个新的回路实例",
+    description="根据回路类型创建回路实例，支持批量实例化",
     response_model=Dict[str, Any]
 )
 async def instantiate_loop(
-        request: InstantiateLoopRequest
+        request: Union[List[InstantiateLoopRequest]],
+        parent_uri: str = Query(
+            ...,
+            description="父节点URI（必填，所有回路在同一装置下创建）",
+            example=Config.BFF_MODEL_ROOT_URI
+        ),
+        max_workers: int = Query(
+            5,
+            description="批量实例化的最大线程数（仅批量生效）",
+            ge=1,
+            le=20
+        )
 ) -> Dict[str, Any]:
     """
     实例化回路
@@ -350,35 +361,127 @@ async def instantiate_loop(
     - 根据回路类型（流量、温度等）创建回路实例
     - 在指定的父节点（装置）下创建回路
     - 返回创建结果和新回路的URI
+    - 支持批量实例化（请求体为数组）
     
     请求参数：
     - loop_type: 回路类型，如"流量"、"温度"、"压力"等
     - loop_display_name: 回路的显示名称
     - loop_browse_name: 回路的浏览名称（唯一标识）
-    - parent_uri: 父节点URI（通常是装置URI）
+    - parent_uri: 父节点URI（必填，通常是装置URI，通过公共参数传入）
+    - max_workers: 批量实例化线程数（仅批量生效）
+
+    批量请求示例：
+    [
+        {
+            "loop_type": "温度",
+            "loop_display_name": "聚合反应器床层温度控制回路",
+            "loop_browse_name": "TIC-108"
+        },
+        {
+            "loop_type": "流量",
+            "loop_display_name": "醚化反应原料醇烯比调节回路",
+            "loop_browse_name": "FIC-215"
+        }
+    ]
     
     返回格式：
     {
         "success": true,
         "message": "操作成功",
-        "result": {
-            "uri": "/pid_zd/xxx",
-            "browseName": "FIC101A",
-            "displayName": "FIC101A流量控制回路"
+        "data": {
+            "loop_uri": "/pid_zd/xxx",
+            "loop_type": "流量",
+            "loop_displayName": "FIC101A流量控制回路",
+            "loop_browseName": "FIC101A"
         },
         "code": 0
     }
+
+    批量返回说明：
+    - data.total / data.success_count / data.failed_count
+    - data.items: 每个回路的执行结果
     """
     try:
-        # 调用Service层实例化回路
-        loop_service = LoopService()
-        result = loop_service.instantiate_loop(
+        def build_result(loop_request: InstantiateLoopRequest) -> Dict[str, Any]:
+            try:
+                result = LoopService().instantiate_loop(
+                    loop_type=loop_request.loop_type,
+                    loop_displayName=loop_request.loop_display_name,
+                    loop_browseName=loop_request.loop_browse_name,
+                    parent_uri=parent_uri
+                )
+
+                if result.get("success"):
+                    logger.info(
+                        "回路实例化成功: 类型=%s, 名称=%s, URI=%s",
+                        loop_request.loop_type,
+                        loop_request.loop_display_name,
+                        result.get('data', {}).get('loop_uri')
+                    )
+                else:
+                    logger.error(
+                        "回路实例化失败: 类型=%s, 名称=%s, 原因=%s",
+                        loop_request.loop_type,
+                        loop_request.loop_display_name,
+                        result.get('message')
+                    )
+                return {
+                    "loop_type": loop_request.loop_type,
+                    "loop_display_name": loop_request.loop_display_name,
+                    "loop_browse_name": loop_request.loop_browse_name,
+                    "parent_uri": parent_uri,
+                    "success": result.get("success", False),
+                    "code": result.get("code"),
+                    "message": result.get("message"),
+                    "data": result.get("data")
+                }
+            except Exception as exc:
+                logger.error(
+                    "回路实例化异常: 类型=%s, 名称=%s, 错误=%s",
+                    loop_request.loop_type,
+                    loop_request.loop_display_name,
+                    str(exc)
+                )
+                return {
+                    "loop_type": loop_request.loop_type,
+                    "loop_display_name": loop_request.loop_display_name,
+                    "loop_browse_name": loop_request.loop_browse_name,
+                    "parent_uri": parent_uri,
+                    "success": False,
+                    "code": 500,
+                    "message": str(exc),
+                    "data": None
+                }
+
+        if isinstance(request, list):
+            if not request:
+                raise HTTPException(
+                    status_code=400,
+                    detail="回路列表不能为空"
+                )
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = list(executor.map(build_result, request))
+            success_count = sum(1 for item in results if item.get("success"))
+            failed_count = len(results) - success_count
+            return {
+                "success": failed_count == 0,
+                "message": "批量实例化完成",
+                "data": {
+                    "total": len(results),
+                    "success_count": success_count,
+                    "failed_count": failed_count,
+                    "items": results
+                },
+                "code": 0 if failed_count == 0 else -1
+            }
+
+        result = LoopService().instantiate_loop(
             loop_type=request.loop_type,
             loop_displayName=request.loop_display_name,
             loop_browseName=request.loop_browse_name,
-            parent_uri=request.parent_uri
+            parent_uri=parent_uri
         )
-        
+
         if result.get("success"):
             logger.info(
                 f"回路实例化成功: 类型={request.loop_type}, "
@@ -387,7 +490,7 @@ async def instantiate_loop(
             )
         else:
             logger.error(f"回路实例化失败: {result.get('message')}")
-        
+
         return result
     
     except Exception as e:
@@ -395,4 +498,198 @@ async def instantiate_loop(
         raise HTTPException(
             status_code=500,
             detail=f"回路实例化失败: {str(e)}"
+        )
+
+
+@router.post(
+    "/batch-import",
+    summary="批量导入回路（CSV）",
+    operation_id="批量导入回路",
+    description="通过上传CSV文件批量导入回路，支持异步多线程处理",
+    response_model=Dict[str, Any]
+)
+async def batch_import_loops(
+        file: UploadFile = File(..., description="CSV文件"),
+        max_workers: int = Query(5, description="最大线程数", ge=1, le=20),
+        parent_uri: str = Query(..., description="父节点URI（必填）")
+) -> Dict[str, Any]:
+    """
+    批量导入回路（CSV文件）
+    
+    功能说明：
+    - 上传CSV文件进行批量导入
+    - 支持异步多线程处理，提高导入效率
+    - 返回任务ID，可通过任务ID查询导入进度
+    
+    必填参数：
+    - parent_uri: 父节点URI（必填，通常是装置URI）
+    
+    CSV文件格式（中文表头）：
+    ```csv
+    回路标识,回路名称,回路类型
+    TIC-108,聚合反应器床层温度控制回路,温度
+    FIC-215,醚化反应原料醇烯比调节回路,流量
+    PIC-309,催化蒸馏塔塔顶压力控制回路,压力
+    ```
+    
+    必填字段：
+    - loop_type: 回路类型
+    - loop_display_name: 回路显示名称
+    - loop_browse_name: 回路标识（唯一）
+    
+    可选字段：
+    - parent_uri: 父节点URI（CSV中的值可覆盖接口参数）
+    - description: 回路描述
+    
+    返回格式：
+    {
+        "task_id": "uuid-string",
+        "message": "导入任务已启动，请使用task_id查询进度",
+        "total_count": 100,
+        "file_name": "loops.csv"
+    }
+    """
+    try:
+        # 验证文件类型
+        if not file.filename.endswith('.csv'):
+            raise HTTPException(
+                status_code=400,
+                detail="只支持CSV文件格式"
+            )
+        
+        # 读取文件内容
+        content = await file.read()
+        csv_content = content.decode('utf-8-sig')  # 支持BOM
+        
+        # 启动导入任务（传递文件名和父节点URI）
+        task_id = LoopImportService.start_import_task(
+            csv_content=csv_content,
+            file_name=file.filename,
+            parent_uri=parent_uri,
+            max_workers=max_workers
+        )
+        
+        # 获取任务状态
+        task_status = LoopImportService.get_task_status(task_id)
+        
+        logger.info(f"批量导入任务已启动: {task_id}, 总计: {task_status.get('total_count')} 个回路, 文件: {file.filename}")
+        
+        return {
+            "task_id": task_id,
+            "message": "导入任务已启动，请使用task_id查询进度",
+            "total_count": task_status.get('total_count'),
+            "file_name": file.filename
+        }
+    
+    except ValueError as e:
+        logger.error(f"CSV解析失败: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"批量导入失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"批量导入失败: {str(e)}"
+        )
+
+
+@router.get(
+    "/import-task/{task_id}",
+    summary="查询导入任务状态",
+    operation_id="查询导入任务状态",
+    description="根据任务ID查询批量导入任务的进度和状态",
+    response_model=Dict[str, Any]
+)
+async def get_import_task_status(
+        task_id: str
+) -> Dict[str, Any]:
+    """
+    查询导入任务状态
+    
+    功能说明：
+    - 查询任务的实时进度
+    - 返回成功、失败数量统计
+    - 返回最近10条错误信息
+    
+    返回格式：
+    {
+        "task_id": "uuid-string",
+        "status": "running",  # pending/running/completed/failed
+        "total_count": 100,
+        "success_count": 80,
+        "failed_count": 20,
+        "current_index": 100,
+        "progress_percentage": 100.0,
+        "error_messages": [
+            {
+                "row_number": 5,
+                "loop_name": "FIC101A",
+                "error": "错误信息"
+            }
+        ],
+        "start_time": "2024-01-01T12:00:00",
+        "end_time": "2024-01-01T12:05:00"
+    }
+    """
+    try:
+        task_status = LoopImportService.get_task_status(task_id)
+        
+        if not task_status:
+            raise HTTPException(
+                status_code=404,
+                detail=f"任务不存在: {task_id}"
+            )
+        
+        return task_status
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查询任务状态失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询任务状态失败: {str(e)}"
+        )
+
+
+@router.get(
+    "/import-tasks",
+    summary="查询所有导入任务",
+    operation_id="查询所有导入任务",
+    description="查询所有批量导入任务的状态列表",
+    response_model=List[Dict[str, Any]]
+)
+async def get_all_import_tasks() -> List[Dict[str, Any]]:
+    """
+    查询所有导入任务
+    
+    功能说明：
+    - 返回所有任务的状态列表
+    - 按时间倒序排列
+    
+    返回格式：
+    [
+        {
+            "task_id": "uuid-string",
+            "status": "completed",
+            "total_count": 100,
+            "success_count": 95,
+            "failed_count": 5,
+            "progress_percentage": 100.0,
+            "start_time": "2024-01-01T12:00:00",
+            "end_time": "2024-01-01T12:05:00"
+        }
+    ]
+    """
+    try:
+        tasks = LoopImportService.get_all_tasks()
+        return tasks
+    
+    except Exception as e:
+        logger.error(f"查询任务列表失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"查询任务列表失败: {str(e)}"
         )

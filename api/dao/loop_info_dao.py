@@ -67,14 +67,12 @@ class LoopInfoDAO:
         Args:
             db: 数据库会话
             loop_uri: 回路URI
-            include_inactive: 是否包含已逻辑删除的回路，默认False
+            include_inactive: 是否包含已逻辑删除的回路，默认False (注意：现在已改为实际删除)
         
         Returns:
-            Optional[LoopInfo]: 映射对象，不存在或已逻辑删除则返回None
+            Optional[LoopInfo]: 映射对象，不存在则返回None
         """
         statement = select(LoopInfo).where(LoopInfo.loop_uri == loop_uri)
-        if not include_inactive:
-            statement = statement.where(LoopInfo.is_active == True)
         return db.exec(statement).first()
     
     @staticmethod
@@ -85,30 +83,26 @@ class LoopInfoDAO:
         Args:
             db: 数据库会话
             loop_path: 回路路径
-            include_inactive: 是否包含已逻辑删除的回路，默认False
+            include_inactive: 是否包含已逻辑删除的回路，默认False (注意：现在已改为实际删除)
         
         Returns:
-            Optional[LoopInfo]: 映射对象，不存在或已逻辑删除则返回None
+            List[LoopInfo]: 映射对象列表
         """
         statement = select(LoopInfo).where(LoopInfo.loop_path.like(f"%{loop_path}%"))
-        if not include_inactive:
-            statement = statement.where(LoopInfo.is_active == True)
         return db.exec(statement).all()
     
     @staticmethod
     def get_active_loops(db: Session) -> List[LoopInfo]:
         """
-        查询所有激活的回路记录
+        查询所有回路记录
         
         Args:
             db: 数据库会话
         
         Returns:
-            List[LoopInfo]: 激活的回路记录列表
+            List[LoopInfo]: 回路记录列表
         """
-        statement = select(LoopInfo).where(
-            LoopInfo.is_active == True
-        ).order_by(LoopInfo.created_time.desc())
+        statement = select(LoopInfo).order_by(LoopInfo.created_time.desc())
         return db.exec(statement).all()
     
     @staticmethod
@@ -118,7 +112,7 @@ class LoopInfoDAO:
         loop_uri: Optional[str] = None,
         loop_path: Optional[str] = None,
         loop_type: Optional[str] = None,
-        is_active: Optional[bool] = True,
+        is_active: Optional[bool] = None,
         page_no: int = 1,
         page_size: int = 10
     ) -> Dict[str, Any]:
@@ -155,7 +149,7 @@ class LoopInfoDAO:
             if loop_type:
                 statement = statement.where(LoopInfo.loop_type == loop_type)
             
-            # 激活状态筛选
+            # 激活状态筛选 (实际删除模式下该筛选通常不再需要)
             if is_active is not None:
                 statement = statement.where(LoopInfo.is_active == is_active)
             
@@ -209,7 +203,7 @@ class LoopInfoDAO:
             loop_uri: Optional[str] = None,
             device_uri: Optional[str] = None,
             loop_type: Optional[str] = None,
-            is_active: Optional[bool] = True,
+            is_active: Optional[bool] = None,
             page_no: int = 1,
             page_size: int = 10
     ) -> Dict[str, Any]:
@@ -457,9 +451,7 @@ class LoopInfoDAO:
             Dict[str, str]: uri到path的映射字典
         """
         try:
-            statement = select(LoopInfo).where(
-                LoopInfo.is_active == True
-            )
+            statement = select(LoopInfo)
             mappings = db.exec(statement).all()
             
             uri_to_path_map = {m.loop_uri: m.loop_path for m in mappings}
@@ -481,9 +473,7 @@ class LoopInfoDAO:
             Dict[str, str]: path到uri的映射字典
         """
         try:
-            statement = select(LoopInfo).where(
-                LoopInfo.is_active == True
-            )
+            statement = select(LoopInfo)
             mappings = db.exec(statement).all()
             
             path_to_uri_map = {m.loop_path: m.loop_uri for m in mappings}

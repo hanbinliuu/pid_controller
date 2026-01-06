@@ -259,11 +259,27 @@ class Config:
     )
     TASK_DEVICE_STATS_CRON: str = _get_config(
         'task.device_stats.cron',
-        '0 1 * * *'  # 默认每天01:00执行
+        '0 1 * * *'  # 默认每天1:00执行
     )
     TASK_DEVICE_STATS_MAX_WORKERS: int = _get_config(
         'task.device_stats.max_workers',
         3,
+        int
+    )
+    
+    # 清理旧导入任务配置
+    TASK_CLEAN_IMPORT_ENABLE: bool = _get_config(
+        'task.clean_import.enable',
+        True,
+        bool
+    )
+    TASK_CLEAN_IMPORT_CRON: str = _get_config(
+        'task.clean_import.cron',
+        '0 2 * * *'  # 默认每天凌晨2点执行
+    )
+    TASK_CLEAN_IMPORT_KEEP_DAYS: int = _get_config(
+        'task.clean_import.keep_days',
+        7,
         int
     )
     

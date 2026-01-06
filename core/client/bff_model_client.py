@@ -915,8 +915,8 @@ class BFFModelClient:
 
         try:
             logger.info(f"查询下一级子模型，标识符: {identifier}")
-            logger.debug(f"请求URL: {url}")
-            logger.debug(f"请求参数: {params}")
+            # logger.debug(f"请求URL: {url}")
+            # logger.debug(f"请求参数: {params}")
 
             response = self.session.get(
                 url,
@@ -953,7 +953,7 @@ class BFFModelClient:
                 }
                 submodels.append(simplified_item)
 
-            logger.info(f"成功查询到 {len(submodels)} 个子模型")
+            # logger.info(f"成功查询到 {len(submodels)} 个子模型")
 
             return {
                 'submodels': submodels,

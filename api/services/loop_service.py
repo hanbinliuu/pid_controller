@@ -6,12 +6,8 @@
 
 import logging
 from typing import Optional, Dict, Any, List
-
-from sqlmodel import Session
-
 from api.middleware.exceptions import RuntimeException
 from api.middleware.response_model import error_response, success_response
-from api.services.bff_service import BFFService
 from api.services.dynamic_config_service import DynamicConfigService
 from core.client import ModelCoreClient, IoTDAClient, ModelDataSourceClient
 from core.client.bff_model_client import BFFModelClient
@@ -34,6 +30,10 @@ class LoopService:
         self.bff_client = BFFModelClient()
         # 回路类型加载
         self.loop_type_map = ModelUtil.get_loop_types()
+        self.dynamic_config: Dict[str, str] = {}
+        with get_db_session() as db:
+            # 获取动态配置参数
+            self.dynamic_config = DynamicConfigService.get_all_configs_map(db)
 
     @staticmethod
     def list_instances_by_node(
@@ -296,6 +296,215 @@ class LoopService:
             logger.error(f"回路子类型查询失败: {str(e)}")
             raise
 
+    def _create_iotda_loop_device(
+            self,
+            device_id: str,
+            device_name: str,
+    ) -> Dict[str, str]:
+        """
+        创建IOTDA回路设备的公共方法
+        
+        Args:
+            device_id: 设备标识
+            device_name: 设备显示名称
+            
+        Returns:
+            Dict[str, str]: 设备信息，包含设备ID和产品ID
+            
+        Raises:
+            RuntimeException: 设备创建失败时抛出
+        """
+        # 虚拟网关设备ID
+        virtual_gateway_device_id = self.dynamic_config.get("virtual_gateway_device_id")
+        # 资源空间 ID
+        default_resource_space = self.dynamic_config.get("default_resource_space")
+        # 产品(网关子设备模型)ID
+        product_model_id = self.dynamic_config.get("product_model_id")
+        
+        # 调用创建设备方法
+        self._create_iotda_device(
+            device_id=device_id,
+            device_name=device_name,
+            product_id=product_model_id,
+            default_resource_space=default_resource_space,
+            virtual_gateway_device_id=virtual_gateway_device_id
+        )
+        
+        return {
+            "device_id": device_id,
+            "product_model_id": product_model_id
+        }
+
+    def _bind_loop_to_device(
+            self,
+            loop_point_uri: str,
+            device_id: str,
+            product_model_id: str,
+            loop_uri: str,
+            loop_displayName: str,
+    ) -> bool:
+        """
+        绑定回路到设备的公共方法
+        
+        Args:
+            loop_point_uri: 回路属性信息节点URI
+            device_id: 设备ID
+            product_model_id: 产品(设备模型)ID
+            loop_uri: 回路URI
+            loop_displayName: 回路显示名称
+            
+        Returns:
+            bool: 绑定成功返回True
+            
+        Raises:
+            RuntimeException: 绑定失败时抛出
+        """
+        if not (loop_point_uri and device_id and product_model_id):
+            logger.error(
+                f"回路-网关设备测点绑定异常, 回路属性信息节点uri: {loop_point_uri}, 设备ID: {device_id}, 产品(网关子设备模型)ID: {product_model_id}")
+            raise RuntimeException(
+                f"回路-网关设备测点绑定异常, 回路属性信息节点uri: {loop_point_uri}, 设备ID: {device_id}, 产品(网关子设备模型)ID: {product_model_id}")
+        
+        # 测点绑定
+        with ModelDataSourceClient() as model_data_source_client:
+            bind_result = model_data_source_client.bind_single_device(
+                uri=loop_point_uri,
+                device_id=device_id,
+                product_id=product_model_id,
+                operator="管理员"
+            )
+            if bind_result.get("success"):
+                logger.info(f"回路-测点批量绑定成功, {loop_displayName}, 设备ID: {device_id}")
+                return True
+            else:
+                logger.error(f"回路测点批量绑定异常, {loop_displayName}, 设备ID: {device_id}, {bind_result.get('message')}")
+                # 绑定失败，删除新创建的回路实例、设备
+                if loop_uri:
+                    self.model_core_client.delete_tree(uri=loop_uri)
+                if device_id:
+                    self.iotda_client.delete_device(device_id=device_id)
+                raise RuntimeException(
+                    f"回路测点批量绑定异常, {loop_displayName}, 设备ID: {device_id}, {bind_result.get('message')}")
+
+    def _create_iotda_device(
+            self,
+            device_id: str,
+            device_name: str,
+            default_resource_space: str ,
+            product_id: str ,
+            virtual_gateway_device_id: str,
+    ) :
+        """
+        创建IOTDA设备实例的公共方法
+        
+        Args:
+            device_id 设备ID
+            device_name 设备名称
+            default_resource_space 资源空间ID
+            product_id 产品ID
+            virtual_gateway_device_id 所属网关设备ID
+        Returns:
+            Dict[str, str]: 设备信息，包含device_id
+            
+        Raises:
+            RuntimeException: 设备创建失败时抛出
+        """
+
+        iot_device = None
+        # 判断设备是否已创建
+        try:
+            try:
+                iot_device = self.iotda_client.get_device(device_id)
+            except Exception as e:
+                logger.error(f"IOTDA设备查询异常, {str(e)}")
+            # 创建子设备
+            if iot_device is None :
+                iotda_init_result = self.iotda_client.create_sub_device(
+                    name=device_id,  # 显示名称
+                    identification=device_id,  # 设备标识
+                    device_id=device_id,  # 设备ID
+                    resource_space_id=default_resource_space,  # 资源空间ID
+                    product_id=product_id,  # 产品（设备模型）ID
+                    gateway_id=virtual_gateway_device_id,  # 网关设备ID
+                    description=device_id,
+                )
+                if iotda_init_result.get("code") == 0:
+                    logger.info(f"IOTDA设备创建成功, {device_name}, 设备ID: {device_id},产品ID: {product_id}")
+                else:
+                    logger.error(f"IOTDA设备创建异常, {iotda_init_result.get('message')}")
+                    raise RuntimeException( iotda_init_result.get("message"))
+                    # raise RuntimeException("IOTDA设备创建异常," + iotda_init_result.get("message"))
+        except Exception as e:
+            logger.error(f"IOT网关设备[{device_id}]创建异常, {str(e)}")
+            raise RuntimeException(f"IOT网关设备[{device_id}]创建异常, {str(e)}")
+
+    def _create_model_loop_instance(
+            self,
+            loop_type: str,
+            loop_displayName: str,
+            loop_browseName: str,
+            parent_uri: str,
+    ) -> str:
+        """
+        在模型中创建回路实例
+        
+        Args:
+            loop_type: 回路类型
+            loop_displayName: 回路显示名称
+            loop_browseName: 回路标识
+            parent_uri: 所属装置URI
+            
+        Returns:
+            str: 创建成功的回路URI
+            
+        Raises:
+            RuntimeException: 实例创建失败时抛出
+        """
+        # 获取回路类型uri
+        loop_type_uri = self.loop_type_map.get(loop_type)
+        if not loop_type_uri:
+            logger.error(f"回路类型不存在: {loop_type}")
+            raise RuntimeException(f"回路类型不存在: {loop_type}")
+        # 获取工程URI
+        project_uri = Config.MODEL_DEFULT_PROJECT_URI
+        
+        # 调用模型核心客户端创建回路
+        loop_info_result = self.model_core_client.drag_to_with_attributes(
+            creator="导入",
+            project_uri=project_uri,
+            source_uri=loop_type_uri,
+            target_uri=parent_uri,
+            display_name=loop_displayName,
+            browse_name=loop_browseName
+        )
+        
+        if not loop_info_result.get("success"):
+            logger.error(f"模型回路实例化失败: {loop_info_result.get('message')}")
+            raise RuntimeException("模型回路实例化失败," + loop_info_result.get("message"))
+        
+        loop_uri = loop_info_result.get("result", {}).get("uri")
+        logger.info(f"模型回路实例化成功: {loop_displayName}, URI: {loop_uri}")
+        return loop_uri
+
+    def _get_loop_point_uri(self, loop_uri: str) -> str:
+        """
+        获取回路测点信息节点URI
+        """
+        if not loop_uri:
+            logger.error("回路属性信息节点uri获取失败")
+            raise RuntimeException("回路属性信息节点uri获取失败")
+
+        loop_uris = self.bff_client.identifier_to_uri(
+            identifiers=[loop_uri + Config.BFF_MODEL_POINT_PATH]
+        )
+        if loop_uris:
+            loop_point_uri = loop_uris[0]
+            logger.info(f"回路属性信息节点uri: {loop_point_uri}")
+            return loop_point_uri
+
+        logger.error("回路属性信息节点uri获取失败")
+        raise RuntimeException("回路属性信息节点uri获取失败")
+
     #  回路实例化
     def instantiate_loop(
             self,
@@ -311,121 +520,63 @@ class LoopService:
             loop_type: 回路类型
             loop_displayName: 回路显示名称
             loop_browseName: 回路标识
-            parent_uri: 装置uri
+            parent_uri: 所属装置uri
 
         Returns:
             Dict[str, Any]: 回路信息
         """
-        # 获取回路类型uri
-        loop_type_uri = self.loop_type_map.get(loop_type)
-        # 获取工程URI
-        project_uri = Config.MODEL_DEFULT_PROJECT_URI
-
         loop_uri = None
         device_id = None
         loop_point_uri = None
-        # todo 创建回路节点-回路实例化
-        # 调用模型核心客户端创建装置
-        # with ModelCoreClient() as model_core_client:
-        loop_info_result = self.model_core_client.drag_to_with_attributes(
-            creator="导入",
-            project_uri=project_uri,
-            source_uri=loop_type_uri,
-            target_uri=parent_uri,
-            display_name=loop_displayName,
-            browse_name=loop_browseName
+        loop_uri = self._create_model_loop_instance(
+            loop_type=loop_type,
+            loop_displayName=loop_displayName,
+            loop_browseName=loop_browseName,
+            parent_uri=parent_uri
         )
-        if loop_info_result.get("success"):
-            loop_uri = loop_info_result.get("result", {}).get("uri")
-            logger.info(f"模型回路实例化成功: {loop_displayName}, URI: {loop_uri}")
-        else:
-            logger.error(f"模型回路实例化失败: {loop_info_result.get('message')}")
-            # todo 删除实例
+        loop_point_uri = self._get_loop_point_uri(loop_uri)
 
+        # todo 回路网关设备实例化
+        try:
+            device_info = self._create_iotda_loop_device(
+                device_id=loop_browseName,
+                device_name=loop_browseName
+            )
+            device_id = device_info.get("device_id")
+            product_model_id = device_info.get("product_model_id")
+
+        except RuntimeException as e:
+            # 删除回路
+            if loop_uri:
+                self.model_core_client.delete_tree(uri=loop_uri)
             return error_response(
                 code=-1,
-                message=f"模型回路实例化失败: {loop_info_result.get('message')}",
-
+                message=f"回路网关设备实例化失败: {str(e)}",
             )
-            # raise RuntimeException("模型回路实例化失败："+loop_info_result.get("message"))
-
-        # 获取回路属性信息节点uri
-        if loop_uri is not None:
-            # with BFFModelClient as bff_client:
-            loop_uris = self.bff_client.identifier_to_uri(identifiers=[loop_uri + "/loop_state_parameters"])
-            if len(loop_uris) > 0:
-                loop_point_uri = loop_uris[0]
-                logger.info(f"回路属性信息节点uri: {loop_point_uri}")
-
-        # return loop_info_result
-        # todo 创建IOTDA设备实例
-        dynamic_config: Dict[str, str] = {}
-        with get_db_session() as db:
-            # 获取动态配置参数
-            dynamic_config = DynamicConfigService.get_all_configs_map(db)
-        # 虚拟网关设备ID
-        virtual_gateway_device_id = dynamic_config.get("virtual_gateway_device_id")
-        # 资源空间 ID
-        default_resource_space = dynamic_config.get("default_resource_space")
-        # 产品(网关子设备模型)ID
-        product_model_id = dynamic_config.get("product_model_id")
-        device_id = loop_browseName
-
-        # with IoTDAClient() as iotda_client:
-        iotda_init_result = self.iotda_client.create_sub_device(
-            name=loop_browseName, #显示名称
-            identification=loop_browseName, #设备标识
-            device_id=loop_browseName, # 设备ID
-            resource_space_id=default_resource_space, # 资源空间ID
-            product_id=product_model_id, # 产品（设备模型）ID
-            gateway_id=virtual_gateway_device_id, # 网关设备ID
-            description=loop_displayName,
-        )
-        if iotda_init_result.get("code") == 0:
-            device_id = loop_browseName
-            logger.info(f"回路网关设备实例化成功: {loop_displayName}, 设备ID: {device_id}")
-        else:
-            logger.error(f"回路网关设备实例化失败: {iotda_init_result.get('message')}")
-            # todo 删除实例、设备
-            self.model_core_client.delete_tree(uri=loop_uri)
-            return error_response(
-                code=-1,
-                message="回路网关设备实例化异常：" + iotda_init_result.get("message")
-            )
-            raise RuntimeException("回路网关设备实例化失败：" + iotda_init_result.get("message"))
+            # raise
 
         # todo 回路-网关设备测点绑定
-        if loop_point_uri and device_id and product_model_id:
-            # 测点绑定
-            with ModelDataSourceClient() as model_data_source_client:
-                bind_result = model_data_source_client.bind_single_device(
-                    uri=loop_point_uri,
-                    device_id=device_id,
-                    product_id=product_model_id,
-                    operator="管理员"
-                )
-                if bind_result.get("success"):
-                    logger.info(f"回路-测点批量绑定成功: {loop_displayName}, 设备ID: {device_id}")
-
-                else:
-                    logger.error(f"回路-测点批量绑定失败: {bind_result.get('message')}")
-                    raise RuntimeException("回路-测点批量绑定失败：" + bind_result.get("message"))
-                return success_response(
-                        data={
-                            "loop_uri": loop_uri,
-                            "loop_type": loop_type,
-                            "loop_displayName": loop_displayName,
-                            "loop_browseName": loop_browseName,
-                            "loop_point_uri": loop_point_uri,
-                            "device_id": device_id,
-                            "product_model_id": product_model_id
-                        }
-                    )
-        else:
-            logger.error(
-                f"回路-网关设备测点绑定异常: 回路属性信息节点uri: {loop_point_uri}, 设备ID: {device_id}, 产品(网关子设备模型)ID: {product_model_id}")
-            # todo 回路列表加载任务执行
+        try:
+            self._bind_loop_to_device(loop_point_uri, device_id, product_model_id, loop_uri, loop_displayName)
+        except RuntimeException as e:
+            logger.error(f"绑定失败: {str(e)}")
             return error_response(
                 code=-1,
-                message=f"回路-网关设备测点绑定异常: 回路属性信息节点uri: {loop_point_uri}, 设备ID: {device_id}, 产品(网关子设备模型)ID: {product_model_id}",
+                message=str(e),
             )
+
+        # todo 回路列表加载任务执行
+        # logger.info("手动触发回路列表加载任务")
+        # from api.tasks.load_loop_info import load_loop_list_and_sync
+        # load_loop_list_and_sync()
+        return success_response(
+            data={
+                "loop_uri": loop_uri,
+                "loop_type": loop_type,
+                "loop_displayName": loop_displayName,
+                "loop_browseName": loop_browseName,
+                "loop_point_uri": loop_point_uri,
+                "device_id": device_id,
+                "product_model_id": product_model_id
+            }
+        )

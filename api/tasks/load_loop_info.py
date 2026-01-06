@@ -38,7 +38,7 @@ def load_loop_list_and_sync() -> Dict[str, Any]:
             "total_instances": 0,
             "new_loops": 0,
             "updated_loops": 0,
-            "deactivated_loops": 0,  # 新增：逻辑删除的回路数
+            "deleted_loops": 0,  # 修改：实际删除的回路数
             "failed_loops": 0,
             "errors": []
         }
@@ -84,14 +84,14 @@ def load_loop_list_and_sync() -> Dict[str, Any]:
                     logger.error(error_msg)
                     stats["errors"].append(error_msg)
             
-            # 3. 逻辑删除未查询到的回路
-            logger.info(f"正在检查并逻辑删除未查询到的回路...")
+            # 3. 实际删除未查询到的回路
+            logger.info(f"正在检查并实际删除未查询到的回路...")
             try:
-                deactivated_count = _deactivate_missing_loops(db, current_loop_uris)
-                stats["deactivated_loops"] = deactivated_count
-                logger.info(f"逻辑删除了 {deactivated_count} 个未查询到的回路")
+                deleted_count = _delete_missing_loops(db, current_loop_uris)
+                stats["deleted_loops"] = deleted_count
+                logger.info(f"实际删除了 {deleted_count} 个未查询到的回路")
             except Exception as e:
-                error_msg = f"逻辑删除未查询回路失败: {str(e)}"
+                error_msg = f"实际删除未查询回路失败: {str(e)}"
                 logger.error(error_msg)
                 stats["errors"].append(error_msg)
         
@@ -103,7 +103,7 @@ def load_loop_list_and_sync() -> Dict[str, Any]:
         logger.info(f"  总实例数: {stats['total_instances']}")
         logger.info(f"  新增回路: {stats['new_loops']}")
         logger.info(f"  更新回路: {stats['updated_loops']}")
-        logger.info(f"  逻辑删除: {stats['deactivated_loops']}")
+        logger.info(f"  实际删除: {stats['deleted_loops']}")
         logger.info(f"  失败回路: {stats['failed_loops']}")
         logger.info("=" * 70)
         
@@ -278,35 +278,33 @@ def _query_loop_points(loop_uri: str) -> Dict[str, str]:
         return {}
 
 
-def _deactivate_missing_loops(db, current_loop_uris: set) -> int:
+def _delete_missing_loops(db, current_loop_uris: set) -> int:
     """
-    逻辑删除未在本次查询中出现的回路
+    实际删除未在本次查询中出现的回路
     
     Args:
         db: 数据库会话
         current_loop_uris: 本次查询到的所有loop_uri集合
         
     Returns:
-        逻辑删除的回路数量
+        实际删除的回路数量
     """
     try:
-        # 获取数据库中所有激活的回路
-        all_active_loops = LoopInfoDAO.get_active_loops(db)
+        # 获取数据库中所有现有的回路
+        all_loops = LoopInfoDAO.get_active_loops(db)
         
-        deactivated_count = 0
-        for loop in all_active_loops:
-            # 如果数据库中的回路不在本次查询结果中，则逻辑删除
+        deleted_count = 0
+        for loop in all_loops:
+            # 如果数据库中的回路不在本次查询结果中，则实际删除
             if loop.loop_uri not in current_loop_uris:
-                update_data = {
-                    "is_active": False,
-                    "updated_time": datetime.now()
-                }
-                LoopInfoDAO.update_by_loop_uri(db, loop.loop_uri, update_data)
-                logger.info(f"逻辑删除回路: {loop.loop_name} ({loop.loop_uri})")
-                deactivated_count += 1
+                LoopInfoDAO.delete_by_loop_uri(db, loop.loop_uri)
+                logger.info(f"实际删除回路: {loop.loop_name} ({loop.loop_uri})")
+                deleted_count += 1
         
-        return deactivated_count
+        return deleted_count
         
     except Exception as e:
-        logger.error(f"逻辑删除回路失败: {str(e)}")
+        logger.error(f"实际删除回路失败: {str(e)}")
         raise
+
+

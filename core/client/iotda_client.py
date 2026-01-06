@@ -49,7 +49,7 @@ class IoTDAClient:
     
     # 接口路径
     CREATE_SUB_DEVICE_PATH = "/iot-core/v1/devices/subDevice"
-    GET_DEVICE_PATH = "/iot-core/v1/devices/{device_id}"
+    GET_DEVICE_PATH = "/iot-core/v1/devices/noauth/{device_id}"
     DELETE_DEVICE_PATH = "/iot-core/v1/devices/{device_id}"
 
     def __init__(self, base_url: Optional[str] = None, timeout: int = None):
@@ -125,13 +125,13 @@ class IoTDAClient:
             "name": name,
             "deviceId": device_id,
             "identification": identification,
-            "description": description,
             "resourceSpaceId": resource_space_id,
             "productId": product_id,
+            "gatewayId": gateway_id,
             "secret": secret,
-            "gatewayId": gateway_id
+            "description": description
         }
-        
+
         try:
             logger.info(f"调用创建子设备接口，设备名称: {name}, 网关ID: {gateway_id}")
             logger.debug(f"请求URL: {url}")
@@ -152,9 +152,7 @@ class IoTDAClient:
                 logger.info(f"子设备创建成功: {name}")
             else:
                 logger.warning(f"子设备创建响应异常: {result.get('message')}")
-            
             return result
-            
         except requests.exceptions.Timeout:
             logger.error(f"请求超时（{self.timeout}秒）")
             raise
@@ -175,16 +173,39 @@ class IoTDAClient:
         Returns:
             接口响应结果:
             {
-                "code": 0,
-                "message": "成功",
-                "results": {
-                    "deviceId": "FIC101A11",
-                    "name": "FIC101A11",
-                    "status": "ONLINE",
-                    ...
-                }
+              "code": 0,
+              "message": "成功",
+              "results": {
+                "id": "FIC101A",
+                "productId": "d612edaa23a9475dbe76921a7b46276b",
+                "name": "FIC101A",
+                "identification": "FIC101A",
+                "secret": "",
+                "deviceId": "FIC101A",
+                "description": "FIC101A",
+                "resourceSpaceId": "ea1e6deab5ac49aeae01177a66b4f9b4",
+                "resourceSpaceName": "PID",
+                "createBy": "管理员",
+                "createTime": 1767601119890,
+                "isSendModel": 0,
+                "createType": 0,
+                "productName": "PID控制回路模型",
+                "deviceType": "网关子设备",
+                "protocol": null,
+                "status": "INACTIVE",
+                "secretStatus": "ACTIVE",
+                "gatewayId": "XN_WG",
+                "gatewayName": null,
+                "gatewayProtocol": null,
+                "longitude": "",
+                "latitude": "",
+                "version": null,
+                "deviceStatusCheckTime": 0,
+                "orgName": "测试",
+                "reportDataCount": 0,
+                "groupName": null
+              }
             }
-            
         Raises:
             requests.exceptions.RequestException: 请求失败时抛出
             
@@ -205,21 +226,21 @@ class IoTDAClient:
             )
             
             response.raise_for_status()
-            result = response.json()
+            reponse_json = response.json()
             
-            if result.get('code') == 0:
+            if reponse_json.get('code') == 0:
                 logger.info(f"设备查询成功: {device_id}")
             else:
-                logger.warning(f"设备查询响应异常: {result.get('message')}")
-            
-            return result
-            
+                logger.warning(f"设备查询响应异常: {reponse_json.get('message')}")
+            return reponse_json.get('results')
         except requests.exceptions.Timeout:
             logger.error(f"请求超时（{self.timeout}秒）")
-            raise
+            return {}
+            # raise
         except requests.exceptions.RequestException as e:
-            logger.error(f"IoTDA设备查询失败: {str(e)}")
-            raise
+            logger.error(f"IoTDA设备查询异常: {str(e)}")
+            return {}
+            # raise
 
     def delete_device(
             self,

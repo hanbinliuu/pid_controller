@@ -111,6 +111,7 @@ def init_database():
         from api.bean import loop_evaluation
         from api.bean import loop_info
         from api.bean import device_evaluation
+        from api.bean import import_task
 
         from api.pid_data_mgr import file_db_models
 

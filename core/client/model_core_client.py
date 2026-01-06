@@ -247,7 +247,7 @@ class ModelCoreClient:
     def delete_tree(
             self,
             uri: str,
-            modifier: str
+            modifier: str=""
     ) -> Dict[str, Any]:
         """
         删除节点
