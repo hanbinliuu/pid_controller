@@ -1,5 +1,3 @@
-import time
-
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Body, Depends
@@ -9,15 +7,14 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from api.bean.generate_curves_request import GenerateCurvesRequest, KTLSimulatorRequest
+from api.response.generate_curves_request import GenerateCurvesRequest, KTLSimulatorRequest
 from api.commond.time_util import parse_time_to_milliseconds, format_time_to_string, get_current_format_time, \
     get_current_time
 from api.middleware.exceptions import RuntimeException
 from api.response.tuning_response import AutoTuningResponse
-from core.agent.tools import process_query_tsdb_data_interpolated, detect_and_visualize
+from core.agent.tools import process_query_tsdb_data_interpolated
 from core.algorithm.ktl_simulator import KTLSimulator
 from api.services.expert_tuning_service import ExpertTuningService
-from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
 from core.client.bff_model_client import BFFModelClient
 from core.client.select_tsdb_client import get_default_database
 from core.config import Config
