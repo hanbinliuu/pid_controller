@@ -791,6 +791,45 @@ TEST_SCENARIOS = [
         'original_pid': {'Kp': 0.5, 'Ki': 0.02, 'Kd': 0.0},
         'loop_type': 'temperature',
     },
+    
+    # ========== 极端场景 (EXTREME Scenarios) ==========
+    # 组合多个高风险因素，测试算法极限能力
+    {
+        'name': 'Extreme - Triple Challenge',
+        'description': '极端场景 - 大滞后(L/T=2.0) + 增益x10 + 高噪声',
+        'process_original': {'K': 0.3, 'T1': 20.0, 'L': 25.0},
+        'process_changed': {'K': 3.0, 'T1': 15.0, 'L': 30.0},
+        'original_pid': {'Kp': 4.0, 'Ki': 0.1, 'Kd': 0.0},
+        'noise_std': 1.2,
+        'loop_type': 'temperature',
+    },
+    {
+        'name': 'Extreme - Slow Delay Gain',
+        'description': '极端场景 - 极慢T1=200s + 大滞后 + 增益x8',
+        'process_original': {'K': 0.5, 'T1': 200.0, 'L': 40.0},
+        'process_changed': {'K': 4.0, 'T1': 150.0, 'L': 80.0},
+        'original_pid': {'Kp': 0.8, 'Ki': 0.005, 'Kd': 0.0},
+        'noise_std': 0.6,
+        'loop_type': 'level',
+    },
+    {
+        'name': 'Extreme - Inverse Noisy',
+        'description': '极端场景 - 反向响应(K变负) + 高噪声 + 增益x5',
+        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 8.0},
+        'process_changed': {'K': -5.0, 'T1': 25.0, 'L': 15.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.05, 'Kd': 0.0},
+        'noise_std': 1.5,
+        'loop_type': 'level',
+    },
+    {
+        'name': 'Extreme - Dominant Delay Slow',
+        'description': '极端场景 - 滞后主导(L/T=2.0) + 极慢T1=150s',
+        'process_original': {'K': 0.8, 'T1': 80.0, 'L': 50.0},
+        'process_changed': {'K': 1.5, 'T1': 150.0, 'L': 300.0},
+        'original_pid': {'Kp': 1.0, 'Ki': 0.01, 'Kd': 0.0},
+        'noise_std': 0.8,
+        'loop_type': 'temperature',
+    },
 ]
 
 # 预定义的幅度测试场景（选择几个典型场景）
@@ -1025,4 +1064,53 @@ REALISTIC_SCENARIOS = [
         'loop_type': 'flow',
         'amplitude_factors': [1.0],
     },
+    
+    # ========== 极端场景 (EXTREME Scenarios) ==========
+    # 这些场景组合了多个高风险因素，用于测试算法的极限能力
+    # 预期：大部分会失败，用于评估改进空间
+    
+    # 1. 极端组合 - 大滞后 + 高增益变化 + 高噪声
+    {
+        'name': 'Extreme - Triple Challenge',
+        'description': '极端场景 - 大滞后(L/T=1.5) + 增益x10 + 高噪声',
+        'process_original': {'K': 0.3, 'T1': 20.0, 'L': 25.0},   # L/T=1.25 → +3
+        'process_changed': {'K': 3.0, 'T1': 15.0, 'L': 30.0},    # K变化x10 → +3
+        'original_pid': {'Kp': 4.0, 'Ki': 0.1, 'Kd': 0.0},
+        'noise_std': 1.2,                                         # 高噪声 → +3
+        'loop_type': 'temperature',
+    },
+    
+    # 2. 极端组合 - 极慢系统 + 大滞后 + 增益跳变
+    {
+        'name': 'Extreme - Slow Delay Gain',
+        'description': '极端场景 - 极慢T1=200s + 大滞后 + 增益x8',
+        'process_original': {'K': 0.5, 'T1': 200.0, 'L': 40.0},  # T1>100 → +2, L/T=0.2
+        'process_changed': {'K': 4.0, 'T1': 150.0, 'L': 80.0},   # K变化x8 → +3, L/T=0.53 → +2
+        'original_pid': {'Kp': 0.8, 'Ki': 0.005, 'Kd': 0.0},
+        'noise_std': 0.6,                                         # 中等噪声 → +2
+        'loop_type': 'level',
+    },
+    
+    # 3. 极端组合 - 反向响应 + 高噪声 + 增益变化
+    {
+        'name': 'Extreme - Inverse Noisy',
+        'description': '极端场景 - 反向响应(K变负) + 高噪声 + 增益x5',
+        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 8.0},
+        'process_changed': {'K': -5.0, 'T1': 25.0, 'L': 15.0},   # 反向响应 → +3, K变化x5 → +3
+        'original_pid': {'Kp': 2.0, 'Ki': 0.05, 'Kd': 0.0},
+        'noise_std': 1.5,                                         # 极高噪声 → +3
+        'loop_type': 'level',
+    },
+    
+    # 4. 极端组合 - 极大滞后比 + 极慢系统
+    {
+        'name': 'Extreme - Dominant Delay Slow',
+        'description': '极端场景 - 滞后主导(L/T=2.0) + 极慢T1=150s',
+        'process_original': {'K': 0.8, 'T1': 80.0, 'L': 50.0},   # L/T=0.625 → +2
+        'process_changed': {'K': 1.5, 'T1': 150.0, 'L': 300.0},  # L/T=2.0 → +3, T1>100 → +2
+        'original_pid': {'Kp': 1.0, 'Ki': 0.01, 'Kd': 0.0},
+        'noise_std': 0.8,                                         # 高噪声 → +2
+        'loop_type': 'temperature',
+    },
 ]
+
