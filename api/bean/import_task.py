@@ -24,7 +24,7 @@ class ImportTask(SQLModel, table=True):
         {"comment": "回路导入状态表"},
     )
 
-    id: Optional[str] = Field(default_factory=lambda: str(uuid4()), primary_key=True, description="主键ID")
+    id: Optional[str] = Field(default_factory=lambda: str(uuid4().hex), primary_key=True, description="主键ID")
     task_id: str = Field(index=True, unique=True, max_length=64, description="任务ID（UUID）")
     status: str = Field(default=ImportStatus.PENDING.value, max_length=20, description="任务状态：pending/running/completed/failed（参考ImportStatus枚举）")
     total_count: int = Field(default=0, description="总回路数量")

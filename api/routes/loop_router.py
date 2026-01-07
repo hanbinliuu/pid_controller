@@ -6,7 +6,6 @@
 
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Dict, Any, List, Union
 from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
 from sqlmodel import Session
@@ -347,6 +346,11 @@ async def instantiate_loop(
             description="父节点URI（必填，所有回路在同一装置下创建）",
             example=Config.BFF_MODEL_ROOT_URI
         ),
+        gateway_device_id: str = Query(
+            None,
+            description="网关设备ID",
+            example="12345"
+        ),
         max_workers: int = Query(
             5,
             description="批量实例化的最大线程数（仅批量生效）",
@@ -402,96 +406,16 @@ async def instantiate_loop(
     - data.items: 每个回路的执行结果
     """
     try:
-        def build_result(loop_request: InstantiateLoopRequest) -> Dict[str, Any]:
-            try:
-                result = LoopService().instantiate_loop(
-                    loop_type=loop_request.loop_type,
-                    loop_displayName=loop_request.loop_display_name,
-                    loop_browseName=loop_request.loop_browse_name,
-                    parent_uri=parent_uri
-                )
-
-                if result.get("success"):
-                    logger.info(
-                        "回路实例化成功: 类型=%s, 名称=%s, URI=%s",
-                        loop_request.loop_type,
-                        loop_request.loop_display_name,
-                        result.get('data', {}).get('loop_uri')
-                    )
-                else:
-                    logger.error(
-                        "回路实例化失败: 类型=%s, 名称=%s, 原因=%s",
-                        loop_request.loop_type,
-                        loop_request.loop_display_name,
-                        result.get('message')
-                    )
-                return {
-                    "loop_type": loop_request.loop_type,
-                    "loop_display_name": loop_request.loop_display_name,
-                    "loop_browse_name": loop_request.loop_browse_name,
-                    "parent_uri": parent_uri,
-                    "success": result.get("success", False),
-                    "code": result.get("code"),
-                    "message": result.get("message"),
-                    "data": result.get("data")
-                }
-            except Exception as exc:
-                logger.error(
-                    "回路实例化异常: 类型=%s, 名称=%s, 错误=%s",
-                    loop_request.loop_type,
-                    loop_request.loop_display_name,
-                    str(exc)
-                )
-                return {
-                    "loop_type": loop_request.loop_type,
-                    "loop_display_name": loop_request.loop_display_name,
-                    "loop_browse_name": loop_request.loop_browse_name,
-                    "parent_uri": parent_uri,
-                    "success": False,
-                    "code": 500,
-                    "message": str(exc),
-                    "data": None
-                }
-
+        loop_service = LoopService()
         if isinstance(request, list):
-            if not request:
-                raise HTTPException(
-                    status_code=400,
-                    detail="回路列表不能为空"
-                )
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                results = list(executor.map(build_result, request))
-            success_count = sum(1 for item in results if item.get("success"))
-            failed_count = len(results) - success_count
-            return {
-                "success": failed_count == 0,
-                "message": "批量实例化完成",
-                "data": {
-                    "total": len(results),
-                    "success_count": success_count,
-                    "failed_count": failed_count,
-                    "items": results
-                },
-                "code": 0 if failed_count == 0 else -1
-            }
-
-        result = LoopService().instantiate_loop(
-            loop_type=request.loop_type,
-            loop_displayName=request.loop_display_name,
-            loop_browseName=request.loop_browse_name,
-            parent_uri=parent_uri
-        )
-
-        if result.get("success"):
-            logger.info(
-                f"回路实例化成功: 类型={request.loop_type}, "
-                f"名称={request.loop_display_name}, "
-                f"URI={result.get('data', {}).get('loop_uri')}"
+            # 将Pydantic模型列表转换为字典列表
+            requests_data = [item.model_dump() for item in request]
+            return loop_service.batch_instantiate_loops(
+                requests=requests_data,
+                parent_uri=parent_uri,
+                gateway_device_id=gateway_device_id,
+                max_workers=max_workers
             )
-        else:
-            logger.error(f"回路实例化失败: {result.get('message')}")
-
-        return result
     
     except Exception as e:
         logger.error(f"回路实例化失败: {str(e)}")
@@ -511,7 +435,8 @@ async def instantiate_loop(
 async def batch_import_loops(
         file: UploadFile = File(..., description="CSV文件"),
         max_workers: int = Query(5, description="最大线程数", ge=1, le=20),
-        parent_uri: str = Query(..., description="父节点URI（必填）")
+        parent_uri: str = Query(..., description="父节点URI（必填）"),
+        gateway_device_id: str = Query(None, description="网关设备ID"),
 ) -> Dict[str, Any]:
     """
     批量导入回路（CSV文件）
@@ -566,7 +491,8 @@ async def batch_import_loops(
             csv_content=csv_content,
             file_name=file.filename,
             parent_uri=parent_uri,
-            max_workers=max_workers
+            max_workers=max_workers,
+            gateway_device_id=gateway_device_id
         )
         
         # 获取任务状态

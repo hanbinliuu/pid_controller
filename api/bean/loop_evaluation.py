@@ -27,7 +27,7 @@ class LoopEvaluation(SQLModel, table=True):
 
     # 主键
     id: Optional[str] = Field(
-        default_factory=lambda: str(uuid4()),
+        default_factory=lambda: str(uuid4().hex),
         primary_key=True,
         index=True,
         sa_column_kwargs={"comment": "记录ID(UUID)"}
