@@ -52,22 +52,23 @@ flowchart TB
     subgraph P3["Phase 3: 振荡整定 - 基于闭环振荡数据的临界法整定"]
         O1["analyze_oscillation()<br/>━━━━━━━━━━<br/>FFT频谱分析提取临界参数:<br/>• 找到主频 f_peak<br/>• 临界周期 Pu = 1/f_peak<br/>• 从振幅估算临界增益 Ku"]
         
-        O1 --> O2{{"Ku有效性检查<br/>━━━━━━━━━━<br/>有效条件:<br/>Ku/K ∈ [0.5, 20]<br/>且 K > 0.05<br/>且 Ku ∈ [0.1, 50]"}}
+        O1 --> O2{{"是否启用LLM微调?<br/>━━━━━━━━━━<br/>复杂场景条件 (满足任一):<br/>• 存在阀门问题 (死区/粘滞)<br/>• data_quality < 0.5<br/>• nonlinearity > 0.5<br/>• confidence < 0.5<br/>• osc_ratio > 0.7"}}
         
-        O2 -->|"不满足(参数异常)"| O3["reason = 'low_gain'<br/>标记为低增益场景<br/>后续使用更保守的整定"]
-        O2 -->|"满足(参数正常)"| O4["reason = 'oscillation'<br/>标记为正常振荡场景"]
+        O2 -->|"满足(复杂场景)"| O2a["LLMAdvisor.decide_strategy()<br/>获取 llm_strategy<br/>(safety, pb_extra, ti_mult)"]
+        O2 -->|"不满足(简单场景)"| O2b["llm_strategy = None<br/>使用规则引擎"]
         
-        O3 --> O5
-        O4 --> O5["ConservativePIDCalculator.calculate()<br/>━━━━━━━━━━<br/>保守PID参数计算 (6步骤):<br/><br/>① 基础pb计算:<br/>   pb_from_K = 100 × K × 1.5<br/>   pb_from_Ku = 100 / (0.2 × Ku)<br/>   pb_base = max(两者) × slow_factor<br/>   (Pu > 30s 时 slow_factor = 1.3)<br/><br/>② 质量因子调整:<br/>   data_quality < 0.5 → ×1.3<br/>   nonlinearity > 0.5 → ×1.2<br/><br/>③ 阀门问题调整:<br/>   存在死区 → ×1.15<br/>   存在粘滞 → ×1.2<br/>   存在饱和 → ×1.1<br/><br/>④ 极端场景调整:<br/>   K > 4.0 → ×1.5~3.0<br/>   L/T1 > 0.5 → ×1.3~2.5<br/>   L/T1 > 0.8 → ×2.5<br/>   osc_ratio > 0.85 → ×1.2~1.6<br/><br/>⑤ 振荡比自适应:<br/>   safety = 1.4<br/>   + 0.5×(osc-0.5) 当osc>0.5<br/>   + 1.0×(osc-0.7) 当osc>0.7<br/>   + 2.0×(osc-0.85) 当osc>0.85<br/><br/>⑥ pb边界限制:<br/>   动态pb_min = pb_min_base × (1 + 0.3/K)<br/>   reason='low_gain' 时 pb_min = min(pb_min×1.5, 500)<br/>   confidence≥0.7: pb_max=min(config,400)<br/>   confidence≥0.5: pb_max=min(config,600)<br/>   confidence<0.5: pb_max=min(config×1.3,800)<br/>   pb = clip(pb, pb_min, pb_max)"]
+        O2a --> O3
+        O2b --> O3{{"Ku有效性检查<br/>━━━━━━━━━━<br/>有效条件:<br/>Ku/K ∈ [0.5, 20]<br/>且 K > 0.05<br/>且 Ku ∈ [0.1, 50]"}}
         
-        O5 --> O6["计算积分和微分时间<br/>━━━━━━━━━━<br/>Ti = max(Pu/2, 1.5) × ti_multiplier<br/>(慢系统 ti_multiplier = 1.1)<br/><br/>Td = 0 (默认不使用微分)<br/>若 osc_ratio > 0.5: Td = Pu/8"]
+        O3 -->|"不满足(参数异常)"| O4["reason = 'low_gain'<br/>标记为低增益场景<br/>后续使用更保守的整定"]
+        O3 -->|"满足(参数正常)"| O5["reason = 'oscillation'<br/>标记为正常振荡场景"]
         
-        O6 --> O7{{"是否启用LLM微调?<br/>━━━━━━━━━━<br/>复杂场景条件 (满足任一):<br/>• 存在阀门问题 (死区/粘滞)<br/>• data_quality < 0.5<br/>• nonlinearity > 0.5<br/>• confidence < 0.5<br/>• osc_ratio > 0.7"}}
+        O4 --> O6
+        O5 --> O6["ConservativePIDCalculator.calculate()<br/>━━━━━━━━━━<br/>保守PID参数计算 (6步骤, 使用llm_strategy影响各步):<br/><br/>① 基础pb计算:<br/>   pb_from_K = 100 × K × 1.5<br/>   pb_from_Ku = 100 / (0.2 × Ku)<br/>   pb_base = max(两者) × slow_factor<br/>   (Pu > 30s 时 slow_factor = 1.3)<br/><br/>② 质量因子调整:<br/>   data_quality < 0.5 → ×1.3<br/>   nonlinearity > 0.5 → ×1.2<br/><br/>③ 阀门问题调整:<br/>   存在死区 → ×1.15<br/>   存在粘滞 → ×1.2<br/>   存在饱和 → ×1.1<br/><br/>④ 极端场景调整:<br/>   K > 4.0 → ×1.5~3.0<br/>   L/T1 > 0.5 → ×1.3~2.5<br/>   L/T1 > 0.8 → ×2.5<br/>   osc_ratio > 0.85 → ×1.2~1.6<br/><br/>⑤ 振荡比自适应 + LLM安全因子:<br/>   safety = 1.4 (LLM可调整)<br/>   + 0.5×(osc-0.5) 当osc>0.5<br/>   + 1.0×(osc-0.7) 当osc>0.7<br/>   + 2.0×(osc-0.85) 当osc>0.85<br/><br/>⑥ pb边界限制:<br/>   动态pb_min = pb_min_base × (1 + 0.3/K)<br/>   reason='low_gain' 时 pb_min = min(pb_min×1.5, 500)<br/>   confidence≥0.7: pb_max=min(config,400)<br/>   confidence≥0.5: pb_max=min(config,600)<br/>   confidence<0.5: pb_max=min(config×1.3,800)<br/>   pb = clip(pb, pb_min, pb_max)"]
         
-        O7 -->|"满足(复杂场景)"| O8["LLMAdvisor.decide_strategy()<br/>LLM微调 safety, pb, ti"]
-        O7 -->|"不满足(简单场景)"| O9["使用规则引擎结果"]
-        O8 --> O10["build_oscillation_output()<br/>构建振荡整定输出结果"]
-        O9 --> O10
+        O6 --> O7["计算积分和微分时间<br/>━━━━━━━━━━<br/>Ti = max(Pu/2, 1.5) × ti_multiplier<br/>(慢系统 ti_multiplier = 1.1, LLM可调)<br/><br/>Td = 0 (默认不使用微分)<br/>若 osc_ratio > 0.5: Td = Pu/8<br/>LLM可启用/禁用微分"]
+        
+        O7 --> O8["build_oscillation_output()<br/>构建振荡整定输出结果"]
     end
 
     OSC --> P3
@@ -136,10 +137,10 @@ flowchart TB
         
         R16 -->|"是 (继电法显著更好)"| R17["使用继电法结果<br/>━━━━━━━━━━<br/>build_method_selector_output()<br/>直接进入 Phase 7 验证"]
         R16 -->|"否 (模型法更优或相当)"| R18["继续模型整定路径<br/>━━━━━━━━━━<br/>忽略继电法结果(如果有)<br/>进入 Phase 6 计算PID"]
-        R10 --> R17
     end
 
     M9 --> P5
+    R10 --> V0
 
     %% ============================================================
     %% Phase 6: PID参数计算
@@ -173,7 +174,9 @@ flowchart TB
     %% Phase 7: 闭环验证
     %% ============================================================
     subgraph P7["Phase 7: 闭环验证 - 仿真验证PID参数的稳定性和性能"]
-        V1["simulate_closed_loop()<br/>━━━━━━━━━━<br/>闭环阶跃响应仿真<br/><br/>仿真设置:<br/>• SP阶跃: 50 → 60<br/>• 仿真时长: max(100, T1×20) 秒<br/>• 采样间隔: dt = min(0.1, T1/10)<br/>• 最大仿真步数: 5000~30000"]
+        V0["📥 PID参数输入<br/>━━━━━━━━━━<br/>来源:<br/>• 振荡整定 (O8)<br/>• 继电法 (R17)<br/>• 保守fallback (R10)<br/>• 模型整定 (C11)"]
+        
+        V0 --> V1["simulate_closed_loop()<br/>━━━━━━━━━━<br/>闭环阶跃响应仿真<br/><br/>仿真设置:<br/>• SP阶跃: 50 → 60<br/>• 仿真时长: max(100, T1×20) 秒<br/>• 采样间隔: dt = min(0.1, T1/10)<br/>• 最大仿真步数: 5000~30000"]
         
         V1 --> V2["_calculate_metrics()<br/>━━━━━━━━━━<br/>计算闭环性能指标:<br/><br/>• settling_time: 调节时间<br/>  首次进入±2%误差带的时间<br/><br/>• overshoot: 超调量<br/>  (peak - SP_final) / ΔSP × 100%<br/><br/>• SSE: 稳态误差<br/>  末10%平均偏差 / ΔSP<br/><br/>• decay_ratio: 衰减比<br/>  peak2 / peak1 (第二峰/第一峰)"]
         
@@ -190,9 +193,10 @@ flowchart TB
         V7 --> V8["calculate_model_rating()<br/>━━━━━━━━━━<br/>计算综合评分 (0~10分)<br/><br/>评分权重:<br/>• 闭环性能: 40%<br/>• 模型拟合质量: 30%<br/>• 数据质量: 20%<br/>• 参数一致性: 10%"]
     end
 
-    O10 --> P7
-    R17 --> P7
-    C11 --> P7
+    O8 --> V0
+    R10 --> V0
+    R17 --> V0
+    C11 --> V0
 
     %% ============================================================
     %% Phase 8: 输出构建
