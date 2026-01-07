@@ -388,3 +388,29 @@ class FileMetaService:
         )
         
         return list(session.exec(stmt).all())
+
+    @staticmethod
+    def set_import_progress(session: Session, fid: int, imported_records: int, total_records: int) -> bool:
+        """
+        设置文件导入进度
+
+        Args:
+            session: 数据库会话
+            fid: 文件编号
+            imported_records: 已导入记录数
+            total_records: 总记录数
+
+        Returns:
+            bool: 更新成功返回True，文件不存在返回False
+        """
+        try:
+            # 更新导入进度字段
+            stmt = update(PIDDataFile).where(PIDDataFile.fid == fid).values(
+                imported_records=imported_records,
+                total_records=total_records
+            )
+            result = session.exec(stmt)
+            session.commit()
+            return result.rowcount > 0
+        except Exception:
+            return False

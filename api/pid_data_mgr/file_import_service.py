@@ -382,7 +382,9 @@ class FileImportService:
 
                 # 处理数据导入
                 num_records = len(df)
-                FileImportService._send_data_to_tsdb(session, df, file.fid)
+                if file.imported_records < num_records:
+                    logger.info(f"正在导入文件: (fid={file.fid}), 总记录数量: {num_records}")
+                    FileImportService._send_data_to_tsdb(session, df, file.fid, file.imported_records)
 
                 # 成功导入后，将文件状态更新为IMPORTED
                 FileMetaService.mark_as(session, file.fid, FileStatus.IMPORTED)
@@ -397,83 +399,99 @@ class FileImportService:
         pass
 
     @staticmethod
-    def _send_data_to_tsdb(session, df, fid):
+    def _send_data_to_tsdb(session, df, fid, offset=0):
         """
         将DataFrame数据发送到时序数据库
 
         Args:
             session: 数据库会话
             df: 包含PID数据的DataFrame
-            file: 文件对象，用于获取设备信息
+            fid: 文件编号
+            offset: 导入偏移量
         """
+        # 选择需要导入的数据
+        if offset > 0:
+            df = df.iloc[offset:].copy()
+
+        # 获取需要导入总记录数
+        total_records = len(df)
+
         # 处理时间戳格式 - 智能识别时间戳单位
         FileImportService._process_timestamps(df)
 
         count = 0
         progress_limit = 5000
-        # 获取 df 记录数量
-        total_records = len(df)
 
-        # 按设备（loop_tag）分组处理数据
-        for device_name in df['loop_tag'].unique():
-            device_data = df[df['loop_tag'] == device_name]
+        # 批量处理数据按 10000 条记录为一批次处理数据
+        out_batch_size = 10000
+        for out_start_idx in range(0, total_records, out_batch_size):
+            out_end_idx = min(out_start_idx + out_batch_size, total_records)
+            out_batch_data = df.iloc[out_start_idx:out_end_idx]
 
-            # 按1000条记录为一批次处理数据
-            batch_size = 1000
-            num_records = len(device_data)
+            # 按设备（loop_tag）分组处理数据
+            for device_name in out_batch_data['loop_tag'].unique():
+                device_data = out_batch_data[out_batch_data['loop_tag'] == device_name]
 
-            for start_idx in range(0, num_records, batch_size):
-                end_idx = min(start_idx + batch_size, num_records)
-                batch_data = device_data.iloc[start_idx:end_idx]
+                # 按1000条记录为一批次处理数据
+                batch_size = 1000
+                num_records = len(device_data)
 
-                # 获取批次的毫秒时间戳
-                timestamps = [ts for ts in batch_data['ts']]
+                for start_idx in range(0, num_records, batch_size):
+                    end_idx = min(start_idx + batch_size, num_records)
+                    batch_data = device_data.iloc[start_idx:end_idx]
 
-                # 定义测量值和数据类型
-                measurements = ["SV", "PV", "MV", "PB", "TI", "TD"]
-                data_types = ["DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE"]
+                    # 获取批次的毫秒时间戳
+                    timestamps = [ts for ts in batch_data['ts']]
 
-                # 组装values数组
-                values = []
-                for measurement in measurements:
-                    measurement_values = batch_data[measurement].tolist()
-                    # 处理空值
-                    processed_values = []
-                    for val in measurement_values:
-                        if pd.isna(val):
-                            processed_values.append(None)
-                        else:
-                            processed_values.append(val)
-                    values.append(processed_values)
+                    # 定义测量值和数据类型
+                    measurements = ["SV", "PV", "MV", "PB", "TI", "TD"]
+                    data_types = ["DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE", "DOUBLE"]
 
-                # 构建请求体
-                request_body = {
-                    "timestamps": timestamps,
-                    "measurements": measurements,
-                    "data_types": data_types,
-                    "values": values,
-                    "is_aligned": False,
-                    "device": f"{device_name}default"
-                }
+                    # 组装values数组
+                    values = []
+                    for measurement in measurements:
+                        measurement_values = batch_data[measurement].tolist()
+                        # 处理空值
+                        processed_values = []
+                        for val in measurement_values:
+                            if pd.isna(val):
+                                processed_values.append(None)
+                            else:
+                                processed_values.append(val)
+                        values.append(processed_values)
 
-                # 发送HTTP请求
-                db_name = settings.db_name
-                url = f"{settings.db_base_url}/api/v1/telemetry/insertTablet?db={db_name}"
+                    # 构建请求体
+                    request_body = {
+                        "timestamps": timestamps,
+                        "measurements": measurements,
+                        "data_types": data_types,
+                        "values": values,
+                        "is_aligned": False,
+                        "device": f"{device_name}default"
+                    }
 
-                response = requests.post(
-                    url,
-                    json=request_body,
-                    headers={"Content-Type": "application/json"},
-                    timeout=30  # 设置超时时间
-                )
+                    # 发送HTTP请求
+                    db_name = settings.db_name
+                    url = f"{settings.db_base_url}/api/v1/telemetry/insertTablet?db={db_name}"
 
-                if response.status_code != 200:
-                    logger.error(f"发送数据到时序数据库失败, 响应: {response.text}")
-                else:
-                    count += len(timestamps)
-                    if count >= progress_limit:
-                        progress_limit += 5000
-                        logger.info(f"(fid={fid})已导入 {count} 条数据, 总记录数量 {total_records}")
+                    response = requests.post(
+                        url,
+                        json=request_body,
+                        headers={"Content-Type": "application/json"},
+                        timeout=30  # 设置超时时间
+                    )
+
+                    if response.status_code != 200:
+                        logger.error(f"发送数据到时序数据库失败, 响应: {response.text}")
+                    else:
+                        count += len(timestamps)
+                        if count >= progress_limit:
+                            progress_limit += 5000
+                            logger.info(f"(fid={fid})已导入 {count} 条数据, 需导入记录数量 {total_records}")
+
+            # 一个 batch 处理完成, 更新进度
+            FileMetaService.set_import_progress(session, fid, offset + count, offset + total_records)
+        logger.info(f"(fid={fid})本次导入记录数量为 {count}, 导入偏移为 {offset}, 需导入记录数量 {total_records}")
 
     @staticmethod
     def _process_timestamps(df):

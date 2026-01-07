@@ -117,6 +117,28 @@ class PIDDataFile(SQLModel, table=True):
         }
     )
 
+    imported_records: int = Field(
+        default=0,
+        description="导入记录数",
+        nullable=False,
+        sa_column_kwargs={
+            "comment": "导入记录数",
+            "nullable": False,
+            "server_default": text("0")
+        }
+    )
+
+    total_records: int = Field(
+        default=0,
+        description="总记录数",
+        nullable=False,
+        sa_column_kwargs={
+            "comment": "总记录数",
+            "nullable": False,
+            "server_default": text("0")
+        }
+    )
+
     status: FileStatus = Field(
         default=FileStatus.UPLOADING,
         description="文件状态",
