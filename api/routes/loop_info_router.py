@@ -10,6 +10,7 @@ from sqlmodel import Session
 from core.database.database import get_db
 from api.services.loop_info_service import LoopInfoService
 from api.bean.loop_info import LoopInfo
+from api.bean.loop_info_request import BatchCreateLoopInfoRequest
 from api.response.loop_info_response import LoopInfoResponse, UpdateLoopInfoResponse
 
 logger = logging.getLogger(__name__)
@@ -189,4 +190,37 @@ async def list_loop_info_exclude_excluded(
         raise HTTPException(
             status_code=500,
             detail=f"查询回路信息列表失败: {str(e)}"
+        )
+
+
+@router.post("/loop-info/batch-create",
+            summary="批量创建回路信息",
+            operation_id="批量创建回路信息",
+            response_model=Dict[str, Any])
+async def batch_create_loop_info(
+    request: BatchCreateLoopInfoRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    批量创建回路信息记录
+    """
+    try:
+        # 将请求模型转换为字典列表
+        mapping_list = [item.model_dump() for item in request.loops]
+        
+        mappings = LoopInfoService.batch_create_mappings(db, mapping_list)
+        
+        return {
+            "success": True,
+            "message": f"成功批量创建 {len(mappings)} 条回路信息记录",
+            "data": {
+                "count": len(mappings),
+                "ids": [m.id for m in mappings]
+            }
+        }
+    except Exception as e:
+        logger.error(f"批量创建回路信息失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"批量创建回路信息失败: {str(e)}"
         )

@@ -150,6 +150,8 @@ class LoopImportService:
             Dict: 创建结果
         """
         try:
+            start_time = datetime.now()
+
             result = loop_service.instantiate_loop(
                 loop_type=loop_data['loop_type'],
                 loop_displayName=loop_data['loop_display_name'],
@@ -157,13 +159,14 @@ class LoopImportService:
                 parent_uri=loop_data['parent_uri']
             )
             logger.info(f"回路创建成功: {result}")
-            
+            end_time = datetime.now()
+            logger.info(f"回路{loop_data['loop_browse_name']}创建耗时: {end_time - start_time}")
             return {
                 'success': result.get('success', False),
                 'row_number': loop_data.get('row_number'),
                 'loop_name': loop_data['loop_display_name'],
                 'message': result.get('message', ''),
-                'uri': result.get('result', {}).get('loop_uri') if result.get('success') else None
+                'uri': result.get('data', {}).get('loop_uri') if result.get('success') else None
             }
             
         except Exception as e:
@@ -188,10 +191,11 @@ class LoopImportService:
         """
         try:
             # 更新任务状态为运行中
+            start_time = datetime.now()
             ImportTaskDAO.update_task_status(
                 task_id=task_id,
                 status=ImportStatus.RUNNING.value,
-                start_time=datetime.now()
+                start_time=start_time
             )
             
             logger.info(f"开始导入任务 {task_id}，共 {len(loops)} 个回路，使用 {max_workers} 个线程")
@@ -240,22 +244,31 @@ class LoopImportService:
                             }
                         )
                         logger.error(f"处理回路时发生异常: {str(e)}")
-            
+            # 同步回路列表信息同步
+            logger.info("导入任务完成，同步回路信息")
+            from api.tasks.load_loop_info import load_loop_list_and_sync
+            load_loop_list_and_sync()
             # 更新任务完成状态
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
             ImportTaskDAO.update_task_status(
                 task_id=task_id,
                 status=ImportStatus.COMPLETED.value,
-                end_time=datetime.now()
+                end_time=end_time,
+                duration=duration
             )
             
             logger.info(f"导入任务完成: {task_id}")
             
         except Exception as e:
             logger.error(f"导入任务异常: {task_id}, 错误: {str(e)}")
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds() if 'start_time' in locals() else 0
             ImportTaskDAO.update_task_status(
                 task_id=task_id,
                 status=ImportStatus.FAILED.value,
-                end_time=datetime.now()
+                end_time=end_time,
+                duration=duration
             )
 
     @classmethod

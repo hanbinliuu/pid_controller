@@ -455,13 +455,7 @@ class LoopInfoService:
             List[LoopInfo]: 创建的映射对象列表
         """
         try:
-            created_mappings = []
-            for mapping_data in mapping_list:
-                mapping = LoopInfoDAO.create(db, mapping_data)
-                created_mappings.append(mapping)
-            
-            logger.info(f"批量创建回路映射关系成功，共创建 {len(created_mappings)} 条记录")
-            return created_mappings
+            return LoopInfoDAO.batch_create(db, mapping_list)
             
         except Exception as e:
             logger.error(f"批量创建回路映射关系失败: {str(e)}")

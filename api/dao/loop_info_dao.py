@@ -35,12 +35,42 @@ class LoopInfoDAO:
             db.commit()
             db.refresh(mapping)
             
-            logger.info(f"创建回路信息记录成功: ID={mapping.id}, loop_uri={mapping.loop_uri}")
+            # logger.info(f"创建回路信息记录成功: ID={mapping.id}, loop_uri={mapping.loop_uri}")
             return mapping
             
         except Exception as e:
             db.rollback()
             logger.error(f"创建回路信息记录失败: {str(e)}")
+            raise
+    
+    @staticmethod
+    def batch_create(db: Session, mapping_list: List[Dict[str, Any]]) -> List[LoopInfo]:
+        """
+        批量创建回路信息记录
+        
+        Args:
+            db: 数据库会话
+            mapping_list: 映射数据字典列表
+        
+        Returns:
+            List[LoopInfo]: 创建的映射对象列表
+        """
+        try:
+            mappings = [LoopInfo(**data) for data in mapping_list]
+            
+            db.add_all(mappings)
+            db.commit()
+            
+            # 刷新所有对象以获取ID等数据库生成的字段
+            for mapping in mappings:
+                db.refresh(mapping)
+                
+            logger.info(f"批量创建回路信息记录成功: 数量={len(mappings)}")
+            return mappings
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"批量创建回路信息记录失败: {str(e)}")
             raise
     
     @staticmethod

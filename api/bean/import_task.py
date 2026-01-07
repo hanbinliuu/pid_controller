@@ -38,6 +38,7 @@ class ImportTask(SQLModel, table=True):
     file_hash: str = Field(default="", max_length=64, description="文件MD5哈希值")
     start_time: Optional[datetime] = Field(default=None, description="开始时间")
     end_time: Optional[datetime] = Field(default=None, description="结束时间")
+    duration: Optional[float] = Field(default=0.0, description="耗时（秒）")
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
 
@@ -49,6 +50,7 @@ class ImportTask(SQLModel, table=True):
                 "total_count": 100,
                 "success_count": 80,
                 "failed_count": 5,
-                "current_index": 85
+                "current_index": 85,
+                "duration": 12.34
             }
         }

@@ -622,6 +622,8 @@ async def get_import_task_status(
         "failed_count": 20,
         "current_index": 100,
         "progress_percentage": 100.0,
+        "duration": 12.34,
+        "duration_display": "12.34s",
         "error_messages": [
             {
                 "row_number": 5,
@@ -678,6 +680,8 @@ async def get_all_import_tasks() -> List[Dict[str, Any]]:
             "success_count": 95,
             "failed_count": 5,
             "progress_percentage": 100.0,
+            "duration": 12.34,
+            "duration_display": "12.34s",
             "start_time": "2024-01-01T12:00:00",
             "end_time": "2024-01-01T12:05:00"
         }

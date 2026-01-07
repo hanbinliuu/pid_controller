@@ -229,6 +229,12 @@ class ImportTaskDAO:
             2
         )
         
+        # 计算耗时（秒）
+        duration = task.duration or 0.0
+        if not duration and task.start_time:
+            end = task.end_time or datetime.now()
+            duration = (end - task.start_time).total_seconds()
+        
         return {
             "task_id": task.task_id,
             "status": task.status,
@@ -237,6 +243,8 @@ class ImportTaskDAO:
             "failed_count": task.failed_count,
             "current_index": task.current_index,
             "progress_percentage": progress_percentage,
+            "duration": round(duration, 2),
+            "duration_display": f"{round(duration, 2)}s",
             "error_messages": error_messages,
             # 文件信息
             "file_info": {

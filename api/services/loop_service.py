@@ -420,7 +420,7 @@ class LoopService:
             # 创建子设备
             if iot_device is None :
                 iotda_init_result = self.iotda_client.create_sub_device(
-                    name=device_id,  # 显示名称
+                    name=device_name,  # 显示名称
                     identification=device_id,  # 设备标识
                     device_id=device_id,  # 设备ID
                     resource_space_id=default_resource_space,  # 资源空间ID
@@ -540,7 +540,7 @@ class LoopService:
         try:
             device_info = self._create_iotda_loop_device(
                 device_id=loop_browseName,
-                device_name=loop_browseName
+                device_name=loop_displayName
             )
             device_id = device_info.get("device_id")
             product_model_id = device_info.get("product_model_id")
@@ -565,10 +565,6 @@ class LoopService:
                 message=str(e),
             )
 
-        # todo 回路列表加载任务执行
-        # logger.info("手动触发回路列表加载任务")
-        # from api.tasks.load_loop_info import load_loop_list_and_sync
-        # load_loop_list_and_sync()
         return success_response(
             data={
                 "loop_uri": loop_uri,

@@ -77,7 +77,7 @@ class ModelDataSourceClient:
             self,
             uri: str,
             devices: List[Dict[str, str]],
-            operator: str = "管理员",
+            operator: str = "PID",
             include_sub: bool = False
     ) -> Dict[str, Any]:
         """
@@ -197,7 +197,7 @@ class ModelDataSourceClient:
             uri: str,
             device_id: str,
             product_id: str,
-            operator: str = "管理员",
+            operator: str = "PID",
             include_sub: bool = False
     ) -> Dict[str, Any]:
         """
@@ -280,7 +280,7 @@ if __name__ == '__main__':
             result = client.batch_bind_device(
                 uri=test_uri,
                 devices=test_devices,
-                operator="管理员",
+                operator="PID",
                 include_sub=False
             )
             
@@ -330,7 +330,7 @@ if __name__ == '__main__':
         request = BatchBindDeviceRequest(
             uri=test_uri,
             devices=devices,
-            operator="管理员",
+            operator="PID",
             include_sub=False
         )
         
