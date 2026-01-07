@@ -381,11 +381,12 @@ class FileImportService:
                     continue
 
                 # 处理数据导入
-                FileImportService._send_data_to_tsdb(session, df)
+                num_records = len(df)
+                FileImportService._send_data_to_tsdb(session, df, file.fid)
 
                 # 成功导入后，将文件状态更新为IMPORTED
                 FileMetaService.mark_as(session, file.fid, FileStatus.IMPORTED)
-                logger.info(f"文件成功导入到时序数据库: {file.name} (fid={file.fid})")
+                logger.info(f"文件成功导入到时序数据库: {file.name} (fid={file.fid}), 导入记录数: {num_records}")
             except requests.exceptions.RequestException as e:
                 logger.error(f"导入文件到时序数据库失败 (fid={file.fid}): {str(e)}")
             except Exception as e:
@@ -396,7 +397,7 @@ class FileImportService:
         pass
 
     @staticmethod
-    def _send_data_to_tsdb(session, df):
+    def _send_data_to_tsdb(session, df, fid):
         """
         将DataFrame数据发送到时序数据库
 
@@ -407,6 +408,11 @@ class FileImportService:
         """
         # 处理时间戳格式 - 智能识别时间戳单位
         FileImportService._process_timestamps(df)
+
+        count = 0
+        progress_limit = 5000
+        # 获取 df 记录数量
+        total_records = len(df)
 
         # 按设备（loop_tag）分组处理数据
         for device_name in df['loop_tag'].unique():
@@ -463,6 +469,11 @@ class FileImportService:
 
                 if response.status_code != 200:
                     logger.error(f"发送数据到时序数据库失败, 响应: {response.text}")
+                else:
+                    count += len(timestamps)
+                    if count >= progress_limit:
+                        progress_limit += 5000
+                        logger.info(f"(fid={fid})已导入 {count} 条数据, 总记录数量 {total_records}")
 
     @staticmethod
     def _process_timestamps(df):
