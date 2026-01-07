@@ -429,8 +429,6 @@ class LoopInfoDAO:
             
             db.delete(mapping)
             db.commit()
-            
-            logger.info(f"删除回路信息记录成功: ID={mapping_id}, loop_uri={mapping.loop_uri}")
             return True
             
         except Exception as e:

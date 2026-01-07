@@ -99,7 +99,7 @@ def load_loop_list_and_sync() -> Dict[str, Any]:
         
         # 输出统计结果
         logger.info("=" * 70)
-        logger.info("定时任务执行完成")
+        logger.info("回路同步任务执行完成")
         logger.info(f"  总实例数: {stats['total_instances']}")
         logger.info(f"  新增回路: {stats['new_loops']}")
         logger.info(f"  更新回路: {stats['updated_loops']}")
@@ -185,21 +185,15 @@ def _sync_loop_to_db(db, instance: Dict[str, Any]) -> str:
     
     if not loop_uri:
         raise ValueError("实例URI为空")
-    
     # 查询是否已存在（包括已逻辑删除的回路）
     existing_loop = LoopInfoDAO.get_by_loop_uri(db, loop_uri, include_inactive=True)
-    
     # 提取实例信息
     loop_name = instance.get('displayName', instance.get('browseName', ''))
     uri_path = instance.get('uriPath', '')  # 从模型中获取完整URI路径
     description = instance.get('description', '')
-    
     # 从扩展属性中提取回路类型
     extended_attr = instance.get('extendedAttr', {})
     loop_type = extended_attr.get('loop_type') or extended_attr.get('HLLX')  # 支持多种字段名
-    
-
-    
     # 准备数据
     loop_data = {
         "loop_uri": loop_uri,
@@ -240,13 +234,13 @@ def _sync_loop_to_db(db, instance: Dict[str, Any]) -> str:
     if existing_loop:
         # 更新现有记录
         LoopInfoDAO.update_by_loop_uri(db, loop_uri, loop_data)
-        logger.debug(f"更新回路: {loop_name} ({loop_uri})")
+        logger.info(f"更新回路: {loop_name} ({loop_uri})")
         return "updated"
     else:
         # 创建新记录
         loop_data["created_time"] = datetime.now()
         LoopInfoDAO.create(db, loop_data)
-        logger.debug(f"新增回路: {loop_name} ({loop_uri})")
+        logger.info(f"新增回路: {loop_name} ({loop_uri})")
         return "created"
 
 
@@ -298,7 +292,7 @@ def _delete_missing_loops(db, current_loop_uris: set) -> int:
             # 如果数据库中的回路不在本次查询结果中，则实际删除
             if loop.loop_uri not in current_loop_uris:
                 LoopInfoDAO.delete_by_loop_uri(db, loop.loop_uri)
-                logger.info(f"实际删除回路: {loop.loop_name} ({loop.loop_uri})")
+                logger.info(f"删除回路: {loop.loop_name} ({loop.loop_uri})")
                 deleted_count += 1
         
         return deleted_count
