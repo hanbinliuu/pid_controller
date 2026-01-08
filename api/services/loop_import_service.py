@@ -13,6 +13,7 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, Any, List, Optional
+import pandas as pd
 
 from api.bean.import_task import ImportTask
 from api.bean.import_status import ImportStatus
@@ -25,6 +26,88 @@ logger = logging.getLogger(__name__)
 
 class LoopImportService:
     """回路批量导入服务（使用数据库存储任务状态）"""
+
+    @classmethod
+    def parse_excel_content(cls, file_content: bytes) -> List[Dict[str, Any]]:
+        """
+        解析 Excel 内容
+
+        Args:
+            file_content: Excel文件二进制内容
+
+        Returns:
+            List[Dict]: 回路数据列表
+        """
+        loops = []
+        try:
+            # 读取 Excel 文件
+            df = pd.read_excel(io.BytesIO(file_content))
+            
+            # 标准化列名（去除前后空格）
+            df.columns = df.columns.astype(str).str.strip()
+            
+            # 字段映射配置
+            field_aliases = {
+                "loop_type": ["loop_type", "回路类型"],
+                "loop_display_name": ["loop_display_name", "回路名称"],
+                "loop_browse_name": ["loop_browse_name", "回路标识"],
+            }
+            required_fields = ["loop_type", "loop_display_name", "loop_browse_name"]
+            
+            # 检查缺失字段
+            missing_fields = []
+            column_mapping = {}
+            
+            for field in required_fields:
+                found = False
+                for alias in field_aliases.get(field, []):
+                    if alias in df.columns:
+                        column_mapping[alias] = field
+                        found = True
+                        break
+                if not found:
+                    missing_fields.append(field)
+            
+            if missing_fields:
+                 display_names = {
+                    "loop_type": "回路类型(loop_type)",
+                    "loop_display_name": "回路名称(loop_display_name)",
+                    "loop_browse_name": "回路标识(loop_browse_name)"
+                }
+                 missing_display = [display_names.get(f, f) for f in missing_fields]
+                 raise ValueError(f"Excel缺少必需字段: {', '.join(missing_display)}")
+
+            # 重命名列以便统一处理
+            df = df.rename(columns=column_mapping)
+            
+            # 替换 NaN 为 None 或空字符串，便于后续处理
+            df = df.where(pd.notnull(df), None)
+
+            # 遍历行
+            for index, row in df.iterrows():
+                row_num = index + 2  # Excel 行号（假设第一行是标题）
+                
+                loop_data = {
+                    'loop_type': str(row.get('loop_type', '') or '').strip(),
+                    'loop_display_name': str(row.get('loop_display_name', '') or '').strip(),
+                    'loop_browse_name': str(row.get('loop_browse_name', '') or '').strip(),
+                    'row_number': row_num
+                }
+                
+                # 检查必填字段是否为空
+                if not all([loop_data['loop_type'], loop_data['loop_display_name'],
+                            loop_data['loop_browse_name']]):
+                     logger.warning(f"第 {row_num} 行数据不完整，跳过")
+                     continue
+                
+                loops.append(loop_data)
+            
+            logger.info(f"Excel解析成功，共解析 {len(loops)} 条有效回路数据")
+            return loops
+
+        except Exception as e:
+            logger.error(f"Excel解析失败: {str(e)}")
+            raise ValueError(f"Excel解析失败: {str(e)}")
 
     @classmethod
     def parse_csv_content(cls, csv_content: str) -> List[Dict[str, Any]]:
@@ -267,7 +350,7 @@ class LoopImportService:
 
     @classmethod
     def start_import_task(cls,
-                          csv_content: str,
+                          file_content: bytes,
                           file_name: str = "",
                           parent_uri: str = "",
                           max_workers: int = 5,
@@ -277,10 +360,10 @@ class LoopImportService:
         启动导入任务
 
         Args:
-            csv_content: CSV文件内容
-            file_name: 文件名称（可选）
-            parent_uri: 父节点URI（可选，缺省时在parse_csv_content中使用默认根节点）
-            max_workers: 最大线程数（默认5）
+            file_content: 文件内容（二进制）
+            file_name: 文件名称（必须包含扩展名以区分 CSV/Excel）
+            parent_uri: 父节点URI
+            max_workers: 最大线程数
             gateway_device_id : 子设备所属网关设备ID
 
         Returns:
@@ -290,16 +373,28 @@ class LoopImportService:
         task_id = str(uuid.uuid4())
 
         # 计算文件信息
-        file_size = len(csv_content.encode('utf-8'))
-        file_hash = hashlib.md5(csv_content.encode('utf-8')).hexdigest()
+        file_size = len(file_content)
+        file_hash = hashlib.md5(file_content).hexdigest()
 
-        # 解析CSV
+        # 解析文件
         try:
-            loops = cls.parse_csv_content(csv_content)
+            if file_name.lower().endswith('.xlsx'):
+                loops = cls.parse_excel_content(file_content)
+            elif file_name.lower().endswith('.csv'):
+                 # 尝试解码 CSV
+                try:
+                    csv_text = file_content.decode('utf-8-sig')
+                except UnicodeDecodeError:
+                    # 如果 utf-8-sig 失败，尝试 gbk
+                     csv_text = file_content.decode('gbk')
+                loops = cls.parse_csv_content(csv_text)
+            else:
+                 raise ValueError("不支持的文件格式，仅支持 .csv 和 .xlsx")
+
             if not loops:
-                raise ValueError("CSV文件中没有有效的回路数据")
+                raise ValueError("文件中没有有效的回路数据")
         except Exception as e:
-            logger.error(f"CSV解析失败: {str(e)}")
+            logger.error(f"文件解析失败: {str(e)}")
             raise
 
         # 在数据库中创建任务（包括文件信息）

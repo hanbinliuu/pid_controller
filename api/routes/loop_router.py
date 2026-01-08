@@ -12,13 +12,11 @@ from sqlmodel import Session
 
 from api.response.loop_response import LoopListResponse, LoopInfoResponse
 from api.response.bff_response import SubmodelListResponse
-from api.services.loop_info_service import LoopInfoService
 from api.services.loop_service import LoopService
 from api.services.loop_import_service import LoopImportService
 from core.config import Config
 from pydantic import BaseModel, Field
 
-from core.database import get_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -427,68 +425,63 @@ async def instantiate_loop(
 
 @router.post(
     "/batch-import",
-    summary="批量导入回路（CSV）",
+    summary="批量导入回路（CSV/Excel）",
     operation_id="批量导入回路",
-    description="通过上传CSV文件批量导入回路，支持异步多线程处理",
+    description="通过上传CSV或Excel文件批量导入回路，支持异步多线程处理",
     response_model=Dict[str, Any]
 )
 async def batch_import_loops(
-        file: UploadFile = File(..., description="CSV文件"),
+        file: UploadFile = File(..., description="CSV或Excel文件"),
         max_workers: int = Query(5, description="最大线程数", ge=1, le=20),
         parent_uri: str = Query(..., description="父节点URI（必填）"),
         gateway_device_id: str = Query(None, description="网关设备ID"),
 ) -> Dict[str, Any]:
     """
-    批量导入回路（CSV文件）
+    批量导入回路（CSV/Excel文件）
     
     功能说明：
-    - 上传CSV文件进行批量导入
+    - 上传CSV或Excel文件进行批量导入
     - 支持异步多线程处理，提高导入效率
     - 返回任务ID，可通过任务ID查询导入进度
     
     必填参数：
     - parent_uri: 父节点URI（必填，通常是装置URI）
     
-    CSV文件格式（中文表头）：
+    文件格式（CSV或Excel）：
+    - 必需列（支持中文表头）：
+        - loop_type / 回路类型
+        - loop_display_name / 回路名称
+        - loop_browse_name / 回路标识
+    
+    CSV格式示例：
     ```csv
     回路标识,回路名称,回路类型
     TIC-108,聚合反应器床层温度控制回路,温度
     FIC-215,醚化反应原料醇烯比调节回路,流量
-    PIC-309,催化蒸馏塔塔顶压力控制回路,压力
     ```
-    
-    必填字段：
-    - loop_type: 回路类型
-    - loop_display_name: 回路显示名称
-    - loop_browse_name: 回路标识（唯一）
-    
-    可选字段：
-    - parent_uri: 父节点URI（CSV中的值可覆盖接口参数）
-    - description: 回路描述
     
     返回格式：
     {
         "task_id": "uuid-string",
         "message": "导入任务已启动，请使用task_id查询进度",
         "total_count": 100,
-        "file_name": "loops.csv"
+        "file_name": "loops.xlsx"
     }
     """
     try:
         # 验证文件类型
-        if not file.filename.endswith('.csv'):
+        if not (file.filename.endswith('.csv') or file.filename.endswith('.xlsx')):
             raise HTTPException(
                 status_code=400,
-                detail="只支持CSV文件格式"
+                detail="只支持CSV或Excel(.xlsx)文件格式"
             )
         
         # 读取文件内容
         content = await file.read()
-        csv_content = content.decode('utf-8-sig')  # 支持BOM
         
         # 启动导入任务（传递文件名和父节点URI）
         task_id = LoopImportService.start_import_task(
-            csv_content=csv_content,
+            file_content=content,
             file_name=file.filename,
             parent_uri=parent_uri,
             max_workers=max_workers,
@@ -508,7 +501,7 @@ async def batch_import_loops(
         }
     
     except ValueError as e:
-        logger.error(f"CSV解析失败: {str(e)}")
+        logger.error(f"文件解析失败: {str(e)}")
         raise HTTPException(
             status_code=400,
             detail=str(e)
