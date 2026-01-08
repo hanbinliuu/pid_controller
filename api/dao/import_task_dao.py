@@ -75,7 +75,7 @@ class ImportTaskDAO:
             if not task:
                 return None
             # 在会话内部直接转换为字典，避免会话关闭后对象分离
-            return ImportTaskDAO.task_to_dict(task)
+            return ImportTaskDAO.task_to_dict(task,is_all_err=True)
 
     @staticmethod
     def update_task_status(task_id: str, status: str, **kwargs) -> bool:
@@ -173,7 +173,7 @@ class ImportTaskDAO:
             statement = select(ImportTask).order_by(ImportTask.created_at.desc()).limit(limit)
             tasks = session.exec(statement).all()
             # 在会话内部直接转换为字典列表，避免会话关闭后对象分离
-            return [ImportTaskDAO.task_to_dict(task) for task in tasks]
+            return [ImportTaskDAO.task_to_dict(task,False) for task in tasks]
 
     @staticmethod
     def delete_old_tasks(keep_days: int = 7) -> int:
@@ -207,7 +207,7 @@ class ImportTaskDAO:
             return count
 
     @staticmethod
-    def task_to_dict(task: ImportTask) -> Dict[str, Any]:
+    def task_to_dict(task: ImportTask,is_all_err:bool=False) -> Dict[str, Any]:
         """
         将任务对象转换为字典
         
@@ -220,7 +220,8 @@ class ImportTaskDAO:
         try:
             error_messages = json.loads(task.error_messages) if task.error_messages else []
             # 只返回最近10条错误
-            error_messages = error_messages[-10:]
+            if not is_all_err:
+                error_messages = error_messages[-10:]
         except json.JSONDecodeError:
             error_messages = []
         

@@ -234,6 +234,7 @@ class LoopImportService:
                 'success': result.get('success', False),
                 'row_number': loop_data.get('row_number'),
                 'loop_name': loop_data['loop_display_name'],
+                'loop_browseName': loop_data['loop_browse_name'],
                 'message': result.get('message', ''),
                 'uri': result.get('data', {}).get('loop_uri') if result.get('success') else None
             }
@@ -244,6 +245,7 @@ class LoopImportService:
                 'success': False,
                 'row_number': loop_data.get('row_number'),
                 'loop_name': loop_data['loop_display_name'],
+                'loop_browseName': loop_data['loop_browse_name'],
                 'message': str(e),
                 'uri': None
             }
@@ -295,6 +297,7 @@ class LoopImportService:
                         error_msg = None if result['success'] else {
                             'row_number': result['row_number'],
                             'loop_name': result['loop_name'],
+                            'loop_uri': result['uri'],
                             'error': result['message']
                         }
 

@@ -3,27 +3,26 @@
 启动PID Agent API服务器的脚本
 """
 import argparse
-import multiprocessing
-import sys
-import os
 import logging
-import uvicorn
+import multiprocessing
+import os
+import sys
 from contextlib import asynccontextmanager
+
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.openapi.docs import (
     get_redoc_html,
     get_swagger_ui_html,
 )
 from fastapi.responses import FileResponse
-
-from api.pid_data_mgr.file_import_service import FileImportService
-from core.config import Config
+from fastapi.staticfiles import StaticFiles
 
 # 添加项目根目录到Python路径
 project_root = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, project_root)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # 导入所有路由
 from api.routes.excluded_loop_router import router as excluded_loop_router
@@ -46,15 +45,18 @@ from api.pid_data_mgr.file_router import pid_data_file_router
 from api.pid_data_mgr.ping_router import router as ping_router
 from api.pid_data_mgr.file_import_service import FileImportService
 # 导入中间件
-from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware, \
-    RequestLoggingMiddleware
+from api.middleware import (
+    ExceptionHandlerMiddleware,
+    RequestLoggingMiddleware,
+    ResponseMiddleware,
+    register_exception_handlers,
+)
 
 # 导入数据库初始化函数
 from core.database.database import init_database, get_db_session
-# 导入定时任务初始化函数
-from api.tasks import init_cron_tasks, shutdown_cron_tasks
 # 导入动态配置服务
 from api.services.dynamic_config_service import DynamicConfigService
+from core.config import Config
 
 
 # 配置日志
@@ -100,19 +102,13 @@ def setup_logging():
 # 设置日志
 logger = setup_logging()
 
-# ========== 定义 Lifespan 上下文管理器 ==========
-# 定时任务是否初始化
-_cron_tasks_initialized = False
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     FastAPI 应用的生命周期管理
     支持 startup 和 shutdown 事件
     """
-    # global _cron_tasks_initialized
-    print("服务启动.....")
+    logger.info("服务启动.....")
     yield  # 应用主体运行
 
     # ========== Shutdown Event ==========
@@ -133,7 +129,8 @@ app = FastAPI(
 )
 
 # 挂载静态文件目录
-app.mount("/static", StaticFiles(directory="static"), name="static")
+static_dir = os.path.join(project_root, "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # 注册全局异常处理器(用于处理框架级别的异常)
 register_exception_handlers(app)
@@ -195,7 +192,7 @@ async def root():
 @app.get("/monitoring")
 async def monitoring_page():
     """回路监控页面"""
-    return FileResponse("static/monitoring/index.html")
+    return FileResponse(os.path.join(static_dir, "monitoring", "index.html"))
 
 
 @app.get("/docs", include_in_schema=False)
@@ -215,13 +212,33 @@ async def redoc_html():
         openapi_url=app.openapi_url,
         title=app.title + " - ReDoc",
         # redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@latest/bundles/redoc.standalone.js",
-        redoc_js_url="/static/swagger-ui/swagger-ui.css"
+        redoc_js_url="/static/swagger-ui/redoc.standalone.js"
     )
+
+
+def _parse_bool_env(name, default=False):
+    """解析布尔型环境变量，支持 true/1/yes/y。"""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _parse_int_env(name, default):
+    """解析整型环境变量，失败时回退并告警。"""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("环境变量 %s=%r 不是有效整数，使用默认值 %s", name, value, default)
+        return default
 
 
 def start_api_server():
     """启动API服务器（纯API服务，不包含后台任务）"""
-    logger.info("=" * 30+" 服务初始化 "+"=" * 30)
+    logger.info("%s 服务初始化 %s", "=" * 30, "=" * 30)
 
     # ========== 初始化操作 ==========
     # 1.初始化数据库
@@ -253,10 +270,12 @@ def start_api_server():
     # 获取日志级别并转换为uvicorn格式
     log_level = os.getenv('LOG_LEVEL', 'INFO').lower()
     # 是否启用热加载（开发环境可设置为True，生产环境应为False）
-    enable_reload = os.getenv('ENABLE_RELOAD', 'False').lower() == 'true'
+    enable_reload = _parse_bool_env('ENABLE_RELOAD', default=False)
     # 获取worker数量，默认为3
-    workers_env = os.getenv('WORKERS', '3')
-    workers = int(workers_env) if not enable_reload else 1
+    workers_default = 3
+    workers = _parse_int_env('WORKERS', workers_default)
+    if enable_reload:
+        workers = 1
 
     logger.info("=" * 60)
     logger.info("启动 PID 整定 API 服务器 (API Only)")
@@ -316,6 +335,18 @@ def _start_file_import_service():
         return None
 
 
+def _stop_file_import_process(file_import_process, timeout=5):
+    """停止PID文件导入服务进程"""
+    if not file_import_process or not file_import_process.is_alive():
+        return
+    file_import_process.terminate()
+    file_import_process.join(timeout=timeout)
+    if file_import_process.is_alive():
+        logger.warning("PID文件导入进程未能正常停止，强制终止")
+        file_import_process.kill()
+    logger.info("✓ PID文件导入进程已停止")
+
+
 def start_background_worker():
     """启动后台任务进程（仅负责定时任务）"""
     import signal
@@ -348,13 +379,7 @@ def start_background_worker():
         logger.info("\n收到停止信号，正在关闭后台任务...")
 
         # 终止文件导入进程
-        if 'file_import_process' in locals() and file_import_process.is_alive():
-            file_import_process.terminate()
-            file_import_process.join(timeout=5)
-            if file_import_process.is_alive():
-                logger.warning("PID文件导入进程未能正常停止，强制终止")
-                file_import_process.kill()
-            logger.info("✓ PID文件导入进程已停止")
+        _stop_file_import_process(file_import_process)
 
         # 终止定时任务
         shutdown_cron_tasks()
@@ -372,13 +397,7 @@ def start_background_worker():
     except KeyboardInterrupt:
         logger.info("\n收到进程中断，正在关闭后台任务...")
         # 终止文件导入进程
-        if file_import_process and file_import_process.is_alive():
-            file_import_process.terminate()
-            file_import_process.join(timeout=5)
-            if file_import_process.is_alive():
-                logger.warning("PID文件导入进程未能正常停止，强制终止")
-                file_import_process.kill()
-            logger.info("✓ PID文件导入进程已停止")
+        _stop_file_import_process(file_import_process)
 
         shutdown_cron_tasks()
         logger.info("✓ 后台任务已停止")
@@ -386,8 +405,6 @@ def start_background_worker():
 
 def start_all():
     """启动所有服务（API + 后台任务）- 使用多进程"""
-    import multiprocessing
-
     logger.info("=" * 60)
     logger.info("启动 PID 整定ALL服务 (API + Worker)")
     logger.info("=" * 60)
@@ -427,11 +444,11 @@ if __name__ == "__main__":
         type=str,
         choices=['api', 'worker', 'all'],
         default='api',
-        help='启动模式: api=仅API服务, worker=仅后台任务, all=全部启动 (默认: all)'
+        help='启动模式: api=仅API服务, worker=仅后台任务, all=全部启动 (默认: api)'
     )
 
     args = parser.parse_args()
-    print(f"启动模式：{args}")
+    logger.info("启动模式: %s", args.mode)
     if args.mode == 'api':
         # 仅启动API服务
         start_api_server()

@@ -48,8 +48,8 @@ class TuningWindowRequest(BaseModel):
     lambda_val: Optional[float] = Field(None, description="Lambda参数值（可选），未指定时自动计算")
     window_size: int = Field(120, description="窗口大小（分钟）", ge=1)
     step_size: int = Field(10, description="滑动步长（分钟）", ge=1)
-    variability_threshold: float = Query(0.8, description="波动性阈值分位数(0-1)", examples=[0.8]),
-    analyst_column: Optional[str] = Query("pv", description="用于波动判断的列名", examples=["pv", "mv", "sv"]),
+    variability_threshold: float = Field(0.8, description="波动性阈值分位数(0-1)", ge=0, le=1)
+    analyst_column: Optional[str] = Field("pv", description="用于波动判断的列名")
     window_sec: int = Field(60, description="插值采样间隔（秒）", ge=1)
     is_filter: bool = Field(False, description="是否对历史数据进行优化过滤")
 
@@ -82,7 +82,7 @@ class AutoTuningRequest(BaseModel):
     tuning_windows: Optional[List[Dict[str, Any]]] = Field(None,
                                                                    description="手动指定时间窗口列表，用于批量整定")
     model_type: ModelType = Field(ModelType.FOPDT, description="模型类型")
-    controller_type: str = Field("PID", description="整定类型", examples=["PID", "PI"])
+    controller_type: str = Field("PID", description="整定类型")
     lambda_val: Optional[float] = Field(None, description="Lambda参数值（可选），未指定时自动计算")
     window_size: int = Field(120, description="窗口大小（分钟）", ge=1)
     step_size: int = Field(10, description="滑动步长（分钟）", ge=1)
@@ -557,8 +557,8 @@ async def get_step_response_windows(
         step_threshold: float = Query(0.05, description="阶跃检测阈值（占输入范围的百分比）", ge=0.01, le=0.5),
         min_response_ratio: float = Query(0.1, description="最小响应比例（响应幅值/输入变化）", ge=0.05, le=1.0),
         confidence_min: float = Query(0.5, description="最小置信度要求（0-1）", ge=0, le=1),
-        analyst_column: Optional[str] = Query("pv", description="用于分析的列名", examples=["pv", "mv", "sv"]),
-        window_sec: int = Query(30, description="插值采样间隔（分钟）", examples=[1, 60]),
+        analyst_column: Optional[str] = Query("pv", description="用于分析的列名"),
+        window_sec: int = Query(30, description="插值采样间隔（分钟）"),
         is_filter: bool = Query(False, description="是否对历史数据进行优化过滤", examples=[False])
 ):
     """
