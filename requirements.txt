@@ -25,3 +25,4 @@ python-jose==3.3.0
 portalocker==3.0.0
 # 定时任务调度
 croniter==2.0.5
+openpyxl==3.1.2

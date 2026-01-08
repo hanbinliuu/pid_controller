@@ -42,7 +42,9 @@ from api.routes.cron_task_router import router as cron_task_router
 from api.routes.home_page_route import home_page_router
 from api.routes.dynamic_config_router import router as dynamic_config_router
 from api.routes.device_manage_router import router as device_manage_router
-
+from api.pid_data_mgr.file_router import pid_data_file_router
+from api.pid_data_mgr.ping_router import router as ping_router
+from api.pid_data_mgr.file_import_service import FileImportService
 # 导入中间件
 from api.middleware import register_exception_handlers, ExceptionHandlerMiddleware, ResponseMiddleware, \
     RequestLoggingMiddleware
@@ -171,7 +173,8 @@ app.include_router(cron_task_router, prefix='/api/cron', tags=['定时任务'])
 app.include_router(home_page_router, prefix='/api/home', tags=['首页'])
 app.include_router(dynamic_config_router, tags=['动态配置参数'])
 app.include_router(device_manage_router, tags=['装置管理'])
-
+app.include_router(pid_data_file_router, tags=['PID数据文件管理'])
+app.include_router(ping_router, tags=['Ping'])
 
 @app.get('/health')
 async def health_check():
