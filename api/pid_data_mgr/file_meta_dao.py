@@ -390,6 +390,26 @@ class FileMetaService:
         return list(session.exec(stmt).all())
 
     @staticmethod
+    def count_files_by_status(session: Session, statuses: List[FileStatus]) -> int:
+        """
+        查询满足指定状态的文件记录数量
+        多个状态之间是或的关系
+        
+        Args:
+            session: 数据库会话
+            statuses: 文件状态列表
+            
+        Returns:
+            int: 满足条件的文件记录数量
+        """
+        if not statuses:
+            return 0
+        
+        # 使用 in_ 操作符查询多个状态
+        stmt = select(func.count()).where(PIDDataFile.status.in_(statuses))
+        return session.exec(stmt).one()
+
+    @staticmethod
     def set_import_progress(session: Session, fid: int, imported_records: int, total_records: int) -> bool:
         """
         设置文件导入进度

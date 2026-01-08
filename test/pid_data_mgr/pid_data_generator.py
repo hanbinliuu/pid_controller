@@ -4,13 +4,10 @@ PID整定所需DCS数据生成程序
 """
 
 import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 import random
 import argparse
 from typing import List, Dict, Optional
-
-from api.pid_data_mgr.file_import_service import FileImportService
 
 
 class PIDDataGenerator:
@@ -266,7 +263,7 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    df = pd.read_csv("D:/pid_test_data.csv")
-    FileImportService._process_timestamps(df)
-    print(df)
+    main()
+    # df = pd.read_csv("D:/pid_test_data.csv")
+    # FileImportService._process_timestamps(df)
+    # print(df)

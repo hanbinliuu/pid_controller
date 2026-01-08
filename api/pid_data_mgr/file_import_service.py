@@ -5,6 +5,8 @@
 """
 import logging
 import os
+from typing import List
+
 import pandas as pd
 
 import requests
@@ -130,6 +132,26 @@ class FileImportService:
             
         except Exception as e:
             logger.error(f"PID文件维护任务执行失败: {str(e)}")
+
+    @staticmethod
+    def _select_expired_files(session: Session) -> List[PIDDataFile]:
+        """
+        选择过期的文件
+
+        Args:
+            session: 数据库会话
+        """
+        # 读取 uploading 状态文件
+        expired_files = FileMetaService.select_expired_uploading_files(session)
+
+        if not expired_files:
+            expired_files = list()
+
+        # 读取 deleted 状态文件
+        deleted_files = FileMetaService.get_files_by_status(session, FileStatus.DELETED)
+        if deleted_files:
+            expired_files.extend(deleted_files)
+        return expired_files
     
     @staticmethod
     def _clean_expired_files(session: Session):
@@ -141,16 +163,8 @@ class FileImportService:
         """
         count = 0
         try:
-            # 读取 uploading 状态文件
-            expired_files = FileMetaService.select_expired_uploading_files(session)
-            
-            if not expired_files:
-                expired_files = list()
-
-            # 读取 deleted 状态文件
-            deleted_files = FileMetaService.get_files_by_status(session, FileStatus.DELETED)
-            if deleted_files:
-                expired_files.extend(deleted_files)
+            # 读取过期文件
+            expired_files = FileImportService._select_expired_files(session)
 
             if len(expired_files) == 0:
                 return count
@@ -518,6 +532,20 @@ class FileImportService:
         df['ts'] = processed_timestamps
 
     @staticmethod
+    def _need_do_import_file() ->  bool:
+        with get_session() as session:
+            # 读取过期文件
+            expired_files = FileImportService._select_expired_files(session)
+            if expired_files:
+                return True
+
+            # 获取已上传, 已合并, 已清理的文件数量
+            count = FileMetaService.count_files_by_status(session, [FileStatus.UPLOADED, FileStatus.MERGED, FileStatus.CLEANED])
+            if count > 0:
+                return True
+        return False
+
+    @staticmethod
     def run_import():
         """
         运行文件导入定期维护任务
@@ -545,8 +573,11 @@ class FileImportService:
         # TODO: 添加任务队列
         while True:
             try:
-                # 执行文件导入维护任务
-                FileImportService.do_import_file()
+                if FileImportService._need_do_import_file():
+                    # 执行文件导入维护任务
+                    FileImportService.do_import_file()
+                else:
+                    logger.debug("没有需要处理的PID文件")
                 
                 # 等待10秒后再次执行
                 time.sleep(10)
