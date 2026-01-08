@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 
 from api.pid_data_mgr.block_util import BlockUtil
+from api.pid_data_mgr.file_meta_dao import FileMetaService
 from api.pid_data_mgr.file_system_service import FileSystemService
 from api.pid_data_mgr.file_store_service import FileStoreService
 from api.pid_data_mgr.file_db_models import FileStatus
@@ -176,7 +177,6 @@ async def delete_file(
 
 @pid_data_file_router.get("/files/{fid}", summary="下载文件")
 async def download_file(
-        request: Request,
         fid: int = Path(..., description="文件编号"),
         session: Session = Depends(get_db)):
     """
@@ -220,3 +220,25 @@ async def download_file(
             "Accept-Ranges": "bytes"
         }
     )
+
+@pid_data_file_router.get("/reimport/files/{fid}", summary="重新导入文件")
+async def reimport_file(
+        fid: int = Path(..., description="文件编号"),
+        session: Session = Depends(get_db)):
+    """
+    重新导入文件, 将文件从 IMPORT_FAILED 状态设置为 CLEANED 状态
+
+    参数：
+    - fid: 文件编号
+    """
+    # 获取文件信息
+    file = FileSystemService.get_file(session, fid)
+    if not file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    if file.status != FileStatus.IMPORT_FAILED:
+        raise HTTPException(status_code=400, detail="文件状态不是 IMPORT_FAILED，无法重新导入")
+
+    FileMetaService.mark_as(session, fid, FileStatus.CLEANED)
+
+    return "完成文件状态设置"
