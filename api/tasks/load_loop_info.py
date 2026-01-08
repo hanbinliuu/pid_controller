@@ -292,7 +292,7 @@ def _delete_missing_loops(db, current_loop_uris: set) -> int:
             # 如果数据库中的回路不在本次查询结果中，则实际删除
             if loop.loop_uri not in current_loop_uris:
                 LoopInfoDAO.delete_by_loop_uri(db, loop.loop_uri)
-                logger.info(f"删除回路: {loop.loop_name} ({loop.loop_uri})")
+                logger.debug(f"删除回路: {loop.loop_name} ({loop.loop_uri})")
                 deleted_count += 1
         
         return deleted_count

@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, List
 from api.middleware.exceptions import RuntimeException
 from api.middleware.response_model import error_response, success_response
 from api.services.dynamic_config_service import DynamicConfigService
+from api.services.loop_info_service import LoopInfoService
 from core.client import ModelCoreClient, IoTDAClient, ModelDataSourceClient
 from core.client.bff_model_client import BFFModelClient
 from api.response.loop_response import LoopListResponse, LoopInstance, LoopStatus, Pagination, LoopInfoResponse
@@ -655,3 +656,75 @@ class LoopService:
 
         logger.error("回路属性信息节点uri获取失败")
         raise RuntimeException("回路属性信息节点uri获取失败")
+
+    def delete_loop(
+            self,
+            modifier: str,
+            loop_uri: str
+    ) -> bool:
+        """
+        删除回路
+
+        Args:
+            modifier: 修改者
+            loop_uri: 回路URI
+
+        Returns:
+            Dict[str, Any]: 删除结果
+            {
+                "success": true,
+                "message": "操作成功",
+                "result": null,
+                "code": 0
+            }
+
+        Raises:
+            Exception: 当删除失败时抛出异常
+        """
+        try:
+            logger.info(f"删除回路: {loop_uri}")
+
+            # 调用模型核心客户端删除回路
+            result = self.model_core_client.delete_tree(
+                uri=loop_uri,
+                modifier=modifier
+            )
+            if result.get("success"):
+                logger.info(f"模型回路实例删除成功: {loop_uri}")
+            else:
+                logger.error(f"模型回路实例删除失败: {result.get('message')}")
+            # 删除回路表数据
+            with get_db_session() as db:
+                if LoopInfoService.delete_by_loop_uri(db, loop_uri):
+                    return True
+                else:
+                    return False
+        except Exception as e:
+            logger.error(f"删除回路异常: {str(e)}")
+            raise
+
+    def has_child_nodes(self, node_uri: str) -> bool:
+        """
+        判断节点是否有子节点
+
+        Args:
+            node_uri: 节点URI
+
+        Returns:
+            bool: 如果有子节点返回 True，否则返回 False
+        """
+        try:
+            result = self.model_core_client.get_children(
+                current_uri=node_uri,
+                node_class_list=["FOLDER", "INSTANCE"]
+            )
+
+            if result.get("success"):
+                children = result.get("result", [])
+                return len(children) > 0
+
+            return False
+
+        except Exception as e:
+            logger.error(f"检查子节点失败: {str(e)}")
+            return False

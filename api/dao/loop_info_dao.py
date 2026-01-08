@@ -383,7 +383,7 @@ class LoopInfoDAO:
             mapping = db.exec(statement).first()
             
             if not mapping:
-                logger.warning(f"未找到loop_uri为 {loop_uri} 的映射记录")
+                logger.warning(f"未找到loop_uri为 {loop_uri} 的回路信息")
                 return None
             
             # 更新字段
@@ -453,7 +453,7 @@ class LoopInfoDAO:
             mapping = db.exec(statement).first()
             
             if not mapping:
-                logger.warning(f"未找到loop_uri为 {loop_uri} 的映射记录")
+                logger.warning(f"未找到loop_uri为 {loop_uri} 的回路信息")
                 return False
             
             db.delete(mapping)

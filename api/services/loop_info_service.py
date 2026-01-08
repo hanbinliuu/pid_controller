@@ -400,7 +400,7 @@ class LoopInfoService:
             raise
     
     @staticmethod
-    def delete_mapping(db: Session, loop_uri: str) -> bool:
+    def delete_by_loop_uri(db: Session, loop_uri: str) -> bool:
         """
         删除映射关系
         

@@ -10,8 +10,10 @@ from typing import Optional, Dict, Any, List, Union
 from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
 from sqlmodel import Session
 
+from api.middleware.response_model import success_response, error_response
 from api.response.loop_response import LoopListResponse, LoopInfoResponse
 from api.response.bff_response import SubmodelListResponse
+from core.utils.idass import get_current_user
 from api.services.loop_service import LoopService
 from api.services.loop_import_service import LoopImportService
 from core.config import Config
@@ -612,7 +614,59 @@ async def get_all_import_tasks() -> List[Dict[str, Any]]:
     
     except Exception as e:
         logger.error(f"查询任务列表失败: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"查询任务列表失败: {str(e)}"
+@router.delete(
+    "/delete",
+    summary="删除回路",
+    operation_id="delete_loop",
+    description="删除指定的回路节点"
+)
+async def delete_loop(
+    loop_uri: str = Query(..., description="回路URI"),
+    user: Any = Depends(get_current_user)  # 暂时使用Any类型，避免依赖引用问题，实际应该用UserInfo
+) -> Dict[str, Any]:
+    """
+    删除回路节点
+
+    Args:
+        loop_uri: 回路URI
+        user: 当前用户信息
+
+    Returns:
+        回路删除结果
+
+    Example:
+        DELETE /api/v1/loop/delete?loop_uri=/pid_zd/eb65b27e4ff94a4da9a82d577f5cf3d9
+    """
+    try:
+        logger.info(f"请求删除回路: {loop_uri}")
+        
+        # 初始化服务
+        loop_service = LoopService()
+
+        # 调用回路服务删除回路
+        # 注意: UserInfo依赖可能未导入，这里假设user对象有user_name属性
+        modifier = user.user_name if hasattr(user, 'user_name') else "unknown"
+        
+        result = loop_service.delete_loop(
+            modifier=modifier,
+            loop_uri=loop_uri
         )
+        
+        # 检查接口返回结果
+        if result:
+            logger.info(f"回路删除成功: {loop_uri}")
+            return success_response(
+                data={
+                    "loop_uri": loop_uri,
+                    "message": "回路删除成功"
+                },
+                message="回路删除成功"
+            )
+        else:
+            return error_response(
+                message= "回路删除失败",
+            )
+            
+    except Exception as e:
+        logger.error(f"删除回路失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"删除回路失败: {str(e)}")
