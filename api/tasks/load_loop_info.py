@@ -234,13 +234,13 @@ def _sync_loop_to_db(db, instance: Dict[str, Any]) -> str:
     if existing_loop:
         # 更新现有记录
         LoopInfoDAO.update_by_loop_uri(db, loop_uri, loop_data)
-        logger.info(f"更新回路: {loop_name} ({loop_uri})")
+        logger.debug(f"更新回路: {loop_name} ({loop_uri})")
         return "updated"
     else:
         # 创建新记录
         loop_data["created_time"] = datetime.now()
         LoopInfoDAO.create(db, loop_data)
-        logger.info(f"新增回路: {loop_name} ({loop_uri})")
+        logger.debug(f"新增回路: {loop_name} ({loop_uri})")
         return "created"
 
 

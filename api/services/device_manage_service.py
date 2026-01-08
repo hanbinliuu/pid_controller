@@ -157,6 +157,15 @@ class DeviceManageService:
         """
         try:
             logger.info(f"删除装置: {device_uri}")
+            # 判断节点下级是否存在节点
+            if self.has_child_nodes(device_uri):
+                logger.warning(f"装置存在子节点，无法删除: {device_uri}")
+                return {
+                    "success": False,
+                    "message": "装置存在子节点，无法删除",
+                    "result": None,
+                    "code": 1
+                }
             
             # 调用模型核心客户端删除装置
             result = self.model_core_client.delete_tree(
@@ -174,6 +183,32 @@ class DeviceManageService:
         except Exception as e:
             logger.error(f"删除装置异常: {str(e)}")
             raise
+    
+    def has_child_nodes(self, device_uri: str) -> bool:
+        """
+        判断节点是否有子节点
+        
+        Args:
+            device_uri: 节点URI
+            
+        Returns:
+            bool: 如果有子节点返回 True，否则返回 False
+        """
+        try:
+            result = self.model_core_client.get_children(
+                current_uri=device_uri,
+                node_class_list=["FOLDER", "INSTANCE"]
+            )
+            
+            if result.get("success"):
+                children = result.get("result", [])
+                return len(children) > 0
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"检查子节点失败: {str(e)}")
+            return False
     
     def close(self):
         """关闭服务资源"""

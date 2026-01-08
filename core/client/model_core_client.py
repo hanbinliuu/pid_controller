@@ -56,6 +56,25 @@ class UpdateFolderRequest:
         }
 
 
+@dataclass
+class GetChildrenRequest:
+    """获取子节点的请求参数"""
+    current_uri: str
+    node_class_list: list = None
+
+    def __post_init__(self):
+        """初始化后处理"""
+        if self.node_class_list is None:
+            self.node_class_list = ["FOLDER", "INSTANCE"]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "currentUri": self.current_uri,
+            "nodeClassList": self.node_class_list
+        }
+
+
 class ModelCoreClient:
     """模型核心建模客户端"""
 
@@ -71,6 +90,8 @@ class ModelCoreClient:
     TREE_DELETE_PATH = "/model/modelling/tree/delete"
     #工程列表
     PROJECT_LIST_PATH = "/model/modelling/project/list"
+    #获取子节点
+    TREE_GET_CHILDREN_PATH = "/model/modelling/tree/getChildren"
 
     def __init__(self, base_url: Optional[str] = None, timeout: int = None):
         """
@@ -314,6 +335,79 @@ class ModelCoreClient:
             logger.error(f"模型核心接口调用失败: {str(e)}")
             raise
 
+    def get_children(
+            self,
+            current_uri: str,
+            node_class_list: list = None
+    ) -> Dict[str, Any]:
+        """
+        获取节点的子节点
+        
+        Args:
+            current_uri: 当前节点URI，如 "/pid_zd/053f3c45413b48bbafacec609d142e57"
+            node_class_list: 节点类型列表，如 ["FOLDER", "INSTANCE"]，默认为 None
+        
+        Returns:
+            接口响应结果，包含子节点列表
+            {
+                "success": true,
+                "message": "成功",
+                "result": {
+                    "children": [
+                        {
+                            "uri": "/pid_zd/xxx",
+                            "nodeClass": "FOLDER",
+                            "displayName": "子节点名称"
+                        }
+                    ]
+                },
+                "code": 0
+            }
+        
+        Raises:
+            requests.exceptions.RequestException: 请求失败时抖出
+        
+        Example:
+            >>> client = ModelCoreClient()
+            >>> result = client.get_children(
+            ...     current_uri="/pid_zd/053f3c45413b48bbafacec609d142e57",
+            ...     node_class_list=["FOLDER", "INSTANCE"]
+            ... )
+        """
+        url = f"{self.base_url}{self.TREE_GET_CHILDREN_PATH}"
+        
+        # 如果没有指定节点类型，使用默认值
+        if node_class_list is None:
+            node_class_list = ["FOLDER", "INSTANCE"]
+        
+        # 构建请求体
+        payload = {
+            "currentUri": current_uri,
+            "nodeClassList": node_class_list
+        }
+        
+        try:
+            logger.info(f"调用获取子节点接口，当前 URI: {current_uri}")
+            logger.debug(f"请求URL: {url}")
+            logger.debug(f"请求体: {payload}")
+            
+            response = self.session.post(
+                url,
+                json=payload,
+                timeout=self.timeout
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            return result
+            
+        except requests.exceptions.Timeout:
+            logger.error(f"请求超时（{self.timeout}秒）")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"模型核心接口调用失败: {str(e)}")
+            raise
+
     def drag_to_with_attributes_by_request(
             self,
             request: DragToWithAttributesRequest
@@ -461,3 +555,34 @@ def list_projects(
     """
     with ModelCoreClient(base_url=base_url, timeout=timeout) as client:
         return client.list_projects()
+
+
+def get_children(
+        current_uri: str,
+        node_class_list: list = None,
+        base_url: Optional[str] = None,
+        timeout: int = None
+) -> Dict[str, Any]:
+    """
+    便捷函数：获取节点的子节点
+    
+    Args:
+        current_uri: 当前节点URI
+        node_class_list: 节点类型列表，默认为 None
+        base_url: 服务基础URL，可选
+        timeout: 请求超时时间，可选
+    
+    Returns:
+        接口响应结果
+    
+    Example:
+        >>> result = get_children(
+        ...     current_uri="/pid_zd/053f3c45413b48bbafacec609d142e57",
+        ...     node_class_list=["FOLDER", "INSTANCE"]
+        ... )
+    """
+    with ModelCoreClient(base_url=base_url, timeout=timeout) as client:
+        return client.get_children(
+            current_uri=current_uri,
+            node_class_list=node_class_list
+        )
