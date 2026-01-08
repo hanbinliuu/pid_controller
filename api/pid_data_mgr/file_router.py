@@ -21,7 +21,7 @@ from api.pid_data_mgr.file_settings import settings
 # 设置存储目录
 settings.storage_dir = config.PID_DATA_FILE_DIR
 
-pid_data_file_router = APIRouter(prefix="/api/v1/history/data", tags=["PID文件上传"])
+pid_data_file_router = APIRouter(prefix="/api/v1/history/data")
 
 @pid_data_file_router.post("/files", summary="创建文件", response_model=CreateFileResponse)
 async def create_file(request: CreateFileRequest, session: Session = Depends(get_db)):
