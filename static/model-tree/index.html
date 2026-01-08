@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模型树 - PID Agent</title>
+    <link rel="stylesheet" href="/static/model-tree/styles.css">
+    <link rel="stylesheet" href="/static/model-tree/modal-styles.css">
+    <link rel="stylesheet" href="/static/model-tree/loop-list-styles.css">
+</head>
+
+<body>
+    <div class="container">
+        <!-- 左侧树形结构 -->
+        <aside class="tree-panel">
+            <div class="panel-header">
+                <h2>企业/车间/装置</h2>
+                <button class="refresh-btn" id="refreshBtn" title="刷新">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+                    </svg>
+                </button>
+            </div>
+
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="搜索节点..." />
+                <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <path d="m21 21-4.35-4.35"></path>
+                </svg>
+            </div>
+
+            <div class="tree-container" id="treeContainer">
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>加载中...</p>
+                </div>
+                <div class="tree-content" id="treeContent"></div>
+                <div class="error-message" id="errorMessage" style="display: none;">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <p id="errorText">加载失败</p>
+                    <button class="retry-btn" id="retryBtn">重试</button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 右侧内容区域 -->
+        <main class="content-panel">
+            <div class="loop-list-container">
+                <div class="loop-list-header">
+                    <h2>回路列表</h2>
+                    <div class="search-form">
+                        <input type="text" id="loopNameSearch" class="search-input" placeholder="回路名称" />
+                        <select id="loopTypeSearch" class="search-select">
+                            <option value="">全部类型</option>
+                            <option value="温度">温度</option>
+                            <option value="压力">压力</option>
+                            <option value="流量">流量</option>
+                            <option value="液位">液位</option>
+                        </select>
+                        <button class="btn btn-primary" id="searchBtn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <path d="m21 21-4.35-4.35"></path>
+                            </svg>
+                            查询
+                        </button>
+                        <button class="btn btn-secondary" id="resetBtn">重置</button>
+                        <div class="v-divider"></div>
+                        <button class="btn btn-primary" id="uploadBtn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            回路上传
+                        </button>
+                        <button class="btn btn-secondary" id="historyBtn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                            上传历史
+                        </button>
+                        <input type="file" id="csvFileInput" accept=".csv,.xlsx" style="display: none;" />
+                    </div>
+                </div>
+
+                <div class="loop-table-container">
+                    <table class="loop-table">
+                        <thead>
+                            <tr>
+                                <th width="80">序号</th>
+                                <th>回路名称</th>
+                                <th>回路描述</th>
+                                <th width="120">回路类型</th>
+                                <th width="100">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="loopTableBody">
+                            <tr class="empty-row">
+                                <td colspan="4">
+                                    <div class="empty-state">
+                                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="1.5">
+                                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                                        </svg>
+                                        <p>请从左侧选择一个节点查看回路列表</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="pagination" id="pagination" style="display: none;">
+                    <div class="pagination-info">
+                        共 <span id="totalCount">0</span> 条记录
+                    </div>
+                    <div class="pagination-controls">
+                        <button class="btn btn-secondary btn-sm" id="prevPage" disabled>上一页</button>
+                        <span class="page-info">第 <span id="currentPage">1</span> / <span id="totalPages">1</span>
+                            页</span>
+                        <button class="btn btn-secondary btn-sm" id="nextPage" disabled>下一页</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 右键菜单 -->
+    <div class="context-menu" id="contextMenu" style="display: none;">
+        <div class="context-menu-item" id="menuAddChild">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>新增下级</span>
+        </div>
+        <div class="context-menu-item" id="menuEdit">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+            <span>编辑</span>
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item danger" id="menuDelete">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            <span>删除</span>
+        </div>
+    </div>
+
+    <!-- 新增/编辑弹窗 -->
+    <div class="modal-overlay" id="modalOverlay" style="display: none;">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="modalTitle">新增装置</h3>
+                <button class="modal-close" id="modalClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="browseName">浏览名称 <span class="required">*</span></label>
+                    <input type="text" id="browseName" class="form-input" placeholder="请输入浏览名称（英文）" />
+                    <span class="form-hint">用于系统内部标识，建议使用英文</span>
+                </div>
+                <div class="form-group">
+                    <label for="displayName">显示名称 <span class="required">*</span></label>
+                    <input type="text" id="displayName" class="form-input" placeholder="请输入显示名称" />
+                    <span class="form-hint">用于界面显示的名称</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modalCancel">取消</button>
+                <button class="btn btn-primary" id="modalConfirm">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 上传确认弹窗 -->
+    <div class="modal-overlay" id="uploadModalOverlay" style="display: none;">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3>确认上传</h3>
+                <button class="modal-close" id="uploadModalClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="upload-confirm">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    <p class="upload-node-name">当前装置：<strong id="uploadNodeName"></strong></p>
+                    <p class="upload-hint">请核对装置无误后再上传回路</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="uploadModalCancel">取消</button>
+                <button class="btn btn-primary" id="uploadModalConfirm">确认上传</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 上传结果弹窗 - 成功 -->
+    <div class="modal-overlay" id="uploadSuccessModal" style="display: none;">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3>提交成功</h3>
+                <button class="modal-close" id="uploadSuccessClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="result-message success-message">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                    <h4>回路上传任务提交成功！</h4>
+                    <div class="result-details">
+                        <p><strong>文件名：</strong><span id="successFileName"></span></p>
+                        <p><strong>回路总数：</strong><span id="successTotalCount"></span></p>
+                        <p><strong>任务ID：</strong><span id="successTaskId"></span></p>
+                    </div>
+                    <p class="result-hint">请通过回路上传任务历史查看进度</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="uploadSuccessConfirm">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 上传结果弹窗 - 失败 -->
+    <div class="modal-overlay" id="uploadErrorModal" style="display: none;">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3>上传失败</h3>
+                <button class="modal-close" id="uploadErrorClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="result-message error-message">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="15" y1="9" x2="9" y2="15"></line>
+                        <line x1="9" y1="9" x2="15" y2="15"></line>
+                    </svg>
+                    <h4>回路上传任务提交失败！</h4>
+                    <div class="result-details">
+                        <p><strong>错误信息：</strong></p>
+                        <p class="error-text" id="errorMessage"></p>
+                    </div>
+                    <p class="result-hint error-hint">请联系管理员</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="uploadErrorConfirm">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 上传历史弹窗 -->
+    <div class="modal-overlay" id="historyModal" style="display: none;">
+        <div class="modal modal-large">
+            <div class="modal-header">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <h3>回路上传历史</h3>
+                    <button class="btn btn-secondary" id="historyRefreshBtn"
+                        style="padding: 6px 12px; font-size: 13px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="23 4 23 10 17 10"></polyline>
+                            <polyline points="1 20 1 14 7 14"></polyline>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                        </svg>
+                        刷新
+                    </button>
+                </div>
+                <button class="modal-close" id="historyModalClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="history-table-container">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th width="200">文件名</th>
+                                <th width="100">状态</th>
+                                <th width="80">进度</th>
+                                <th width="120">成功/失败</th>
+                                <th width="80">耗时</th>
+                                <th width="150">开始时间</th>
+                                <th width="80">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTableBody">
+                            <tr class="loading-row">
+                                <td colspan="7">加载中...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="historyModalConfirm">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 错误详情弹窗 -->
+    <div class="modal-overlay" id="errorDetailsModal" style="display: none;">
+        <div class="modal modal-medium">
+            <div class="modal-header">
+                <h3>错误详情</h3>
+                <button class="modal-close" id="errorDetailsClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="error-details-container">
+                    <div class="error-summary">
+                        <p><strong>任务ID：</strong><span id="errorTaskId"></span></p>
+                        <p><strong>错误总数：</strong><span id="errorTotalCount" class="count-failed"></span></p>
+                    </div>
+                    <div class="error-list" id="errorList">
+                        <!-- 错误列表将在这里动态生成 -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="errorDetailsConfirm">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 删除确认弹窗 -->
+    <div class="modal-overlay" id="deleteModalOverlay" style="display: none;">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3>确认删除</h3>
+                <button class="modal-close" id="deleteModalClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="delete-confirm">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <p>确定要删除节点 <strong id="deleteNodeName"></strong> 吗？</p>
+                    <p class="warning-text">此操作不可恢复，请谨慎操作！</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="deleteModalCancel">取消</button>
+                <button class="btn btn-danger" id="deleteModalConfirm">确定删除</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 回路删除确认弹窗 -->
+    <div class="modal-overlay" id="loopDeleteModalOverlay" style="display: none;">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3>确认删除</h3>
+                <button class="modal-close" id="loopDeleteModalClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="delete-confirm">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="8" x2="12" y2="12"></line>
+                        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <p>确定要删除回路 <strong id="loopDeleteName"></strong> 吗？</p>
+                    <p class="warning-text">此操作不可恢复，请谨慎操作！</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="loopDeleteModalCancel">取消</button>
+                <button class="btn btn-danger" id="loopDeleteModalConfirm">确定删除</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 通用消息提示弹窗 -->
+    <div class="modal-overlay" id="genericMessageModal" style="display: none;">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3 id="genericMessageTitle">提示</h3>
+                <button class="modal-close" id="genericMessageClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="result-message" id="genericMessageContent">
+                    <!-- 动态插入图标和文本 -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="genericMessageConfirm">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/model-tree/upload-history-manager.js"></script>
+    <script src="/static/model-tree/loop-list-manager.js"></script>
+    <script src="/static/model-tree/device-manager.js"></script>
+    <script src="/static/model-tree/script.js"></script>
+</body>
+
+</html>

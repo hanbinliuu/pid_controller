@@ -194,6 +194,11 @@ async def monitoring_page():
     """回路监控页面"""
     return FileResponse(os.path.join(static_dir, "monitoring", "index.html"))
 
+@app.get("/model-tree")
+async def model_tree_page():
+    """模型树页面"""
+    return FileResponse("static/model-tree/index.html")
+
 
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():
