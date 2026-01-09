@@ -9,9 +9,8 @@ from sqlmodel import Session
 
 from core.database.database import get_db
 from api.services.loop_info_service import LoopInfoService
-from api.bean.loop_info import LoopInfo
-from api.bean.loop_info_request import BatchCreateLoopInfoRequest
-from api.response.loop_info_response import LoopInfoResponse, UpdateLoopInfoResponse
+from api.request.loop_info_request import BatchCreateLoopInfoRequest
+from api.response.loop_info_response import LoopInfoResponse
 
 logger = logging.getLogger(__name__)
 

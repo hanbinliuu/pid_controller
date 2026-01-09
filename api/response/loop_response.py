@@ -186,4 +186,5 @@ class DeviceRealTimeStats(BaseModel):
     loop_count: int = Field(None, description="回路数")
     auto_control_rate: float = Field(None, description="自控率")
     stability_rate: float = Field(None, description="平稳率")
+    unknown_loop_count: Optional[int] = Field(None, description="未知回路数")
     pass

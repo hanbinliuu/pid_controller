@@ -8,6 +8,7 @@ from core.database.database import get_db_session
 from api.dao.loop_info_dao import LoopInfoDAO
 from api.dao.loop_evaluation_dao import LoopEvaluationDAO
 
+
 logger = logging.getLogger(__name__)
 
 # -------------------
@@ -75,8 +76,9 @@ def _calc_loop_performance(start_time: datetime, end_time: datetime, max_workers
             with get_db_session() as db:
                 for item in result.get('results', []):
                     status = item.get('status')
-                    if status not in ['优', '良', '中', '差', '开环', '条件剔除']:
-                        continue
+                    # 将异常状态统一归类为未知状态
+                    if status not in ['优', '良', '中', '差', '开环', '条件剔除', '未知']:
+                        status = '未知'
 
                     loop_uri = item.get('loop_uri')
                     if isinstance(excluded_loop_uris, list) and loop_uri in excluded_loop_uris:
@@ -153,12 +155,3 @@ def _calc_loop_performance(start_time: datetime, end_time: datetime, max_workers
             "status": "异常",
             "error": str(e)
         }
-
-
-if __name__ == '__main__':
-    # calc_loop_performance()
-    # 计算时间范围
-    hours = 0
-    end_time = datetime.now() - timedelta(hours=hours)
-    start_time = end_time - timedelta(hours=24)
-    _calc_loop_performance(start_time, end_time)

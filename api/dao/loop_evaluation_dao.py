@@ -462,10 +462,10 @@ class LoopEvaluationDAO:
                 db.commit()
                 db.refresh(existing)
                 
-                logger.info(
-                    f"更新回路评估记录: loop_uri={loop_uri}, "
-                    f"date={assessment_date}, id={existing.id}, loop_name={existing.loop_name}"
-                )
+                # logger.info(
+                #     f"更新回路评估记录: loop_uri={loop_uri}, "
+                #     f"date={assessment_date}, id={existing.id}, loop_name={existing.loop_name}"
+                # )
                 return existing
             else:
                 # 创建新记录

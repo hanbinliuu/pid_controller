@@ -250,7 +250,7 @@ class DeviceDataService:
             return response_data
 
         except Exception as e:
-            logger.error(f"获取历史数据失败: {str(e)}")
+            logger.error(f"获取历史数据异常: {str(e)}")
             raise
 
     @staticmethod

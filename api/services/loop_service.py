@@ -264,7 +264,7 @@ class LoopService:
             with BFFModelClient(loop_uri=loop_uri) as client:
                 result = client.query_current_raw_values(point_names)
 
-                logger.info(f"BFF查询成功，测点数量: {len(result)}")
+                # logger.info(f"BFF查询成功，测点数量: {len(result)}")
 
                 return result
 

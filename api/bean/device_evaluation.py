@@ -96,6 +96,11 @@ class DeviceEvaluation(SQLModel, table=True):
         default=None,
         sa_column_kwargs={"comment": "条件剔除回路数"}
     )
+    
+    unknown_loop_count: Optional[int] = Field(
+        default=None,
+        sa_column_kwargs={"comment": "未知回路数"}
+    )
 
     # 时间戳
     created_time: Optional[datetime] = Field(
