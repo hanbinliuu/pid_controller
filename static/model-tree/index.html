@@ -92,6 +92,24 @@
                             </svg>
                             上传历史
                         </button>
+                        <div class="v-divider"></div>
+                        <button class="btn btn-primary" id="dataImportBtn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            数据导入
+                        </button>
+                        <button class="btn btn-secondary" id="dataImportHistoryBtn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <polyline points="12 6 12 12 16 14"></polyline>
+                            </svg>
+                            导入历史
+                        </button>
                         <input type="file" id="csvFileInput" accept=".csv,.xlsx" style="display: none;" />
                     </div>
                 </div>
@@ -434,6 +452,107 @@
         </div>
     </div>
 
+    <!-- 数据导入弹窗 -->
+    <div class="modal-overlay" id="dataImportOverlay" style="display: none;">
+        <div class="modal modal-small">
+            <div class="modal-header">
+                <h3>数据导入</h3>
+                <button class="modal-close" id="dataImportClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label style="margin-bottom: 10px; display: block;">选择文件 (.csv)</label>
+                    <div class="file-drop-area" id="dataImportDropArea">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="1.5" style="color: var(--primary-color); margin-bottom: 10px;">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <div style="color: var(--text-secondary); margin-bottom: 5px;">点击或拖拽文件到这里</div>
+                        <div style="font-size: 12px; color: var(--text-muted);">支持 .csv 格式</div>
+                        <input type="file" id="dataImportFile" accept=".csv" style="display: none;" />
+                    </div>
+                    <div id="dataImportFileName" class="file-name-display" style="display: none;"></div>
+                </div>
+                <div class="form-group">
+                    <label for="dataImportDesc">文件描述</label>
+                    <textarea id="dataImportDesc" class="form-input" rows="3" placeholder="请输入文件描述（可选）"></textarea>
+                </div>
+
+                <div id="dataImportProgress" style="display:none; margin-top:20px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                        <span class="status-text" id="dataImportStatus">准备上传...</span>
+                        <span class="status-text" id="dataImportPercent">0%</span>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="dataImportProgressBar" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="dataImportCancel">取消</button>
+                <button class="btn btn-primary" id="dataImportStartBtn" disabled>开始导入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导入历史弹窗 -->
+    <div class="modal-overlay" id="dataImportHistoryOverlay" style="display: none;">
+        <div class="modal modal-large" style="max-width: 900px;">
+            <div class="modal-header">
+                <h3>导入历史</h3>
+                <button class="modal-close" id="dataImportHistoryClose">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="history-search-bar" style="display:flex; gap:10px; margin-bottom:15px;">
+                    <input type="text" id="dataHistoryNameSearch" class="search-input" placeholder="文件名">
+                    <input type="datetime-local" id="dataHistoryDateStart" class="search-input" style="width:180px;">
+                    <span style="align-self:center;">至</span>
+                    <input type="datetime-local" id="dataHistoryDateEnd" class="search-input" style="width:180px;">
+                    <button class="btn btn-primary" id="dataHistorySearchBtn">查询</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th width="60">序号</th>
+                                <th>文件名</th>
+                                <th width="100">大小</th>
+                                <th width="80">状态</th>
+                                <th width="100">导入条数/总条数</th>
+                                <th width="120">失败原因</th>
+                                <th width="160">创建时间</th>
+                                <th>描述</th>
+                                <th width="220">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dataImportHistoryTableBody">
+                            <!-- 动态加载 -->
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pagination" id="dataHistoryPagination"
+                    style="margin-top:15px; display:flex; justify-content:flex-end; gap:10px; align-items:center;">
+                    <span class="page-info">共 <span id="dataHistoryTotal">0</span> 条，页码 <span
+                            id="dataHistoryPage">1/1</span></span>
+                    <button class="btn btn-sm btn-secondary" id="dataHistoryPrev" disabled>上一页</button>
+                    <button class="btn btn-sm btn-secondary" id="dataHistoryNext" disabled>下一页</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 通用消息提示弹窗 -->
     <div class="modal-overlay" id="genericMessageModal" style="display: none;">
         <div class="modal modal-small">
@@ -457,10 +576,18 @@
         </div>
     </div>
 
-    <script src="/static/model-tree/upload-history-manager.js"></script>
-    <script src="/static/model-tree/loop-list-manager.js"></script>
-    <script src="/static/model-tree/device-manager.js"></script>
     <script src="/static/model-tree/script.js"></script>
+    <script src="/static/model-tree/spark-md5.js"></script>
+    <script src="/static/model-tree/device-manager.js"></script>
+    <script src="/static/model-tree/loop-list-manager.js"></script>
+    <script src="/static/model-tree/upload-history-manager.js"></script>
+    <script src="/static/model-tree/data-import-manager.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // 初始化数据导入管理器
+            window.dataImportManager = new DataImportManager();
+        });
+    </script>
 </body>
 
 </html>

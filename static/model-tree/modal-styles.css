@@ -312,3 +312,10 @@
 /* 失败任务行高亮 */
 .task-row-failed { background: rgba(239, 68, 68, 0.05) !important; border-left: 3px solid var(--danger-color); }
 .task-row-failed:hover { background: rgba(239, 68, 68, 0.1) !important; }
+
+/* Textarea specific styles */
+textarea.form-input {
+    font-family: inherit;
+    resize: vertical;
+    min-height: 80px;
+}

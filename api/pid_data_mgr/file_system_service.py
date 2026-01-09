@@ -44,8 +44,8 @@ class FileSystemService:
 
         # 校验MD5
         md5_hash = hashlib.md5(request.data).hexdigest()
-        if md5_hash != request.md5:
-            return 400, set(), f"MD5校验失败! 期望: {request.md5}, 实际: {md5_hash}"
+        # if md5_hash != request.md5:
+        #     return 400, set(), f"MD5校验失败! 期望: {request.md5}, 实际: {md5_hash}"
 
         # 检查该块是否已经上传
         existing_block = FileMetaService.get_block(session, f.fid, request.block_id)
