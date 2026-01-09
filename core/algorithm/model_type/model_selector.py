@@ -402,13 +402,30 @@ class ModelSelector(LoggerMixin):
                 segments_for_fitting = valid_segments
                 results_for_fitting = segment_results
         
-        # Step 2: 对有效段尝试多种模型拟合（使用 SegmentFitter）
-        segment_results_fitted = self._segment_fitter.fit_all_segments(segments_for_fitting, results_for_fitting)
+        # Step 1.95: 振荡预检 - 在模型拟合前过滤高振荡段
+        fitting_segs, fitting_results, precheck_osc_segs, precheck_osc_results = \
+            self._precheck_oscillation(segments_for_fitting, results_for_fitting)
+        
+        # 如果全部是高振荡段，直接走振荡整定
+        if not fitting_segs:
+            self.log("⚠️ 所有段均为高振荡，直接启用振荡整定")
+            oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
+                segments_for_fitting, results_for_fitting, current_pid, force=True
+            )
+            if oscillation_result is not None:
+                return self._oscillation_tuner.build_oscillation_output(
+                    oscillation_result, hist_data, time_range, input_data.tuning_window,
+                    original_segments, original_results
+                )
+            return self._empty_result(input_data)
+        
+        # Step 2: 只对正常段尝试模型拟合（使用 SegmentFitter）
+        segment_results_fitted = self._segment_fitter.fit_all_segments(fitting_segs, fitting_results)
         
         # Step 2.5: 检查是否需要振荡整定
         # 如果整定段拟合效果差，或者只有振荡段，尝试振荡整定
         oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
-            segments_for_fitting, segment_results_fitted, current_pid
+            fitting_segs, segment_results_fitted, current_pid
         )
         if oscillation_result is not None:
             # 使用振荡分析结果，跳过后续的模型融合
@@ -437,17 +454,17 @@ class ModelSelector(LoggerMixin):
         best_model_type = self._select_best_model_type(segment_results_fitted, hist_data)
         self.log(f"🎯 选择模型类型: {best_model_type}")
         
-        # Step 4: 融合各段参数
-        fusion_result = self._fuse_parameters(segment_results_fitted, best_model_type, segments_for_fitting)
+        # Step 4: 融合各段参数（只使用拟合成功的正常段）
+        fusion_result = self._fuse_parameters(segment_results_fitted, best_model_type, fitting_segs)
         
         # Step 5: 验证一致性与仿真匹配度
-        fusion_result = self._validate_and_refine(fusion_result, segments_for_fitting, hist_data)
+        fusion_result = self._validate_and_refine(fusion_result, fitting_segs, hist_data)
         
         # Step 5.5: 检查融合参数是否有效
         if abs(fusion_result.K) < self._epsilon or fusion_result.T1 < self._epsilon:
             self.log("\n   ⚠️ 参数融合失败（K或T1为0），尝试振荡整定fallback...")
             fallback_result = self._oscillation_tuner.try_oscillation_tuning(
-                segments_for_fitting, segment_results_fitted, current_pid, force=True
+                fitting_segs, segment_results_fitted, current_pid, force=True
             )
             if fallback_result is not None:
                 self.log("   ✅ 振荡整定fallback成功")
@@ -464,7 +481,7 @@ class ModelSelector(LoggerMixin):
             'T2': fusion_result.T2, 'L': fusion_result.L
         }
         method_result = self._method_selector.select_and_tune(
-            segments_for_fitting, segment_results_fitted,
+            fitting_segs, segment_results_fitted,
             model_params=model_params, lambda_factor=lambda_factor
         )
         
@@ -481,7 +498,7 @@ class ModelSelector(LoggerMixin):
             )
         
         # 构建数据质量信息，用于自适应保守PID整定
-        quality_info = self._build_quality_info(segments_for_fitting, segment_results_fitted, fusion_result)
+        quality_info = self._build_quality_info(fitting_segs, segment_results_fitted, fusion_result)
         
         # 构建最终输出（传入扰动段信息和质量信息）
         # 使用原始段数据（降采样前）用于可视化
@@ -705,8 +722,54 @@ class ModelSelector(LoggerMixin):
         return segment_fits
     
     # ============================================================
+    # Step 1.95: 振荡预检
+    # ============================================================
+    
+    def _precheck_oscillation(self, segments: List['HistoricalData'], 
+                               results: List['SegmentResult'],
+                               threshold: float = 0.7) -> tuple:
+        """
+        Step 1.95: 振荡预检 - 在模型拟合前识别高振荡段
+        
+        高振荡段的模型拟合通常会失败(R²≈0)，提前识别可以：
+        1. 避免无意义的拟合计算
+        2. 防止错误的K/T/L污染融合池
+        
+        Args:
+            segments: 数据段列表
+            results: 对应的分析结果列表
+            threshold: 振荡比阈值，超过此值视为高振荡段
+            
+        Returns:
+            fitting_segs, fitting_results: 正常段，待拟合
+            osc_segs, osc_results: 高振荡段，跳过拟合
+        """
+        fitting_segs, fitting_results = [], []
+        osc_segs, osc_results = [], []
+        
+        self.log(f"\n{'='*60}")
+        self.log("📊 Step 1.95: 振荡预检（跳过高振荡段的模型拟合）")
+        self.log('='*60)
+        
+        for seg, res in zip(segments, results):
+            osc_ratio = getattr(res, 'oscillation_ratio', 0.0)
+            
+            if osc_ratio > threshold:
+                self.log(f"   段{res.segment_idx+1}: 振荡比={osc_ratio:.2f} > {threshold}，跳过拟合")
+                osc_segs.append(seg)
+                osc_results.append(res)
+            else:
+                fitting_segs.append(seg)
+                fitting_results.append(res)
+        
+        self.log(f"   📊 预检结果: {len(fitting_segs)} 个正常段, {len(osc_segs)} 个高振荡段")
+        
+        return fitting_segs, fitting_results, osc_segs, osc_results
+    
+    # ============================================================
     # Step 4: 参数融合
     # ============================================================
+
     
     def _fuse_parameters(self, segment_results: List[SegmentResult],
                          model_type: str,
