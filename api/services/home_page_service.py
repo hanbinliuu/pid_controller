@@ -43,7 +43,8 @@ class HomePageService:
                     group_name=root_result.device_name,
                     loop_count=root_result.loop_count,
                     auto_control_rate=root_result.auto_control_rate,
-                    stability_rate=root_result.stability_rate
+                    stability_rate=root_result.stability_rate,
+                    unknown_loop_count=root_result.unknown_loop_count
                 )
             )
 
@@ -56,7 +57,8 @@ class HomePageService:
                     group_name=child_result.device_name,
                     loop_count=child_result.loop_count,
                     auto_control_rate=child_result.auto_control_rate,
-                    stability_rate=child_result.stability_rate
+                    stability_rate=child_result.stability_rate,
+                    unknown_loop_count=child_result.unknown_loop_count
                 )
             )
         return results

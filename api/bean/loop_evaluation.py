@@ -3,12 +3,12 @@
 回路评估对象Bean类
 定义回路性能评估的数据结构
 """
-from datetime import datetime, date
-from typing import Optional, Dict, Any
-from uuid import UUID, uuid4
+from datetime import datetime
+from typing import Optional
+from uuid import uuid4
 
-from sqlalchemy import Text, func, UniqueConstraint
-from sqlmodel import SQLModel, Field, Column, JSON
+from sqlalchemy import func, UniqueConstraint
+from sqlmodel import SQLModel, Field
 
 
 class LoopEvaluation(SQLModel, table=True):

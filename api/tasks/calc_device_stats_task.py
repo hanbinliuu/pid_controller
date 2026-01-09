@@ -4,17 +4,17 @@
 按天统计各装置下回路的性能状态
 """
 import logging
-from datetime import datetime, date
-from typing import Dict, List, Any
+from datetime import date
+from typing import Dict, Any
 
-from api.bean.loop_evaluation import LoopEvaluation
+from api.bean.enum.loop_status_enum import PerformanceStatus
 from api.bean.loop_info import LoopInfo
+
 from core.database.database import get_db_session
 from api.dao.loop_info_dao import LoopInfoDAO
 from api.dao.loop_evaluation_dao import LoopEvaluationDAO
 from api.dao.device_evaluation_dao import DeviceEvaluationDAO
 from api.services.bff_service import BFFService
-from core.config import Config
 from core.global_constants import LOOP_AUTO_CONTROL_THRESHOLD, LOOP_STABLE_THRESHOLD
 from sqlmodel import select, or_
 
@@ -160,19 +160,26 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                 stable_loops = 0
                 open_loops = 0
                 conditional_excluded_loops = 0
+                unknown_loops = 0
+
                 
                 # 统计各项指标
                 for loop_data in loops:
                     evaluation = loop_data.get('evaluation')
                 
                     # 条件剔除判断
-                    if not evaluation or evaluation.status == '条件剔除':
+                    if not evaluation or evaluation.status == PerformanceStatus.CONDITIONAL_EXCLUDED.value:
                         conditional_excluded_loops += 1
                         continue
 
                     # 开环判断：status == '开环'
-                    if evaluation.status == '开环':
+                    if evaluation.status == PerformanceStatus.OPEN.value:
                         open_loops += 1
+                    
+                    # 未知状态判断：异常回路归类为未知
+                    elif evaluation.status == PerformanceStatus.UNKNOWN.value:
+                        # 未知状态的回路不计入正常统计，但需要单独统计
+                        unknown_loops += 1
 
                     # 自控率判断：auto_control_rate >= LOOP_AUTO_CONTROL_THRESHOLD
                     if evaluation.auto_control_rate and evaluation.auto_control_rate >= LOOP_AUTO_CONTROL_THRESHOLD:
@@ -192,6 +199,7 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                     'auto_control_loops': auto_control_loops,
                     'stable_loops': stable_loops,
                     'conditional_excluded_loops': conditional_excluded_loops,
+                    'unknown_loops': unknown_loops,
                     'auto_control_rate': round(auto_control_rate, 2),
                     'stability_rate': round(stability_rate, 2)
                 }
@@ -225,7 +233,8 @@ def calc_device_statistics(statistics_date: date = None) -> Dict[str, Any]:
                 'auto_control_rate': stats['auto_control_rate'],
                 'stable_loop_count': stats['stable_loops'],
                 'stability_rate': stats['stability_rate'],
-                'conditional_excluded_loop_count': stats['conditional_excluded_loops']
+                'conditional_excluded_loop_count': stats['conditional_excluded_loops'],
+                'unknown_loop_count': stats['unknown_loops']
             })
         
         # 批量写入数据库

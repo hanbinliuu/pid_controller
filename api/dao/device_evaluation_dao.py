@@ -427,6 +427,21 @@ class DeviceEvaluationDAO:
             raise
     
     @staticmethod
+    def get_by_id(db: Session, evaluation_id: str) -> Optional[DeviceEvaluation]:
+        """
+        根据ID获取评估记录
+        
+        Args:
+            db: 数据库会话
+            evaluation_id: 评估记录ID (UUID字符串)
+        
+        Returns:
+            Optional[DeviceEvaluation]: 评估对象
+        """
+        statement = select(DeviceEvaluation).where(DeviceEvaluation.id == evaluation_id)
+        return db.exec(statement).first()
+    
+    @staticmethod
     def query_list(
         db: Session,
         device_name: Optional[str] = None,
