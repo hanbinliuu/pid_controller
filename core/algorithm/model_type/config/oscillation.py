@@ -92,7 +92,7 @@ OSCILLATION_TUNING = {
     'enable_adaptive_derivative': True,  # 是否启用自适应微分
     'derivative_factor': 0.25,           # Kd = Kp * Pu * derivative_factor
     'derivative_oscillation_threshold': 0.5,  # 振荡比超过此值才加微分
-    'td_base_divisor': 8.0,              # Td基础计算: Pu / td_base_divisor
+    'td_base_divisor': 12.0,              # Td基础计算: Pu / td_base_divisor
     'td_multiplier_factor': 1.5,         # Td乘数系数
     'td_range': [0.3, 3.0],              # Td范围限制
     

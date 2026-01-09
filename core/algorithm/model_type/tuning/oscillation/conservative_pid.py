@@ -282,7 +282,8 @@ class ConservativePIDCalculator(LoggerMixin):
         """计算保守的 Ti 和 Td 值"""
         osc_config = Config.OSCILLATION_TUNING
         ti_min_base = osc_config.get('ti_min_base', 1.5)
-        base_Ti = max(Pu / 2, ti_min_base) if Pu > 0 else 2.0
+        # 减小基础除数：Pu/3 而非 Pu/2，让 Ti 不容易触顶
+        base_Ti = max(Pu / 3, ti_min_base) if Pu > 0 else 2.0
         
         ti_osc_start = osc_config.get('ti_osc_start', 0.6)
         ti_osc_factor = osc_config.get('ti_osc_factor', 0.5)
@@ -300,7 +301,7 @@ class ConservativePIDCalculator(LoggerMixin):
         else:
             ti_multiplier *= llm_strategy.ti_multiplier
         
-        conservative_Ti = np.clip(base_Ti * ti_multiplier, *osc_config.get('ti_range', [1.5, 10.0]))
+        conservative_Ti = np.clip(base_Ti * ti_multiplier, *osc_config.get('ti_range', [1.5, 25.0]))
         
         conservative_Td = 0.0
         td_multiplier = 0.0
@@ -311,7 +312,8 @@ class ConservativePIDCalculator(LoggerMixin):
             enable_derivative = llm_strategy.enable_derivative
         
         if enable_derivative and (oscillation_ratio > derivative_threshold or (llm_strategy and llm_strategy.enable_derivative)):
-            td_base_divisor = osc_config.get('td_base_divisor', 8.0)
+            # 增大基础除数：默认 12 而非 8，让 Td 不容易触顶
+            td_base_divisor = osc_config.get('td_base_divisor', 12.0)
             base_Td = Pu / td_base_divisor if Pu > 0 else 0.5
             td_mult_factor = osc_config.get('td_multiplier_factor', 1.5)
             effective_osc = max(0, oscillation_ratio - derivative_threshold)
