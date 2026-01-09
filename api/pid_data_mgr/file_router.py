@@ -143,6 +143,10 @@ async def get_file_list(
                 fid=f.fid,
                 name=f.name,
                 size=f.total_size,
+                imported_records=f.imported_records,
+                total_records=f.total_records,
+                status=FileStatus(f.status).name,
+                failed_reason=f.failed_reason or "",
                 create_time=f.create_time.strftime("%Y-%m-%d %H:%M:%S"),
                 description=f.description or ""
             )

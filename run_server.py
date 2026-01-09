@@ -363,10 +363,10 @@ def start_background_worker():
     logger.info("=" * 60)
 
     # 启动定时任务
-    cron_tasks_success = _start_cron_tasks()
-    if not cron_tasks_success:
-        logger.error("定时任务启动失败，退出进程")
-        sys.exit(1)
+    # cron_tasks_success = _start_cron_tasks()
+    # if not cron_tasks_success:
+    #     logger.error("定时任务启动失败，退出进程")
+    #     sys.exit(1)
 
     # 启动PID文件导入服务
     file_import_process = _start_file_import_service()
@@ -448,7 +448,7 @@ if __name__ == "__main__":
         '--mode',
         type=str,
         choices=['api', 'worker', 'all'],
-        default='api',
+        default='all',
         help='启动模式: api=仅API服务, worker=仅后台任务, all=全部启动 (默认: api)'
     )
 

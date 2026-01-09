@@ -93,6 +93,10 @@ class FileItem(BaseModel):
     fid: int = Field(..., description="文件编号")
     name: str = Field(..., description="文件名")
     size: int = Field(..., description="文件大小（字节）")
+    imported_records: int = Field(..., description="已导入记录数")
+    total_records: int = Field(..., description="总记录数")
+    status: str = Field(..., description="文件状态")
+    failed_reason: str = Field(default="", description="失败原因")
     create_time: str = Field(..., description="创建时间")
     description: str = Field(..., description="文件描述")
 
@@ -103,6 +107,10 @@ class FileItem(BaseModel):
                 "name": "hello.csv",
                 "type": "csv",
                 "size": 102400,
+                "imported_records": 100,
+                "total_records": 1000,
+                "status": "UPLOADED",
+                "failed_reason": "",
                 "create_time": "2023-02-07 15:20:49",
                 "description": ""
             }
