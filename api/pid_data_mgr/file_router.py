@@ -44,10 +44,10 @@ async def create_file(request: CreateFileRequest, session: Session = Depends(get
 
 @pid_data_file_router.put("/files", summary="上传文件块", response_model=UploadFileChunkResponse)
 async def upload_file_chunk(
+        request: Request,
         upload_id: str = Query(..., description="上传编号"),
         block_id: int = Query(..., description="文件块编号"),
         md5: str = Query(..., description="文件块 MD5"),
-        file: UploadFile = File(...),
         session: Session = Depends(get_db)):
     # 验证上传编号
     upload_id = upload_id.strip()
@@ -66,18 +66,18 @@ async def upload_file_chunk(
     if len(md5) != settings.md5_sum_length:
         raise HTTPException(status_code=400, detail=f"MD5校验码长度错误, 必须为{settings.md5_sum_length}个字节!")
 
-    # 将文件块内容转换成字节数组
-    file_chunk = await file.read()
+    # 从请求体读取字节数据
+    file_chunk = await request.body()
 
     # 创建 UploadFileRequest 对象
-    request = UploadFileChunkRequest(
+    upload_request = UploadFileChunkRequest(
         md5=md5,
         block_id=block_id,
         upload_id=upload_id,
         data=file_chunk
     )
 
-    code, block_list, message = FileSystemService.upload_file_chunk(session, request)
+    code, block_list, message = FileSystemService.upload_file_chunk(session, upload_request)
     if code != 0:
         raise HTTPException(status_code=500, detail=f"上传文件块失败: {message}")
 

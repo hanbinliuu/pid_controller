@@ -50,6 +50,7 @@ def upload_file_in_chunks(file_path: str, base_url: str, chunk_size: int = 1024*
 
             # 计算MD5
             md5_hash = hashlib.md5(chunk_data).hexdigest()
+            print(f"块 {block_id} MD5: {md5_hash}")
 
             # 构建上传URL
             upload_chunk_url = f"{base_url}/api/v1/history/data/files"
@@ -59,15 +60,12 @@ def upload_file_in_chunks(file_path: str, base_url: str, chunk_size: int = 1024*
                 "md5": md5_hash
             }
 
-            # 创建文件对象进行上传
-            from io import BytesIO
-            file_obj = BytesIO(chunk_data)
-
-            files = {
-                'file': (f'chunk_{block_id}', file_obj, 'application/octet-stream')
+            # 直接发送字节数据作为请求体
+            headers = {
+                'Content-Type': 'application/octet-stream'
             }
 
-            response = requests.put(upload_chunk_url, params=params, files=files)
+            response = requests.put(upload_chunk_url, params=params, data=chunk_data, headers=headers)
 
             if response.status_code != 200:
                 print(f"上传块 {block_id} 失败: {response.text}")
