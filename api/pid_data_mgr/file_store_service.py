@@ -100,6 +100,10 @@ class FileStoreService:
         except Exception as e:
             pass
 
+        # 检查临时文件对应目录是否存在
+        if not os.path.exists(os.path.dirname(merged_file_path_tmp)):
+            raise FileNotFoundError(f"数据目录不存在: {os.path.dirname(merged_file_path_tmp)}")
+
         merged_file_path = os.path.join(settings.get_storage_path(), str(file.fid), file.upload_id)
         # 合并文件块
         with open(merged_file_path_tmp, 'wb') as merged_file:
