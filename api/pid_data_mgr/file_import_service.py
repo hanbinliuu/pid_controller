@@ -177,7 +177,7 @@ class FileImportService:
                     if file.status == FileStatus.UPLOADING:
                         # 检查是否传输完成
                         blocks_count = BlockUtil.calc_blocks_count(file.total_size, file.block_size)
-                        uploaded_blocks_count = FileMetaService.count_blocks(file.fid)
+                        uploaded_blocks_count = FileMetaService.count_blocks(session, file.fid)
                         if uploaded_blocks_count == blocks_count:
                             # 上传完成
                             FileMetaService.mark_as(session, file.fid, FileStatus.UPLOADED)
