@@ -143,6 +143,39 @@ class OscillationTuner(LoggerMixin):
         y_lower = np.array([np.min(pv[max(0,i-window):min(len(pv),i+window+1)]) for i in range(len(pv))])
         envelope_width = np.median(y_upper - y_lower)
         return float(np.clip(envelope_width / pv_range, 0.0, 1.0))
+    
+    def _fuse_oscillation_features(self, oscillation_analyses: List[Dict]) -> tuple:
+        """
+        多振荡段特征融合
+        
+        使用中位数融合多个振荡段的 Pu 和 Ku，提高鲁棒性。
+        中位数比平均值更能抵抗单个异常段的影响。
+        
+        Args:
+            oscillation_analyses: 振荡分析结果列表，每个包含 osc_info
+            
+        Returns:
+            (fused_Pu, fused_Ku): 融合后的极限周期和极限增益
+        """
+        Pu_values = []
+        Ku_values = []
+        
+        for analysis in oscillation_analyses:
+            osc_info = analysis.get('osc_info', {})
+            Pu = osc_info.get('Pu', 0)
+            Ku = osc_info.get('Ku', 0)
+            
+            # 只收集有效的 Pu/Ku 值
+            if Pu > 0.1:  # Pu 至少 0.1s
+                Pu_values.append(Pu)
+            if Ku > 0.01:  # Ku 至少 0.01
+                Ku_values.append(Ku)
+        
+        # 使用中位数融合
+        fused_Pu = float(np.median(Pu_values)) if Pu_values else None
+        fused_Ku = float(np.median(Ku_values)) if Ku_values else None
+        
+        return fused_Pu, fused_Ku
 
     def try_oscillation_tuning(self, segments: List[HistoricalData], 
                                segment_results: List[SegmentResult],
@@ -252,6 +285,17 @@ class OscillationTuner(LoggerMixin):
             elif analysis['data_points'] > best_analysis['data_points']:
                 best_analysis = analysis
                 best_seg = segments[idx] if idx < len(segments) else None
+        
+        # Step: 多振荡段特征融合
+        # 如果有多个振荡分析结果，使用中位数融合 Pu/Ku 以提高鲁棒性
+        if len(oscillation_analyses) > 1:
+            fused_Pu, fused_Ku = self._fuse_oscillation_features(oscillation_analyses)
+            if fused_Pu is not None and fused_Ku is not None:
+                self.log(f"   📊 多振荡段融合: {len(oscillation_analyses)} 个段 → Pu={fused_Pu:.1f}s, Ku={fused_Ku:.3f}")
+                # 用融合后的值替换 best_analysis 中的值
+                best_analysis['osc_info'] = best_analysis['osc_info'].copy()
+                best_analysis['osc_info']['Pu'] = fused_Pu
+                best_analysis['osc_info']['Ku'] = fused_Ku
         
         # 检查是否需要保守参数
         use_conservative = False
