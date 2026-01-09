@@ -413,7 +413,8 @@ class OscillationTuner(LoggerMixin):
         conservative_Kp = 100.0 / pb_safe
         
         ti_base_min = 10.0 if self._loop_type == 'level' else 5.0
-        conservative_Ti = np.clip(max(Pu_approx / 2, ti_base_min) * ti_multiplier, *osc_config.get('ti_range', [1.5, 25.0]))
+        # 简化 Ti 计算：使用较小的 Ti 加快响应，上限 25s
+        conservative_Ti = np.clip(ti_base_min * 1.5, *osc_config.get('ti_range', [1.5, 25.0]))
         conservative_Ki = conservative_Kp / conservative_Ti
         
         kd_threshold = 0.6 if self._loop_type == 'level' else 0.5
