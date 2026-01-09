@@ -7,6 +7,7 @@ import logging
 from datetime import date
 from typing import Dict, Any
 
+from api.bean.enum.loop_status_enum import PerformanceStatus
 from api.bean.loop_info import LoopInfo
 
 from core.database.database import get_db_session
