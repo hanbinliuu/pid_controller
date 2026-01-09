@@ -130,7 +130,12 @@ class FileListData(BaseModel):
                     {
                         "fid": 10010,
                         "name": "hello.csv",
+                        "type": "csv",
                         "size": 102400,
+                        "imported_records": 100,
+                        "total_records": 1000,
+                        "status": "UPLOADED",
+                        "failed_reason": "",
                         "create_time": "2023-02-07 15:20:49",
                         "description": ""
                     }

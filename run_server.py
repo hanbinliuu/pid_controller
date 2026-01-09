@@ -363,10 +363,10 @@ def start_background_worker():
     logger.info("=" * 60)
 
     # 启动定时任务
-    # cron_tasks_success = _start_cron_tasks()
-    # if not cron_tasks_success:
-    #     logger.error("定时任务启动失败，退出进程")
-    #     sys.exit(1)
+    cron_tasks_success = _start_cron_tasks()
+    if not cron_tasks_success:
+        logger.error("定时任务启动失败，退出进程")
+        sys.exit(1)
 
     # 启动PID文件导入服务
     file_import_process = _start_file_import_service()
