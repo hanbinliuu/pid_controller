@@ -199,6 +199,28 @@ async def model_tree_page():
     """模型树页面"""
     return FileResponse("static/model-tree/index.html")
 
+@app.get("/system-config")
+async def system_config_page():
+    """系统动态配置页面"""
+    return FileResponse("static/system-config/index.html")
+
+@app.get("/api/v1/proxy/resource-spaces")
+async def proxy_resource_spaces():
+    """代理获取资源空间列表"""
+    import httpx
+    url = "http://core-iotda-infra-system.sit-cloud.ieccloud.hollicube.com/iot-core/v1/resourceSpaces"
+    token = "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJyZWFsTmFtZSI6IueuoeeQhuWRmCIsImF1ZCI6WyJvYXV0aDItcmVzb3VyY2UiXSwidXNlcl9uYW1lIjoicm9vdCIsInNjb3BlIjpbImFsbCJdLCJyb2xlcyI6WyJhZG1pbiJdLCJleHAiOjE3NjcxNzI2NjAsInJlc291cmNlX2lkcyI6WyJvYXV0aDItcmVzb3VyY2UiXSwidXNlcklkIjoiMTI1ODk1NzIxOTI1MTAzMjA2NiIsImp0aSI6IjFlYmZiYjAxLTE4OGMtNDVmYy1iODdhLTY4ZDdiOWU5NGM1MSIsImNsaWVudF9pZCI6ImluZnJhLXN5c3RlbV9tb2RlbC1jb3JlLXRvb2wiLCJ1c2VybmFtZSI6InJvb3QiLCJhdHRycyI6e319.Ny7gq7HWE5kx1zi6BHfkodsAZ_jLs18Is1qPswwx32aEYlxL90l6aaGf8C5SCEtWMxZvP1oe68HH8EJxOabBbBQTsjhAid-P5auoQyw5t3IMJM9eg8Pm1p9e4Aa9qjXB64mRcVc3Mr6m52KMjiGfTz0bYixTCOogebhfufGWhdNBxrXi2pfKCU6Pg9DMGgygKSoPTAOEugdIPtlAeIgyvO8cX2fyKsNk-x_8b3dtJf0VmRI66LIxne2u0fJX2PmuqD5XbBYI0fhrMxQ5JF8NbFaM6Yegg4VMkb7npCkvDe-D4UIgk-fhpxx3oc4avKXClqsjQBlgqKhdYS7LrfwmDA"
+    
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers={"Authorization": token})
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logger.error(f"Failed to fetch resource spaces: {str(e)}")
+        return {"code": 500, "message": f"Failed to fetch resource spaces: {str(e)}", "data": []}
+
 
 @app.get("/docs", include_in_schema=False)
 async def custom_swagger_ui_html():

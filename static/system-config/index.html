@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统动态配置 - PID Agent</title>
+    <link rel="stylesheet" href="/static/system-config/styles.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>系统动态配置</h1>
+            <div class="btn-group">
+                <button class="save-btn" onclick="saveConfigs()">保存配置</button>
+                <button class="refresh-btn" onclick="loadConfigs()">刷新列表</button>
+            </div>
+        </div>
+
+        <div id="loading" class="loading">加载中...</div>
+        <div id="error" class="error-message" style="display: none;"></div>
+        <div id="toast" class="toast"></div>
+
+        <!-- Resource Space Modal -->
+        <div id="resourceSpaceModal" class="modal-overlay" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>选择资源空间</h3>
+                    <button class="close-btn" onclick="closeResourceSpaceModal()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="resource-table-container">
+                        <table class="resource-table">
+                            <thead>
+                                <tr>
+                                    <th width="10%">序号</th>
+                                    <th width="30%">资源空间名称</th>
+                                    <th width="30%">所属租户名称</th>
+                                    <th width="30%">所属组织</th>
+                                </tr>
+                            </thead>
+                            <tbody id="resourceTableBody">
+                                <!-- Data will be loaded here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="cancel-btn" onclick="closeResourceSpaceModal()">取消</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table class="config-table" id="configTable" style="display: none;">
+                <thead>
+                    <tr>
+                        <th width="20%">配置名称</th>
+                        <th width="20%">配置键</th>
+                        <th width="30%">配置值</th>
+                        <th width="15%">分组</th>
+                        <th width="15%">更新时间</th>
+                    </tr>
+                </thead>
+                <tbody id="configTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+    <script src="/static/system-config/script.js"></script>
+</body>
+
+</html>
