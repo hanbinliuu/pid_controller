@@ -282,19 +282,16 @@ class ConservativePIDCalculator(LoggerMixin):
         """计算保守的 Ti 和 Td 值"""
         osc_config = Config.OSCILLATION_TUNING
         ti_min_base = osc_config.get('ti_min_base', 1.5)
-        # 减小基础除数：Pu/3 而非 Pu/2，让 Ti 不容易触顶
-        base_Ti = max(Pu / 3, ti_min_base) if Pu > 0 else 2.0
+        
+        # 简化 Ti 计算：使用固定的较小值加快响应，不再依赖 Pu
+        # 基础 Ti = 10s，最大 25s
+        base_Ti = max(10.0, ti_min_base)
         
         ti_osc_start = osc_config.get('ti_osc_start', 0.6)
         ti_osc_factor = osc_config.get('ti_osc_factor', 0.5)
         ti_multiplier = 1.0 + np.sqrt(oscillation_ratio - ti_osc_start) * ti_osc_factor if oscillation_ratio > ti_osc_start else 1.0
         
-        ti_slow_thresholds = osc_config.get('ti_slow_pu_thresholds', [20.0, 10.0])
-        ti_slow_factors = osc_config.get('ti_slow_factors', [1.1, 1.05, 1.0])
-        for i, threshold in enumerate(ti_slow_thresholds):
-            if Pu > threshold:
-                ti_multiplier *= ti_slow_factors[i]
-                break
+        # 移除慢系统 Ti 增大逻辑，保持 Ti 较小
         
         if llm_strategy is None:
             ti_multiplier = self._strategy.adjust_ti_multiplier(ti_multiplier, K_approx, Pu, oscillation_ratio, osc_config, log_func=self.log)

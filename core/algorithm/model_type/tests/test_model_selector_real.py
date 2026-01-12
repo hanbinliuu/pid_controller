@@ -35,7 +35,7 @@ from core.algorithm.model_type.model_selector import ModelSelector
 
 CONFIG = {
     # 回路 URI
-    # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951",
+    # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", 
     # 'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
     'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
@@ -43,8 +43,8 @@ CONFIG = {
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        {'start_time': '2025-12-16 10:39:00', 'end_time': '2025-12-16 14:58:00'},
-        # {'start_time': '2026-01-04 00:39:41', 'end_time': '2026-01-04 18:39:41'},
+        {'start_time': '2026-01-09 00:39:41', 'end_time': '2026-01-09 13:39:41'},
+        # {'start_time': '2026-01-05 00:39:41', 'end_time': '2026-01-05 13:39:41'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
@@ -686,6 +686,223 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     plt.close()
 
 
+def visualize_new_pid_simulation(data: List[Dict], fitting_result: Dict, scenario_name: str = None):
+    """
+    可视化新整定参数从原始数据最后一个点开始的未来仿真走势
+    
+    从原始数据的最后一个点开始，使用新的PID参数进行闭环仿真，
+    展示新参数下的预期控制轨迹，与原始数据合并在一张图中。
+    
+    Args:
+        data: 原始历史数据
+        fitting_result: ModelSelector 的整定结果
+        scenario_name: 场景名称（用于文件命名）
+    """
+    # 获取原始数据
+    pv_array, sv_array, mv_array, timestamps = convert_to_arrays(data)
+    time_array = [datetime.fromtimestamp(ts / 1000) for ts in timestamps]
+    
+    # 获取模型和PID参数
+    model_params = fitting_result.get('model_parameters', {})
+    pid_params = fitting_result.get('pid_parameters', {})
+    model_type = fitting_result.get('model_type', 'FOPDT')
+    
+    K = model_params.get('K', 1.0)
+    T1 = model_params.get('T1', 10.0)
+    T2 = model_params.get('T2', 0.0)
+    L = model_params.get('L', 0.0)
+    
+    Kp = pid_params.get('kp', 1.0)
+    Ki = pid_params.get('ki', 0.0)
+    Kd = pid_params.get('kd', 0.0)
+    
+    # 计算采样间隔 (秒)
+    if len(timestamps) > 1:
+        dt = (timestamps[1] - timestamps[0]) / 1000.0  # ms -> s
+    else:
+        dt = 1.0
+    
+    # ========== 从最后一个点开始仿真未来轨迹 ==========
+    # 仿真时间：基于模型时间常数，确保足够收敛到稳态
+    # 一般需要 5*T1 才能达到 99% 稳态，使用 max(15*T1, 600秒)
+    original_duration = (timestamps[-1] - timestamps[0]) / 1000.0  # 秒
+    T1_based_duration = max(T1 * 15, 600)  # 至少 15 倍时间常数或 600 秒
+    sim_duration = min(T1_based_duration, 10000)  # 上限 10000 秒（约2.8小时）
+    n_sim_steps = int(sim_duration / dt)
+    n_sim_steps = max(1000, min(n_sim_steps, 20000))  # 限制在 1000~20000 步
+    
+    # 初始条件：原始数据的最后一个点
+    pv_init = pv_array[-1]
+    mv_init = mv_array[-1]
+    sv_target = sv_array[-1]  # 使用最后一个设定值作为目标
+    
+    # 检测 MV 饱和情况 - 如果 MV 接近 0% 或 100%，则无法正常调节
+    mv_saturated = (mv_init > 95) or (mv_init < 5)
+    
+    if mv_saturated:
+        # MV 饱和时，使用标准阶跃测试工作点（与闭环验证一致）
+        pv_range = np.ptp(pv_array)
+        pv_mean = np.mean(pv_array)
+        
+        # 使用 PV 中间值作为初始点，产生 10% 阶跃
+        pv_init = pv_mean
+        mv_init = 50.0  # 中间位置
+        sv_target = pv_mean + pv_range * 0.1
+        print(f"   ⚠️ MV 饱和，切换到标准阶跃测试: PV={pv_init:.1f} → SV={sv_target:.1f}")
+    else:
+        # 如果初始偏差太小（PV已接近SV），人为引入10%阶跃扰动以展示调节效果
+        initial_error = abs(sv_target - pv_init)
+        sv_range = max(np.ptp(sv_array), 1.0)  # SV变化范围
+        if initial_error < sv_range * 0.05:  # 偏差小于5%范围
+            # 将SV提升10%以产生明显阶跃
+            sv_step = sv_range * 0.1
+            sv_target = sv_target + sv_step
+            print(f"   📊 初始偏差较小，引入阶跃扰动: SV += {sv_step:.2f}")
+    
+    # 生成未来时间序列
+    last_timestamp = timestamps[-1]
+    dt_ms = int(dt * 1000)
+    future_timestamps = [last_timestamp + i * dt_ms for i in range(1, n_sim_steps + 1)]
+    future_time_array = [datetime.fromtimestamp(ts / 1000) for ts in future_timestamps]
+    
+    # 状态变量初始化
+    pv_sim = np.zeros(n_sim_steps)
+    mv_sim = np.zeros(n_sim_steps)
+    sv_sim = np.full(n_sim_steps, sv_target)
+    
+    # 过程模型状态 (增量模型)
+    x1 = 0.0
+    x2 = 0.0
+    
+    # PID控制器状态 - 从当前偏差开始
+    integral = 0.0
+    prev_error = sv_target - pv_init
+    
+    # 延迟缓冲区
+    delay_steps = max(1, int(L / dt)) if L > 0 else 1
+    mv_history = [mv_init] * delay_steps
+    
+    # MV 限幅
+    mv_min, mv_max = 0.0, 100.0
+    
+    # 基准点 (从最后一个点开始)
+    pv_base = pv_init
+    mv_base = mv_init
+    
+    pv_current = pv_init
+    
+    for i in range(n_sim_steps):
+        sp = sv_target
+        
+        # PID 控制器计算
+        error = sp - pv_current
+        integral += error * dt
+        derivative = (error - prev_error) / dt if dt > 0 else 0.0
+        prev_error = error
+        
+        # 积分限幅
+        integral = np.clip(integral, -100 / (Ki + 1e-10), 100 / (Ki + 1e-10))
+        
+        # PID 输出
+        mv_out = mv_base + Kp * error + Ki * integral + Kd * derivative
+        mv_out = np.clip(mv_out, mv_min, mv_max)
+        mv_sim[i] = mv_out
+        
+        # 延迟处理
+        mv_history.append(mv_out)
+        mv_delayed = mv_history.pop(0)
+        
+        # 增量 MV
+        delta_mv = mv_delayed - mv_base
+        
+        # 过程模型更新
+        if model_type in ['SOPDT', 'SECOND_ORDER']:
+            T1_eff = max(T1, dt)
+            T2_eff = max(T2, dt) if T2 > 0 else T1_eff
+            dx1 = (K * delta_mv - x1) / T1_eff
+            dx2 = (x1 - x2) / T2_eff
+            x1 += dx1 * dt
+            x2 += dx2 * dt
+            delta_pv = x2
+        else:
+            T1_eff = max(T1, dt)
+            dx1 = (K * delta_mv - x1) / T1_eff
+            x1 += dx1 * dt
+            delta_pv = x1
+        
+        pv_current = pv_base + delta_pv
+        pv_sim[i] = pv_current
+    
+    # ========== 创建合并图表 ==========
+    fig = plt.figure(figsize=(18, 8))
+    
+    pb = pid_params.get('pb', Kp * 100 if Kp > 0 else 100)
+    ti = pid_params.get('ti', 0)
+    td = pid_params.get('td', 0)
+    
+    fig.suptitle(f'原始数据 + 新参数未来仿真 (pb={pb:.1f}%, Ti={ti:.1f}s, Td={td:.2f}s)\n'
+                 f'模型: {model_type}, K={K:.3f}, T1={T1:.1f}s, L={L:.1f}s', 
+                 fontsize=12, fontweight='bold')
+    
+    # ========== 子图1: PV/SV ==========
+    ax1 = fig.add_subplot(2, 1, 1)
+    
+    # 原始数据
+    ax1.plot(time_array, pv_array, 'b-', label='原始PV (实测)', linewidth=0.8, alpha=0.8)
+    ax1.plot(time_array, sv_array, 'r--', label='SV (设定值)', linewidth=1.0)
+    
+    # 未来仿真轨迹 (绿色，加粗)
+    ax1.plot(future_time_array, pv_sim, 'g-', label='新参数PV (仿真预测)', linewidth=2.0)
+    ax1.plot(future_time_array, sv_sim, 'r--', linewidth=1.0)  # 延续 SV
+    
+    # 分界线
+    ax1.axvline(x=time_array[-1], color='purple', linestyle='--', linewidth=1.5, 
+                label='仿真起点', alpha=0.8)
+    
+    # 仿真区域背景
+    ax1.axvspan(time_array[-1], future_time_array[-1], alpha=0.1, color='green')
+    
+    ax1.set_ylabel('PV / SV')
+    ax1.set_title('过程值：原始数据 + 新参数仿真预测')
+    ax1.legend(loc='upper right')
+    ax1.grid(True, alpha=0.3)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    
+    # ========== 子图2: MV ==========
+    ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
+    
+    # 原始数据
+    ax2.plot(time_array, mv_array, 'b-', label='原始MV (实测)', linewidth=0.8, alpha=0.8)
+    
+    # 未来仿真轨迹
+    ax2.plot(future_time_array, mv_sim, 'g-', label='新参数MV (仿真预测)', linewidth=2.0)
+    
+    # 分界线
+    ax2.axvline(x=time_array[-1], color='purple', linestyle='--', linewidth=1.5, alpha=0.8)
+    
+    # 仿真区域背景
+    ax2.axvspan(time_array[-1], future_time_array[-1], alpha=0.1, color='green')
+    
+    ax2.set_ylabel('MV')
+    ax2.set_xlabel('时间')
+    ax2.set_title('操作值：原始数据 + 新参数仿真预测')
+    ax2.legend(loc='upper right')
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # 保存图表
+    if scenario_name:
+        filename = f'new_pid_simulation_{scenario_name}.png'
+    else:
+        filename = f'new_pid_simulation_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
+    
+    filepath = f"{CONFIG['log_dir']}/{filename}"
+    plt.savefig(filepath, dpi=150, bbox_inches='tight')
+    print(f"\n📊 新参数仿真图表已保存至: {filepath}")
+    plt.close()
+
+
 def print_result_json(result: Dict):
     """打印完整的结果 JSON 格式"""
     import json
@@ -820,6 +1037,11 @@ if __name__ == "__main__":
         step5_start = time.time()
         scenario_name = start_time_str.replace(' ', '_').replace(':', '-')
         visualize_fitting_result(data, tuning_input, result, scenario_name)
+        
+        # Step 5.1: 新参数仿真图
+        if result.get('success'):
+            visualize_new_pid_simulation(data, result, scenario_name)
+        
         step5_elapsed = time.time() - step5_start
         
         # 汇总耗时统计
