@@ -33,7 +33,7 @@ config/application.properties
 *.png
 
 # Markdown
-*.md
+#*.md
 
 # macOS
 .DS_Store
