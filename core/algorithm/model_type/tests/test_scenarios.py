@@ -830,6 +830,267 @@ TEST_SCENARIOS = [
         'noise_std': 0.8,
         'loop_type': 'temperature',
     },
+    
+    # ========== 阀门特性问题场景 (Valve Characteristics) ==========
+    {
+        'name': 'Valve Deadband Flow',
+        'description': '阀门死区 - MV小幅变化时PV不响应',
+        # 死区会导致控制器持续积分，最终大幅动作后振荡
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 2.0},
+        'process_changed': {'K': 2.0, 'T1': 18.0, 'L': 5.0},
+        'original_pid': {'Kp': 3.0, 'Ki': 0.15, 'Kd': 0.0},  # 高积分试图克服死区
+        'loop_type': 'flow',
+        'valve_deadband': 5.0,  # 5% 死区
+    },
+    {
+        'name': 'Valve Stiction Flow',
+        'description': '阀门粘滞 - MV反向时PV滞后',
+        # 粘滞会导致周期性振荡（阀门卡住后突然移动）
+        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 3.0},
+        'process_changed': {'K': 1.8, 'T1': 22.0, 'L': 6.0},
+        'original_pid': {'Kp': 2.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'valve_stiction': 3.0,  # 3% 粘滞
+    },
+    {
+        'name': 'MV Saturation High',
+        'description': 'MV饱和 - 阀门全开/全关',
+        # 饱和会导致积分饱和（windup），解除后过冲振荡
+        'process_original': {'K': 0.8, 'T1': 30.0, 'L': 3.0},
+        'process_changed': {'K': 2.5, 'T1': 25.0, 'L': 8.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.08, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'mv_saturation': [0, 100],  # MV 限制在 0-100%
+    },
+    {
+        'name': 'Valve Deadband + Stiction',
+        'description': '阀门死区+粘滞组合 - 严重非线性',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 2.0},
+        'process_changed': {'K': 1.5, 'T1': 18.0, 'L': 4.0},
+        'original_pid': {'Kp': 3.5, 'Ki': 0.2, 'Kd': 0.0},  # 激进 PID 应对非线性
+        'loop_type': 'flow',
+        'valve_deadband': 3.0,
+        'valve_stiction': 2.0,
+    },
+    
+    # ========== 正常阶跃响应基准 (Normal Step Response Baseline) ==========
+    {
+        'name': 'Normal Step Flow',
+        'description': '正常阶跃响应 - 流量回路基准（无振荡）',
+        # 系统变化小，PID 仍然适用，不应振荡
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 2.0},
+        'process_changed': {'K': 1.2, 'T1': 22.0, 'L': 3.0},  # 小幅变化
+        'original_pid': {'Kp': 1.5, 'Ki': 0.06, 'Kd': 0.0},  # 保守 PID
+        'loop_type': 'flow',
+        'expected_stable': True,  # 预期稳定
+    },
+    {
+        'name': 'Normal Step Temperature',
+        'description': '正常阶跃响应 - 温度回路基准（无振荡）',
+        'process_original': {'K': 0.8, 'T1': 50.0, 'L': 5.0},
+        'process_changed': {'K': 1.0, 'T1': 55.0, 'L': 6.0},
+        'original_pid': {'Kp': 1.0, 'Ki': 0.03, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'expected_stable': True,
+    },
+    {
+        'name': 'Normal Step Level',
+        'description': '正常阶跃响应 - 液位回路基准（无振荡）',
+        'process_original': {'K': 0.5, 'T1': 80.0, 'L': 5.0},
+        'process_changed': {'K': 0.6, 'T1': 90.0, 'L': 7.0},
+        'original_pid': {'Kp': 0.8, 'Ki': 0.015, 'Kd': 0.0},
+        'loop_type': 'level',
+        'expected_stable': True,
+    },
+    {
+        'name': 'Normal Step Pressure',
+        'description': '正常阶跃响应 - 压力回路基准（无振荡）',
+        'process_original': {'K': 1.2, 'T1': 15.0, 'L': 1.0},
+        'process_changed': {'K': 1.4, 'T1': 16.0, 'L': 2.0},
+        'original_pid': {'Kp': 1.2, 'Ki': 0.08, 'Kd': 0.0},
+        'loop_type': 'pressure',
+        'expected_stable': True,
+    },
+    
+    # ========== 高级过程模型场景 (Advanced Process Models) ==========
+    {
+        'name': 'Integrating Level True',
+        'description': '真实积分液位过程 - 无自稳定',
+        'process_original': {'K': 0.05, 'T1': 1.0, 'L': 3.0},  # K 是积分增益
+        'process_changed': {'K': 0.08, 'T1': 1.0, 'L': 5.0},
+        'original_pid': {'Kp': 5.0, 'Ki': 0.02, 'Kd': 0.0},
+        'loop_type': 'level',
+        'process_type': 'integrating',  # 使用 IntegratingProcess
+    },
+    {
+        'name': 'Underdamped Temperature',
+        'description': '欠阻尼温度回路 - 自然振荡',
+        'process_original': {'K': 1.0, 'T1': 40.0, 'L': 5.0, 'T2': 20.0, 'zeta': 0.3},
+        'process_changed': {'K': 2.0, 'T1': 35.0, 'L': 8.0, 'T2': 18.0, 'zeta': 0.25},
+        'original_pid': {'Kp': 1.5, 'Ki': 0.05, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'process_type': 'sopdt',  # 使用 SOPDTProcess
+    },
+    {
+        'name': 'Boiler Swell Shrink',
+        'description': '锅炉虚假水位 - 反向响应',
+        'process_original': {'K': 1.0, 'T1': 60.0, 'L': 5.0, 'K_inv': 0.3, 'T_inv': 8.0},
+        'process_changed': {'K': 1.5, 'T1': 50.0, 'L': 8.0, 'K_inv': 0.4, 'T_inv': 6.0},
+        'original_pid': {'Kp': 1.2, 'Ki': 0.03, 'Kd': 0.5},
+        'loop_type': 'level',
+        'process_type': 'inverse_response',  # 使用 InverseResponseProcess
+    },
+    {
+        'name': 'Thermowell Measurement Lag',
+        'description': '温度套管测量滞后',
+        'process_original': {'K': 0.8, 'T1': 50.0, 'L': 5.0},
+        'process_changed': {'K': 1.5, 'T1': 40.0, 'L': 8.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.06, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'measurement_lag': 10.0,  # 10s 测量滞后
+    },
+    {
+        'name': 'Stick Slip Valve',
+        'description': '阀门粘滞跳动 - 周期性跳跃',
+        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 3.0},
+        'process_changed': {'K': 1.8, 'T1': 22.0, 'L': 5.0},
+        'original_pid': {'Kp': 2.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'valve_stiction': 3.0,
+        'stick_slip_period': 20,  # 每20步跳动一次
+    },
+    {
+        'name': 'Equal Percentage Valve',
+        'description': '等百分比阀门特性',
+        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
+        'process_changed': {'K': 2.0, 'T1': 25.0, 'L': 6.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'valve_curve': 'equal_pct',  # 等百分比特性
+    },
+    {
+        'name': 'Time Varying Delay',
+        'description': '时变滞后 - 负荷相关延迟',
+        'process_original': {'K': 1.0, 'T1': 40.0, 'L': 10.0},
+        'process_changed': {'K': 1.5, 'T1': 35.0, 'L': 15.0},
+        'original_pid': {'Kp': 1.5, 'Ki': 0.05, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'delay_variation': 0.3,  # ±30% 滞后变化
+    },
+    {
+        'name': 'Combined Advanced Flow',
+        'description': '组合高级特性 - 死区+粘滞+等百分比',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 2.0},
+        'process_changed': {'K': 1.8, 'T1': 18.0, 'L': 4.0},
+        'original_pid': {'Kp': 3.0, 'Ki': 0.15, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'valve_deadband': 3.0,
+        'valve_stiction': 2.0,
+        'valve_curve': 'equal_pct',
+    },
+    
+    # ========== 真实环境扰动场景 (Realistic Environment Disturbances) ==========
+    {
+        'name': 'Load Disturbance Random',
+        'description': '随机负荷扰动 - 进料流量波动',
+        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
+        'process_changed': {'K': 1.8, 'T1': 25.0, 'L': 5.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'load_disturbance': 2.0,  # ±2 单位负荷扰动
+        'load_disturbance_freq': 0.005,  # 0.005Hz (周期200s)
+    },
+    {
+        'name': 'Pump Pulsation',
+        'description': '泵脉动周期性扰动',
+        'process_original': {'K': 1.2, 'T1': 20.0, 'L': 2.0},
+        'process_changed': {'K': 2.0, 'T1': 18.0, 'L': 4.0},
+        'original_pid': {'Kp': 2.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'pressure',
+        'periodic_disturbance': 0.5,  # ±0.5 单位
+        'periodic_disturbance_period': 5.0,  # 5s 周期
+    },
+    {
+        'name': 'Colored Noise Sensor',
+        'description': '有色噪声 - 更真实的传感器噪声',
+        'process_original': {'K': 1.0, 'T1': 35.0, 'L': 4.0},
+        'process_changed': {'K': 2.2, 'T1': 28.0, 'L': 7.0},
+        'original_pid': {'Kp': 1.8, 'Ki': 0.08, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'noise_std': 0.3,
+        'colored_noise_tau': 5.0,  # 5s 滤波时间常数
+    },
+    {
+        'name': 'Sensor Drift Temperature',
+        'description': '传感器漂移 - 温度传感器老化',
+        'process_original': {'K': 0.8, 'T1': 50.0, 'L': 8.0},
+        'process_changed': {'K': 1.5, 'T1': 40.0, 'L': 12.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.05, 'Kd': 0.0},
+        'loop_type': 'temperature',
+        'sensor_drift': 0.5,  # 0.5 单位/小时漂移
+    },
+    {
+        'name': 'Sensor Fault Spike',
+        'description': '传感器故障 - 间歇性跳变',
+        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 3.0},
+        'process_changed': {'K': 1.5, 'T1': 22.0, 'L': 5.0},
+        'original_pid': {'Kp': 2.2, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'sensor_fault_prob': 0.001,  # 0.1% 故障概率
+        'sensor_fault_mag': 3.0,  # ±3 单位跳变
+    },
+    {
+        'name': 'Positioner Dynamics',
+        'description': '阀门定位器动态 - 响应滞后',
+        'process_original': {'K': 1.0, 'T1': 20.0, 'L': 2.0},
+        'process_changed': {'K': 2.0, 'T1': 18.0, 'L': 4.0},
+        'original_pid': {'Kp': 2.5, 'Ki': 0.12, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'positioner_tc': 3.0,  # 3s 定位器时间常数
+        'positioner_db': 0.5,  # 0.5% 定位器死区
+    },
+    {
+        'name': 'Pneumatic Delay',
+        'description': '气动延迟 - 长管线',
+        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 5.0},
+        'process_changed': {'K': 1.8, 'T1': 28.0, 'L': 8.0},
+        'original_pid': {'Kp': 1.8, 'Ki': 0.08, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'pneumatic_delay': 2.0,  # 2s 气动延迟
+    },
+    {
+        'name': 'Digital Quantization',
+        'description': '数字效应 - 低分辨率采集',
+        'process_original': {'K': 1.0, 'T1': 25.0, 'L': 3.0},
+        'process_changed': {'K': 2.0, 'T1': 22.0, 'L': 5.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+        'quantization_bits': 10,  # 10位分辨率
+        'communication_delay': 1.0,  # 1s 通信延迟
+    },
+    {
+        'name': 'Full Industrial Environment',
+        'description': '完整工业环境 - 所有真实效应组合',
+        'process_original': {'K': 1.0, 'T1': 30.0, 'L': 3.0},
+        'process_changed': {'K': 2.0, 'T1': 25.0, 'L': 6.0},
+        'original_pid': {'Kp': 2.0, 'Ki': 0.1, 'Kd': 0.0},
+        'loop_type': 'flow',
+        # 负荷扰动
+        'load_disturbance': 1.0,
+        'periodic_disturbance': 0.3,
+        # 传感器效应
+        'noise_std': 0.2,
+        'colored_noise_tau': 3.0,
+        'sensor_drift': 0.2,
+        # 执行器效应
+        'valve_deadband': 2.0,
+        'valve_stiction': 1.5,
+        'positioner_tc': 2.0,
+        'pneumatic_delay': 1.0,
+        # 数字效应
+        'quantization_bits': 12,
+        'communication_delay': 0.5,
+    },
 ]
 
 # 预定义的幅度测试场景（选择几个典型场景）

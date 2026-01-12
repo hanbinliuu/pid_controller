@@ -923,9 +923,6 @@ def print_result_json(result: Dict):
         for k, v in model_params.items()
     }
     
-    # 高级参数建议
-    adv_params = result.get('advanced_params_recommendation', {})
-    
     output = {
         'success': bool(result.get('success')),  # 转换 numpy.bool_ 为 Python bool
         'model_type': result.get('model_type'),
@@ -935,7 +932,6 @@ def print_result_json(result: Dict):
         'end_time': str(result.get('end_time')),
         'model_parameters': model_params_formatted,
         'pid_parameters': pid_params_formatted,
-        'advanced_params_recommendation': adv_params,
         'fitting_result': {
             'r_squared': round(fitting_result.get('r_squared', 0), 4),
             'rmse': round(fitting_result.get('rmse', 0), 4),

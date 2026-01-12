@@ -235,9 +235,17 @@ CONFIG = {
 # 过程模型仿真
 # ============================================================
 class FOPDTProcess:
-    """一阶加纯滞后过程模型"""
+    """一阶加纯滞后过程模型
     
-    def __init__(self, K: float, T1: float, L: float, dt: float = 1.0):
+    支持阀门非线性特性:
+    - deadband: 死区 (MV小幅变化不响应)
+    - stiction: 粘滞 (MV反向时需克服阻力)
+    - mv_min/mv_max: MV饱和限制
+    """
+    
+    def __init__(self, K: float, T1: float, L: float, dt: float = 1.0,
+                 deadband: float = 0.0, stiction: float = 0.0,
+                 mv_min: float = 0.0, mv_max: float = 100.0):
         self.K = K
         self.T1 = T1
         self.L = L
@@ -245,10 +253,24 @@ class FOPDTProcess:
         self.delay_steps = max(1, int(L / dt))
         self.mv_buffer = []
         self.pv = 0.0
+        
+        # 阀门非线性参数
+        self.deadband = deadband  # 死区百分比
+        self.stiction = stiction  # 粘滞百分比
+        self.mv_min = mv_min      # MV下限
+        self.mv_max = mv_max      # MV上限
+        
+        # 阀门状态
+        self.last_mv_actual = 0.0  # 上次实际阀门位置
+        self.last_mv_direction = 0  # 上次移动方向 (-1, 0, 1)
+        self.stuck = False         # 是否粘住
     
     def reset(self, pv_initial: float = 0.0):
         self.pv = pv_initial
         self.mv_buffer = [pv_initial / self.K if self.K != 0 else 0] * self.delay_steps
+        self.last_mv_actual = pv_initial / self.K if self.K != 0 else 0
+        self.last_mv_direction = 0
+        self.stuck = False
     
     def set_params(self, K: float, T1: float, L: float):
         """动态修改过程参数（模拟系统特性变化）"""
@@ -262,13 +284,637 @@ class FOPDTProcess:
         self.L = L
         self.delay_steps = new_delay_steps
     
+    def set_valve_params(self, deadband: float = 0.0, stiction: float = 0.0,
+                         mv_min: float = 0.0, mv_max: float = 100.0):
+        """设置阀门非线性参数"""
+        self.deadband = deadband
+        self.stiction = stiction
+        self.mv_min = mv_min
+        self.mv_max = mv_max
+    
+    def _apply_valve_nonlinearity(self, mv_command: float) -> float:
+        """应用阀门非线性特性，返回实际阀门位置"""
+        # 1. 应用饱和限制
+        mv_saturated = max(self.mv_min, min(self.mv_max, mv_command))
+        
+        # 2. 计算移动量和方向
+        mv_change = mv_saturated - self.last_mv_actual
+        direction = 1 if mv_change > 0 else (-1 if mv_change < 0 else 0)
+        
+        # 3. 应用粘滞 (反向时需要克服粘滞力)
+        if self.stiction > 0 and direction != 0:
+            direction_changed = (direction != self.last_mv_direction and self.last_mv_direction != 0)
+            if direction_changed:
+                # 反向，需要克服粘滞
+                if abs(mv_change) < self.stiction:
+                    # 变化量小于粘滞力，阀门不动
+                    self.stuck = True
+                    return self.last_mv_actual
+                else:
+                    # 克服了粘滞，但实际移动量减少
+                    self.stuck = False
+                    mv_actual = self.last_mv_actual + (mv_change - direction * self.stiction)
+            else:
+                # 同方向，正常移动
+                self.stuck = False
+                mv_actual = mv_saturated
+        else:
+            mv_actual = mv_saturated
+        
+        # 4. 应用死区 (小幅变化不响应)
+        if self.deadband > 0:
+            if abs(mv_actual - self.last_mv_actual) < self.deadband:
+                # 变化量在死区内，阀门不动
+                return self.last_mv_actual
+        
+        # 5. 更新状态
+        self.last_mv_direction = direction if direction != 0 else self.last_mv_direction
+        self.last_mv_actual = mv_actual
+        
+        return mv_actual
+    
     def step(self, mv: float) -> float:
-        self.mv_buffer.append(mv)
+        # 应用阀门非线性
+        mv_actual = self._apply_valve_nonlinearity(mv)
+        
+        # 延迟缓冲
+        self.mv_buffer.append(mv_actual)
         mv_delayed = self.mv_buffer.pop(0)
+        
+        # FOPDT 响应
         alpha = self.dt / (self.T1 + self.dt)
         pv_ss = self.K * mv_delayed
         self.pv = self.pv + alpha * (pv_ss - self.pv)
         return self.pv
+
+
+class IntegratingProcess:
+    """积分过程模型 - 适用于液位控制
+    
+    液位回路特点：
+    - PV 是 MV 的积分：dPV/dt = K * MV
+    - 没有自稳定趋势，需要控制器维持平衡
+    """
+    
+    def __init__(self, K: float, L: float, dt: float = 1.0,
+                 deadband: float = 0.0, stiction: float = 0.0,
+                 mv_min: float = 0.0, mv_max: float = 100.0):
+        self.K = K  # 积分增益 (单位变化率 / %MV)
+        self.L = L
+        self.dt = dt
+        self.delay_steps = max(1, int(L / dt))
+        self.mv_buffer = []
+        self.pv = 0.0
+        
+        # 复用 FOPDT 的阀门非线性
+        self.deadband = deadband
+        self.stiction = stiction
+        self.mv_min = mv_min
+        self.mv_max = mv_max
+        self.last_mv_actual = 0.0
+        self.last_mv_direction = 0
+        self.stuck = False
+        
+        # 平衡点 MV (使 dPV/dt = 0)
+        self.mv_balance = 50.0  # 假设 50% 时流入=流出
+    
+    def reset(self, pv_initial: float = 0.0, mv_balance: float = 50.0):
+        self.pv = pv_initial
+        self.mv_balance = mv_balance
+        self.mv_buffer = [mv_balance] * self.delay_steps
+        self.last_mv_actual = mv_balance
+        self.last_mv_direction = 0
+        self.stuck = False
+    
+    def _apply_valve_nonlinearity(self, mv_command: float) -> float:
+        """复用 FOPDT 的阀门非线性逻辑"""
+        mv_saturated = max(self.mv_min, min(self.mv_max, mv_command))
+        mv_change = mv_saturated - self.last_mv_actual
+        direction = 1 if mv_change > 0 else (-1 if mv_change < 0 else 0)
+        
+        if self.stiction > 0 and direction != 0:
+            direction_changed = (direction != self.last_mv_direction and self.last_mv_direction != 0)
+            if direction_changed and abs(mv_change) < self.stiction:
+                self.stuck = True
+                return self.last_mv_actual
+            self.stuck = False
+        
+        if self.deadband > 0 and abs(mv_change) < self.deadband:
+            return self.last_mv_actual
+        
+        self.last_mv_direction = direction if direction != 0 else self.last_mv_direction
+        self.last_mv_actual = mv_saturated
+        return mv_saturated
+    
+    def step(self, mv: float) -> float:
+        mv_actual = self._apply_valve_nonlinearity(mv)
+        
+        self.mv_buffer.append(mv_actual)
+        mv_delayed = self.mv_buffer.pop(0)
+        
+        # 积分响应：dPV/dt = K * (MV - MV_balance)
+        # MV > balance: 液位上升; MV < balance: 液位下降
+        dpv = self.K * (mv_delayed - self.mv_balance) * self.dt
+        self.pv = self.pv + dpv
+        return self.pv
+
+
+class SOPDTProcess:
+    """二阶加纯滞后过程模型 - 适用于欠阻尼温度回路
+    
+    特点：
+    - 二阶响应可以产生振荡
+    - 阻尼比 zeta < 1 时为欠阻尼，会有超调
+    """
+    
+    def __init__(self, K: float, T1: float, T2: float, L: float, 
+                 zeta: float = 0.5, dt: float = 1.0,
+                 deadband: float = 0.0, stiction: float = 0.0,
+                 mv_min: float = 0.0, mv_max: float = 100.0):
+        self.K = K
+        self.T1 = T1  # 主时间常数
+        self.T2 = T2  # 二阶时间常数
+        self.L = L
+        self.zeta = zeta  # 阻尼比
+        self.dt = dt
+        self.delay_steps = max(1, int(L / dt))
+        self.mv_buffer = []
+        
+        # 状态变量 (二阶系统需要两个状态)
+        self.pv = 0.0
+        self.dpv = 0.0  # PV 的导数
+        
+        # 阀门非线性
+        self.deadband = deadband
+        self.stiction = stiction
+        self.mv_min = mv_min
+        self.mv_max = mv_max
+        self.last_mv_actual = 0.0
+        self.last_mv_direction = 0
+    
+    def reset(self, pv_initial: float = 0.0):
+        self.pv = pv_initial
+        self.dpv = 0.0
+        self.mv_buffer = [pv_initial / self.K if self.K != 0 else 0] * self.delay_steps
+        self.last_mv_actual = pv_initial / self.K if self.K != 0 else 0
+        self.last_mv_direction = 0
+    
+    def _apply_valve_nonlinearity(self, mv_command: float) -> float:
+        mv_saturated = max(self.mv_min, min(self.mv_max, mv_command))
+        mv_change = mv_saturated - self.last_mv_actual
+        direction = 1 if mv_change > 0 else (-1 if mv_change < 0 else 0)
+        
+        if self.stiction > 0 and direction != 0:
+            if direction != self.last_mv_direction and self.last_mv_direction != 0:
+                if abs(mv_change) < self.stiction:
+                    return self.last_mv_actual
+        
+        if self.deadband > 0 and abs(mv_change) < self.deadband:
+            return self.last_mv_actual
+        
+        self.last_mv_direction = direction if direction != 0 else self.last_mv_direction
+        self.last_mv_actual = mv_saturated
+        return mv_saturated
+    
+    def step(self, mv: float) -> float:
+        mv_actual = self._apply_valve_nonlinearity(mv)
+        
+        self.mv_buffer.append(mv_actual)
+        mv_delayed = self.mv_buffer.pop(0)
+        
+        # 二阶系统状态空间方程
+        # T1*T2 * d²pv/dt² + (T1+T2)*dpv/dt + pv = K*u
+        # 转换为状态空间形式用欧拉法积分
+        pv_ss = self.K * mv_delayed
+        
+        omega_n = 1.0 / np.sqrt(self.T1 * max(self.T2, 0.1))  # 自然频率
+        
+        # 二阶系统微分方程
+        d2pv = omega_n**2 * (pv_ss - self.pv) - 2 * self.zeta * omega_n * self.dpv
+        
+        # 欧拉积分
+        self.dpv = self.dpv + d2pv * self.dt
+        self.pv = self.pv + self.dpv * self.dt
+        
+        return self.pv
+
+
+class InverseResponseProcess:
+    """反向响应过程模型 - 适用于锅炉汽包水位
+    
+    特点：
+    - MV 增加时，PV 先下降后上升（或相反）
+    - 物理原因：锅炉加水时，冷水进入导致汽泡破裂，水位先降后升
+    """
+    
+    def __init__(self, K: float, T1: float, L: float,
+                 K_inv: float = 0.3, T_inv: float = 5.0, dt: float = 1.0,
+                 deadband: float = 0.0, stiction: float = 0.0,
+                 mv_min: float = 0.0, mv_max: float = 100.0):
+        self.K = K  # 主增益（最终稳态）
+        self.T1 = T1
+        self.L = L
+        self.K_inv = K_inv  # 反向增益（初始反向幅度）
+        self.T_inv = T_inv  # 反向时间常数
+        self.dt = dt
+        self.delay_steps = max(1, int(L / dt))
+        self.mv_buffer = []
+        
+        # 两个并联的一阶系统
+        self.pv_main = 0.0  # 主响应
+        self.pv_inv = 0.0   # 反向响应
+        
+        # 阀门非线性
+        self.deadband = deadband
+        self.stiction = stiction
+        self.mv_min = mv_min
+        self.mv_max = mv_max
+        self.last_mv_actual = 0.0
+        self.last_mv_direction = 0
+    
+    def reset(self, pv_initial: float = 0.0):
+        self.pv_main = pv_initial
+        self.pv_inv = 0.0
+        mv_init = pv_initial / self.K if self.K != 0 else 0
+        self.mv_buffer = [mv_init] * self.delay_steps
+        self.last_mv_actual = mv_init
+        self.last_mv_direction = 0
+    
+    def _apply_valve_nonlinearity(self, mv_command: float) -> float:
+        mv_saturated = max(self.mv_min, min(self.mv_max, mv_command))
+        mv_change = mv_saturated - self.last_mv_actual
+        direction = 1 if mv_change > 0 else (-1 if mv_change < 0 else 0)
+        
+        if self.stiction > 0 and direction != 0:
+            if direction != self.last_mv_direction and self.last_mv_direction != 0:
+                if abs(mv_change) < self.stiction:
+                    return self.last_mv_actual
+        
+        if self.deadband > 0 and abs(mv_change) < self.deadband:
+            return self.last_mv_actual
+        
+        self.last_mv_direction = direction if direction != 0 else self.last_mv_direction
+        self.last_mv_actual = mv_saturated
+        return mv_saturated
+    
+    @property
+    def pv(self):
+        return self.pv_main - self.pv_inv
+    
+    def step(self, mv: float) -> float:
+        mv_actual = self._apply_valve_nonlinearity(mv)
+        
+        self.mv_buffer.append(mv_actual)
+        mv_delayed = self.mv_buffer.pop(0)
+        
+        # 主响应 (慢)
+        alpha_main = self.dt / (self.T1 + self.dt)
+        pv_ss_main = self.K * mv_delayed
+        self.pv_main = self.pv_main + alpha_main * (pv_ss_main - self.pv_main)
+        
+        # 反向响应 (快，负增益效果)
+        alpha_inv = self.dt / (self.T_inv + self.dt)
+        pv_ss_inv = self.K_inv * mv_delayed
+        self.pv_inv = self.pv_inv + alpha_inv * (pv_ss_inv - self.pv_inv)
+        
+        return self.pv_main - self.pv_inv
+
+
+class AdvancedFOPDTProcess(FOPDTProcess):
+    """增强的 FOPDT 过程模型
+    
+    新增特性：
+    - measurement_lag: 测量滞后（热电偶套管延迟）
+    - stick_slip: 间歇粘滞跳动
+    - valve_curve: 阀门特性曲线 (linear/equal_pct/quick_open)
+    - time_varying_delay: 时变滞后
+    """
+    
+    def __init__(self, K: float, T1: float, L: float, dt: float = 1.0,
+                 deadband: float = 0.0, stiction: float = 0.0,
+                 mv_min: float = 0.0, mv_max: float = 100.0,
+                 measurement_lag: float = 0.0,
+                 stick_slip_period: int = 0,
+                 valve_curve: str = 'linear',
+                 delay_variation: float = 0.0):
+        super().__init__(K, T1, L, dt, deadband, stiction, mv_min, mv_max)
+        
+        # 测量滞后 (一阶滤波器)
+        self.measurement_lag = measurement_lag
+        self.pv_measured = 0.0
+        
+        # 间歇粘滞跳动
+        self.stick_slip_period = stick_slip_period  # 多少步后强制跳动
+        self.stick_slip_counter = 0
+        self.stick_slip_accumulated = 0.0
+        
+        # 阀门特性曲线
+        self.valve_curve = valve_curve  # 'linear', 'equal_pct', 'quick_open'
+        
+        # 时变滞后
+        self.delay_variation = delay_variation  # 滞后变化幅度 (±%)
+        self.base_delay_steps = self.delay_steps
+    
+    def reset(self, pv_initial: float = 0.0):
+        super().reset(pv_initial)
+        self.pv_measured = pv_initial
+        self.stick_slip_counter = 0
+        self.stick_slip_accumulated = 0.0
+    
+    def _apply_valve_curve(self, mv: float) -> float:
+        """应用阀门特性曲线"""
+        # 归一化到 0-1
+        mv_norm = (mv - self.mv_min) / (self.mv_max - self.mv_min + 1e-6)
+        mv_norm = max(0, min(1, mv_norm))
+        
+        if self.valve_curve == 'equal_pct':
+            # 等百分比特性: flow = R^(x-1), R 通常为 50
+            R = 50.0
+            if mv_norm > 0:
+                flow_norm = R ** (mv_norm - 1)
+            else:
+                flow_norm = 0
+        elif self.valve_curve == 'quick_open':
+            # 快开特性: flow = sqrt(x)
+            flow_norm = np.sqrt(mv_norm)
+        else:
+            # 线性特性
+            flow_norm = mv_norm
+        
+        # 转换回 MV 范围
+        return self.mv_min + flow_norm * (self.mv_max - self.mv_min)
+    
+    def _apply_stick_slip(self, mv_actual: float) -> float:
+        """应用间歇粘滞跳动"""
+        if self.stick_slip_period <= 0:
+            return mv_actual
+        
+        if self.stuck:
+            # 累积被阻止的变化量
+            self.stick_slip_accumulated += mv_actual - self.last_mv_actual
+            self.stick_slip_counter += 1
+            
+            # 周期性强制释放
+            if self.stick_slip_counter >= self.stick_slip_period:
+                self.stick_slip_counter = 0
+                # 突然跳动：释放累积量
+                mv_jump = self.last_mv_actual + self.stick_slip_accumulated
+                self.stick_slip_accumulated = 0.0
+                self.stuck = False
+                return mv_jump
+        else:
+            self.stick_slip_counter = 0
+            self.stick_slip_accumulated = 0.0
+        
+        return mv_actual
+    
+    def _update_time_varying_delay(self, mv: float):
+        """更新时变滞后"""
+        if self.delay_variation > 0:
+            # 滞后随 MV 变化（负荷相关）
+            variation = 1 + self.delay_variation * (mv - 50) / 50
+            variation = max(0.5, min(2.0, variation))
+            new_delay = int(self.base_delay_steps * variation)
+            
+            if new_delay != self.delay_steps:
+                if new_delay > len(self.mv_buffer):
+                    self.mv_buffer = [self.mv_buffer[-1] if self.mv_buffer else mv] * (new_delay - len(self.mv_buffer)) + self.mv_buffer
+                elif new_delay < len(self.mv_buffer):
+                    self.mv_buffer = self.mv_buffer[-new_delay:]
+                self.delay_steps = new_delay
+    
+    def step(self, mv: float) -> float:
+        # 1. 应用阀门特性曲线
+        mv_curved = self._apply_valve_curve(mv)
+        
+        # 2. 应用基本阀门非线性
+        mv_actual = self._apply_valve_nonlinearity(mv_curved)
+        
+        # 3. 应用间歇粘滞跳动
+        mv_actual = self._apply_stick_slip(mv_actual)
+        
+        # 4. 更新时变滞后
+        self._update_time_varying_delay(mv_actual)
+        
+        # 5. 延迟缓冲
+        self.mv_buffer.append(mv_actual)
+        mv_delayed = self.mv_buffer.pop(0)
+        
+        # 6. FOPDT 响应
+        alpha = self.dt / (self.T1 + self.dt)
+        pv_ss = self.K * mv_delayed
+        self.pv = self.pv + alpha * (pv_ss - self.pv)
+        
+        # 7. 测量滞后（一阶滤波）
+        if self.measurement_lag > 0:
+            alpha_m = self.dt / (self.measurement_lag + self.dt)
+            self.pv_measured = self.pv_measured + alpha_m * (self.pv - self.pv_measured)
+            return self.pv_measured
+        
+        return self.pv
+
+
+class RealisticEnvironment:
+    """真实环境模拟器 - 添加各种工业现场噪声和扰动
+    
+    包含：
+    - 随机负荷扰动
+    - 周期性扰动（泵脉动等）
+    - 有色噪声（比白噪声更真实）
+    - 传感器漂移
+    - 传感器故障/跳变
+    - 阀门定位器动态
+    - 气动延迟
+    - 采样量化
+    - 通信延迟
+    """
+    
+    def __init__(self, dt: float = 1.0,
+                 # 负荷扰动
+                 load_disturbance_amplitude: float = 0.0,
+                 load_disturbance_frequency: float = 0.01,  # Hz
+                 # 周期性扰动
+                 periodic_disturbance_amplitude: float = 0.0,
+                 periodic_disturbance_period: float = 10.0,  # 秒
+                 # 噪声特性
+                 noise_std: float = 0.1,
+                 colored_noise_tau: float = 0.0,  # 有色噪声时间常数
+                 # 传感器
+                 sensor_drift_rate: float = 0.0,  # 单位/小时
+                 sensor_fault_probability: float = 0.0,
+                 sensor_fault_magnitude: float = 5.0,
+                 # 阀门定位器
+                 positioner_time_constant: float = 0.0,
+                 positioner_deadband: float = 0.0,
+                 # 气动延迟
+                 pneumatic_delay: float = 0.0,
+                 # 数字效应
+                 quantization_bits: int = 0,  # 0 表示无量化
+                 communication_delay: float = 0.0):
+        
+        self.dt = dt
+        self.step_count = 0
+        
+        # 负荷扰动
+        self.load_disturbance_amplitude = load_disturbance_amplitude
+        self.load_disturbance_frequency = load_disturbance_frequency
+        self.load_disturbance_phase = np.random.uniform(0, 2 * np.pi)
+        
+        # 周期性扰动
+        self.periodic_disturbance_amplitude = periodic_disturbance_amplitude
+        self.periodic_disturbance_period = periodic_disturbance_period
+        
+        # 噪声
+        self.noise_std = noise_std
+        self.colored_noise_tau = colored_noise_tau
+        self.colored_noise_state = 0.0
+        
+        # 传感器
+        self.sensor_drift_rate = sensor_drift_rate
+        self.sensor_drift_accumulated = 0.0
+        self.sensor_fault_probability = sensor_fault_probability
+        self.sensor_fault_magnitude = sensor_fault_magnitude
+        self.sensor_fault_active = False
+        self.sensor_fault_duration = 0
+        
+        # 阀门定位器
+        self.positioner_time_constant = positioner_time_constant
+        self.positioner_deadband = positioner_deadband
+        self.positioner_state = 0.0
+        
+        # 气动延迟
+        self.pneumatic_delay = pneumatic_delay
+        self.pneumatic_delay_steps = max(0, int(pneumatic_delay / dt))
+        self.pneumatic_buffer = []
+        
+        # 数字效应
+        self.quantization_bits = quantization_bits
+        self.communication_delay = communication_delay
+        self.communication_delay_steps = max(0, int(communication_delay / dt))
+        self.pv_buffer = []
+        self.mv_buffer = []
+    
+    def reset(self):
+        """重置环境状态"""
+        self.step_count = 0
+        self.colored_noise_state = 0.0
+        self.sensor_drift_accumulated = 0.0
+        self.sensor_fault_active = False
+        self.sensor_fault_duration = 0
+        self.positioner_state = 0.0
+        self.pneumatic_buffer = []
+        self.pv_buffer = []
+        self.mv_buffer = []
+        self.load_disturbance_phase = np.random.uniform(0, 2 * np.pi)
+    
+    def get_load_disturbance(self) -> float:
+        """获取随机负荷扰动"""
+        if self.load_disturbance_amplitude <= 0:
+            return 0.0
+        
+        t = self.step_count * self.dt
+        # 低频正弦 + 随机扰动
+        sine_component = np.sin(2 * np.pi * self.load_disturbance_frequency * t + self.load_disturbance_phase)
+        random_component = np.random.normal(0, 0.3)
+        
+        return self.load_disturbance_amplitude * (0.7 * sine_component + 0.3 * random_component)
+    
+    def get_periodic_disturbance(self) -> float:
+        """获取周期性扰动（如泵脉动）"""
+        if self.periodic_disturbance_amplitude <= 0:
+            return 0.0
+        
+        t = self.step_count * self.dt
+        # 快速正弦波模拟泵脉动
+        return self.periodic_disturbance_amplitude * np.sin(2 * np.pi * t / self.periodic_disturbance_period)
+    
+    def get_colored_noise(self) -> float:
+        """生成有色噪声（低通滤波白噪声）"""
+        if self.noise_std <= 0:
+            return 0.0
+        
+        white_noise = np.random.normal(0, self.noise_std)
+        
+        if self.colored_noise_tau > 0:
+            # 一阶低通滤波器
+            alpha = self.dt / (self.colored_noise_tau + self.dt)
+            self.colored_noise_state = (1 - alpha) * self.colored_noise_state + alpha * white_noise
+            return self.colored_noise_state
+        else:
+            return white_noise
+    
+    def apply_sensor_effects(self, pv_true: float) -> float:
+        """应用传感器效应：漂移、故障、量化"""
+        pv = pv_true
+        
+        # 1. 传感器漂移
+        if self.sensor_drift_rate > 0:
+            self.sensor_drift_accumulated += self.sensor_drift_rate * self.dt / 3600
+            pv += self.sensor_drift_accumulated
+        
+        # 2. 传感器故障（随机跳变）
+        if self.sensor_fault_probability > 0:
+            if self.sensor_fault_active:
+                self.sensor_fault_duration -= 1
+                if self.sensor_fault_duration <= 0:
+                    self.sensor_fault_active = False
+                else:
+                    pv += self.sensor_fault_magnitude * (1 if np.random.random() > 0.5 else -1)
+            elif np.random.random() < self.sensor_fault_probability:
+                self.sensor_fault_active = True
+                self.sensor_fault_duration = np.random.randint(1, 10)
+        
+        # 3. 添加测量噪声（有色噪声）
+        pv += self.get_colored_noise()
+        
+        # 4. 添加扰动
+        pv += self.get_load_disturbance()
+        pv += self.get_periodic_disturbance()
+        
+        # 5. 量化效应
+        if self.quantization_bits > 0:
+            pv_range = 100.0  # 假设 0-100 范围
+            resolution = pv_range / (2 ** self.quantization_bits)
+            pv = np.round(pv / resolution) * resolution
+        
+        # 6. 通信延迟
+        if self.communication_delay_steps > 0:
+            self.pv_buffer.append(pv)
+            if len(self.pv_buffer) > self.communication_delay_steps:
+                pv = self.pv_buffer.pop(0)
+            else:
+                pv = self.pv_buffer[0]  # 初始填充
+        
+        return pv
+    
+    def apply_actuator_effects(self, mv_command: float) -> float:
+        """应用执行器效应：定位器动态、气动延迟"""
+        mv = mv_command
+        
+        # 1. 阀门定位器动态
+        if self.positioner_time_constant > 0:
+            alpha = self.dt / (self.positioner_time_constant + self.dt)
+            self.positioner_state = self.positioner_state + alpha * (mv - self.positioner_state)
+            mv = self.positioner_state
+        
+        # 2. 定位器死区
+        if self.positioner_deadband > 0:
+            if abs(mv - self.positioner_state) < self.positioner_deadband:
+                mv = self.positioner_state
+        
+        # 3. 气动延迟
+        if self.pneumatic_delay_steps > 0:
+            self.pneumatic_buffer.append(mv)
+            if len(self.pneumatic_buffer) > self.pneumatic_delay_steps:
+                mv = self.pneumatic_buffer.pop(0)
+            else:
+                mv = self.pneumatic_buffer[0]
+        
+        return mv
+    
+    def step(self):
+        """前进一个时间步"""
+        self.step_count += 1
 
 
 class PIDController:
@@ -316,6 +962,123 @@ class PIDController:
 # ============================================================
 # 数据生成：稳态 -> 振荡 -> 新PID稳态（振荡场景）
 # ============================================================
+def create_process(params: dict, cfg: dict, dt: float = 1.0):
+    """工厂函数：根据配置创建适当的过程模型"""
+    process_type = cfg.get('process_type', 'fopdt')
+    
+    # 阀门非线性参数
+    deadband = cfg.get('valve_deadband', 0.0)
+    stiction = cfg.get('valve_stiction', 0.0)
+    mv_sat = cfg.get('mv_saturation', [0, 100])
+    mv_min = mv_sat[0] if isinstance(mv_sat, list) else 0.0
+    mv_max = mv_sat[1] if isinstance(mv_sat, list) else 100.0
+    
+    # 高级特性参数
+    measurement_lag = cfg.get('measurement_lag', 0.0)
+    stick_slip_period = cfg.get('stick_slip_period', 0)
+    valve_curve = cfg.get('valve_curve', 'linear')
+    delay_variation = cfg.get('delay_variation', 0.0)
+    
+    if process_type == 'integrating':
+        # 积分过程 (液位)
+        return IntegratingProcess(
+            K=params.get('K', 0.05),
+            L=params.get('L', 3.0),
+            dt=dt,
+            deadband=deadband,
+            stiction=stiction,
+            mv_min=mv_min,
+            mv_max=mv_max
+        )
+    
+    elif process_type == 'sopdt':
+        # 二阶过程 (欠阻尼温度)
+        return SOPDTProcess(
+            K=params.get('K', 1.0),
+            T1=params.get('T1', 30.0),
+            T2=params.get('T2', 10.0),
+            L=params.get('L', 5.0),
+            zeta=params.get('zeta', 0.5),
+            dt=dt,
+            deadband=deadband,
+            stiction=stiction,
+            mv_min=mv_min,
+            mv_max=mv_max
+        )
+    
+    elif process_type == 'inverse_response':
+        # 反向响应过程 (锅炉水位)
+        return InverseResponseProcess(
+            K=params.get('K', 1.0),
+            T1=params.get('T1', 60.0),
+            L=params.get('L', 5.0),
+            K_inv=params.get('K_inv', 0.3),
+            T_inv=params.get('T_inv', 5.0),
+            dt=dt,
+            deadband=deadband,
+            stiction=stiction,
+            mv_min=mv_min,
+            mv_max=mv_max
+        )
+    
+    elif measurement_lag > 0 or stick_slip_period > 0 or valve_curve != 'linear' or delay_variation > 0:
+        # 高级 FOPDT (有测量滞后/粘滞跳动/非线性阀门/时变滞后)
+        return AdvancedFOPDTProcess(
+            K=params.get('K', 1.0),
+            T1=params.get('T1', 30.0),
+            L=params.get('L', 5.0),
+            dt=dt,
+            deadband=deadband,
+            stiction=stiction,
+            mv_min=mv_min,
+            mv_max=mv_max,
+            measurement_lag=measurement_lag,
+            stick_slip_period=stick_slip_period,
+            valve_curve=valve_curve,
+            delay_variation=delay_variation
+        )
+    
+    else:
+        # 标准 FOPDT
+        return FOPDTProcess(
+            K=params.get('K', 1.0),
+            T1=params.get('T1', 30.0),
+            L=params.get('L', 5.0),
+            dt=dt,
+            deadband=deadband,
+            stiction=stiction,
+            mv_min=mv_min,
+            mv_max=mv_max
+        )
+
+
+def create_environment(cfg: dict, dt: float = 1.0) -> RealisticEnvironment:
+    """工厂函数：根据配置创建真实环境模拟器"""
+    return RealisticEnvironment(
+        dt=dt,
+        # 负荷扰动
+        load_disturbance_amplitude=cfg.get('load_disturbance', 0.0),
+        load_disturbance_frequency=cfg.get('load_disturbance_freq', 0.01),
+        # 周期性扰动
+        periodic_disturbance_amplitude=cfg.get('periodic_disturbance', 0.0),
+        periodic_disturbance_period=cfg.get('periodic_disturbance_period', 10.0),
+        # 噪声
+        noise_std=cfg.get('noise_std', 0.1),
+        colored_noise_tau=cfg.get('colored_noise_tau', 0.0),
+        # 传感器
+        sensor_drift_rate=cfg.get('sensor_drift', 0.0),
+        sensor_fault_probability=cfg.get('sensor_fault_prob', 0.0),
+        sensor_fault_magnitude=cfg.get('sensor_fault_mag', 5.0),
+        # 阀门定位器
+        positioner_time_constant=cfg.get('positioner_tc', 0.0),
+        positioner_deadband=cfg.get('positioner_db', 0.0),
+        # 气动延迟
+        pneumatic_delay=cfg.get('pneumatic_delay', 0.0),
+        # 数字效应
+        quantization_bits=cfg.get('quantization_bits', 0),
+        communication_delay=cfg.get('communication_delay', 0.0)
+    )
+
 def generate_oscillation_data() -> Tuple[List[Dict], Dict, Dict]:
     """
     生成振荡场景数据：稳态 → 系统变化导致振荡 → 新PID恢复稳态
@@ -324,12 +1087,8 @@ def generate_oscillation_data() -> Tuple[List[Dict], Dict, Dict]:
     dt = cfg['dt']
     sv = cfg['sv']
     
-    process = FOPDTProcess(
-        K=cfg['process_original']['K'],
-        T1=cfg['process_original']['T1'],
-        L=cfg['process_original']['L'],
-        dt=dt
-    )
+    # 使用工厂函数创建过程模型
+    process = create_process(cfg['process_original'], cfg, dt)
     
     controller = PIDController(
         Kp=cfg['original_pid']['Kp'],
@@ -346,6 +1105,9 @@ def generate_oscillation_data() -> Tuple[List[Dict], Dict, Dict]:
     steady_steps = int(cfg['steady_duration'] / dt)
     osc_steps = int(cfg['oscillation_duration'] / dt)
     total_steps = steady_steps + osc_steps
+    
+    # 创建真实环境模拟器
+    env = create_environment(cfg, dt)
     
     start_time = datetime.now() - timedelta(seconds=total_steps * dt)
     history_data = []
@@ -369,15 +1131,24 @@ def generate_oscillation_data() -> Tuple[List[Dict], Dict, Dict]:
                 )
                 print(f"   ⚠️ System changed: K={cfg['process_changed']['K']}, T1={cfg['process_changed']['T1']}")
         
-        mv = controller.compute(sv, pv)
-        pv = process.step(mv)
-        pv_noisy = pv + np.random.normal(0, cfg['noise_std'])
+        # 应用执行器效应
+        mv_actual = env.apply_actuator_effects(controller.compute(sv, pv))
+        pv_true = process.step(mv_actual)
+        
+        # 应用传感器效应（包括噪声、扰动）
+        pv_measured = env.apply_sensor_effects(pv_true)
+        
+        # 更新控制器使用测量值
+        pv = pv_measured
+        
+        # 环境步进
+        env.step()
         
         history_data.append({
             'timestamp': timestamp,
-            'pv': round(pv_noisy, 2),
+            'pv': round(pv_measured, 2),
             'sv': round(sv, 2),
-            'mv': round(mv, 2),
+            'mv': round(mv_actual, 2),
             'phase': phase,
         })
     
@@ -498,7 +1269,8 @@ def generate_synthetic_data() -> Tuple[List[Dict], Dict, Dict]:
 
 def simulate_with_new_pid(process_params: Dict, pid_params: Dict,
                           sv: float, duration: float = 300, dt: float = 1.0,
-                          error_band_pct: float = 0.05, seed: int = None) -> Dict:
+                          error_band_pct: float = 0.05, seed: int = None,
+                          valve_params: Dict = None) -> Dict:
     """用PID参数仿真，计算性能指标
     
     Args:
@@ -509,15 +1281,25 @@ def simulate_with_new_pid(process_params: Dict, pid_params: Dict,
         dt: 采样周期（秒）
         error_band_pct: 误差带百分比（默认5%）
         seed: 随机种子，确保可重复性
+        valve_params: 阀门参数 {deadband, stiction, mv_saturation}
     """
     # 固定随机种子确保可重复性
     if seed is not None:
         np.random.seed(seed)
+    
+    # 解析阀门参数
+    vp = valve_params or {}
+    mv_sat = vp.get('mv_saturation', [0, 100])
+    
     process = FOPDTProcess(
         K=process_params['K'],
         T1=process_params['T1'],
         L=process_params['L'],
-        dt=dt
+        dt=dt,
+        deadband=vp.get('deadband', vp.get('valve_deadband', 0.0)),
+        stiction=vp.get('stiction', vp.get('valve_stiction', 0.0)),
+        mv_min=mv_sat[0] if isinstance(mv_sat, list) else 0.0,
+        mv_max=mv_sat[1] if isinstance(mv_sat, list) else 100.0
     )
     
     controller = PIDController(
@@ -616,10 +1398,10 @@ def detect_disturbance_windows(data: List[Dict]) -> List[Dict]:
     # 方法1: 检测SV变化
     sv_diff = np.abs(np.diff(sv_array))
     sv_change_indices = np.where(sv_diff > 1.0)[0]
-    
+      
     if len(sv_change_indices) > 0:
         start_idx = max(0, sv_change_indices[0] - 20)
-        return [{
+        return [{ 
             'start_time': timestamps[start_idx],
             'end_time': timestamps[-1],
             'start_idx': start_idx,
@@ -628,7 +1410,7 @@ def detect_disturbance_windows(data: List[Dict]) -> List[Dict]:
     
     # 方法2: 检测PV偏离SV（正常扰动场景）
     error = np.abs(pv_array - sv_array)
-    error_threshold = 2.0  # PV偏离SV超过2就认为有扰动
+    error_threshold = 2.0  # PV偏离SV超过2就认为有扰动 
     
     for i in range(50, len(error)):
         if error[i] > error_threshold:
