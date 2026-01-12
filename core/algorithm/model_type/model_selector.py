@@ -13,8 +13,7 @@ from .utils import (
 # 子模块导入
 from .preprocessing import DataPreprocessor, SegmentProcessor, SegmentManager
 from .fitting import (
-    ModelIdentifier, SegmentFitter, PIDFusionStrategy, 
-    WindowResult as FusionWindowResult, UnifiedModelSelector, SegmentModelFit
+    ModelIdentifier, SegmentFitter, UnifiedModelSelector, SegmentModelFit, ParameterFusion
 )
 from .tuning import PIDCalculator, DataQualityInfo, OscillationTuner, TuningMethodSelector, StabilityAnalyzer
 from .simulation import ModelSimulator
@@ -87,6 +86,9 @@ class ModelSelector(LoggerMixin):
         # 段管理器（从 model_selector 拆分出来）
         self._segment_manager = SegmentManager(self._preprocessor, verbose)
         
+        # 参数融合器（从 model_selector 拆分出来）
+        self._param_fusion = ParameterFusion(self._segment_processor, verbose)
+        
         # OscillationTuner 支持 LLM 决策（临界法整定专用）
         loop_type = process_context.get('loop_type', '') if process_context else ''
         loop_name = process_context.get('loop_name', '') if process_context else ''
@@ -94,6 +96,9 @@ class ModelSelector(LoggerMixin):
             self._pid_calculator, self._simulator, verbose,
             llm_client=llm_client, loop_type=loop_type, loop_name=loop_name
         )
+        
+        # 设置 OutputBuilder 的 oscillation_tuner（用于 fallback）
+        self._output_builder.set_oscillation_tuner(self._oscillation_tuner)
         
         # 整定方法选择器（自动选择模型辨识法/继电反馈法/混合方法）
         self._method_selector = TuningMethodSelector(
@@ -774,165 +779,8 @@ class ModelSelector(LoggerMixin):
     def _fuse_parameters(self, segment_results: List[SegmentResult],
                          model_type: str,
                          segments: List[HistoricalData] = None) -> FusionResult:
-        """融合各段参数"""
-        self.log(f"\n{'='*60}")
-        self.log("📊 Step 4: 参数融合")
-        self.log('='*60)
-        
-        fusion = FusionResult(model_type=model_type)
-        
-        window_results = []
-        added_indices = set()
-        valid_segment_idx = 0
-        
-        for threshold in self.R2_THRESHOLDS:
-            valid_segment_idx = 0
-            for result in segment_results:
-                if not result.is_valid:
-                    continue
-                
-                if result.segment_idx in added_indices:
-                    valid_segment_idx += 1
-                    continue
-                
-                fit_result = result.model_results.get(model_type)
-                if fit_result is None:
-                    valid_segment_idx += 1
-                    continue
-                
-                r2 = fit_result.get('r2', 0)
-                if r2 < threshold:
-                    valid_segment_idx += 1
-                    continue
-                
-                K, T1 = fit_result.get('K', 0), fit_result.get('T1', 0)
-                if K == 0 and T1 == 0:
-                    valid_segment_idx += 1
-                    continue
-                
-                # 跳过K值不合理的段（已在拟合阶段标记）
-                k_reasonable = fit_result.get('k_reasonable', True)
-                if not k_reasonable:
-                    self.log(f"      段{result.segment_idx+1}: K={K:.4f} 超出合理范围，跳过融合")
-                    valid_segment_idx += 1
-                    continue
-                
-                # 跳过数据点数太少的段（根据质量动态调整阈值）
-                min_fusion_points = Config.SEGMENT_PROCESSING.get('min_fusion_points', 50)
-                min_fusion_points_hq = Config.SEGMENT_PROCESSING.get('min_fusion_points_high_quality', 30)
-                
-                # 高质量段（R²>0.8）允许更少的数据点
-                if r2 > 0.8 and result.data_points >= min_fusion_points_hq:
-                    pass  # 高质量段，允许使用
-                elif result.data_points < min_fusion_points:
-                    self.log(f"      段{result.segment_idx+1}: 数据点数={result.data_points} < {min_fusion_points}，跳过融合")
-                    valid_segment_idx += 1
-                    continue
-                
-                stability_score, oscillation_ratio, settling_quality, is_steady = 1.0, 0.0, 1.0, True
-                if segments is not None and valid_segment_idx < len(segments):
-                    seg = segments[valid_segment_idx]
-                    stability_score, oscillation_ratio, settling_quality, is_steady = \
-                        self._segment_processor.analyze_segment_stability(seg, fit_result)
-                
-                quality_adjusted_stability = stability_score
-                if result.nonlinearity_score > 0.3:
-                    quality_adjusted_stability *= (1 - result.nonlinearity_score * 0.5)
-                if result.quality_score < 0.5:
-                    quality_adjusted_stability *= (0.5 + result.quality_score)
-                
-                if result.oscillation_ratio > 0:
-                    oscillation_ratio = result.oscillation_ratio
-                
-                window_results.append(FusionWindowResult(
-                    window_idx=result.segment_idx,
-                    K=K, T1=T1, 
-                    T2=fit_result.get('T2', 0), 
-                    L=fit_result.get('L', 0),
-                    r2=r2,
-                    data_points=result.data_points,
-                    stability_score=quality_adjusted_stability,
-                    oscillation_ratio=oscillation_ratio,
-                    settling_quality=settling_quality,
-                    is_steady=is_steady and not result.is_nonlinear,
-                    nonlinearity_score=result.nonlinearity_score,
-                    quality_score=result.quality_score
-                ))
-                added_indices.add(result.segment_idx)
-                valid_segment_idx += 1
-            
-            if window_results:
-                if threshold < self.R2_THRESHOLDS[0]:
-                    self.log(f"   ⚠️ 使用阈值 R²≥{threshold} 收集到 {len(window_results)} 个有效段")
-                break
-        
-        if not window_results:
-            self.log("   ⚠️ 无有效参数，使用默认值")
-            return fusion
-        
-        steady_count = sum(1 for w in window_results if w.is_steady)
-        avg_stability = np.mean([w.stability_score for w in window_results])
-        
-        self.log(f"   收集到 {len(window_results)} 个有效段 (稳态段: {steady_count}, 平均稳态评分: {avg_stability:.2f}):")
-        for w in window_results:
-            steady_flag = "✓稳态" if w.is_steady else "⚠非稳态"
-            self.log(f"      段{w.window_idx+1}: K={w.K:.4f}, T1={w.T1:.2f}, R²={w.r2:.3f}, "
-                    f"稳态={w.stability_score:.2f} {steady_flag}")
-        
-        try:
-            fusion_strategy = PIDFusionStrategy(verbose=self._verbose)
-            fusion_result = fusion_strategy.fuse(window_results)
-            
-            fusion.K = fusion_result.K
-            fusion.T1 = fusion_result.T1
-            fusion.T2 = fusion_result.T2
-            fusion.L = fusion_result.L
-            fusion.fusion_method = fusion_result.strategy_used.value
-            fusion.consistency_score = fusion_result.confidence
-            fusion.n_segments_used = len(fusion_result.windows_used)
-            
-            if len(window_results) > 1:
-                fusion.K_std = float(np.std([w.K for w in window_results]))
-                fusion.T1_std = float(np.std([w.T1 for w in window_results]))
-            else:
-                fusion.K_std = 0.0
-                fusion.T1_std = 0.0
-            
-            self.log(f"\n   融合策略: {fusion.fusion_method}")
-            self.log(f"   决策原因: {fusion_result.reasoning}")
-            self.log(f"   使用窗口: {[i+1 for i in fusion_result.windows_used]}")
-            
-        except Exception as e:
-            self.log(f"   ⚠️ PIDFusionStrategy 失败: {e}，使用备用逻辑")
-            best_window = max(window_results, key=lambda w: w.r2)
-            fusion.K = best_window.K
-            fusion.T1 = best_window.T1
-            fusion.T2 = best_window.T2
-            fusion.L = best_window.L
-            fusion.fusion_method = "best_window_fallback"
-            fusion.consistency_score = best_window.r2
-            fusion.n_segments_used = 1
-        
-        # 模型参数合理性约束（从配置获取阈值）
-        param_constraints = Config.PARAMETER_CONSTRAINTS
-        T1_max = param_constraints['T1_max']
-        L_max = param_constraints['L_max']
-        
-        if fusion.T1 > T1_max:
-            self.log(f"   ⚠️ T1={fusion.T1:.2f}s 过大，限制为 {T1_max}s")
-            fusion.T1 = T1_max
-        if fusion.L > L_max:
-            self.log(f"   ⚠️ L={fusion.L:.2f}s 过大，限制为 {L_max}s")
-            fusion.L = L_max
-        
-        self.log(f"\n   融合结果 ({fusion.fusion_method}, {fusion.n_segments_used}段):")
-        self.log(f"   K  = {fusion.K:.4f} ± {fusion.K_std:.4f}")
-        self.log(f"   T1 = {fusion.T1:.2f} ± {fusion.T1_std:.2f}")
-        self.log(f"   T2 = {fusion.T2:.2f}")
-        self.log(f"   L  = {fusion.L:.2f}")
-        self.log(f"   一致性评分: {fusion.consistency_score:.2f}")
-        
-        return fusion
+        """融合各段参数（委托给 ParameterFusion）"""
+        return self._param_fusion.fuse(segment_results, model_type, segments)
     
     # ============================================================
     # Step 5: 验证与优化
@@ -1430,205 +1278,11 @@ class ModelSelector(LoggerMixin):
                       quality_info: DataQualityInfo = None,
                       segment_results: List[SegmentResult] = None,
                       segments: List[HistoricalData] = None) -> Dict[str, Any]:
-        """
-        构建最终输出
-        
-        Args:
-            quality_info: 数据质量信息，用于自适应保守PID整定
-            segment_results: 各段拟合结果，用于闭环不稳定时切换振荡整定
-            segments: 各扰动段数据，用于闭环不稳定时切换振荡整定
-        """
-        pid_params = self._pid_calculator.calculate_from_fusion(
-            fusion, lambda_factor, quality_info=quality_info
+        """构建最终输出（委托给 OutputBuilder）"""
+        return self._output_builder.build_full_output(
+            fusion, hist_data, time_range, lambda_factor,
+            tuning_windows, quality_info, segment_results, segments
         )
-        
-        params = self._simulator.fusion_to_params(fusion)
-        
-        valid_mask = hist_data.pv != 0
-        y = hist_data.pv[valid_mask]
-        u = hist_data.mv[valid_mask]
-        ts = np.array(hist_data.timestamp[valid_mask], dtype=np.int64)  # 确保是 int64 类型
-        sv = hist_data.sv[valid_mask]
-        
-        # 构建扰动段掩码：只在扰动段内使用模型拟合
-        disturbance_mask = np.zeros(len(ts), dtype=bool)
-        if tuning_windows:
-            for window in tuning_windows:
-                # 支持 TuningWindow 对象或字典
-                if hasattr(window, 'start_time'):
-                    start_ts = parse_time_to_milliseconds(window.start_time)
-                    end_ts = parse_time_to_milliseconds(window.end_time)
-                else:
-                    start_ts = parse_time_to_milliseconds(window.get('start_time'))
-                    end_ts = parse_time_to_milliseconds(window.get('end_time'))
-                disturbance_mask |= (ts >= start_ts) & (ts <= end_ts)
-        
-        # 对全量数据进行模型仿真
-        pv_model_full = self._simulator.simulate_segmented(
-            params, fusion.model_type, y, u, 
-            reset_on_sv_change=True, sv=sv,
-            enable_smooth=True,
-            enable_amplitude_calibration=True,
-            enable_offset_correction=True,
-            enable_oscillation_overlay=True
-        )
-        
-        # pv_model: 扰动段用模型拟合，稳态段用实际PV
-        pv_model = y.copy()  # 先用实际PV填充
-        pv_model[disturbance_mask] = pv_model_full[disturbance_mask]  # 扰动段用模型值
-        
-        sim_r2 = calculate_r2(y, pv_model)
-        
-        pv_diff = np.diff(y)
-        sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
-        oscillation_ratio = sign_changes / (len(y) - 2) if len(y) > 2 else 0
-        
-        pv_range = np.ptp(y)
-        model_range = np.ptp(pv_model)
-        amplitude_ratio = model_range / (pv_range + self._epsilon) if pv_range > 0.1 else 1.0
-        
-        self.log(f"   pv_model检查: sim_R²={sim_r2:.3f}, 振荡={oscillation_ratio:.2f}, "
-                f"PV范围={pv_range:.2f}, 模型范围={model_range:.2f}, 幅度比={amplitude_ratio:.2f}")
-        
-        # 从配置读取阈值
-        ms_cfg = Config.MODEL_SELECTOR
-        
-        sim_quality_poor = (
-            sim_r2 < ms_cfg['sim_r2_poor_threshold'] or
-            fusion.global_r2 < Config.MODEL_FITTING['r2_poor_threshold'] or
-            oscillation_ratio > ms_cfg['oscillation_poor_threshold'] or
-            amplitude_ratio < ms_cfg['amplitude_ratio_min'] or 
-            amplitude_ratio > ms_cfg['amplitude_ratio_max']
-        )
-        
-        fitting_failed = (
-            fusion.n_segments_used == 0 or
-            sim_r2 < ms_cfg['sim_r2_fail_threshold'] or
-            amplitude_ratio < ms_cfg['amplitude_ratio_fail_min'] or 
-            amplitude_ratio > ms_cfg['amplitude_ratio_fail_max']
-        )
-        
-        if fitting_failed:
-            self.log(f"   ❌ 拟合完全失败，保留原始pv_model用于诊断分析")
-        elif sim_quality_poor:
-            reason = []
-            if sim_r2 < ms_cfg['sim_r2_poor_threshold']:
-                reason.append(f"R²={sim_r2:.3f}")
-            if oscillation_ratio > ms_cfg['oscillation_poor_threshold']:
-                reason.append(f"振荡={oscillation_ratio:.2f}")
-            if amplitude_ratio < ms_cfg['amplitude_ratio_min'] or amplitude_ratio > ms_cfg['amplitude_ratio_max']:
-                reason.append(f"幅度比={amplitude_ratio:.2f}")
-            self.log(f"   ⚠️ 模型仿真质量较差({', '.join(reason)})")
-        
-        total_data_points = int(np.sum(valid_mask))
-        
-        # 先进行闭环稳定性验证（使用实际数据的初值）
-        sp_initial = float(sv[0]) if len(sv) > 0 else ms_cfg['default_sp_initial']
-        sp_final = float(sv[-1]) if len(sv) > 0 else ms_cfg['default_sp_final']
-        pv_initial = float(y[0]) if len(y) > 0 else sp_initial
-        
-        # 确保有足够的阶跃幅度，并且初值合理
-        sp_change = abs(sp_final - sp_initial)
-        pv_sp_diff = abs(pv_initial - sp_initial)
-        
-        # 如果 SP 阶跃幅度太小，或者 PV 初值与 SP 初值差距太大，使用默认阶跃测试
-        if sp_change < ms_cfg['min_sp_change'] or pv_sp_diff > sp_change * 2:
-            sp_initial = ms_cfg['default_sp_initial']
-            sp_final = ms_cfg['default_sp_final']
-            pv_initial = ms_cfg['default_pv_initial']
-        
-        is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
-            fusion, pid_params, 
-            sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
-            verbose=self._verbose
-        )
-        
-        # 如果闭环不稳定，尝试切换到振荡整定法
-        if not is_stable and self._oscillation_tuner is not None and segments is not None:
-            self.log(f"\n   ⚠️ 常规整定闭环不稳定，尝试切换到振荡整定法...")
-            
-            # 尝试振荡整定 (参数顺序: segments, segment_results, current_pid, force)
-            # force=True 强制使用振荡整定，不检查是否有成功拟合的段
-            osc_result = self._oscillation_tuner.try_oscillation_tuning(
-                segments, segment_results, pid_params, force=True
-            )
-            
-            if osc_result is not None and osc_result.get('success', False):
-                self.log(f"   ✅ 振荡整定成功，使用振荡整定参数")
-                
-                # 使用振荡整定的结果
-                osc_output = self._oscillation_tuner.build_oscillation_output(
-                    osc_result, hist_data, time_range, tuning_windows,
-                    segments, segment_results
-                )
-                return osc_output
-            else:
-                self.log(f"   ⚠️ 振荡整定也失败，保持原参数")
-        
-        # 再计算 model_rating（传入闭环指标）
-        model_rating, score_details = self._pid_calculator.calculate_model_rating(
-            fusion, total_data_points, cl_metrics=cl_metrics, verbose=self._verbose
-        )
-        
-        if self._verbose:
-            self.log(f"\n   📊 评分详情:")
-            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × 30%")
-            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × 20%")
-            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × 15%")
-            self.log(f"      数据覆盖度 ({fusion.n_segments_used}段/{total_data_points}点): {score_details.get('coverage_score', 0):.1f}/10 × 10%")
-            self.log(f"      闭环稳定性: {score_details.get('stability_score', 0):.1f}/10 × 25%")
-            self.log(f"      → 综合评分: {model_rating}/10")
-        
-        closed_loop_info = {
-            'is_stable': is_stable,
-            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
-            'overshoot': cl_metrics.overshoot,
-            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
-            'steady_state_error': cl_metrics.steady_state_error,
-            'oscillation_count': cl_metrics.oscillation_count,
-            'decay_ratio': cl_metrics.decay_ratio,
-            # 保存仿真参数，供可视化使用
-            'sp_initial': sp_initial,
-            'sp_final': sp_final,
-            'pv_initial': pv_initial
-        }
-        
-        # success条件：拟合成功 且 闭环稳定
-        success = (not fitting_failed) and is_stable
-        
-        return {
-            'success': success,
-            'model_type': fusion.model_type,
-            'model_rating': model_rating,
-            'start_time': time_range.get('start_time'),
-            'end_time': time_range.get('end_time'),
-            'model_parameters': {
-                'K': round(fusion.K, 4),
-                'T1': round(fusion.T1, 4),
-                'T2': round(fusion.T2, 4),
-                'L': round(fusion.L, 4)
-            },
-            'pid_parameters': pid_params,
-            'fitting_result': {
-                'timestamp': ts.tolist(),
-                'sv': sv.tolist(),
-                'pv': y.tolist(),
-                'mv': u.tolist(),
-                'pv_model': pv_model.tolist(),
-                'r_squared': round(fusion.global_r2, 4),
-                'rmse': round(fusion.global_rmse, 4)
-            },
-            'fusion_info': {
-                'method': fusion.fusion_method,
-                'n_segments': fusion.n_segments_used,
-                'consistency_score': round(fusion.consistency_score, 4),
-                'K_std': round(fusion.K_std, 4),
-                'T1_std': round(fusion.T1_std, 4)
-            },
-            'closed_loop_verification': closed_loop_info,
-            'rating_details': score_details,
-            'segment_info': OutputBuilder.build_segment_info(segments, segment_results) if segments else []
-        }
     
     def _build_segment_info(self, segments: List[HistoricalData], 
                              segment_results: List[SegmentResult]) -> List[Dict]:

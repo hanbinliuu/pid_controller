@@ -8,6 +8,7 @@
 - StepResponseIdentifier: 阶跃响应法 (63%, 面积法, 两点法)
 - FrequencyDomainIdentifier: 频域法 (互相关, FFT)
 - EnsembleIdentifier: 多方法融合辨识
+- ParameterFusion: 多段参数融合
 """
 
 from .model_identifier import ModelIdentifier, EnsembleIdentifier
@@ -17,6 +18,7 @@ from .type_selector import UnifiedModelSelector, SegmentModelFit
 from .step_response_identifier import StepResponseIdentifier
 from .frequency_domain_identifier import FrequencyDomainIdentifier
 from .relay_identifier import RelayIdentifier, RelayResult, LimitCycleInfo
+from .parameter_fusion import ParameterFusion
 
 __all__ = [
     'ModelIdentifier',
@@ -32,5 +34,5 @@ __all__ = [
     'RelayIdentifier',
     'RelayResult',
     'LimitCycleInfo',
+    'ParameterFusion',
 ]
-
