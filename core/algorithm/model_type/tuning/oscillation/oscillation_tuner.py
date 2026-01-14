@@ -444,18 +444,28 @@ class OscillationTuner(LoggerMixin):
         oscillation_ratio = best_result.oscillation_ratio if best_result else 0.5
         data_quality = best_result.quality_score if best_result else 0.4
         
-        # 优化: 降低增益调整系数
+        # 恢复稳定性: 恢复增益调整系数
         if K_approx > 2.0:
-            pb_base *= 1.0 + (K_approx - 2.0) * (0.15 if self._loop_type == 'level' else 0.18)  # 原: 0.2/0.25
+            pb_base *= 1.0 + (K_approx - 2.0) * (0.18 if self._loop_type == 'level' else 0.22)  # 恢复
         elif K_approx < 0.5 and self._loop_type != 'level':
-            pb_base *= 1.3  # 原: 1.5
+            pb_base *= 1.4  # 恢复
         
-        # 优化: 降低慢系统调整系数
-        t1_threshold = 80.0 if self._loop_type == 'level' else 60.0
+        # 恢复稳定性: 恢复慢系统调整系数
+        t1_threshold = 80.0 if self._loop_type == 'level' else 60.0  # 恢复阈值
         if T1_approx > t1_threshold:
-            pb_base *= 1.0 + (T1_approx - t1_threshold) / (250.0 if self._loop_type == 'level' else 200.0)  # 原: 200/150
+            pb_base *= 1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 150.0)  # 恢复
         
-        pb_safe = np.clip(pb_base, osc_config.get('pb_min', 100.0), osc_config.get('pb_max', 400.0))  # 优化: pb范围收窄
+        # 按回路类型设置不同pb_max上限 (适度放宽以提高稳态率)
+        if self._loop_type == 'flow':
+            pb_max_limit = 220.0  # 流量: 放宽 180→220
+        elif self._loop_type == 'pressure':
+            pb_max_limit = 280.0  # 压力: 放宽 250→280
+        elif self._loop_type in ['temperature', 'level']:
+            pb_max_limit = osc_config.get('pb_max', 450.0)  # 温度/液位: 放宽至450
+        else:
+            pb_max_limit = osc_config.get('pb_max', 400.0)
+        
+        pb_safe = np.clip(pb_base, osc_config.get('pb_min', 80.0), pb_max_limit)
         conservative_Kp = 100.0 / pb_safe
         
         ti_base_min = 10.0 if self._loop_type == 'level' else 5.0
@@ -463,7 +473,17 @@ class OscillationTuner(LoggerMixin):
         conservative_Ti = np.clip(ti_base_min * 1.5, *osc_config.get('ti_range', [1.5, 25.0]))
         conservative_Ki = conservative_Kp / conservative_Ti
         
-        kd_threshold = 0.6 if self._loop_type == 'level' else 0.5
+        # 石化优化: 按回路类型差异化Td使用阈值
+        # 流量/压力: 少用Td (阈值0.8), 温度: 多用Td (阈值0.4), 液位: 不用Td
+        if self._loop_type == 'level':
+            kd_threshold = 0.9  # 液位基本不用Td
+        elif self._loop_type == 'temperature':
+            kd_threshold = 0.4  # 温度多用Td
+        elif self._loop_type in ['flow', 'pressure']:
+            kd_threshold = 0.8  # 流量/压力少用Td
+        else:
+            kd_threshold = 0.6
+        
         if oscillation_ratio > kd_threshold:
             conservative_Td = np.clip(Pu_approx / 10, *osc_config.get('td_range', [0.3, 3.0]))
             conservative_Kd = conservative_Kp * conservative_Td

@@ -121,18 +121,18 @@ OSCILLATION_TUNING = {
     'level_fallback_pb': 250.0,          # 液位回路fallback时的默认pb（新增）
     'level_fallback_ti_factor': 2.5,     # 液位回路fallback时的Ti乘数（新增）
     
-    # ========== pb范围 (平衡优化: 兼顾稳态率和PB分布) ==========
-    'pb_min': 100.0,                     # pb下限
-    'pb_max': 450.0,                     # pb上限 (平衡: 400→450)
-    'pb_max_large_delay': 650.0,         # 大滞后系统pb上限
+    # ========== pb范围 (恢复稳定性) ==========
+    'pb_min': 80.0,                      # pb下限
+    'pb_max': 450.0,                     # pb上限 (恢复: 350→450)
+    'pb_max_large_delay': 600.0,         # 大滞后系统pb上限 (恢复: 500→600)
     
-    # ========== 大滞后系统专用配置（L/T1 > 0.5）(平衡优化) ==========
+    # ========== 大滞后系统专用配置（L/T1 > 0.5）(恢复稳定性) ==========
     'large_delay_ratio_threshold': 0.5,  # 大滞后比阈值
-    'large_delay_lambda_factor': 2.2,    # 大滞后时Lambda因子 (平衡: 2.0→2.2)
-    'large_delay_pb_boost': 1.6,         # 大滞后时pb额外增益 (平衡: 1.5→1.6)
-    'large_delay_ti_boost': 1.4,         # 大滞后时Ti额外增益 (平衡: 1.3→1.4)
+    'large_delay_lambda_factor': 2.5,    # 大滞后时Lambda因子 (恢复)
+    'large_delay_pb_boost': 1.8,         # 大滞后时pb额外增益 (恢复: 1.6→1.8)
+    'large_delay_ti_boost': 1.5,         # 大滞后时Ti额外增益 (恢复: 1.4→1.5)
     'extreme_delay_ratio_threshold': 0.8, # 极大滞后比阈值
-    'extreme_delay_pb_boost': 2.2,       # 极大滞后时pb额外增益 (平衡: 2.0→2.2)
+    'extreme_delay_pb_boost': 2.5,       # 极大滞后时pb额外增益 (恢复: 2.2→2.5)
     'large_delay_absolute_threshold': 15.0, # 绝对滞后阈值（秒）
     
     # ========== 极慢系统配置（T1 > 100s 或 Pu > 100s）==========

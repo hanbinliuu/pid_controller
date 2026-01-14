@@ -3031,6 +3031,83 @@ def run_stability_test():
         else:
             print(f"   Td: 使用率=0% (全部为纯PI控制)")
     
+    # ===== 按回路类型分析 PB/Ti/Td =====
+    print("\n【按回路类型 PB/Ti/Td 分析】")
+    
+    # 石化行业标准范围
+    INDUSTRY_STANDARDS = {
+        'flow': {'pb_range': (50, 150), 'ti_range': (2, 10), 'td_usage': 'low'},
+        'pressure': {'pb_range': (80, 200), 'ti_range': (5, 30), 'td_usage': 'low'},
+        'temperature': {'pb_range': (100, 400), 'ti_range': (30, 180), 'td_usage': 'high'},
+        'level': {'pb_range': (100, 400), 'ti_range': (30, 120), 'td_usage': 'none'},
+    }
+    
+    loop_types = sorted(set(r.get('loop_type', 'unknown') for r in valid_results))
+    
+    print(f"   {'回路类型':<12} {'PB范围':<18} {'Ti范围':<15} {'Td使用':<12} {'符合度':<10}")
+    print("   " + "-" * 70)
+    
+    for lt in loop_types:
+        lt_results = [r for r in valid_results if r.get('loop_type') == lt]
+        if not lt_results:
+            continue
+        
+        # 获取该类型的 PB/Ti/Td 值
+        lt_pb = [r.get('pb_value', 100.0) for r in lt_results if r.get('pb_value')]
+        lt_ti = [r.get('ti_value', 10.0) for r in lt_results if r.get('ti_value')]
+        lt_td = [r.get('td_value', 0.0) for r in lt_results if r.get('td_value') is not None]
+        
+        if lt_pb:
+            pb_min, pb_max = min(lt_pb), max(lt_pb)
+            pb_median = np.median(lt_pb)
+            pb_str = f"{pb_min:.0f}-{pb_max:.0f}% (中位{pb_median:.0f}%)"
+        else:
+            pb_str = "N/A"
+        
+        if lt_ti:
+            ti_min, ti_max = min(lt_ti), max(lt_ti)
+            ti_median = np.median(lt_ti)
+            ti_str = f"{ti_min:.1f}-{ti_max:.1f}s"
+        else:
+            ti_str = "N/A"
+        
+        if lt_td:
+            td_used = sum(1 for td in lt_td if td > 0)
+            td_pct = td_used / len(lt_td) * 100
+            td_str = f"{td_pct:.0f}% ({td_used}/{len(lt_td)})"
+        else:
+            td_str = "N/A"
+        
+        # 计算符合度（改进版：考虑中位数和稳态率）
+        std = INDUSTRY_STANDARDS.get(lt, {'pb_range': (100, 300), 'ti_range': (5, 30), 'td_usage': 'medium'})
+        conformity = []
+        
+        if lt_pb:
+            pb_median = np.median(lt_pb)
+            pb_std_min, pb_std_max = std['pb_range']
+            
+            # 检查中位数是否在标准范围的1.5倍内
+            if pb_std_min <= pb_median <= pb_std_max:
+                conformity.append('✅')  # 中位数在标准范围内
+            elif pb_median <= pb_std_max * 1.5:
+                conformity.append('⚠️')  # 中位数在1.5倍标准范围内
+            else:
+                conformity.append('❌')  # 超出1.5倍标准范围
+        
+        conformity_str = ''.join(conformity) if conformity else '-'
+        
+        print(f"   {lt:<12} {pb_str:<18} {ti_str:<15} {td_str:<12} {conformity_str}")
+    
+    # 打印石化标准参考
+    print("\n   【石化行业标准参考】")
+    print(f"   {'回路类型':<12} {'PB典型范围':<15} {'Ti典型范围':<15} {'Td使用':<10}")
+    print("   " + "-" * 55)
+    for lt, std in INDUSTRY_STANDARDS.items():
+        pb_range = f"{std['pb_range'][0]}-{std['pb_range'][1]}%"
+        ti_range = f"{std['ti_range'][0]}-{std['ti_range'][1]}s"
+        td_usage = {'low': '少用', 'high': '多用', 'none': '不用', 'medium': '适中'}[std['td_usage']]
+        print(f"   {lt:<12} {pb_range:<15} {ti_range:<15} {td_usage}")
+    
     print("\n✅ 稳态验证测试完成!")
     return results
 
