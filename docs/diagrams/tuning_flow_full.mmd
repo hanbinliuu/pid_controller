@@ -64,9 +64,9 @@ flowchart TB
         O3 -->|"满足(参数正常)"| O5["reason = 'oscillation'<br/>标记为正常振荡场景"]
         
         O4 --> O6
-        O5 --> O6["ConservativePIDCalculator.calculate()<br/>━━━━━━━━━━<br/>保守PID参数计算 (6步骤, 使用llm_strategy影响各步):<br/><br/>① 基础pb计算:<br/>   pb_from_K = 100 × K × 1.5<br/>   pb_from_Ku = 100 / (0.2 × Ku)<br/>   pb_base = max(两者) × slow_factor<br/>   (Pu > 30s 时 slow_factor = 1.3)<br/><br/>② 质量因子调整:<br/>   data_quality < 0.5 → ×1.3<br/>   nonlinearity > 0.5 → ×1.2<br/><br/>③ 阀门问题调整:<br/>   存在死区 → ×1.15<br/>   存在粘滞 → ×1.2<br/>   存在饱和 → ×1.1<br/><br/>④ 极端场景调整:<br/>   K > 4.0 → ×1.5~3.0<br/>   L/T1 > 0.5 → ×1.3~2.5<br/>   L/T1 > 0.8 → ×2.5<br/>   osc_ratio > 0.85 → ×1.2~1.6<br/><br/>⑤ 振荡比自适应 + LLM安全因子:<br/>   safety = 1.4 (LLM可调整)<br/>   + 0.5×(osc-0.5) 当osc>0.5<br/>   + 1.0×(osc-0.7) 当osc>0.7<br/>   + 2.0×(osc-0.85) 当osc>0.85<br/><br/>⑥ pb边界限制:<br/>   动态pb_min = pb_min_base × (1 + 0.3/K)<br/>   reason='low_gain' 时 pb_min = min(pb_min×1.5, 500)<br/>   confidence≥0.7: pb_max=min(config,400)<br/>   confidence≥0.5: pb_max=min(config,600)<br/>   confidence<0.5: pb_max=min(config×1.3,800)<br/>   pb = clip(pb, pb_min, pb_max)"]
+        O5 --> O6["ConservativePIDCalculator.calculate()<br/>━━━━━━━━━━<br/>保守PID参数计算 (6步骤, 使用llm_strategy影响各步):<br/><br/>① 基础pb计算:<br/>   pb_from_K = 100 × K × 1.5<br/>   pb_from_Ku = 100 / (0.2 × Ku)<br/>   pb_base = max(两者) × slow_factor<br/>   (Pu > 30s 时 slow_factor = 1.3)<br/><br/>② 质量因子调整:<br/>   data_quality < 0.5 → ×1.3<br/>   nonlinearity > 0.5 → ×1.2<br/><br/>③ 阀门问题调整:<br/>   存在死区 → ×1.15<br/>   存在粘滞 → ×1.2<br/>   存在饱和 → ×1.1<br/><br/>④ 极端场景调整:<br/>   K > 4.0 → ×1.5~2.5<br/>   L/T1 > 0.5 → ×1.3~2.3<br/>   L/T1 > 0.8 → ×2.3<br/>   osc_ratio > 0.85 → ×1.15~1.5<br/><br/>⑤ 振荡比自适应 + LLM安全因子<br/><br/>⑥ pb边界限制 (按回路类型):<br/>   flow: pb_max = 220 (石化标准50-150%)<br/>   pressure: pb_max = 280 (石化标准80-200%)<br/>   temperature: pb_max = 450 (石化标准100-400%)<br/>   level: pb_max = 450 (石化标准100-400%)<br/>   pb = clip(pb, pb_min, pb_max)"]
         
-        O6 --> O7["计算积分和微分时间<br/>━━━━━━━━━━<br/>Ti = max(Pu/2, 1.5) × ti_multiplier<br/>(慢系统 ti_multiplier = 1.1, LLM可调)<br/><br/>Td = 0 (默认不使用微分)<br/>若 osc_ratio > 0.5: Td = Pu/8<br/>LLM可启用/禁用微分"]
+        O6 --> O7["计算积分和微分时间<br/>━━━━━━━━━━<br/>Ti = max(Pu/2, 1.5) × ti_multiplier<br/>(慢系统 ti_multiplier = 1.1)<br/><br/>Td使用阈值 (按回路类型):<br/>• flow/pressure: 阈值=0.8 (少用Td)<br/>• temperature: 阈值=0.4 (多用Td)<br/>• level: 阈值=0.9 (基本不用Td)<br/><br/>若 osc_ratio > 阈值: Td = Pu/10"]
         
         O7 --> O8["build_oscillation_output()<br/>构建振荡整定输出结果"]
     end
@@ -123,7 +123,7 @@ flowchart TB
         R7 --> R9{{"candidates 为空?"}}
         R8 --> R9
         
-        R9 -->|"是"| R10["_conservative_fallback()<br/>━━━━━━━━━━<br/>保守fallback整定<br/>固定参数: Kp=0.5, Ti=25, Td=0<br/>reason: 无可用整定方法"]
+        R9 -->|"是"| R10["_fallback_tuning()<br/>━━━━━━━━━━<br/>保守fallback整定 (按回路类型):<br/><br/>pb_base:<br/>• flow: 100 (pb_max=220)<br/>• pressure: 120 (pb_max=280)<br/>• temperature: 180 (pb_max=450)<br/>• level: 200 (pb_max=450)<br/><br/>Td阈值:<br/>• flow/pressure: 0.8 (少用)<br/>• temperature: 0.4 (多用)<br/>• level: 0.9 (基本不用)"]
         R9 -->|"否"| R11["对每个候选方法验证稳定性<br/>━━━━━━━━━━<br/>_verify_stability()<br/>StabilityAnalyzer.check_stability()<br/>计算 GM (增益裕度)<br/>计算 PM (相位裕度)"]
         
         R11 --> R12["_select_best_by_stability()<br/>━━━━━━━━━━<br/>选择策略:<br/>• 有稳定候选 → 选PM最大的<br/>• 都不稳定 → 选PM最接近45°的"]
