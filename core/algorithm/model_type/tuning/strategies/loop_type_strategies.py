@@ -217,7 +217,7 @@ class FlowLoopStrategy(LoopTypeStrategy):
         return ti_mult
     
     def get_fallback_params(self) -> Dict[str, float]:
-        return {'pb_base': 180.0, 't1_divisor': 5.0, 't1_min': 10.0, 'ti_multiplier': 1.2}
+        return {'pb_base': 150.0, 't1_divisor': 5.0, 't1_min': 10.0, 'ti_multiplier': 1.2}  # pb优化: 180→150
 
 
 class TemperatureLoopStrategy(LoopTypeStrategy):
@@ -282,7 +282,7 @@ class TemperatureLoopStrategy(LoopTypeStrategy):
         return ti_mult
     
     def get_fallback_params(self) -> Dict[str, float]:
-        return {'pb_base': 220.0, 't1_divisor': 3.0, 't1_min': 30.0, 'ti_multiplier': 1.8}
+        return {'pb_base': 200.0, 't1_divisor': 3.0, 't1_min': 30.0, 'ti_multiplier': 1.8}  # 平衡优化: 180→200 保持稳定性
 
 
 class PressureLoopStrategy(LoopTypeStrategy):
@@ -343,7 +343,7 @@ class PressureLoopStrategy(LoopTypeStrategy):
         return ti_mult
     
     def get_fallback_params(self) -> Dict[str, float]:
-        return {'pb_base': 160.0, 't1_divisor': 4.0, 't1_min': 15.0, 'ti_multiplier': 1.0}
+        return {'pb_base': 140.0, 't1_divisor': 4.0, 't1_min': 15.0, 'ti_multiplier': 1.0}  # pb优化: 160→140
 
 
 class LevelLoopStrategy(LoopTypeStrategy):
@@ -402,7 +402,7 @@ class LevelLoopStrategy(LoopTypeStrategy):
         return ti_mult
     
     def get_fallback_params(self) -> Dict[str, float]:
-        return {'pb_base': 250.0, 't1_divisor': 3.0, 't1_min': 30.0, 'ti_multiplier': 2.5}
+        return {'pb_base': 220.0, 't1_divisor': 3.0, 't1_min': 30.0, 'ti_multiplier': 2.5}  # 平衡优化: 保持稳定性
 
 
 class DefaultLoopStrategy(LoopTypeStrategy):
@@ -421,7 +421,7 @@ class DefaultLoopStrategy(LoopTypeStrategy):
         return ti_mult
     
     def get_fallback_params(self) -> Dict[str, float]:
-        return {'pb_base': 200.0, 't1_divisor': 4.0, 't1_min': 20.0, 'ti_multiplier': 1.5}
+        return {'pb_base': 160.0, 't1_divisor': 4.0, 't1_min': 20.0, 'ti_multiplier': 1.5}  # pb优化: 200→160
 
 
 # 策略注册表

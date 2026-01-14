@@ -174,12 +174,13 @@ class ConservativePIDCalculator(LoggerMixin):
 
     def _apply_extreme_factors(self, pb_base: float, K_approx: float, 
                                Pu: float, oscillation_ratio: float) -> Tuple[float, float]:
-        """应用极端场景因子"""
+        """应用极端场景因子 (优化版: 降低因子上限以获得更合理的PB值)"""
         if K_approx > 4.0:
             if K_approx > 6.0:
-                extreme_gain_factor = min(1.0 + (K_approx - 4.0) * 0.25, 3.0)
+                # 原: 3.0上限, 优化: 2.0上限
+                extreme_gain_factor = min(1.0 + (K_approx - 4.0) * 0.20, 2.0)
             else:
-                extreme_gain_factor = min(1.0 + (K_approx - 4.0) * 0.15, 2.0)
+                extreme_gain_factor = min(1.0 + (K_approx - 4.0) * 0.12, 1.5)
             pb_base *= extreme_gain_factor
             self.log(f"   ⚠️ 极高增益场景(K={K_approx:.1f}): 保守因子 ×{extreme_gain_factor:.2f}")
         
@@ -189,12 +190,13 @@ class ConservativePIDCalculator(LoggerMixin):
         T1_approx = Pu * (1.0 + 1.0 / max(K_approx, 0.5)) / 4.0
         delay_ratio = estimated_L / max(T1_approx, 1.0)
         
+        # 平衡优化: 适度恢复滞后因子以保证稳定性
         if delay_ratio > 0.8:
-            delay_factor = 2.5
+            delay_factor = 2.0  # 平衡: 1.8→2.0
         elif delay_ratio > 0.6:
-            delay_factor = min(1.6 + (delay_ratio - 0.6) * 4.0, 2.4)
+            delay_factor = min(1.5 + (delay_ratio - 0.6) * 2.5, 1.9)  # 平衡恢复
         elif delay_ratio > 0.4:
-            delay_factor = 1.3 + (delay_ratio - 0.4) * 1.5
+            delay_factor = 1.25 + (delay_ratio - 0.4) * 1.25
         else:
             delay_factor = 1.0
         
@@ -202,8 +204,9 @@ class ConservativePIDCalculator(LoggerMixin):
             pb_base *= delay_factor
             self.log(f"   ⚠️ 滞后比(L/T1≈{delay_ratio:.2f}): 保守 ×{delay_factor:.2f}")
         
+        # 优化: 降低振荡因子上限 (原1.6→1.3)
         if oscillation_ratio > 0.85:
-            extreme_osc_factor = min(1.2 + (oscillation_ratio - 0.85) * 2.0, 1.6)
+            extreme_osc_factor = min(1.1 + (oscillation_ratio - 0.85) * 1.5, 1.3)  # 原: 1.2+2.0*(x-0.85), 上限1.6
             pb_base *= extreme_osc_factor
             self.log(f"   ⚠️ 极端振荡场景: 保守因子 ×{extreme_osc_factor:.2f}")
         
@@ -254,14 +257,15 @@ class ConservativePIDCalculator(LoggerMixin):
         """应用 pb 边界限制"""
         osc_config = Config.OSCILLATION_TUNING
         pb_min_base = osc_config.get('pb_min', 80.0)
-        pb_max_config = osc_config.get('pb_max', 600.0)
+        pb_max_config = osc_config.get('pb_max', 600.0)  # 保持配置值
         
+        # 根据置信度调整上限 (适度优化)
         if confidence >= 0.8:
-            pb_max = min(pb_max_config, 400.0)
+            pb_max = min(pb_max_config, 350.0)  # 高置信度时适度限制
         elif confidence >= 0.5:
-            pb_max = min(pb_max_config, 600.0)
+            pb_max = min(pb_max_config, 500.0)  # 中置信度
         else:
-            pb_max = min(pb_max_config * 1.3, 800.0)
+            pb_max = min(pb_max_config * 1.2, 700.0)  # 低置信度保守
         
         pb_k_factor = osc_config.get('pb_k_adjustment_factor', 0.3)
         if K_approx > 0.01:

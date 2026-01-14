@@ -27,6 +27,7 @@ from core.client.bff_model_client import BFFModelClient
 from core.client.real_tsdb_client import get_default_database
 from core.algorithm.tuning_segment.stability_detector import find_high_variability_periods
 from core.algorithm.model_type.model_selector import ModelSelector
+from core.algorithm.model_type.tuning_difficulty_analyzer import TuningDifficultyAnalyzer
  
 
 # ============================================================
@@ -36,8 +37,8 @@ from core.algorithm.model_type.model_selector import ModelSelector
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", 
-    # 'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
-    'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
+    'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
+    # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
@@ -219,6 +220,25 @@ def run_model_selector(data: List[Dict], qualified_windows: List[Dict],
             for k, v in quality_report['stats'].items():
                 print(f"      {k}: {v}")
     
+    # 🆕 整定难度分析
+    if verbose:
+        print("\n🎯 整定难度分析:")
+        pv_array, sv_array, mv_array, timestamps = convert_to_arrays(data)
+        difficulty_analyzer = TuningDifficultyAnalyzer()
+        difficulty_result = difficulty_analyzer.analyze(
+            pv_array, mv_array, sv_array, timestamps, loop_type='unknown'
+        )
+        print(f"   难度评分: {difficulty_result['difficulty_score']:.1f}/10 ({difficulty_result['difficulty_level_cn']})")
+        if difficulty_result['issues']:
+            print("   检测到的问题:")
+            for issue in difficulty_result['issues']:
+                severity_icon = {'low': '🟡', 'medium': '🟠', 'high': '🔴'}.get(issue['severity'], '⚪')
+                print(f"      {severity_icon} {issue['name_cn']}: {issue['evidence']}")
+        if difficulty_result['recommendations']:
+            print("   整定建议:")
+            for rec in difficulty_result['recommendations']:
+                print(f"      • {rec}")
+    
     # 构造新格式输入
     # response_mode: 'fast' (快速响应，允许超调), 'balanced' (默认), 'conservative' (保守，无超调)
     input_data = {
@@ -336,8 +356,8 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     closed_loop_info = fitting_result.get('closed_loop_verification', {})
     has_closed_loop = closed_loop_info and closed_loop_info.get('is_stable') is not None
     
-    # 创建图表：如果有闭环数据则4个子图，否则3个
-    n_plots = 4 if has_closed_loop else 3
+    # 创建图表：如果有闭环数据则5个子图（含新PID仿真），否则3个
+    n_plots = 5 if has_closed_loop else 3
     fig = plt.figure(figsize=(16, 4 * n_plots))
     
     model_type = fitting_result.get('model_type', 'Unknown')
@@ -671,6 +691,97 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
                             xytext=(peak_time + 5, peak_val),
                             fontsize=8, color='red',
                             arrowprops=dict(arrowstyle='->', color='red', lw=0.8))
+    
+    # ========== 子图5: 新PID仿真预测（使用真实过程模型） ==========
+    if has_closed_loop:
+        ax5 = fig.add_subplot(n_plots, 1, 5)
+        
+        # 获取模型参数
+        model_params = fitting_result.get('model_parameters', {})
+        pid_params = fitting_result.get('pid_parameters', {})
+        
+        K = model_params.get('K', 1.0)
+        T1 = model_params.get('T1', 10.0)
+        T2 = model_params.get('T2', 0.0)
+        L = model_params.get('L', 0.0)
+        
+        Kp = pid_params.get('kp', 1.0)
+        Ki = pid_params.get('ki', 0.0)
+        Kd = pid_params.get('kd', 0.0)
+        
+        # 采样间隔
+        if len(timestamps) > 1:
+            dt_sim = (timestamps[1] - timestamps[0]) / 1000.0
+        else:
+            dt_sim = 1.0
+        
+        # 仿真时长 - 拉长以观察稳态收敛
+        sim_duration = max(T1 * 20, 1000)  # 至少 20 倍时间常数或 1000 秒
+        n_sim_steps = min(int(sim_duration / dt_sim), 20000)
+        
+        # 初始条件
+        pv_init = pv_array[-1]
+        mv_init = mv_array[-1]
+        sv_target = sv_array[-1]
+        
+        # 如果初始偏差太小，引入阶跃
+        initial_error = abs(sv_target - pv_init)
+        if initial_error < 2.0:
+            sv_target = sv_target + max(np.ptp(sv_array) * 0.1, 5.0)
+        
+        # 状态初始化
+        pv_sim = np.zeros(n_sim_steps)
+        mv_sim = np.zeros(n_sim_steps)
+        sv_sim = np.full(n_sim_steps, sv_target)
+        
+        x1, x2 = 0.0, 0.0
+        integral = 0.0
+        prev_error = sv_target - pv_init
+        delay_steps = max(1, int(L / dt_sim)) if L > 0 else 1
+        mv_history = [mv_init] * delay_steps
+        pv_current = pv_init
+        pv_base = pv_init
+        mv_base = mv_init
+        
+        for i in range(n_sim_steps):
+            error = sv_target - pv_current
+            integral = np.clip(integral + error * dt_sim, -100/(Ki+1e-10), 100/(Ki+1e-10))
+            derivative = (error - prev_error) / dt_sim if dt_sim > 0 else 0.0
+            prev_error = error
+            
+            mv_out = np.clip(mv_base + Kp * error + Ki * integral + Kd * derivative, 0, 100)
+            mv_sim[i] = mv_out
+            
+            mv_history.append(mv_out)
+            mv_delayed = mv_history.pop(0)
+            delta_mv = mv_delayed - mv_base
+            
+            T1_eff = max(T1, dt_sim)
+            dx1 = (K * delta_mv - x1) / T1_eff
+            x1 += dx1 * dt_sim
+            pv_current = pv_base + x1
+            pv_sim[i] = pv_current
+        
+        t_sim = np.arange(n_sim_steps) * dt_sim
+        
+        # 绘制
+        ax5.plot(t_sim, pv_sim, 'b-', label='PV (预测)', linewidth=1.5)
+        ax5.axhline(y=sv_target, color='r', linestyle='--', label=f'SV={sv_target:.1f}', linewidth=1.2)
+        ax5.fill_between(t_sim, sv_target * 0.95, sv_target * 1.05, alpha=0.2, color='green', label='±5%误差带')
+        ax5.axhline(y=pv_init, color='gray', linestyle=':', alpha=0.5, label=f'初始PV={pv_init:.1f}')
+        
+        # 稳态判定
+        error_band = abs(sv_target) * 0.05
+        in_band = np.abs(pv_sim[-100:] - sv_target) < error_band if len(pv_sim) >= 100 else False
+        is_stable_predict = np.all(in_band) if isinstance(in_band, np.ndarray) else False
+        stable_status = '✅ 预测稳态' if is_stable_predict else '❌ 预测不稳态'
+        
+        ax5.set_xlabel('仿真时间 (s)')
+        ax5.set_ylabel('PV')
+        ax5.set_title(f'新PID参数仿真预测（基于估算模型）- {stable_status}')
+        ax5.legend(loc='upper right')
+        ax5.grid(True, alpha=0.3)
+        ax5.set_xlim([0, t_sim[-1]])
     
     plt.tight_layout()
     

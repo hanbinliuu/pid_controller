@@ -428,14 +428,14 @@ class OscillationTuner(LoggerMixin):
         large_delay_threshold = osc_config.get('large_delay_ratio_threshold', 0.5)
         
         if delay_ratio > extreme_delay_threshold or L_approx > 30.0:
-            # 极大滞后：应用最保守的pb增益
-            pb_base *= osc_config.get('extreme_delay_pb_boost', 2.5)
-            ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.5) * 1.2
+            # 极大滞后：应用保守的pb增益 (优化: 降低上限 2.5→1.8)
+            pb_base *= osc_config.get('extreme_delay_pb_boost', 1.8)  # 原: 2.5
+            ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.4) * 1.1  # 原: 1.5 * 1.2
             self.log(f"   ⚠️ 检测到极大滞后系统 (L/T={delay_ratio:.2f})")
         elif delay_ratio > large_delay_threshold or L_approx > osc_config.get('large_delay_absolute_threshold', 15.0):
-            # 大滞后：标准保守
-            pb_base *= osc_config.get('large_delay_pb_boost', 1.8)
-            ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.5)
+            # 大滞后：标准保守 (优化: 降低 1.8→1.4)
+            pb_base *= osc_config.get('large_delay_pb_boost', 1.4)  # 原: 1.8
+            ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.3)  # 原: 1.5
         
         pu_min = 20.0 if self._loop_type == 'level' else 10.0
         Pu_approx = max(4 * L_approx, pu_min)
@@ -444,16 +444,18 @@ class OscillationTuner(LoggerMixin):
         oscillation_ratio = best_result.oscillation_ratio if best_result else 0.5
         data_quality = best_result.quality_score if best_result else 0.4
         
+        # 优化: 降低增益调整系数
         if K_approx > 2.0:
-            pb_base *= 1.0 + (K_approx - 2.0) * (0.2 if self._loop_type == 'level' else 0.25)
+            pb_base *= 1.0 + (K_approx - 2.0) * (0.15 if self._loop_type == 'level' else 0.18)  # 原: 0.2/0.25
         elif K_approx < 0.5 and self._loop_type != 'level':
-            pb_base *= 1.5
+            pb_base *= 1.3  # 原: 1.5
         
+        # 优化: 降低慢系统调整系数
         t1_threshold = 80.0 if self._loop_type == 'level' else 60.0
         if T1_approx > t1_threshold:
-            pb_base *= 1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 150.0)
+            pb_base *= 1.0 + (T1_approx - t1_threshold) / (250.0 if self._loop_type == 'level' else 200.0)  # 原: 200/150
         
-        pb_safe = np.clip(pb_base, osc_config.get('pb_min', 120.0), osc_config.get('pb_max', 500.0))
+        pb_safe = np.clip(pb_base, osc_config.get('pb_min', 100.0), osc_config.get('pb_max', 400.0))  # 优化: pb范围收窄
         conservative_Kp = 100.0 / pb_safe
         
         ti_base_min = 10.0 if self._loop_type == 'level' else 5.0

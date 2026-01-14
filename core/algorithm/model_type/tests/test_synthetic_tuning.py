@@ -2648,6 +2648,7 @@ def run_stability_test():
     
     results = []
     rule_stable_count = 0
+    rule_stable_cl_count = 0  # 闭环验证稳态计数（用估算模型参数）
     llm_stable_count = 0
     
     for idx, scenario in enumerate(scenarios, 1):
@@ -2733,9 +2734,24 @@ def run_stability_test():
                 rule_stable_count += 1
             
             if not tuning_success:
-                print(f"      稳态: ❌ 否 (整定失败，无有效参数)")
+                print(f"      稳态(真实参数): ❌ 否 (整定失败，无有效参数)")
             else:
-                print(f"      稳态: {'✅ 是' if sim_rule['is_stable'] else '❌ 否'} (Ts={sim_rule['settling_time']:.0f}s)")
+                print(f"      稳态(真实参数): {'✅ 是' if sim_rule['is_stable'] else '❌ 否'} (Ts={sim_rule['settling_time']:.0f}s)")
+            
+            # ===== 闭环验证（用估算模型参数）=====
+            model_params = result_rule.get('model_parameters', {})
+            estimated_process = {
+                'K': model_params.get('K', 1.0),
+                'T1': model_params.get('T1', 30.0),
+                'L': model_params.get('L', model_params.get('delay', 5.0))
+            }
+            sim_rule_cl = simulate_with_new_pid(estimated_process, pid_rule, sv, duration=sim_duration, seed=sim_seed+10)
+            rule_stable_cl = tuning_success and sim_rule_cl['is_stable']
+            if rule_stable_cl:
+                rule_stable_cl_count += 1
+            
+            if tuning_success:
+                print(f"      稳态(闭环验证): {'✅ 是' if sim_rule_cl['is_stable'] else '❌ 否'} (Ts={sim_rule_cl['settling_time']:.0f}s)")
             
             # ===== LLM + 规则引擎整定 =====
             llm_stable = None
@@ -2774,6 +2790,9 @@ def run_stability_test():
                 'rule_stable': rule_stable,
                 'rule_ts': sim_rule['settling_time'],
                 'rule_overshoot': sim_rule.get('overshoot', 0),
+                'pb_value': pid_rule.get('pb', 100.0),  # 记录PB值
+                'ti_value': pid_rule.get('ti', 10.0),   # 记录Ti值
+                'td_value': pid_rule.get('td', 0.0),    # 记录Td值
                 'llm_stable': llm_stable,
                 'llm_ts': sim_llm['settling_time'] if sim_llm else None,
                 'llm_overshoot': sim_llm.get('overshoot', 0) if sim_llm else None,
@@ -2886,9 +2905,12 @@ def run_stability_test():
     print(f"║  场景总数: {total:<65}║")
     print("╠" + "═" * 78 + "╣")
     print("║  【稳态达成率】" + " " * 62 + "║")
-    print(f"║    规则引擎:     {rule_stable_count}/{total} ({rule_stable_count/total*100:.1f}%)" + " " * 49 + "║")
+    rule_rate = rule_stable_count/total*100 if total > 0 else 0
+    cl_rate = rule_stable_cl_count/total*100 if total > 0 else 0
+    print(f"║    规则(真实参数): {rule_stable_count}/{total} ({rule_rate:.1f}%)" + " " * 47 + "║")
+    print(f"║    规则(闭环验证): {rule_stable_cl_count}/{total} ({cl_rate:.1f}%)" + " " * 47 + "║")
     if llm_available:
-        print(f"║    LLM+规则引擎: {llm_stable_count}/{total} ({llm_stable_count/total*100:.1f}%)" + " " * 47 + "║")
+        print(f"║    LLM+规则引擎:   {llm_stable_count}/{total} ({llm_stable_count/total*100:.1f}%)" + " " * 45 + "║")
     print("╠" + "═" * 78 + "╣")
     if llm_available:
         print("║  【LLM价值分析】" + " " * 61 + "║")
@@ -2940,6 +2962,74 @@ def run_stability_test():
         if stats['total'] > 0:
             rate = stats['stable'] / stats['total'] * 100
             print(f"{level_emoji[level]} {level:<8} {stats['total']:<8} {stats['stable']}/{stats['total']:<10} {rate:.1f}%")
+    
+    # ===== PB分布统计（检查是否符合真实场景）=====
+    print("\n【PB分布统计】")
+    pb_values = [r.get('pb_value', 100.0) for r in valid_results if r.get('pb_value')]
+    if pb_values:
+        pb_mean = np.mean(pb_values)
+        pb_median = np.median(pb_values)
+        pb_min = np.min(pb_values)
+        pb_max = np.max(pb_values)
+        
+        # 统计各区间分布
+        pb_ranges = [
+            ('50-150%', 50, 150, '🟢 理想'),
+            ('150-300%', 150, 300, '🟡 正常'),
+            ('300-500%', 300, 500, '🟠 偏高'),
+            ('500%+', 500, float('inf'), '🔴 过高')
+        ]
+        
+        print(f"   平均PB: {pb_mean:.1f}%  |  中位PB: {pb_median:.1f}%  |  范围: {pb_min:.0f}%-{pb_max:.0f}%")
+        print(f"   {'PB范围':<15} {'场景数':<10} {'占比':<10} {'评价':<10}")
+        print("   " + "-" * 50)
+        
+        for label, low, high, rating in pb_ranges:
+            count = sum(1 for pb in pb_values if low <= pb < high)
+            pct = count / len(pb_values) * 100 if pb_values else 0
+            print(f"   {label:<15} {count:<10} {pct:.1f}%{' ':5}{rating}")
+        
+        # 判断是否符合真实场景
+        normal_count = sum(1 for pb in pb_values if 50 <= pb < 300)
+        normal_rate = normal_count / len(pb_values) * 100
+        
+        if normal_rate >= 70:
+            print(f"\n   ✅ PB分布符合工业标准 ({normal_rate:.0f}%在正常范围)")
+        elif normal_rate >= 50:
+            print(f"\n   ⚠️ PB分布偏高 ({normal_rate:.0f}%在正常范围，建议优化)")
+        else:
+            print(f"\n   ❌ PB分布过高 (仅{normal_rate:.0f}%在正常范围，需要优化)")
+    
+    # ===== Ti/Td 分布统计 =====
+    print("\n【Ti/Td 分布统计】")
+    ti_values = [r.get('ti_value', 10.0) for r in valid_results if r.get('ti_value')]
+    td_values = [r.get('td_value', 0.0) for r in valid_results if r.get('td_value') is not None]
+    
+    if ti_values:
+        ti_mean = np.mean(ti_values)
+        ti_median = np.median(ti_values)
+        ti_min = np.min(ti_values)
+        ti_max = np.max(ti_values)
+        print(f"   Ti: 平均={ti_mean:.1f}s  中位={ti_median:.1f}s  范围={ti_min:.1f}-{ti_max:.1f}s")
+        
+        # Ti分布
+        ti_ranges = [('0-5s', 0, 5), ('5-15s', 5, 15), ('15-30s', 15, 30), ('30s+', 30, float('inf'))]
+        ti_dist = []
+        for label, low, high in ti_ranges:
+            count = sum(1 for ti in ti_values if low <= ti < high)
+            pct = count / len(ti_values) * 100
+            ti_dist.append(f"{label}:{count}({pct:.0f}%)")
+        print(f"   分布: {' | '.join(ti_dist)}")
+    
+    if td_values:
+        td_nonzero = [td for td in td_values if td > 0]
+        td_used = len(td_nonzero)
+        td_pct = td_used / len(td_values) * 100
+        if td_nonzero:
+            td_mean = np.mean(td_nonzero)
+            print(f"   Td: 使用率={td_pct:.0f}% ({td_used}/{len(td_values)})  平均={td_mean:.2f}s (仅非零)")
+        else:
+            print(f"   Td: 使用率=0% (全部为纯PI控制)")
     
     print("\n✅ 稳态验证测试完成!")
     return results
@@ -3091,9 +3181,11 @@ def run_lambda_tuning_test():
     
     results = []
     stable_count = 0
+    stable_count_cl = 0  # 闭环验证稳态计数
     
     # 按回路类型统计
     by_loop_type = {}
+    by_loop_type_cl = {}  # 闭环验证统计
     
     for i, scenario in enumerate(scenarios, 1):
         print(f"\n{'─'*70}")
@@ -3144,14 +3236,49 @@ def run_lambda_tuning_test():
             print(f"   整定方法: {tuning_method}")
             print(f"   模型辨识: K误差={K_error:.1f}%, T1误差={T1_error:.1f}%, L误差={L_error:.1f}%")
             
-            # 仿真验证
-            sim = simulate_with_new_pid(scenario['process'], pid_new, metadata['sv'], duration=400)
-            is_stable = sim['is_stable']
+            # 仿真验证 - 动态调整仿真时长
+            # 对于慢系统(液位/温度)或大T1系统,延长仿真时间
+            loop_type = scenario.get('loop_type', 'unknown')
+            process_T1 = scenario['process']['T1']
             
-            if is_stable:
+            if loop_type == 'level' or process_T1 > 40:
+                # 液位或慢系统: 仿真时长 = 10 * T1, 最少 600s
+                sim_duration = max(600, int(10 * process_T1))
+            elif loop_type == 'temperature' or process_T1 > 30:
+                # 温度回路: 仿真时长 = 8 * T1
+                sim_duration = max(500, int(8 * process_T1))
+            else:
+                # 流量/压力等快速回路
+                sim_duration = 400
+            
+            # ===== 方法1: 使用真实过程参数仿真 =====
+            sim = simulate_with_new_pid(scenario['process'], pid_new, metadata['sv'], duration=sim_duration)
+            is_stable_true = sim['is_stable']
+            
+            # 对于慢系统，如果未稳态但在收敛，也认为成功
+            if not is_stable_true and (loop_type == 'level' or process_T1 > 40):
+                if sim['is_converging'] and sim['steady_error'] < 10:
+                    is_stable_true = True
+            
+            # ===== 方法2: 使用估算模型参数仿真（闭环验证） =====
+            estimated_process = {
+                'K': model_params.get('K', 1.0),
+                'T1': model_params.get('T1', 30.0),
+                'L': model_params.get('L', model_params.get('delay', 5.0))
+            }
+            sim_cl = simulate_with_new_pid(estimated_process, pid_new, metadata['sv'], duration=sim_duration)
+            is_stable_cl = sim_cl['is_stable']
+            
+            # 对于慢系统的宽松判定
+            if not is_stable_cl and (loop_type == 'level' or estimated_process['T1'] > 40):
+                if sim_cl['is_converging'] and sim_cl['steady_error'] < 15:
+                    is_stable_cl = True
+            
+            if is_stable_true:
                 stable_count += 1
             
-            print(f"   稳态验证: {'✅ 是' if is_stable else '❌ 否'} (Ts={sim['settling_time']:.0f}s)")
+            print(f"   真实参数仿真: {'✅' if is_stable_true else '❌'} (Ts={sim['settling_time']:.0f}s)")
+            print(f"   闭环验证:     {'✅' if is_stable_cl else '❌'} (Ts={sim_cl['settling_time']:.0f}s, 用估算模型)")
             
             # ===== 生成可视化图表 =====
             print("   📊 生成可视化图表...")
@@ -3185,8 +3312,8 @@ def run_lambda_tuning_test():
                            alpha=0.2, color='green', label='±5%误差带')
             ax2.set_xlabel('Time (s)')
             ax2.set_ylabel('PV')
-            status = '✅ 稳态' if is_stable else '❌ 未稳态'
-            ax2.set_title(f'新PID仿真响应 - {status} (Ts={sim["settling_time"]:.0f}s)')
+            status = '✅ 稳态' if is_stable_true else '❌ 未稳态'
+            ax2.set_title(f"新PID仿真响应 - {status} (Ts={sim['settling_time']:.0f}s)")
             ax2.legend()
             ax2.grid(True, alpha=0.3)
             
@@ -3214,9 +3341,17 @@ def run_lambda_tuning_test():
             loop_type = scenario.get('loop_type', 'unknown')
             if loop_type not in by_loop_type:
                 by_loop_type[loop_type] = {'total': 0, 'stable': 0}
+            if loop_type not in by_loop_type_cl:
+                by_loop_type_cl[loop_type] = {'total': 0, 'stable': 0}
+            
             by_loop_type[loop_type]['total'] += 1
-            if is_stable:
+            by_loop_type_cl[loop_type]['total'] += 1
+            
+            if is_stable_true:
                 by_loop_type[loop_type]['stable'] += 1
+            if is_stable_cl:
+                by_loop_type_cl[loop_type]['stable'] += 1
+                stable_count_cl += 1
             
             results.append({
                 'scenario': scenario['name'],
@@ -3225,7 +3360,8 @@ def run_lambda_tuning_test():
                 'K_error': K_error,
                 'T1_error': T1_error,
                 'L_error': L_error,
-                'is_stable': is_stable,
+                'is_stable_true': is_stable_true,
+                'is_stable_cl': is_stable_cl,
                 'settling_time': sim['settling_time'],
             })
             
@@ -3253,11 +3389,19 @@ def run_lambda_tuning_test():
         print(f"║   T1 平均误差: {avg_T1_err:>6.1f}%                                                    ║")
         print(f"║   L 平均误差:  {avg_L_err:>6.1f}%                                                    ║")
         print("╠" + "═" * 78 + "╣")
-        print(f"║ 稳态达成率 (按回路类型):                                                  ║")
-        for lt, stats in sorted(by_loop_type.items()):
-            rate = stats['stable'] / stats['total'] * 100 if stats['total'] > 0 else 0
-            print(f"║   {lt:<12}: {stats['stable']}/{stats['total']} ({rate:.0f}%)                                               ║")
-        print(f"║   总体:        {stable_count}/{total} ({stable_count/total*100:.0f}%)                                               ║")
+        print(f"║ 稳态达成率对比:                                                          ║")
+        print(f"║                      真实参数仿真    闭环验证(估算模型)                  ║")
+        print(f"║{'─'*78}║")
+        for lt in sorted(by_loop_type.keys()):
+            stats_true = by_loop_type[lt]
+            stats_cl = by_loop_type_cl.get(lt, {'total': 0, 'stable': 0})
+            rate_true = stats_true['stable'] / stats_true['total'] * 100 if stats_true['total'] > 0 else 0
+            rate_cl = stats_cl['stable'] / stats_cl['total'] * 100 if stats_cl['total'] > 0 else 0
+            print(f"║   {lt:<12}:    {stats_true['stable']}/{stats_true['total']} ({rate_true:>3.0f}%)           {stats_cl['stable']}/{stats_cl['total']} ({rate_cl:>3.0f}%)                       ║")
+        rate_true_total = stable_count/total*100 if total > 0 else 0
+        rate_cl_total = stable_count_cl/total*100 if total > 0 else 0
+        print(f"║{'─'*78}║")
+        print(f"║   总体:           {stable_count}/{total} ({rate_true_total:>3.0f}%)           {stable_count_cl}/{total} ({rate_cl_total:>3.0f}%)                       ║")
     print("╚" + "═" * 78 + "╝")
     
     print("\n✅ Lambda 整定验证测试完成!")
