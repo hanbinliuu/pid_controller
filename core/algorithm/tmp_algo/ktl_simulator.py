@@ -15,7 +15,7 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 import logging
 import matplotlib
 
-from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
+from core.algorithm.tmp_algo.ls_pid_autotune_v5 import SystemIdentifier
 
 matplotlib.use('Agg')  # 使用非交互式后端
 import matplotlib.pyplot as plt

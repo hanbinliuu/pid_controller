@@ -815,3 +815,161 @@ ModelIdentifier.MODEL_SIMULATORS = {
     'FO_INTEGRATOR': ModelIdentifier.integral_delay_model,
     'SO_INTEGRATOR': ModelIdentifier.second_order_model,
 }
+
+
+# ============================================================
+# 多方法融合辨识器
+# ============================================================
+class EnsembleIdentifier:
+    """
+    多方法融合辨识器
+    
+    综合使用多种辨识方法，根据数据特征选择最优结果：
+    1. 曲线拟合法 (least_squares)
+    2. 阶跃响应法 (63%, area, two-point)
+    3. 频域法 (cross-correlation, FFT)
+    """
+    
+    @staticmethod
+    def identify_fopdt_ensemble(t: np.ndarray, y: np.ndarray, u: np.ndarray,
+                                 step_score: float = 0.0,
+                                 oscillation_ratio: float = 0.0) -> dict:
+        """
+        多方法融合辨识FOPDT
+        
+        Args:
+            t, y, u: 时间、输出、输入数组
+            step_score: 阶跃特征评分 (0-1)
+            oscillation_ratio: 振荡比例 (0-1)
+            
+        Returns:
+            dict: {K, T1, L, method, confidence, all_results}
+        """
+        from .step_response_identifier import StepResponseIdentifier
+        from .frequency_domain_identifier import FrequencyDomainIdentifier
+        
+        results = []
+        
+        # 1. 曲线拟合法（基准方法）
+        try:
+            params = ModelIdentifier.identify_fopdt(t, y, u)
+            if params and len(params) >= 3:
+                results.append({
+                    'K': params[0],
+                    'T1': params[1],
+                    'L': params[2],
+                    'method': 'curve_fitting',
+                    'confidence': 0.7
+                })
+        except Exception:
+            pass
+        
+        # 2. 阶跃响应法（适用于有阶跃的数据）
+        if step_score > 0.4:
+            try:
+                step_result = StepResponseIdentifier.identify_fopdt(t, y, u)
+                if step_result:
+                    # 阶跃特征越明显，置信度越高
+                    step_result['confidence'] *= (0.5 + 0.5 * step_score)
+                    results.append(step_result)
+            except Exception:
+                pass
+        
+        # 3. 频域法（适用于振荡数据）
+        if oscillation_ratio > 0.3:
+            try:
+                freq_result = FrequencyDomainIdentifier.identify_fopdt(t, y, u)
+                if freq_result:
+                    # 振荡越明显，频域法置信度越高
+                    freq_result['confidence'] *= (0.5 + 0.5 * oscillation_ratio)
+                    results.append(freq_result)
+            except Exception:
+                pass
+        
+        if not results:
+            # 全部失败，返回默认值
+            return {
+                'K': 1.0, 'T1': 30.0, 'L': 5.0,
+                'method': 'default',
+                'confidence': 0.1,
+                'all_results': []
+            }
+        
+        # 融合策略：加权平均或选择最优
+        if len(results) == 1:
+            best = results[0]
+        else:
+            # 检查一致性
+            Ks = [r['K'] for r in results]
+            K_cv = np.std(Ks) / (np.mean(np.abs(Ks)) + 1e-9)
+            
+            if K_cv < 0.3:
+                # 结果一致，加权平均
+                weights = [r['confidence'] for r in results]
+                total_w = sum(weights)
+                K_fused = sum(r['K'] * r['confidence'] for r in results) / total_w
+                T1_fused = sum(r['T1'] * r['confidence'] for r in results) / total_w
+                L_fused = sum(r['L'] * r['confidence'] for r in results) / total_w
+                
+                best = {
+                    'K': K_fused,
+                    'T1': T1_fused,
+                    'L': L_fused,
+                    'method': 'ensemble_weighted',
+                    'confidence': min(1.0, sum(weights) / len(weights) * 1.2)
+                }
+            else:
+                # 结果不一致，选择置信度最高的
+                best = max(results, key=lambda x: x['confidence'])
+        
+        best['all_results'] = results
+        return best
+    
+    @staticmethod
+    def identify_sopdt_ensemble(t: np.ndarray, y: np.ndarray, u: np.ndarray,
+                                 step_score: float = 0.0) -> dict:
+        """
+        多方法融合辨识SOPDT
+        """
+        from .step_response_identifier import StepResponseIdentifier
+        
+        results = []
+        
+        # 1. 曲线拟合法
+        try:
+            params = ModelIdentifier.identify_sopdt(t, y, u)
+            if params and len(params) >= 4:
+                results.append({
+                    'K': params[0],
+                    'T1': params[1],
+                    'T2': params[2],
+                    'L': params[3],
+                    'method': 'curve_fitting',
+                    'confidence': 0.7
+                })
+        except Exception:
+            pass
+        
+        # 2. 两点法
+        if step_score > 0.5:
+            try:
+                step_result = StepResponseIdentifier.identify_sopdt(t, y, u)
+                if step_result and 'T2' in step_result:
+                    step_result['confidence'] *= (0.5 + 0.5 * step_score)
+                    results.append(step_result)
+            except Exception:
+                pass
+        
+        if not results:
+            return {
+                'K': 1.0, 'T1': 30.0, 'T2': 10.0, 'L': 5.0,
+                'method': 'default',
+                'confidence': 0.1,
+                'all_results': []
+            }
+        
+        # 选择最优
+        best = max(results, key=lambda x: x['confidence'])
+        best['all_results'] = results
+        return best
+

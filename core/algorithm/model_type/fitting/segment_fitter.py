@@ -205,6 +205,48 @@ class SegmentFitter(LoggerMixin):
                     aic = calculate_aic(rss, len(y), n_params)
                     bic = calculate_bic(rss, len(y), n_params)
                     
+                    # ========== 剧烈震荡导致负K值的自动校正 ==========
+                    # 当检测到高振荡且K为负时，很可能是相位偏移导致的误判
+                    # 真正的反向作用系统（制冷、减压）通常不会有剧烈震荡
+                    fitted_k_raw = params_dict['K']
+                    k_sign_corrected = False
+                    oscillation_ratio = oscillation_info.get('oscillation_ratio', 0) if is_oscillating else 0
+                    
+                    if fitted_k_raw < 0 and is_oscillating:
+                        # 剧烈震荡（ratio > 0.5）时，负K很可能是相位偏移导致
+                        # 中等震荡（ratio > 0.3）时，需要进一步检查
+                        osc_negative_k_threshold = Config.OSCILLATION_TUNING.get('negative_k_oscillation_threshold', 0.3)
+                        osc_severe_threshold = Config.OSCILLATION_TUNING.get('negative_k_severe_threshold', 0.5)
+                        
+                        if oscillation_ratio > osc_severe_threshold:
+                            # 剧烈震荡：直接取绝对值
+                            params_raw = list(params_raw)
+                            params_raw[0] = abs(params_raw[0])
+                            params_raw = tuple(params_raw)
+                            params_dict = self._simulator.PARAM_FORMATS[model_type](params_raw)
+                            y_pred = self._simulator.simulate(params_raw, model_type, t, u, y0)
+                            r2 = calculate_r2(y, y_pred)
+                            k_sign_corrected = True
+                            self.log(f"   ⚠️ {model_type}: 剧烈震荡(ratio={oscillation_ratio:.2f})导致负K={fitted_k_raw:.4f}，"
+                                    f"自动校正为K={params_dict['K']:.4f}")
+                        elif oscillation_ratio > osc_negative_k_threshold:
+                            # 中等震荡：比较正负K的拟合效果
+                            params_raw_pos = list(params_raw)
+                            params_raw_pos[0] = abs(params_raw_pos[0])
+                            params_raw_pos = tuple(params_raw_pos)
+                            y_pred_pos = self._simulator.simulate(params_raw_pos, model_type, t, u, y0)
+                            r2_pos = calculate_r2(y, y_pred_pos)
+                            
+                            # 如果正K的R²更好或相近，使用正K
+                            if r2_pos >= r2 - 0.05:
+                                params_raw = params_raw_pos
+                                params_dict = self._simulator.PARAM_FORMATS[model_type](params_raw)
+                                y_pred = y_pred_pos
+                                r2 = r2_pos
+                                k_sign_corrected = True
+                                self.log(f"   ⚠️ {model_type}: 中等震荡(ratio={oscillation_ratio:.2f})，"
+                                        f"负K={fitted_k_raw:.4f}校正为K={params_dict['K']:.4f} (R²: {r2:.4f})")
+                    
                     fitted_k = abs(params_dict['K'])
                     k_reasonable = k_min <= fitted_k <= k_max
                     
@@ -232,8 +274,11 @@ class SegmentFitter(LoggerMixin):
                         'y_pred': y_pred,
                         'k_expected': k_expected,
                         'k_reasonable': k_reasonable,
+                        'k_sign_corrected': k_sign_corrected,  # 标记K符号是否被校正
+                        'k_original': fitted_k_raw if k_sign_corrected else params_dict['K'],  # 原始K值
                         'is_oscillating': is_oscillating,
-                        'oscillation_severity': severity if is_oscillating else 'none'
+                        'oscillation_severity': severity if is_oscillating else 'none',
+                        'oscillation_ratio': oscillation_ratio
                     }
                     
                     # 更新最佳R²用于早停判断

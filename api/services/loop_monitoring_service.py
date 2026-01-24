@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from api.services.device_data_service import DeviceDataService
 from core.client.bff_model_client import BFFModelClient
-from core.algorithm.stability_rate import PerformanceEvaluator
+from core.algorithm.tmp_algo.stability_rate import PerformanceEvaluator
 from core.config import Config
 
 logger = logging.getLogger(__name__)

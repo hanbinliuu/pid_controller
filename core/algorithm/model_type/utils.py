@@ -12,6 +12,11 @@
 - calculate_aic: 计算 AIC (赤池信息准则)
 - calculate_bic: 计算 BIC (贝叶斯信息准则)
 
+信号分析
+--------
+- calculate_oscillation_ratio: 计算振荡比
+- calculate_signal_range: 计算信号范围和增益估计
+
 其他工具
 --------
 - parse_timestamp: 解析各种格式的时间戳
@@ -21,7 +26,7 @@
 
 import numpy as np
 from datetime import datetime, timezone, timedelta
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 # 北京时区 (UTC+8)
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -64,6 +69,55 @@ def calculate_bic(rss: float, n: int, k: int) -> float:
     if rss <= 0 or n <= k:
         return float('inf')
     return n * np.log(rss / n) + k * np.log(n)
+
+
+def calculate_oscillation_ratio(signal: np.ndarray) -> float:
+    """
+    计算信号的振荡比（符号变化频率）
+    
+    振荡比 = 符号变化次数 / (信号长度 - 2)
+    
+    Args:
+        signal: 输入信号数组
+    
+    Returns:
+        振荡比 [0, 1]，越大表示振荡越剧烈
+    """
+    if len(signal) < 3:
+        return 0.0
+    
+    signal_diff = np.diff(signal)
+    sign_changes = np.sum(np.abs(np.diff(np.sign(signal_diff))) > 0)
+    oscillation_ratio = sign_changes / (len(signal) - 2)
+    
+    return float(min(oscillation_ratio, 1.0))
+
+
+def calculate_signal_range(pv: np.ndarray, mv: np.ndarray, 
+                           epsilon: float = None) -> Tuple[float, float, float]:
+    """
+    计算信号范围和估计增益
+    
+    Args:
+        pv: 过程变量数组
+        mv: 操作变量数组
+        epsilon: 最小值阈值，默认使用 Config.EPSILON
+    
+    Returns:
+        (pv_range, mv_range, k_estimate): PV范围、MV范围、估计增益
+    """
+    if epsilon is None:
+        epsilon = EPSILON
+    
+    pv_range = float(np.ptp(pv))
+    mv_range = float(np.ptp(mv))
+    
+    if mv_range > epsilon:
+        k_estimate = pv_range / mv_range
+    else:
+        k_estimate = 1.0
+    
+    return pv_range, mv_range, k_estimate
 
 
 def parse_timestamp(ts: Any) -> Optional[float]:

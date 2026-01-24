@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime, timedelta
 import numpy as np
 from api.services.loop_monitoring_service import LoopMonitoringService
-from core.algorithm.stability_rate import PerformanceEvaluator
+from core.algorithm.tmp_algo.stability_rate import PerformanceEvaluator
 
 
 def test_performance_evaluator_methods():

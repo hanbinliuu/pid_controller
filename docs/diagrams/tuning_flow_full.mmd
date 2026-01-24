@@ -1,0 +1,216 @@
+%%{init: {'theme': 'dark', 'themeVariables': { 'fontSize': '11px' }}}%%
+flowchart TB
+    %% ============================================================
+    %% 入口
+    %% ============================================================
+    START[("📥 输入数据<br/>history_data: 历史PV/MV/SV数据<br/>tuning_window: 扰动时间窗口列表<br/>current_pid: 当前PID参数(可选)")] --> P1
+
+    %% ============================================================
+    %% Phase 1: 数据预处理
+    %% ============================================================
+    subgraph P1["Phase 1: 数据预处理 - 从原始数据提取可用于模型辨识的数据段"]
+        S1["Step 1: extract_segments()<br/>━━━━━━━━━━<br/>根据tuning_window时间窗口<br/>从history_data中切片提取数据段"]
+        
+        S1 --> S2["Step 1.3: filter_invalid_segments()<br/>━━━━━━━━━━<br/>过滤无效数据段:<br/>• MV变化范围 ptp(mv) < 0.1 → 无激励信号<br/>• 数据点数 len < 30 → 数据量不足<br/>• PV为0占比 > 20% → 传感器异常<br/>• PV与MV相关性 < 0.1 → 无响应关系"]
+        
+        S2 --> S3["Step 1.5: detect_tuning_segments()<br/>━━━━━━━━━━<br/>检测MV阶跃变化点，找适合模型辨识的整定段<br/><br/>_detect_mv_steps() 阶跃检测算法:<br/>• 滑动窗口大小 = 10点<br/>• 阶跃幅度需满足 |step_size| ≥ min_step_size<br/>• 阶跃前波动需满足 before_std < |step| × step_std_ratio<br/>• 检测到阶跃后跳过 2×stable_window 避免重复检测<br/><br/>_evaluate_step_response() 响应质量评估 (6项评分0~1):<br/>① PV变化幅度 - PV变化是否与MV阶跃成比例<br/>② 响应方向一致性 - PV趋势是否明显(正或负)<br/>③ 收敛性 - 后期标准差是否比前期降低<br/>④ 振荡比 - 符号变化率(<0.3好, <0.5可接受)<br/>⑤ MV-PV相关性 - 相关系数绝对值(>0.5好)<br/>⑥ 阶跃形态 - 前半段变化占总变化比例(>60%好)"]
+        
+        S3 --> S4{{"找到有效整定段?"}}
+        S4 -->|"是"| S5["merge_tuning_and_disturbance()<br/>合并整定段与扰动段的重叠窗口<br/>smart_downsample() 降采样至1000点<br/>保持阶跃点和峰值特征"]
+        S4 -->|"否"| S5a["使用原始扰动段<br/>smart_downsample() 降采样至1000点"]
+        
+        S5 --> S6{{"MV是否有变化?<br/>np.ptp(mv) > 0.1"}}
+        S5a --> S6
+        S6 -->|"否"| FAIL["❌ 无法进行模型辨识<br/>MV无变化，返回空结果"]
+        S6 -->|"是"| S7["Step 1.9: classify_segments()<br/>━━━━━━━━━━<br/>将数据段分类:<br/>• step_score > 0.5 且 osc_ratio < 0.5 → 整定段(适合模型辨识)<br/>• osc_ratio > 0.5 → 振荡段(适合振荡整定)<br/>• 其他 → 混合段"]
+    end
+
+    %% ============================================================
+    %% Phase 2: 模型拟合与路由决策
+    %% ============================================================
+    subgraph P2["Phase 2: 模型拟合与路由 - 尝试多种模型拟合，决定走模型路径还是振荡路径"]
+        F1["Step 2: fit_all_segments()<br/>━━━━━━━━━━<br/>对每个数据段尝试多种过程模型拟合:<br/>• FOPDT: 一阶加纯滞后 (K, T1, L) - 3参数<br/>• SOPDT: 二阶加纯滞后 (K, T1, T2, L) - 4参数<br/>• FO: 一阶无滞后 (K, T1) - 2参数<br/>• SaturationFOPDT: 非线性饱和模型<br/><br/>计算拟合质量指标:<br/>• R² = 1 - RSS/TSS (决定系数)<br/>• AIC = n×ln(RSS/n) + 2k (赤池信息准则)<br/>• BIC = n×ln(RSS/n) + k×ln(n) (贝叶斯信息准则)"]
+        
+        F1 --> F2["Step 2.5: try_oscillation_tuning()<br/>━━━━━━━━━━<br/>检查是否应该切换到振荡整定路径<br/>振荡整定适用于模型辨识效果差的情况"]
+        
+        F2 --> F3{{"是否触发振荡整定?<br/>━━━━━━━━━━<br/>满足任一条件即触发:<br/>• 最佳R² < 0.35 (拟合效果很差)<br/>• 振荡比 > 0.08 且 包络比 > 0.5 (明显振荡)<br/>• 失败段比例 > 0.8 (大部分段拟合失败)<br/>• 成功点数 < 300 (R²<0.6时阈值=500)<br/>• 平均振荡比 > 0.7 且 振荡段数 ≥ 总数/2"}}
+        
+        F3 -->|"满足任一条件"| OSC["→ 进入振荡整定路径<br/>(Phase 3)"]
+        F3 -->|"有成功拟合段"| F4["Step 2.6: check_all_fitting_failed()<br/>检查是否所有模型拟合都失败"]
+        
+        F4 --> F5{{"全部拟合失败?"}}
+        F5 -->|"是"| F5a["强制使用振荡整定<br/>force=True"]
+        F5a --> OSC
+        F5 -->|"否"| MODEL["→ 进入模型整定路径<br/>(Phase 4)"]
+    end
+
+    S7 --> P2
+
+    %% ============================================================
+    %% Phase 3: 振荡整定路径
+    %% ============================================================
+    subgraph P3["Phase 3: 振荡整定 - 基于闭环振荡数据的临界法整定"]
+        O1["analyze_oscillation()<br/>━━━━━━━━━━<br/>FFT频谱分析提取临界参数:<br/>• 找到主频 f_peak<br/>• 临界周期 Pu = 1/f_peak<br/>• 从振幅估算临界增益 Ku"]
+        
+        O1 --> O2{{"是否启用LLM微调?<br/>━━━━━━━━━━<br/>复杂场景条件 (满足任一):<br/>• 存在阀门问题 (死区/粘滞)<br/>• data_quality < 0.5<br/>• nonlinearity > 0.5<br/>• confidence < 0.5<br/>• osc_ratio > 0.7"}}
+        
+        O2 -->|"满足(复杂场景)"| O2a["LLMAdvisor.decide_strategy()<br/>获取 llm_strategy<br/>(safety, pb_extra, ti_mult)"]
+        O2 -->|"不满足(简单场景)"| O2b["llm_strategy = None<br/>使用规则引擎"]
+        
+        O2a --> O3
+        O2b --> O3{{"Ku有效性检查<br/>━━━━━━━━━━<br/>有效条件:<br/>Ku/K ∈ [0.5, 20]<br/>且 K > 0.05<br/>且 Ku ∈ [0.1, 50]"}}
+        
+        O3 -->|"不满足(参数异常)"| O4["reason = 'low_gain'<br/>标记为低增益场景<br/>后续使用更保守的整定"]
+        O3 -->|"满足(参数正常)"| O5["reason = 'oscillation'<br/>标记为正常振荡场景"]
+        
+        O4 --> O6
+        O5 --> O6["ConservativePIDCalculator.calculate()<br/>━━━━━━━━━━<br/>保守PID参数计算 (6步骤, 使用llm_strategy影响各步):<br/><br/>① 基础pb计算:<br/>   pb_from_K = 100 × K × 1.5<br/>   pb_from_Ku = 100 / (0.2 × Ku)<br/>   pb_base = max(两者) × slow_factor<br/>   (Pu > 30s 时 slow_factor = 1.3)<br/><br/>② 质量因子调整:<br/>   data_quality < 0.5 → ×1.3<br/>   nonlinearity > 0.5 → ×1.2<br/><br/>③ 阀门问题调整:<br/>   存在死区 → ×1.15<br/>   存在粘滞 → ×1.2<br/>   存在饱和 → ×1.1<br/><br/>④ 极端场景调整:<br/>   K > 4.0 → ×1.5~2.5<br/>   L/T1 > 0.5 → ×1.3~2.3<br/>   L/T1 > 0.8 → ×2.3<br/>   osc_ratio > 0.85 → ×1.15~1.5<br/><br/>⑤ 振荡比自适应 + LLM安全因子<br/><br/>⑥ pb边界限制 (按回路类型):<br/>   flow: pb_max = 220 (石化标准50-150%)<br/>   pressure: pb_max = 280 (石化标准80-200%)<br/>   temperature: pb_max = 450 (石化标准100-400%)<br/>   level: pb_max = 450 (石化标准100-400%)<br/>   pb = clip(pb, pb_min, pb_max)"]
+        
+        O6 --> O7["计算积分和微分时间<br/>━━━━━━━━━━<br/>Ti = max(Pu/2, 1.5) × ti_multiplier<br/>(慢系统 ti_multiplier = 1.1)<br/><br/>Td使用阈值 (按回路类型):<br/>• flow/pressure: 阈值=0.8 (少用Td)<br/>• temperature: 阈值=0.4 (多用Td)<br/>• level: 阈值=0.9 (基本不用Td)<br/><br/>若 osc_ratio > 阈值: Td = Pu/10"]
+        
+        O7 --> O8["build_oscillation_output()<br/>构建振荡整定输出结果"]
+    end
+
+    OSC --> P3
+
+    %% ============================================================
+    %% Phase 4: 模型选择与参数融合
+    %% ============================================================
+    subgraph P4["Phase 4: 模型选择与融合 - 选择最优模型类型并融合多段参数"]
+        M1["Step 3: select_best_model_type()<br/>━━━━━━━━━━<br/>基于R²加权投票选择最优模型类型<br/>复杂度惩罚(简单模型优先):<br/>• FO: penalty = 0<br/>• FOPDT: penalty = -0.02<br/>• SOPDT: penalty = -0.05"]
+        
+        M1 --> M2["Step 4: fuse_parameters()<br/>━━━━━━━━━━<br/>融合多个数据段的模型参数<br/><br/>R²阈值过滤(级联尝试):<br/>① 先取 R² > 0.65 的高质量段<br/>② 不够则放宽到 R² > 0.55<br/>③ 再不够则 R² > 0.40<br/><br/>段有效性检查:<br/>• k_reasonable = False → 跳过(K值不合理)<br/>• data_points < 50 → 跳过(数据太少)<br/>• R² > 0.8 时可放宽到 30点<br/>• nonlinearity > 0.3 → 权重 ×0.5<br/>• quality < 0.5 → 权重 ×(0.5+quality)"]
+        
+        M2 --> M3{{"按R²质量分级"}}
+        M3 -->|"R² > 0.65"| M4a["高置信段"]
+        M3 -->|"R² > 0.55"| M4b["中置信段"]
+        M3 -->|"R² > 0.40"| M4c["低置信段"]
+        
+        M4a --> M5
+        M4b --> M5
+        M4c --> M5["PIDFusionStrategy.fuse()<br/>━━━━━━━━━━<br/>加权平均融合参数:<br/>wi = Ri² × quality_adjusted_stability<br/>K_fused = Σ(wi×Ki) / Σwi<br/>T1_fused = Σ(wi×T1i) / Σwi<br/>L_fused = Σ(wi×Li) / Σwi"]
+        
+        M5 --> M6["参数约束与一致性评分<br/>━━━━━━━━━━<br/>参数约束:<br/>• T1 > T1_max → 限制到T1_max<br/>• L > L_max → 限制到L_max<br/><br/>一致性评分 (consistency_score):<br/>CV = std(Ki) / mean(Ki)<br/>• CV < 0.3 → 高一致性(参数稳定)<br/>• CV > 0.5 → 低一致性(段间差异大)"]
+        
+        M6 --> M7["Step 5: validate_and_refine()<br/>仿真匹配度验证与优化"]
+        
+        M7 --> M8{{"融合参数有效?<br/>K > 0 且 T1 > 0"}}
+        M8 -->|"否(参数无效)"| M8a["fallback: 强制振荡整定"]
+        M8a --> OSC
+        M8 -->|"是(参数有效)"| M9["FusionResult 有效<br/>继续下一步"]
+    end
+
+    MODEL --> P4
+
+    %% ============================================================
+    %% Phase 5: 整定方法选择
+    %% ============================================================
+    subgraph P5["Phase 5: 整定方法选择 (Step 5.6) - 尝试多种方法，选择稳定性最好的"]
+        R1["TuningMethodSelector.select_and_tune()<br/>━━━━━━━━━━<br/>传入融合后的模型参数: K, T1, T2, L<br/><br/>analyze_data_characteristics() 分析数据特征:<br/>• step_quality: 阶跃响应质量 (0~1)<br/>• oscillation_regularity: 振荡规则性 (0~1)<br/>• n_cycles: 完整振荡周期数<br/>• noise_level: 噪声水平"]
+        
+        R1 --> R2["收集候选方法 candidates = []"]
+        
+        R2 --> R3{{"model_params 有效?<br/>K ≠ 0"}}
+        R3 -->|"是"| R4["尝试1: 模型辨识法整定<br/>━━━━━━━━━━<br/>_model_based_tuning()<br/>使用 PIDCalculator.calculate()<br/>Lambda公式计算PID<br/>→ 加入 candidates"]
+        R3 -->|"否"| R5["跳过模型法"]
+        
+        R4 --> R6{{"有振荡特征?<br/>has_oscillation = True<br/>且 n_cycles ≥ 1"}}
+        R5 --> R6
+        
+        R6 -->|"是"| R7["尝试2: 继电反馈法整定<br/>━━━━━━━━━━<br/>_relay_feedback_tuning()<br/>RelayIdentifier.estimate_critical_params()<br/>从振荡数据提取 Ku, Pu<br/>ZN公式 + safety_factor=1.5<br/>→ 加入 candidates"]
+        R6 -->|"否"| R8["跳过继电法"]
+        
+        R7 --> R9{{"candidates 为空?"}}
+        R8 --> R9
+        
+        R9 -->|"是"| R10["_fallback_tuning()<br/>━━━━━━━━━━<br/>保守fallback整定 (按回路类型):<br/><br/>pb_base:<br/>• flow: 100 (pb_max=220)<br/>• pressure: 120 (pb_max=280)<br/>• temperature: 180 (pb_max=450)<br/>• level: 200 (pb_max=450)<br/><br/>Td阈值:<br/>• flow/pressure: 0.8 (少用)<br/>• temperature: 0.4 (多用)<br/>• level: 0.9 (基本不用)"]
+        R9 -->|"否"| R11["对每个候选方法验证稳定性<br/>━━━━━━━━━━<br/>_verify_stability()<br/>StabilityAnalyzer.check_stability()<br/>计算 GM (增益裕度)<br/>计算 PM (相位裕度)"]
+        
+        R11 --> R12["_select_best_by_stability()<br/>━━━━━━━━━━<br/>选择策略:<br/>• 有稳定候选 → 选PM最大的<br/>• 都不稳定 → 选PM最接近45°的"]
+        
+        R12 --> R13{{"最优方法稳定?<br/>GM ≥ 2 且 PM ≥ 45°"}}
+        R13 -->|"否"| R14["_adjust_for_stability()<br/>━━━━━━━━━━<br/>adjust_kp_for_margins()<br/>逐步降低Kp直到满足裕度<br/>target_gm=2.0, target_pm=45°"]
+        R13 -->|"是"| R15["保持原参数"]
+        
+        R14 --> R16
+        R15 --> R16{{"继电法结果更好?<br/>━━━━━━━━━━<br/>判断条件 (全部满足):<br/>• method == RELAY_FEEDBACK<br/>• is_stable == True<br/>• PM > 50° (显著优于模型法)"}}
+        
+        R16 -->|"是 (继电法显著更好)"| R17["使用继电法结果<br/>━━━━━━━━━━<br/>build_method_selector_output()<br/>直接进入 Phase 7 验证"]
+        R16 -->|"否 (模型法更优或相当)"| R18["继续模型整定路径<br/>━━━━━━━━━━<br/>忽略继电法结果(如果有)<br/>进入 Phase 6 计算PID"]
+    end
+
+    M9 --> P5
+    R10 --> V0
+
+    %% ============================================================
+    %% Phase 6: PID参数计算
+    %% ============================================================
+    subgraph P6["Phase 6: PID参数计算 - 基于模型参数和数据质量计算最终PID"]
+        C1["build_quality_info()<br/>━━━━━━━━━━<br/>构建数据质量信息 DataQualityInfo:<br/>• quality_score: 数据质量评分<br/>• oscillation_ratio: 平均振荡比<br/>• r_squared: 全局拟合R²<br/>• consistency_score: 参数一致性<br/>• is_noisy: 是否存在高噪声段"]
+        
+        C1 --> C2["calculate_conservative_level()<br/>━━━━━━━━━━<br/>计算自适应保守等级和pb最小值<br/><br/>保守度计算公式:<br/>conservativeness =<br/>  0.25 × (1 - quality_score) +<br/>  0.30 × (1 - r_squared) +<br/>  0.20 × oscillation_ratio × 0.5 +<br/>  0.25 × (1 - consistency_score)<br/><br/>缩放因子: r² > 0.95 时 ×0.35<br/><br/>pb_min计算:<br/>pb_min = pb_base + conservativeness × (pb_max - pb_base) × valve_compensation<br/>(osc > 0.5 且 r² < 0.85 时 valve_compensation ×= 1.3)"]
+        
+        C2 --> C3{{"根据回路类型选择整定公式<br/>loop_type"}}
+        
+        C3 -->|"level (液位-积分过程)"| C4["SIMC公式:<br/>Kp = 1/(K × 4 × (λ+L))<br/>Ti = 4 × (λ+L)"]
+        C3 -->|"flow/pressure (流量/压力)"| C5["Lambda公式:<br/>Kp = T1/(K × (λ×T1+L))<br/>Ti = T1"]
+        C3 -->|"temperature (温度)"| C6["Lambda公式 + 保守因子1.2"]
+        
+        C4 --> C7
+        C5 --> C7
+        C6 --> C7["PIDCalculator.calculate()<br/>执行PID参数计算"]
+        
+        C7 --> C8{{"大滞后检测<br/>delay_ratio = L/T1 > 0.5?"}}
+        C8 -->|"是(大滞后系统)"| C9["大滞后校正:<br/>λ_factor ×= 2.5<br/>增加pb_boost"]
+        C8 -->|"否(正常系统)"| C10["正常计算"]
+        
+        C9 --> C11
+        C10 --> C11["apply_constraints()<br/>━━━━━━━━━━<br/>应用参数边界约束:<br/>Kp = clip(Kp, kp_min, kp_max)<br/>Ti = clip(Ti, ti_min, ti_max)<br/>Td = clip(Td, 0, td_max)"]
+    end
+
+    R18 --> P6
+
+    %% ============================================================
+    %% Phase 7: 闭环验证
+    %% ============================================================
+    subgraph P7["Phase 7: 闭环验证 - 仿真验证PID参数的稳定性和性能"]
+        V0["📥 PID参数输入<br/>━━━━━━━━━━<br/>来源:<br/>• 振荡整定 (O8)<br/>• 继电法 (R17)<br/>• 保守fallback (R10)<br/>• 模型整定 (C11)"]
+        
+        V0 --> V1["simulate_closed_loop()<br/>━━━━━━━━━━<br/>闭环阶跃响应仿真<br/><br/>仿真设置:<br/>• SP阶跃: 50 → 60<br/>• 仿真时长: max(100, T1×20) 秒<br/>• 采样间隔: dt = min(0.1, T1/10)<br/>• 最大仿真步数: 5000~30000"]
+        
+        V1 --> V2["_calculate_metrics()<br/>━━━━━━━━━━<br/>计算闭环性能指标:<br/><br/>• settling_time: 调节时间<br/>  首次进入±2%误差带的时间<br/><br/>• overshoot: 超调量<br/>  (peak - SP_final) / ΔSP × 100%<br/><br/>• SSE: 稳态误差<br/>  末10%平均偏差 / ΔSP<br/><br/>• decay_ratio: 衰减比<br/>  peak2 / peak1 (第二峰/第一峰)"]
+        
+        V2 --> V3{{"稳定性判定<br/>━━━━━━━━━━<br/>同时满足所有条件:<br/>• settling_time < ∞ (能收敛)<br/>• SSE < 5% (稳态精度)<br/>• overshoot < 50% (超调可控)<br/>• decay_ratio < 0.5 (快速衰减)"}}
+        
+        V3 -->|"是(稳定)"| V4["✓ is_stable = True<br/>验证通过"]
+        V3 -->|"否(不稳定)"| V5["保守回退机制<br/>━━━━━━━━━━<br/>增加保守度:<br/>• osc_ratio += 0.15<br/>• confidence ×= 0.5<br/>重新计算PID参数"]
+        
+        V5 --> V6{{"重试次数 < 3?"}}
+        V6 -->|"是"| V1
+        V6 -->|"否(达到最大重试)"| V7["使用最保守参数<br/>放弃进一步优化"]
+        
+        V4 --> V8
+        V7 --> V8["calculate_model_rating()<br/>━━━━━━━━━━<br/>计算综合评分 (0~10分)<br/><br/>评分权重:<br/>• 闭环性能: 40%<br/>• 模型拟合质量: 30%<br/>• 数据质量: 20%<br/>• 参数一致性: 10%"]
+    end
+
+    O8 --> V0
+    R10 --> V0
+    R17 --> V0
+    C11 --> V0
+
+    %% ============================================================
+    %% Phase 8: 输出构建
+    %% ============================================================
+    subgraph P8["Phase 8: 输出 - 构建最终整定结果"]
+        OUT["build_output()<br/>━━━━━━━━━━<br/>输出内容:<br/><br/>• model_parameters: 模型参数<br/>  K, T1, T2, L, model_type<br/><br/>• pid_parameters: PID参数<br/>  Kp, Ki, Kd, Ti, Td, pb, method<br/><br/>• closed_loop_verification: 验证结果<br/>  is_stable, settling_time,<br/>  overshoot, SSE, decay_ratio<br/><br/>• model_rating: 综合评分 (0~10)<br/><br/>• fitting_result: 拟合结果<br/>  pv_model, r², residuals"]
+    end
+
+    V8 --> P8 --> END[("✅ 返回整定结果")]
+
+    %% 样式
+    style START fill:#4a9eff,color:#fff
+    style END fill:#20c997,color:#fff
+    style FAIL fill:#ff4444,color:#fff
+    style OSC fill:#ff6b6b,color:#fff
+    style MODEL fill:#51cf66,color:#fff
+    style V4 fill:#20c997,color:#fff

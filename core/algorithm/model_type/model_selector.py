@@ -11,12 +11,11 @@ from .utils import (
 )
 
 # 子模块导入
-from .preprocessing import DataPreprocessor, SegmentProcessor
+from .preprocessing import DataPreprocessor, SegmentProcessor, SegmentManager
 from .fitting import (
-    ModelIdentifier, SegmentFitter, PIDFusionStrategy, 
-    WindowResult as FusionWindowResult, UnifiedModelSelector, SegmentModelFit
+    ModelIdentifier, SegmentFitter, UnifiedModelSelector, SegmentModelFit, ParameterFusion
 )
-from .tuning import PIDCalculator, DataQualityInfo, OscillationTuner
+from .tuning import PIDCalculator, DataQualityInfo, OscillationTuner, TuningMethodSelector, StabilityAnalyzer
 from .simulation import ModelSimulator
 
 # 其他模块
@@ -34,6 +33,10 @@ class ModelSelector(LoggerMixin):
     3. 基于AIC/RSS/形状特征选择最优模型结构 → 确定模型类型
     4. 融合各段参数 → 唯一K, T, L（加权平均 / 全局优化）
     5. 验证一致性与仿真匹配度 → 最终输出
+    
+    LLM 增强:
+    - 支持使用大模型决策保守策略
+    - 通过构造函数或 set_llm_client() 启用
     """
     
     # 使用统一的常量定义（来自 ModelType）
@@ -45,15 +48,31 @@ class ModelSelector(LoggerMixin):
     MIN_R2_FOR_QUALITY = Config.MODEL_SELECTOR['min_r2_for_quality']
     R2_THRESHOLDS = Config.MODEL_SELECTOR['r2_thresholds']
     
-    def __init__(self, verbose: bool = False):
+    def __init__(self, verbose: bool = False, llm_client=None, process_context: dict = None):
+        """
+        Args:
+            verbose: 是否输出详细日志
+            llm_client: LLM 客户端，用于决策保守策略
+                       需实现 chat(prompt) -> str 方法
+            process_context: 工艺上下文信息（可选）
+                - loop_type: 回路类型 (flow/temperature/pressure/level)
+                - loop_name: 回路名称
+                - safety_critical: 是否安全关键
+                - allow_overshoot: 是否允许超调
+        """
         self._init_logger(verbose)
         self._epsilon = Config.EPSILON
+        self._llm_client = llm_client
+        self._process_context = process_context
         
         # 初始化子模块
         self._preprocessor = DataPreprocessor(verbose=verbose)
         self._segment_processor = SegmentProcessor(verbose=verbose)
         self._simulator = ModelSimulator()
+        
+        # PIDCalculator（正常整定用规则引擎，不需要 LLM）
         self._pid_calculator = PIDCalculator()
+        
         self._unified_selector = UnifiedModelSelector(verbose=verbose)
         
         # 拆分后的子模块
@@ -63,9 +82,57 @@ class ModelSelector(LoggerMixin):
         self._output_builder = OutputBuilder(
             self._simulator, self._pid_calculator, verbose
         )
+        
+        # 段管理器（从 model_selector 拆分出来）
+        self._segment_manager = SegmentManager(self._preprocessor, verbose)
+        
+        # 参数融合器（从 model_selector 拆分出来）
+        self._param_fusion = ParameterFusion(self._segment_processor, verbose)
+        
+        # OscillationTuner 支持 LLM 决策（临界法整定专用）
+        loop_type = process_context.get('loop_type', '') if process_context else ''
+        loop_name = process_context.get('loop_name', '') if process_context else ''
         self._oscillation_tuner = OscillationTuner(
+            self._pid_calculator, self._simulator, verbose,
+            llm_client=llm_client, loop_type=loop_type, loop_name=loop_name
+        )
+        
+        # 设置 OutputBuilder 的 oscillation_tuner（用于 fallback）
+        self._output_builder.set_oscillation_tuner(self._oscillation_tuner)
+        
+        # 整定方法选择器（自动选择模型辨识法/继电反馈法/混合方法）
+        self._method_selector = TuningMethodSelector(
             self._pid_calculator, self._simulator, verbose
         )
+    
+    def set_llm_client(self, llm_client, process_context: dict = None):
+        """
+        设置 LLM 客户端，启用 LLM 决策保守策略
+        
+        注意：LLM 只在临界法整定时使用，正常数据质量好的整定不需要 LLM。
+        
+        Args:
+            llm_client: LLM 客户端
+            process_context: 工艺上下文信息
+                - loop_type: 回路类型 (flow/temperature/pressure/level)
+                - loop_name: 回路名称
+                - safety_critical: 是否安全关键
+        
+        使用示例:
+            selector = ModelSelector(verbose=True)
+            selector.set_llm_client(
+                llm_client=OllamaClient(model="qwen2.5:7b"),
+                process_context={'loop_type': 'temperature', 'loop_name': '反应釜温度'}
+            )
+            result = selector.run(input_data)
+        """
+        self._llm_client = llm_client
+        self._process_context = process_context
+        
+        # 更新 OscillationTuner（临界法整定专用）
+        loop_type = process_context.get('loop_type', '') if process_context else ''
+        loop_name = process_context.get('loop_name', '') if process_context else ''
+        self._oscillation_tuner.set_llm_client(llm_client, loop_type, loop_name)
     
     @property
     def verbose(self) -> bool:
@@ -76,7 +143,16 @@ class ModelSelector(LoggerMixin):
     # ============================================================
     
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """模型整定主入口（新格式）"""
+        """模型整定主入口（新格式）
+        
+        Args:
+            input_data: 输入数据字典
+                - history_data: 历史数据列表
+                - params: 参数配置
+                - qualified_windows: 扰动窗口列表
+                - current_pid: 当前 PID 参数（可选）
+                - process_context: 工艺上下文（可选，会覆盖构造函数中的设置）
+        """
         history_data = input_data.get('history_data', [])
         params = input_data.get('params', {})
         qualified_windows = input_data.get('qualified_windows', [])
@@ -133,6 +209,29 @@ class ModelSelector(LoggerMixin):
         fitting_result = result.get('fitting_result', {})
         fitting_result['recommendation'] = recommendation
         
+        # 构建新的 pid_parameters，保留 llm_decision
+        new_pid_params = {
+            'pb': round(float(Pb), 2),
+            'ti': round(float(Ti), 2),
+            'td': round(float(Td), 2),
+            'kp': round(float(Kp), 2),
+            'ki': round(float(Ki), 2),
+            'kd': round(float(Kd), 2)
+        }
+        
+        # 保留 LLM 决策信息（如果有）
+        if 'llm_decision' in pid_params:
+            new_pid_params['llm_decision'] = pid_params['llm_decision']
+        
+        # 输出最终 PID 参数（verbose 模式）
+        self.log(f"\n{'='*60}")
+        self.log(f"📋 最终整定参数输出:")
+        self.log(f"   PB = {Pb:.2f}%")
+        self.log(f"   TI = {Ti:.2f}s")
+        self.log(f"   TD = {Td:.2f}s")
+        self.log(f"   (Kp={Kp:.4f}, Ki={Ki:.4f}, Kd={Kd:.4f})")
+        self.log(f"{'='*60}")
+        
         return {
             'success': result.get('success', False),
             'model_type': result.get('model_type', 'FOPDT'),
@@ -141,14 +240,7 @@ class ModelSelector(LoggerMixin):
             'start_time': result.get('start_time'),
             'end_time': result.get('end_time'),
             'model_parameters': result.get('model_parameters', {}),
-            'pid_parameters': {
-                'pb': round(float(Pb), 2),
-                'ti': round(float(Ti), 2),
-                'td': round(float(Td), 2),
-                'kp': round(float(Kp), 2),
-                'ki': round(float(Ki), 2),
-                'kd': round(float(Kd), 2)
-            },
+            'pid_parameters': new_pid_params,
             'fitting_result': fitting_result,
             'fusion_info': result.get('fusion_info', {}),
             'closed_loop_verification': result.get('closed_loop_verification', {}),
@@ -246,8 +338,28 @@ class ModelSelector(LoggerMixin):
             use_tuning_segments = False
         
         # 保存原始段数据用于可视化（降采样前）
-        original_segments = valid_segments.copy()
-        original_results = segment_results.copy()
+        # 使用深拷贝避免后续修改影响原始数据
+        original_segments = [
+            HistoricalData(
+                timestamp=seg.timestamp.copy(),
+                pv=seg.pv.copy(),
+                sv=seg.sv.copy(),
+                mv=seg.mv.copy()
+            ) for seg in valid_segments
+        ]
+        original_results = [SegmentResult(
+            segment_idx=r.segment_idx,
+            start_idx=r.start_idx,
+            end_idx=r.end_idx,
+            data_points=r.data_points,
+            is_valid=r.is_valid,
+            invalid_reason=r.invalid_reason,
+            quality_score=r.quality_score,
+            nonlinearity_score=r.nonlinearity_score,
+            step_response_score=r.step_response_score,
+            oscillation_ratio=r.oscillation_ratio,
+            is_nonlinear=r.is_nonlinear
+        ) for r in segment_results]
         
         # Step 1.7: 智能降采样（加速整定）
         if enable_downsample and valid_segments:
@@ -277,22 +389,51 @@ class ModelSelector(LoggerMixin):
             segments_for_fitting = tuning_segs
             results_for_fitting = tuning_results
         else:
-            # 没有整定段：使用全部段，后续可能走振荡整定
-            self.log(f"⚠️ 无整定段，使用全部 {len(valid_segments)} 个段")
-            segments_for_fitting = valid_segments
-            results_for_fitting = segment_results
+            # 没有整定段：检查是否应该使用原始扰动段
+            # 如果 valid_segments 是短段（<100点）且有振荡，使用原始扰动段
+            use_disturbance = False
+            if osc_segs and len(osc_segs) > 0:
+                # 检查振荡段是否太短
+                total_osc_points = sum(len(seg.pv) for seg in osc_segs)
+                if total_osc_points < 100 and disturbance_segs:
+                    # 振荡段太短，使用原始扰动段
+                    self.log(f"⚠️ 振荡段太短({total_osc_points}点)，使用原始扰动段({sum(len(s.pv) for s in disturbance_segs)}点)")
+                    segments_for_fitting = disturbance_segs
+                    results_for_fitting = disturbance_results
+                    use_disturbance = True
+            
+            if not use_disturbance:
+                self.log(f"⚠️ 无整定段，使用全部 {len(valid_segments)} 个段")
+                segments_for_fitting = valid_segments
+                results_for_fitting = segment_results
         
-        # Step 2: 对有效段尝试多种模型拟合（使用 SegmentFitter）
-        segment_results_fitted = self._segment_fitter.fit_all_segments(segments_for_fitting, results_for_fitting)
+        # Step 1.95: 振荡预检 - 在模型拟合前过滤高振荡段
+        fitting_segs, fitting_results, precheck_osc_segs, precheck_osc_results = \
+            self._precheck_oscillation(segments_for_fitting, results_for_fitting)
+        
+        # 如果全部是高振荡段，直接走振荡整定
+        if not fitting_segs:
+            self.log("⚠️ 所有段均为高振荡，直接启用振荡整定")
+            oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
+                segments_for_fitting, results_for_fitting, current_pid, force=True
+            )
+            if oscillation_result is not None:
+                return self._oscillation_tuner.build_oscillation_output(
+                    oscillation_result, hist_data, time_range, input_data.tuning_window,
+                    original_segments, original_results
+                )
+            return self._empty_result(input_data)
+        
+        # Step 2: 只对正常段尝试模型拟合（使用 SegmentFitter）
+        segment_results_fitted = self._segment_fitter.fit_all_segments(fitting_segs, fitting_results)
         
         # Step 2.5: 检查是否需要振荡整定
         # 如果整定段拟合效果差，或者只有振荡段，尝试振荡整定
         oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
-            segments_for_fitting, segment_results_fitted, current_pid
+            fitting_segs, segment_results_fitted, current_pid
         )
         if oscillation_result is not None:
             # 使用振荡分析结果，跳过后续的模型融合
-            # 使用原始段数据（降采样前）用于可视化
             return self._oscillation_tuner.build_oscillation_output(
                 oscillation_result, hist_data, time_range, input_data.tuning_window,
                 original_segments, original_results
@@ -301,10 +442,8 @@ class ModelSelector(LoggerMixin):
         # Step 2.6: 检查模型拟合是否全部失败
         all_fitting_failed = self._check_all_fitting_failed(segment_results_fitted)
         if all_fitting_failed:
-            # 如果整定段拟合失败，尝试回退使用扰动段进行临界法整定
             if use_tuning_segments and disturbance_segs:
                 self.log("🔄 整定段拟合失败，回退使用扰动段尝试临界法整定")
-                # 使用扰动段重新尝试振荡整定
                 fallback_result = self._oscillation_tuner.try_oscillation_tuning(
                     disturbance_segs, disturbance_results, current_pid, force=True
                 )
@@ -316,18 +455,55 @@ class ModelSelector(LoggerMixin):
             self.log("❌ 所有模型拟合和振荡检测均失败，无法整定")
             return self._empty_result(input_data)
         
-        # Step 3: 基于AIC/RSS/形状特征选择最优模型结构（支持全量数据验证）
+        # Step 3: 基于AIC/RSS/形状特征选择最优模型结构
         best_model_type = self._select_best_model_type(segment_results_fitted, hist_data)
         self.log(f"🎯 选择模型类型: {best_model_type}")
         
-        # Step 4: 融合各段参数
-        fusion_result = self._fuse_parameters(segment_results_fitted, best_model_type, segments_for_fitting)
+        # Step 4: 融合各段参数（只使用拟合成功的正常段）
+        fusion_result = self._fuse_parameters(segment_results_fitted, best_model_type, fitting_segs)
         
         # Step 5: 验证一致性与仿真匹配度
-        fusion_result = self._validate_and_refine(fusion_result, segments_for_fitting, hist_data)
+        fusion_result = self._validate_and_refine(fusion_result, fitting_segs, hist_data)
+        
+        # Step 5.5: 检查融合参数是否有效
+        if abs(fusion_result.K) < self._epsilon or fusion_result.T1 < self._epsilon:
+            self.log("\n   ⚠️ 参数融合失败（K或T1为0），尝试振荡整定fallback...")
+            fallback_result = self._oscillation_tuner.try_oscillation_tuning(
+                fitting_segs, segment_results_fitted, current_pid, force=True
+            )
+            if fallback_result is not None:
+                self.log("   ✅ 振荡整定fallback成功")
+                return self._oscillation_tuner.build_oscillation_output(
+                    fallback_result, hist_data, time_range, input_data.tuning_window,
+                    original_segments, original_results
+                )
+            else:
+                self.log("   ❌ 振荡整定fallback也失败")
+        
+        # Step 5.6: 使用方法选择器验证稳定性，必要时使用继电反馈法
+        model_params = {
+            'K': fusion_result.K, 'T1': fusion_result.T1,
+            'T2': fusion_result.T2, 'L': fusion_result.L
+        }
+        method_result = self._method_selector.select_and_tune(
+            fitting_segs, segment_results_fitted,
+            model_params=model_params, lambda_factor=lambda_factor
+        )
+        
+        # 只有当继电反馈法的稳定性明显更好时才使用
+        from .tuning import TuningMethod
+        if (method_result.method == TuningMethod.RELAY_FEEDBACK and 
+            method_result.stability_margins and 
+            method_result.stability_margins.is_stable and
+            method_result.stability_margins.phase_margin > 50):
+            self.log(f"\n🎯 继电反馈法稳定性更好 (PM={method_result.stability_margins.phase_margin:.1f}°)")
+            return self._build_method_selector_output(
+                method_result, fusion_result, hist_data, time_range,
+                input_data.tuning_window, original_segments, original_results
+            )
         
         # 构建数据质量信息，用于自适应保守PID整定
-        quality_info = self._build_quality_info(segments_for_fitting, segment_results_fitted, fusion_result)
+        quality_info = self._build_quality_info(fitting_segs, segment_results_fitted, fusion_result)
         
         # 构建最终输出（传入扰动段信息和质量信息）
         # 使用原始段数据（降采样前）用于可视化
@@ -387,67 +563,13 @@ class ModelSelector(LoggerMixin):
         return quality_info
     
     # ============================================================
-    # Step 1.5: 智能降采样
+    # Step 1.5: 智能降采样（委托给 SegmentManager）
     # ============================================================
     
     def _apply_smart_downsample(self, segments: List[HistoricalData], 
                                  target_points: int = 1000) -> List[HistoricalData]:
-        """
-        对每个扰动段应用智能降采样
-        
-        Args:
-            segments: 有效扰动段列表
-            target_points: 每段目标点数
-        
-        Returns:
-            降采样后的扰动段列表
-        """
-        downsampled = []
-        total_original = 0
-        total_downsampled = 0
-        
-        for i, seg in enumerate(segments):
-            n = len(seg.pv)
-            total_original += n
-            
-            # 自动估计目标点数（根据数据特征自适应）
-            auto_target = self._preprocessor.estimate_optimal_target_points(
-                n, pv=seg.pv, sv=seg.sv
-            )
-            actual_target = min(target_points, auto_target)
-            
-            if n <= actual_target:
-                # 数据量小，不需要降采样
-                downsampled.append(seg)
-                total_downsampled += n
-            else:
-                # 执行智能降采样
-                result = self._preprocessor.smart_downsample(
-                    seg.pv, seg.mv, seg.sv, seg.timestamp,
-                    target_points=actual_target,
-                    min_points=100,
-                    preserve_features=True
-                )
-                
-                pv_down, mv_down, sv_down, ts_down = result
-                
-                # 创建新的 HistoricalData
-                new_seg = HistoricalData(
-                    timestamp=ts_down,
-                    pv=pv_down,
-                    sv=sv_down,
-                    mv=mv_down
-                )
-                downsampled.append(new_seg)
-                total_downsampled += len(pv_down)
-                
-                self.log(f"   📉 段{i+1}: {n} → {len(pv_down)} 点 (降采样率 {len(pv_down)/n*100:.1f}%)")
-        
-        if total_original > total_downsampled:
-            reduction = (1 - total_downsampled / total_original) * 100
-            self.log(f"📉 智能降采样: {total_original} → {total_downsampled} 点 (减少 {reduction:.1f}%)")
-        
-        return downsampled
+        """对每个扰动段应用智能降采样（委托给 SegmentManager）"""
+        return self._segment_manager.apply_smart_downsample(segments, target_points)
     
     # ============================================================
     # Step 2.5: 振荡分析与临界法整定（已移至 oscillation_tuner.py）
@@ -605,166 +727,60 @@ class ModelSelector(LoggerMixin):
         return segment_fits
     
     # ============================================================
+    # Step 1.95: 振荡预检
+    # ============================================================
+    
+    def _precheck_oscillation(self, segments: List['HistoricalData'], 
+                               results: List['SegmentResult'],
+                               threshold: float = 0.7) -> tuple:
+        """
+        Step 1.95: 振荡预检 - 在模型拟合前识别高振荡段
+        
+        高振荡段的模型拟合通常会失败(R²≈0)，提前识别可以：
+        1. 避免无意义的拟合计算
+        2. 防止错误的K/T/L污染融合池
+        
+        Args:
+            segments: 数据段列表
+            results: 对应的分析结果列表
+            threshold: 振荡比阈值，超过此值视为高振荡段
+            
+        Returns:
+            fitting_segs, fitting_results: 正常段，待拟合
+            osc_segs, osc_results: 高振荡段，跳过拟合
+        """
+        fitting_segs, fitting_results = [], []
+        osc_segs, osc_results = [], []
+        
+        self.log(f"\n{'='*60}")
+        self.log("📊 Step 1.95: 振荡预检（跳过高振荡段的模型拟合）")
+        self.log('='*60)
+        
+        for seg, res in zip(segments, results):
+            osc_ratio = getattr(res, 'oscillation_ratio', 0.0)
+            
+            if osc_ratio > threshold:
+                self.log(f"   段{res.segment_idx+1}: 振荡比={osc_ratio:.2f} > {threshold}，跳过拟合")
+                osc_segs.append(seg)
+                osc_results.append(res)
+            else:
+                fitting_segs.append(seg)
+                fitting_results.append(res)
+        
+        self.log(f"   📊 预检结果: {len(fitting_segs)} 个正常段, {len(osc_segs)} 个高振荡段")
+        
+        return fitting_segs, fitting_results, osc_segs, osc_results
+    
+    # ============================================================
     # Step 4: 参数融合
     # ============================================================
+
     
     def _fuse_parameters(self, segment_results: List[SegmentResult],
                          model_type: str,
                          segments: List[HistoricalData] = None) -> FusionResult:
-        """融合各段参数"""
-        self.log(f"\n{'='*60}")
-        self.log("📊 Step 4: 参数融合")
-        self.log('='*60)
-        
-        fusion = FusionResult(model_type=model_type)
-        
-        window_results = []
-        added_indices = set()
-        valid_segment_idx = 0
-        
-        for threshold in self.R2_THRESHOLDS:
-            valid_segment_idx = 0
-            for result in segment_results:
-                if not result.is_valid:
-                    continue
-                
-                if result.segment_idx in added_indices:
-                    valid_segment_idx += 1
-                    continue
-                
-                fit_result = result.model_results.get(model_type)
-                if fit_result is None:
-                    valid_segment_idx += 1
-                    continue
-                
-                r2 = fit_result.get('r2', 0)
-                if r2 < threshold:
-                    valid_segment_idx += 1
-                    continue
-                
-                K, T1 = fit_result.get('K', 0), fit_result.get('T1', 0)
-                if K == 0 and T1 == 0:
-                    valid_segment_idx += 1
-                    continue
-                
-                # 跳过K值不合理的段（已在拟合阶段标记）
-                k_reasonable = fit_result.get('k_reasonable', True)
-                if not k_reasonable:
-                    self.log(f"      段{result.segment_idx+1}: K={K:.4f} 超出合理范围，跳过融合")
-                    valid_segment_idx += 1
-                    continue
-                
-                # 跳过数据点数太少的段（防止过拟合）
-                min_fusion_points = Config.SEGMENT_PROCESSING.get('min_fusion_points', 100)
-                if result.data_points < min_fusion_points:
-                    self.log(f"      段{result.segment_idx+1}: 数据点数={result.data_points} < {min_fusion_points}，跳过融合")
-                    valid_segment_idx += 1
-                    continue
-                
-                stability_score, oscillation_ratio, settling_quality, is_steady = 1.0, 0.0, 1.0, True
-                if segments is not None and valid_segment_idx < len(segments):
-                    seg = segments[valid_segment_idx]
-                    stability_score, oscillation_ratio, settling_quality, is_steady = \
-                        self._segment_processor.analyze_segment_stability(seg, fit_result)
-                
-                quality_adjusted_stability = stability_score
-                if result.nonlinearity_score > 0.3:
-                    quality_adjusted_stability *= (1 - result.nonlinearity_score * 0.5)
-                if result.quality_score < 0.5:
-                    quality_adjusted_stability *= (0.5 + result.quality_score)
-                
-                if result.oscillation_ratio > 0:
-                    oscillation_ratio = result.oscillation_ratio
-                
-                window_results.append(FusionWindowResult(
-                    window_idx=result.segment_idx,
-                    K=K, T1=T1, 
-                    T2=fit_result.get('T2', 0), 
-                    L=fit_result.get('L', 0),
-                    r2=r2,
-                    data_points=result.data_points,
-                    stability_score=quality_adjusted_stability,
-                    oscillation_ratio=oscillation_ratio,
-                    settling_quality=settling_quality,
-                    is_steady=is_steady and not result.is_nonlinear,
-                    nonlinearity_score=result.nonlinearity_score,
-                    quality_score=result.quality_score
-                ))
-                added_indices.add(result.segment_idx)
-                valid_segment_idx += 1
-            
-            if window_results:
-                if threshold < self.R2_THRESHOLDS[0]:
-                    self.log(f"   ⚠️ 使用阈值 R²≥{threshold} 收集到 {len(window_results)} 个有效段")
-                break
-        
-        if not window_results:
-            self.log("   ⚠️ 无有效参数，使用默认值")
-            return fusion
-        
-        steady_count = sum(1 for w in window_results if w.is_steady)
-        avg_stability = np.mean([w.stability_score for w in window_results])
-        
-        self.log(f"   收集到 {len(window_results)} 个有效段 (稳态段: {steady_count}, 平均稳态评分: {avg_stability:.2f}):")
-        for w in window_results:
-            steady_flag = "✓稳态" if w.is_steady else "⚠非稳态"
-            self.log(f"      段{w.window_idx+1}: K={w.K:.4f}, T1={w.T1:.2f}, R²={w.r2:.3f}, "
-                    f"稳态={w.stability_score:.2f} {steady_flag}")
-        
-        try:
-            fusion_strategy = PIDFusionStrategy(verbose=self._verbose)
-            fusion_result = fusion_strategy.fuse(window_results)
-            
-            fusion.K = fusion_result.K
-            fusion.T1 = fusion_result.T1
-            fusion.T2 = fusion_result.T2
-            fusion.L = fusion_result.L
-            fusion.fusion_method = fusion_result.strategy_used.value
-            fusion.consistency_score = fusion_result.confidence
-            fusion.n_segments_used = len(fusion_result.windows_used)
-            
-            if len(window_results) > 1:
-                fusion.K_std = float(np.std([w.K for w in window_results]))
-                fusion.T1_std = float(np.std([w.T1 for w in window_results]))
-            else:
-                fusion.K_std = 0.0
-                fusion.T1_std = 0.0
-            
-            self.log(f"\n   融合策略: {fusion.fusion_method}")
-            self.log(f"   决策原因: {fusion_result.reasoning}")
-            self.log(f"   使用窗口: {[i+1 for i in fusion_result.windows_used]}")
-            
-        except Exception as e:
-            self.log(f"   ⚠️ PIDFusionStrategy 失败: {e}，使用备用逻辑")
-            best_window = max(window_results, key=lambda w: w.r2)
-            fusion.K = best_window.K
-            fusion.T1 = best_window.T1
-            fusion.T2 = best_window.T2
-            fusion.L = best_window.L
-            fusion.fusion_method = "best_window_fallback"
-            fusion.consistency_score = best_window.r2
-            fusion.n_segments_used = 1
-        
-        # 模型参数合理性约束（从配置获取阈值）
-        param_constraints = Config.PARAMETER_CONSTRAINTS
-        T1_max = param_constraints['T1_max']
-        L_max = param_constraints['L_max']
-        
-        if fusion.T1 > T1_max:
-            self.log(f"   ⚠️ T1={fusion.T1:.2f}s 过大，限制为 {T1_max}s")
-            fusion.T1 = T1_max
-        if fusion.L > L_max:
-            self.log(f"   ⚠️ L={fusion.L:.2f}s 过大，限制为 {L_max}s")
-            fusion.L = L_max
-        
-        self.log(f"\n   融合结果 ({fusion.fusion_method}, {fusion.n_segments_used}段):")
-        self.log(f"   K  = {fusion.K:.4f} ± {fusion.K_std:.4f}")
-        self.log(f"   T1 = {fusion.T1:.2f} ± {fusion.T1_std:.2f}")
-        self.log(f"   T2 = {fusion.T2:.2f}")
-        self.log(f"   L  = {fusion.L:.2f}")
-        self.log(f"   一致性评分: {fusion.consistency_score:.2f}")
-        
-        return fusion
+        """融合各段参数（委托给 ParameterFusion）"""
+        return self._param_fusion.fuse(segment_results, model_type, segments)
     
     # ============================================================
     # Step 5: 验证与优化
@@ -1166,189 +1182,69 @@ class ModelSelector(LoggerMixin):
         """获取参数边界（委托给 ModelType.get_bounds）"""
         return ModelType.get_bounds(model_type)
     
-    def _build_output(self, fusion: FusionResult, hist_data: HistoricalData,
-                      time_range: Dict, lambda_factor: float,
-                      tuning_windows: List[Dict] = None,
-                      quality_info: DataQualityInfo = None,
-                      segment_results: List[SegmentResult] = None,
-                      segments: List[HistoricalData] = None) -> Dict[str, Any]:
+    def _build_method_selector_output(self, method_result, fusion_result: FusionResult,
+                                       hist_data: HistoricalData, time_range: Dict,
+                                       tuning_windows: List, segments: List,
+                                       segment_results: List) -> Dict[str, Any]:
         """
-        构建最终输出
+        构建方法选择器的输出结果
         
-        Args:
-            quality_info: 数据质量信息，用于自适应保守PID整定
-            segment_results: 各段拟合结果，用于闭环不稳定时切换振荡整定
-            segments: 各扰动段数据，用于闭环不稳定时切换振荡整定
+        当继电反馈法或混合方法的稳定性更好时使用
         """
-        pid_params = self._pid_calculator.calculate_from_fusion(
-            fusion, lambda_factor, quality_info=quality_info
-        )
+        from .tuning import TuningMethod
+        from .utils import calculate_r2, calculate_rmse
         
-        params = self._simulator.fusion_to_params(fusion)
+        pid_params = method_result.pid_params
+        model_params = method_result.model_params or {
+            'K': fusion_result.K, 'T1': fusion_result.T1,
+            'T2': fusion_result.T2, 'L': fusion_result.L
+        }
         
         valid_mask = hist_data.pv != 0
         y = hist_data.pv[valid_mask]
         u = hist_data.mv[valid_mask]
-        ts = np.array(hist_data.timestamp[valid_mask], dtype=np.int64)  # 确保是 int64 类型
+        ts = np.array(hist_data.timestamp[valid_mask], dtype=np.int64)
         sv = hist_data.sv[valid_mask]
         
-        # 构建扰动段掩码：只在扰动段内使用模型拟合
-        disturbance_mask = np.zeros(len(ts), dtype=bool)
-        if tuning_windows:
-            for window in tuning_windows:
-                # 支持 TuningWindow 对象或字典
-                if hasattr(window, 'start_time'):
-                    start_ts = parse_time_to_milliseconds(window.start_time)
-                    end_ts = parse_time_to_milliseconds(window.end_time)
-                else:
-                    start_ts = parse_time_to_milliseconds(window.get('start_time'))
-                    end_ts = parse_time_to_milliseconds(window.get('end_time'))
-                disturbance_mask |= (ts >= start_ts) & (ts <= end_ts)
-        
-        # 对全量数据进行模型仿真
-        pv_model_full = self._simulator.simulate_segmented(
-            params, fusion.model_type, y, u, 
-            reset_on_sv_change=True, sv=sv,
-            enable_smooth=True,
-            enable_amplitude_calibration=True,
-            enable_offset_correction=True,
-            enable_oscillation_overlay=True
+        # 使用模型参数进行仿真
+        params = (model_params.get('K', 1.0), model_params.get('T1', 10.0), model_params.get('L', 1.0))
+        pv_model = self._simulator.simulate_segmented(
+            params, 'FOPDT', y, u, reset_on_sv_change=True, sv=sv,
+            enable_smooth=True, enable_amplitude_calibration=True,
+            enable_offset_correction=True, enable_oscillation_overlay=True
         )
         
-        # pv_model: 扰动段用模型拟合，稳态段用实际PV
-        pv_model = y.copy()  # 先用实际PV填充
-        pv_model[disturbance_mask] = pv_model_full[disturbance_mask]  # 扰动段用模型值
+        r2 = calculate_r2(y, pv_model)
+        rmse = calculate_rmse(y, pv_model)
         
-        sim_r2 = calculate_r2(y, pv_model)
-        
-        pv_diff = np.diff(y)
-        sign_changes = np.sum(np.abs(np.diff(np.sign(pv_diff))) > 0)
-        oscillation_ratio = sign_changes / (len(y) - 2) if len(y) > 2 else 0
-        
-        pv_range = np.ptp(y)
-        model_range = np.ptp(pv_model)
-        amplitude_ratio = model_range / (pv_range + self._epsilon) if pv_range > 0.1 else 1.0
-        
-        self.log(f"   pv_model检查: sim_R²={sim_r2:.3f}, 振荡={oscillation_ratio:.2f}, "
-                f"PV范围={pv_range:.2f}, 模型范围={model_range:.2f}, 幅度比={amplitude_ratio:.2f}")
-        
-        # 从配置读取阈值
-        ms_cfg = Config.MODEL_SELECTOR
-        
-        sim_quality_poor = (
-            sim_r2 < ms_cfg['sim_r2_poor_threshold'] or
-            fusion.global_r2 < Config.MODEL_FITTING['r2_poor_threshold'] or
-            oscillation_ratio > ms_cfg['oscillation_poor_threshold'] or
-            amplitude_ratio < ms_cfg['amplitude_ratio_min'] or 
-            amplitude_ratio > ms_cfg['amplitude_ratio_max']
-        )
-        
-        fitting_failed = (
-            fusion.n_segments_used == 0 or
-            sim_r2 < ms_cfg['sim_r2_fail_threshold'] or
-            amplitude_ratio < ms_cfg['amplitude_ratio_fail_min'] or 
-            amplitude_ratio > ms_cfg['amplitude_ratio_fail_max']
-        )
-        
-        if fitting_failed:
-            self.log(f"   ❌ 拟合完全失败，保留原始pv_model用于诊断分析")
-        elif sim_quality_poor:
-            reason = []
-            if sim_r2 < ms_cfg['sim_r2_poor_threshold']:
-                reason.append(f"R²={sim_r2:.3f}")
-            if oscillation_ratio > ms_cfg['oscillation_poor_threshold']:
-                reason.append(f"振荡={oscillation_ratio:.2f}")
-            if amplitude_ratio < ms_cfg['amplitude_ratio_min'] or amplitude_ratio > ms_cfg['amplitude_ratio_max']:
-                reason.append(f"幅度比={amplitude_ratio:.2f}")
-            self.log(f"   ⚠️ 模型仿真质量较差({', '.join(reason)})")
-        
-        total_data_points = int(np.sum(valid_mask))
-        
-        # 先进行闭环稳定性验证（使用实际数据的初值）
-        sp_initial = float(sv[0]) if len(sv) > 0 else ms_cfg['default_sp_initial']
-        sp_final = float(sv[-1]) if len(sv) > 0 else ms_cfg['default_sp_final']
-        pv_initial = float(y[0]) if len(y) > 0 else sp_initial
-        
-        # 确保有足够的阶跃幅度，并且初值合理
-        sp_change = abs(sp_final - sp_initial)
-        pv_sp_diff = abs(pv_initial - sp_initial)
-        
-        # 如果 SP 阶跃幅度太小，或者 PV 初值与 SP 初值差距太大，使用默认阶跃测试
-        if sp_change < ms_cfg['min_sp_change'] or pv_sp_diff > sp_change * 2:
-            sp_initial = ms_cfg['default_sp_initial']
-            sp_final = ms_cfg['default_sp_final']
-            pv_initial = ms_cfg['default_pv_initial']
-        
-        is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
-            fusion, pid_params, 
-            sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
-            verbose=self._verbose
-        )
-        
-        # 如果闭环不稳定，尝试切换到振荡整定法
-        if not is_stable and self._oscillation_tuner is not None and segments is not None:
-            self.log(f"\n   ⚠️ 常规整定闭环不稳定，尝试切换到振荡整定法...")
-            
-            # 尝试振荡整定 (参数顺序: segments, segment_results, current_pid, force)
-            # force=True 强制使用振荡整定，不检查是否有成功拟合的段
-            osc_result = self._oscillation_tuner.try_oscillation_tuning(
-                segments, segment_results, pid_params, force=True
-            )
-            
-            if osc_result is not None and osc_result.get('success', False):
-                self.log(f"   ✅ 振荡整定成功，使用振荡整定参数")
-                
-                # 使用振荡整定的结果
-                osc_output = self._oscillation_tuner.build_oscillation_output(
-                    osc_result, hist_data, time_range, tuning_windows,
-                    segments, segment_results
-                )
-                return osc_output
-            else:
-                self.log(f"   ⚠️ 振荡整定也失败，保持原参数")
-        
-        # 再计算 model_rating（传入闭环指标）
-        model_rating, score_details = self._pid_calculator.calculate_model_rating(
-            fusion, total_data_points, cl_metrics=cl_metrics, verbose=self._verbose
-        )
-        
-        if self._verbose:
-            self.log(f"\n   📊 评分详情:")
-            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × 30%")
-            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × 20%")
-            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × 15%")
-            self.log(f"      数据覆盖度 ({fusion.n_segments_used}段/{total_data_points}点): {score_details.get('coverage_score', 0):.1f}/10 × 10%")
-            self.log(f"      闭环稳定性: {score_details.get('stability_score', 0):.1f}/10 × 25%")
-            self.log(f"      → 综合评分: {model_rating}/10")
-        
-        closed_loop_info = {
-            'is_stable': is_stable,
-            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
-            'overshoot': cl_metrics.overshoot,
-            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
-            'steady_state_error': cl_metrics.steady_state_error,
-            'oscillation_count': cl_metrics.oscillation_count,
-            'decay_ratio': cl_metrics.decay_ratio,
-            # 保存仿真参数，供可视化使用
-            'sp_initial': sp_initial,
-            'sp_final': sp_final,
-            'pv_initial': pv_initial
+        # 稳定性信息
+        margins = method_result.stability_margins
+        stability_info = {
+            'is_stable': margins.is_stable if margins else False,
+            'gain_margin': margins.gain_margin if margins else 0,
+            'gain_margin_db': margins.gain_margin_db if margins else 0,
+            'phase_margin': margins.phase_margin if margins else 0,
         }
         
-        # success条件：拟合成功 且 闭环稳定
-        success = (not fitting_failed) and is_stable
+        # 评分：基于稳定性裕度
+        if margins and margins.is_stable:
+            gm_score = min(10, margins.gain_margin * 2)  # GM=2 -> 4分, GM=5 -> 10分
+            pm_score = min(10, margins.phase_margin / 9)  # PM=45 -> 5分, PM=90 -> 10分
+            model_rating = round((gm_score + pm_score) / 2, 1)
+        else:
+            model_rating = 3.0
         
         return {
-            'success': success,
-            'model_type': fusion.model_type,
+            'success': True,
+            'model_type': 'FOPDT',
             'model_rating': model_rating,
             'start_time': time_range.get('start_time'),
             'end_time': time_range.get('end_time'),
             'model_parameters': {
-                'K': round(fusion.K, 4),
-                'T1': round(fusion.T1, 4),
-                'T2': round(fusion.T2, 4),
-                'L': round(fusion.L, 4)
+                'K': round(model_params.get('K', 0), 4),
+                'T1': round(model_params.get('T1', 0), 4),
+                'T2': round(model_params.get('T2', 0), 4),
+                'L': round(model_params.get('L', 0), 4)
             },
             'pid_parameters': pid_params,
             'fitting_result': {
@@ -1357,79 +1253,49 @@ class ModelSelector(LoggerMixin):
                 'pv': y.tolist(),
                 'mv': u.tolist(),
                 'pv_model': pv_model.tolist(),
-                'r_squared': round(fusion.global_r2, 4),
-                'rmse': round(fusion.global_rmse, 4)
+                'r_squared': round(r2, 4),
+                'rmse': round(rmse, 4)
             },
             'fusion_info': {
-                'method': fusion.fusion_method,
-                'n_segments': fusion.n_segments_used,
-                'consistency_score': round(fusion.consistency_score, 4),
-                'K_std': round(fusion.K_std, 4),
-                'T1_std': round(fusion.T1_std, 4)
+                'method': method_result.method.value,
+                'n_segments': len(segments) if segments else 0,
+                'consistency_score': method_result.confidence,
+                'tuning_method': method_result.method.value,
+                'critical_params': method_result.critical_params
             },
-            'closed_loop_verification': closed_loop_info,
-            'rating_details': score_details,
-            'segment_info': self._build_segment_info(segments, segment_results) if segments else []
+            'closed_loop_verification': stability_info,
+            'rating_details': {
+                'method': method_result.method.value,
+                'reasoning': method_result.reasoning,
+                'warnings': method_result.warnings
+            },
+            'segment_info': OutputBuilder.build_segment_info(segments, segment_results) if segments else []
         }
+    
+    def _build_output(self, fusion: FusionResult, hist_data: HistoricalData,
+                      time_range: Dict, lambda_factor: float,
+                      tuning_windows: List[Dict] = None,
+                      quality_info: DataQualityInfo = None,
+                      segment_results: List[SegmentResult] = None,
+                      segments: List[HistoricalData] = None) -> Dict[str, Any]:
+        """构建最终输出（委托给 OutputBuilder）"""
+        return self._output_builder.build_full_output(
+            fusion, hist_data, time_range, lambda_factor,
+            tuning_windows, quality_info, segment_results, segments
+        )
     
     def _build_segment_info(self, segments: List[HistoricalData], 
                              segment_results: List[SegmentResult]) -> List[Dict]:
-        """构建段信息用于可视化"""
-        segment_info = []
-        for i, (seg, result) in enumerate(zip(segments, segment_results)):
-            if len(seg.timestamp) > 0:
-                # 判断段类型：阶跃特征好且振荡低 → 整定段
-                is_tuning = (result.step_response_score >= 0.5 and 
-                            result.oscillation_ratio < 0.5)
-                segment_info.append({
-                    'index': i,
-                    'start_time': int(seg.timestamp[0]),
-                    'end_time': int(seg.timestamp[-1]),
-                    'data_points': len(seg.pv),
-                    'step_response_score': round(result.step_response_score, 2),
-                    'oscillation_ratio': round(result.oscillation_ratio, 2),
-                    'type': 'tuning' if is_tuning else 'oscillation'
-                })
-        return segment_info
+        """构建段信息用于可视化（委托给 OutputBuilder）"""
+        return OutputBuilder.build_segment_info(segments, segment_results)
     
     def _check_mv_no_change(self, valid_segments: List[HistoricalData]) -> bool:
-        """检查MV是否无变化（无变化无法进行模型辨识）"""
-        for seg in valid_segments:
-            mv = seg.mv
-            if len(mv) < 2:
-                continue
-            mv_range = np.max(mv) - np.min(mv)
-            # MV变化范围小于1%认为无变化
-            mv_mean = np.mean(np.abs(mv)) if np.mean(np.abs(mv)) > 0 else 1.0
-            if mv_range > mv_mean * 0.01 or mv_range > 1.0:
-                return False  # 有变化
-        return True  # 所有段MV都无变化
+        """检查MV是否无变化（委托给 SegmentManager）"""
+        return self._segment_manager.check_mv_no_change(valid_segments)
     
     def _check_all_fitting_failed(self, segment_results: List[SegmentResult]) -> bool:
-        """检查是否所有模型拟合都失败"""
-        for result in segment_results:
-            if result is None:
-                continue
-            # 检查是否有任何模型拟合成功（R² >= 0.3 且 K 值合理）
-            # 注意：SegmentResult使用model_results而不是fits
-            model_results = getattr(result, 'model_results', {}) or {}
-            for model_type, params in model_results.items():
-                if params is None:
-                    continue
-                r2 = params.get('r2', 0)
-                K = params.get('K', 0)
-                # R² >= 0.3 且 K 值在合理范围内认为拟合成功（降低阈值以容纳振荡数据）
-                if r2 >= 0.3 and 0.01 < abs(K) < 100:
-                    return False  # 有成功的拟合
-            
-            # 检查非线性模型结果
-            nonlinear = getattr(result, 'nonlinear_result', None)
-            if nonlinear is not None:
-                nl_r2 = nonlinear.get('r2', 0)
-                nl_K = nonlinear.get('params', {}).get('K', 0) if nonlinear.get('params') else 0
-                if nl_r2 >= 0.3 and 0.01 < abs(nl_K) < 100:
-                    return False  # 非线性模型拟合成功
-        return True  # 所有拟合都失败
+        """检查是否所有模型拟合都失败（委托给 SegmentManager）"""
+        return self._segment_manager.check_all_fitting_failed(segment_results)
     
     def _merge_tuning_and_disturbance(
         self,
@@ -1439,249 +1305,21 @@ class ModelSelector(LoggerMixin):
         disturbance_results: List[SegmentResult],
         hist_data: HistoricalData
     ) -> Tuple[List[HistoricalData], List[SegmentResult]]:
-        """
-        合并整定段和扰动段的时间窗口
-        
-        逻辑：
-        1. 优先使用整定段（MV阶跃检测到的）
-        2. 如果整定段和扰动段有时间重叠，合并时间窗口并重新提取数据
-        3. 不重叠的扰动段作为备用（振荡整定）
-        
-        Args:
-            tuning_segs: 基于MV阶跃检测的整定段
-            tuning_results: 整定段结果
-            disturbance_segs: 基于扰动窗口提取的扰动段
-            disturbance_results: 扰动段结果
-            hist_data: 原始历史数据（用于重新提取合并段）
-        
-        Returns:
-            (merged_segments, merged_results)
-        """
-        self.log(f"\n{'='*60}")
-        self.log("📊 Step 1.6: 整定段与扰动段合并")
-        self.log('='*60)
-        self.log(f"   整定段（MV阶跃检测）: {len(tuning_segs)} 个")
-        self.log(f"   扰动段（扰动窗口）: {len(disturbance_segs)} 个")
-        
-        merged_segments = []
-        merged_results = []
-        used_disturbance_indices = set()
-        
-        # 处理每个整定段
-        for i, (tuning_seg, tuning_result) in enumerate(zip(tuning_segs, tuning_results)):
-            tuning_start = tuning_seg.timestamp[0] if len(tuning_seg.timestamp) > 0 else 0
-            tuning_end = tuning_seg.timestamp[-1] if len(tuning_seg.timestamp) > 0 else 0
-            
-            # 检查是否与某个扰动段重叠，如果重叠则合并时间窗口
-            merged_with_disturbance = False
-            for j, (dist_seg, dist_result) in enumerate(zip(disturbance_segs, disturbance_results)):
-                if j in used_disturbance_indices:
-                    continue
-                    
-                dist_start = dist_seg.timestamp[0] if len(dist_seg.timestamp) > 0 else 0
-                dist_end = dist_seg.timestamp[-1] if len(dist_seg.timestamp) > 0 else 0
-                
-                # 检查时间是否有重叠或相近（间隔小于5分钟=300秒=300000毫秒）
-                gap_threshold = 300000  # 5分钟
-                has_overlap = not (tuning_end + gap_threshold < dist_start or dist_end + gap_threshold < tuning_start)
-                
-                if has_overlap:
-                    # 判断整定段是否完全包含在扰动段内（是子集）
-                    tuning_is_subset = (tuning_start >= dist_start and tuning_end <= dist_end)
-                    # 判断扰动段是否完全包含在整定段内
-                    dist_is_subset = (dist_start >= tuning_start and dist_end <= tuning_end)
-                    
-                    # 计算扩展比例
-                    tuning_duration = tuning_end - tuning_start
-                    dist_duration = dist_end - dist_start
-                    expansion_ratio = max(tuning_duration, dist_duration) / max(min(tuning_duration, dist_duration), 1)
-                    
-                    # 计算质量差异（整定段质量 - 扰动段质量）
-                    tuning_quality = tuning_result.step_response_score
-                    dist_quality = dist_result.step_response_score
-                    quality_diff = tuning_quality - dist_quality
-                    
-                    # 检查振荡差异（整定段振荡 vs 扰动段振荡）
-                    tuning_osc = tuning_result.oscillation_ratio
-                    dist_osc = dist_result.oscillation_ratio
-                    osc_diff = dist_osc - tuning_osc  # 正值表示扰动段振荡更严重
-                    
-                    if tuning_is_subset and expansion_ratio > 5:
-                        # 整定段是扰动段的子集，且扩展比例太大（>5倍）
-                        # 直接使用整定段，不扩展（避免引入大量低质量数据）
-                        merged_segments.append(tuning_seg)
-                        tuning_result.segment_idx = len(merged_segments) - 1
-                        merged_results.append(tuning_result)
-                        self.log(f"   + 整定段{i+1} ⊂ 扰动段{j+1}: 整定段是子集，扩展比={expansion_ratio:.1f}x，保留原整定段")
-                        self.log(f"     整定段={len(tuning_seg.pv)}点（质量好），扰动段={len(dist_seg.pv)}点（不扩展）")
-                    elif dist_is_subset:
-                        # 扰动段是整定段的子集，使用整定段
-                        merged_segments.append(tuning_seg)
-                        tuning_result.segment_idx = len(merged_segments) - 1
-                        merged_results.append(tuning_result)
-                        self.log(f"   + 扰动段{j+1} ⊂ 整定段{i+1}: 使用整定段")
-                        self.log(f"     整定段={len(tuning_seg.pv)}点")
-                    elif quality_diff > 0.3 or osc_diff > 0.4:
-                        # 整定段质量明显好于扰动段（质量差>0.3）或扰动段振荡严重（振荡差>0.4）
-                        # 不合并，避免低质量数据稀释整定段
-                        merged_segments.append(tuning_seg)
-                        tuning_result.segment_idx = len(merged_segments) - 1
-                        merged_results.append(tuning_result)
-                        self.log(f"   + 整定段{i+1} 与 扰动段{j+1}: 质量差异大，保留原整定段")
-                        self.log(f"     整定段质量={tuning_quality:.2f}(振荡={tuning_osc:.2f}), 扰动段质量={dist_quality:.2f}(振荡={dist_osc:.2f})")
-                        self.log(f"     质量差={quality_diff:.2f}, 振荡差={osc_diff:.2f} → 不合并")
-                    elif expansion_ratio <= 2:
-                        # 扩展比例较小（<=2倍）且质量差异不大，可以合并
-                        merged_start = min(tuning_start, dist_start)
-                        merged_end = max(tuning_end, dist_end)
-                        merged_seg = self._extract_segment_by_time(hist_data, merged_start, merged_end)
-                        
-                        if merged_seg is not None and len(merged_seg.pv) > 0:
-                            merged_segments.append(merged_seg)
-                            tuning_result.segment_idx = len(merged_segments) - 1
-                            tuning_result.data_points = len(merged_seg.pv)
-                            merged_results.append(tuning_result)
-                            self.log(f"   + 整定段{i+1} ∩ 扰动段{j+1}: 合并时间窗口（扩展比={expansion_ratio:.1f}x）")
-                            self.log(f"     原整定段={len(tuning_seg.pv)}点, 原扰动段={len(dist_seg.pv)}点 → 合并后={len(merged_seg.pv)}点")
-                        else:
-                            merged_segments.append(tuning_seg)
-                            tuning_result.segment_idx = len(merged_segments) - 1
-                            merged_results.append(tuning_result)
-                            self.log(f"   + 整定段{i+1} 与 扰动段{j+1}: 合并失败，使用整定段")
-                    else:
-                        # 扩展比例过大，只使用整定段
-                        merged_segments.append(tuning_seg)
-                        tuning_result.segment_idx = len(merged_segments) - 1
-                        merged_results.append(tuning_result)
-                        self.log(f"   + 整定段{i+1} 与 扰动段{j+1}: 扩展比={expansion_ratio:.1f}x过大，保留原整定段")
-                        self.log(f"     整定段={len(tuning_seg.pv)}点")
-                    
-                    used_disturbance_indices.add(j)
-                    merged_with_disturbance = True
-                    break
-            
-            if not merged_with_disturbance:
-                # 整定段独立存在
-                merged_segments.append(tuning_seg)
-                tuning_result.segment_idx = len(merged_segments) - 1
-                merged_results.append(tuning_result)
-                self.log(f"   + 整定段{i+1}: {len(tuning_seg.pv)}点, "
-                        f"阶跃={tuning_result.step_response_score:.2f}, 振荡={tuning_result.oscillation_ratio:.2f}")
-        
-        # 如果有整定段，则只使用整定段，不再添加扰动段
-        # 只有在没有整定段时才使用扰动段
-        if len(tuning_segs) == 0:
-            # 没有整定段，添加所有扰动段
-            for j, (dist_seg, dist_result) in enumerate(zip(disturbance_segs, disturbance_results)):
-                merged_segments.append(dist_seg)
-                dist_result.segment_idx = len(merged_segments) - 1
-                merged_results.append(dist_result)
-                self.log(f"   + 扰动段{j+1}: {len(dist_seg.pv)}点, "
-                        f"阶跃={dist_result.step_response_score:.2f}, 振荡={dist_result.oscillation_ratio:.2f}")
-        else:
-            # 有整定段时，忽略未合并的扰动段
-            unused_count = len(disturbance_segs) - len(used_disturbance_indices)
-            if unused_count > 0:
-                self.log(f"   ⚠️ 忽略 {unused_count} 个未合并的扰动段（优先使用整定段）")
-        
-        self.log(f"   📊 合并后共 {len(merged_segments)} 个有效段")
-        return merged_segments, merged_results
-    
-    def _extract_segment_by_time(self, hist_data: HistoricalData, 
-                                  start_time: int, end_time: int) -> Optional[HistoricalData]:
-        """根据时间范围从历史数据中提取段"""
-        try:
-            mask = (hist_data.timestamp >= start_time) & (hist_data.timestamp <= end_time)
-            indices = np.where(mask)[0]
-            
-            if len(indices) < 10:
-                return None
-            
-            return HistoricalData(
-                timestamp=hist_data.timestamp[indices],
-                pv=hist_data.pv[indices],
-                sv=hist_data.sv[indices],
-                mv=hist_data.mv[indices]
-            )
-        except Exception as e:
-            self.log(f"   提取段失败: {e}")
-            return None
+        """合并整定段和扰动段的时间窗口（委托给 SegmentManager）"""
+        return self._segment_manager.merge_tuning_and_disturbance(
+            tuning_segs, tuning_results,
+            disturbance_segs, disturbance_results,
+            hist_data
+        )
     
     def _classify_and_prioritize_segments(
         self, 
         valid_segments: List[HistoricalData], 
         segment_results: List[SegmentResult]
     ) -> Tuple[List[HistoricalData], List[SegmentResult], List[HistoricalData], List[SegmentResult]]:
-        """
-        将扰动段分类为整定段和振荡段，优先使用整定段
-        
-        整定段：阶跃特征好（step_response_score >= 0.5）且振荡不严重（oscillation_ratio < 0.5）
-        振荡段：振荡比例高（oscillation_ratio >= 0.5）
-        
-        Returns:
-            (tuning_segments, tuning_results, oscillation_segments, oscillation_results)
-        """
-        tuning_segments = []      # 整定段（优先用于模型辨识）
-        tuning_results = []
-        oscillation_segments = [] # 振荡段（备用，用于临界法）
-        oscillation_results = []
-        
-        # 阈值配置
-        step_threshold = 0.5      # 阶跃特征阈值
-        osc_threshold = 0.5       # 振荡比例阈值
-        
-        for seg, result in zip(valid_segments, segment_results):
-            step_score = result.step_response_score
-            osc_ratio = result.oscillation_ratio
-            
-            # 分类：阶跃特征好且振荡不严重 → 整定段
-            if step_score >= step_threshold and osc_ratio < osc_threshold:
-                tuning_segments.append(seg)
-                tuning_results.append(result)
-            else:
-                oscillation_segments.append(seg)
-                oscillation_results.append(result)
-        
-        self.log(f"\n{'='*60}")
-        self.log("📊 Step 1.8: 整定段/振荡段分类")
-        self.log('='*60)
-        self.log(f"   整定段（阶跃特征好）: {len(tuning_segments)} 个")
-        self.log(f"   振荡段（振荡为主）: {len(oscillation_segments)} 个")
-        
-        # 详细信息
-        for i, (seg, result) in enumerate(zip(valid_segments, segment_results)):
-            step_score = result.step_response_score
-            osc_ratio = result.oscillation_ratio
-            seg_type = "整定段" if (step_score >= step_threshold and osc_ratio < osc_threshold) else "振荡段"
-            self.log(f"   段{i+1}: {seg_type} (阶跃={step_score:.2f}, 振荡={osc_ratio:.2f})")
-        
-        return tuning_segments, tuning_results, oscillation_segments, oscillation_results
+        """将扰动段分类为整定段和振荡段（委托给 SegmentManager）"""
+        return self._segment_manager.classify_and_prioritize_segments(valid_segments, segment_results)
     
     def _empty_result(self, input_data: Optional[TuningInput]) -> Dict[str, Any]:
-        """空结果"""
-        return {
-            'success': False,
-            'model_type': ModelType.FOPDT,
-            'model_rating': 0.0,
-            'start_time': getattr(input_data, 'start_time', None) if input_data else None,
-            'end_time': getattr(input_data, 'end_time', None) if input_data else None,
-            'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
-            'pid_parameters': {'Kp': 1.0, 'Ki': 0.05, 'Kd': 0.0},
-            'fitting_result': {
-                'timestamp': [], 'sv': [], 'pv': [], 'mv': [],
-                'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0
-            },
-            'fusion_info': {
-                'method': 'none',
-                'n_segments': 0,
-                'consistency_score': 0.0
-            },
-            'rating_details': {
-                'r2_score': 0.0,
-                'consistency_score': 0.0,
-                'validity_score': 0.0,
-                'coverage_score': 0.0,
-                'n_segments': 0,
-                'total_data_points': 0
-            }
-        }
+        """空结果（委托给 OutputBuilder）"""
+        return OutputBuilder.create_empty_result(input_data)
