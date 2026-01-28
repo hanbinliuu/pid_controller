@@ -17,7 +17,7 @@ from api.middleware.exceptions import DataProcessException
 from api.services.loop_service import LoopService
 from core.agent.tools import PIDOptimizationTool, detect_and_visualize, \
     process_query_tsdb_data_interpolated
-from core.algorithm import tuning_segment_selector
+from core.algorithm.tmp_algo import tuning_segment_selector
 from core.algorithm.model_type import ModelSelector
 from core.utils import PIDConverter
 from core.utils.model_type import ModelType

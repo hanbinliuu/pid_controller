@@ -13,7 +13,7 @@ from api.commond.time_util import parse_time_to_milliseconds, format_time_to_str
 from api.middleware.exceptions import RuntimeException
 from api.response.tuning_response import AutoTuningResponse
 from core.agent.tools import process_query_tsdb_data_interpolated
-from core.algorithm.ktl_simulator import KTLSimulator
+from core.algorithm.tmp_algo.ktl_simulator import KTLSimulator
 from api.services.expert_tuning_service import ExpertTuningService
 from core.client.bff_model_client import BFFModelClient
 from core.client.select_tsdb_client import get_default_database
@@ -342,7 +342,7 @@ async def generate_all_curves(request: GenerateCurvesRequest = Body(..., descrip
     - 支持数据库查询模式(start_time, end_time)或直接数据模式(t_data, y_actual)
     """
     try:
-        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier, PIDController
+        from core.algorithm.tmp_algo.ls_pid_autotune_v5 import SystemIdentifier, PIDController
         K=request.K
         T1=request.T1
         T2=request.T2
@@ -583,7 +583,7 @@ async def get_step_response_windows(
     - recommendation: 推荐等级（优秀/良好/可接受/不推荐）
     """
     try:
-        from core.algorithm.ls_pid_autotune_v5 import SystemIdentifier
+        from core.algorithm.tmp_algo.ls_pid_autotune_v5 import SystemIdentifier
 
         # 时间默认值：最近一天
         if end_time is None:

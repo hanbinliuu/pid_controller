@@ -6,8 +6,10 @@
 
 
 import logging
+from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
 from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
+from fastapi.responses import FileResponse
 from sqlmodel import Session
 
 from api.middleware.response_model import success_response, error_response
@@ -22,6 +24,14 @@ from pydantic import BaseModel, Field
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "config" / "excel_model"
+TEMPLATE_FILE_MAP = {
+    "loop": "pid_loop_import_model.csv",
+    "data": "pid_data_import_model.csv",
+    "pid_loop": "pid_loop_import_model.csv",
+    "pid_data": "pid_data_import_model.csv",
+}
 
 
 class PointValuesRequest(BaseModel):
@@ -514,6 +524,48 @@ async def batch_import_loops(
             status_code=500,
             detail=f"批量导入失败: {str(e)}"
         )
+
+
+@router.get(
+    "/import-template",
+    summary="下载导入模板",
+    operation_id="下载导入模板",
+    description="根据模板类型下载导入模板文件",
+)
+async def download_import_template(
+        template_type: str = Query(
+            ...,
+            description="模板类型：loop（回路导入）、data（回路数据导入）",
+            example="loop"
+        )
+) -> FileResponse:
+    """
+    下载导入模板
+
+    模板类型：
+    - loop: 回路导入模板（pid_loop_import_model.csv）
+    - data: 回路数据导入模板（pid_data_import_model.csv）
+    """
+    template_key = (template_type or "").strip().lower()
+    template_file = TEMPLATE_FILE_MAP.get(template_key)
+    if not template_file:
+        raise HTTPException(
+            status_code=400,
+            detail="不支持的模板类型，仅支持 loop 或 data"
+        )
+
+    template_path = TEMPLATE_DIR / template_file
+    if not template_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="模板文件不存在，请联系管理员"
+        )
+
+    return FileResponse(
+        path=str(template_path),
+        filename=template_file,
+        media_type="text/csv"
+    )
 
 
 @router.get(
