@@ -62,7 +62,7 @@ async def send_device_command(
     with BFFModelClient(loop_uri=loop_uri) as client:
         table, field_mapping = client.query_table_and_points_by_loop_uri(loop_uri=loop_uri)
         # 查询常用字段
-        query_result = client.query_common_fields(field_mapping.values())
+        query_result = client.query_common_fields(model_point_names=list(field_mapping.values()))
 
         # 提取table名称和测点列表
         table_and_points = BFFModelClient.extract_table_and_points_from_paths(query_result)
