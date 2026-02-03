@@ -105,9 +105,9 @@ async def analyze_temperature(
         )
 
 @router.get("/pid-optimization",
-            summary="大模型整定-PID参数优化建议",
-            operation_id="大模型整定-PID参数优化建议",
-            description="基于历史数据分析结果，提供PID参数调整建议")
+            summary="大模型整定-PID参数智能优化分析",
+            operation_id="大模型整定-PID参数智能优化分析",
+            description="基于pid参数历史数据分析结果，分析PID参数控制效果")
 async def optimize_pid(
         start_time: Union[int, str] = Query(None, description="开始时间，支持毫秒时间戳或字符串格式",
                                             examples=[1640995200000, "2022-01-01 12:00:00", "2022-01-01T12:00:00",
