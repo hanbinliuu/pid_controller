@@ -123,12 +123,27 @@ def run_and_collect_failed():
 
 
 def save_failed_results(failed_scenarios):
-    """保存失败场景的可视化结果"""
+    """保存失败场景的可视化结果（优化版）"""
     output_dir = 'core/algorithm/model_type/tests/results/unsuccess'
     os.makedirs(output_dir, exist_ok=True)
     
-    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
-    plt.rcParams['axes.unicode_minus'] = False
+    # 优化配色方案
+    COLORS = {
+        'pv': '#2E86AB',      # 深蓝
+        'sv': '#E94F37',      # 红
+        'mv': '#44AF69',      # 绿
+        'band': '#A7C957',    # 浅绿
+        'grid': '#CCCCCC',
+        'bg': '#FAFAFA',
+    }
+    
+    # 使用 macOS 系统中文字体
+    plt.rcParams['font.sans-serif'] = ['PingFang SC', 'Heiti SC', 'STHeiti', 'Microsoft YaHei', 'SimHei', 'Arial']
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['figure.facecolor'] = 'white'
+    plt.rcParams['axes.facecolor'] = COLORS['bg']
+    plt.rcParams['axes.unicode_minus'] = False  # 正确显示负号
+    plt.rcParams['axes.grid'] = True
     
     print(f"\n保存失败场景图表到: {output_dir}")
     print("=" * 60)
@@ -145,92 +160,99 @@ def save_failed_results(failed_scenarios):
         process_changed = info['process_changed']
         sv = info['sv']
         
-        # 创建图表
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        # 创建图表 - 简化为 1x2 布局
+        fig = plt.figure(figsize=(14, 6))
         
-        # 子图1: PV响应
-        ax1 = axes[0, 0]
-        ax1.plot(sim_result['t'], sim_result['pv'], 'b-', label='PV', linewidth=1.5)
-        ax1.plot(sim_result['t'], sim_result['sv'], 'r--', label='SV', linewidth=1.2)
-        ax1.axhline(y=sv * 1.05, color='gray', linestyle=':', alpha=0.5, label='±5% Band')
-        ax1.axhline(y=sv * 0.95, color='gray', linestyle=':', alpha=0.5)
-        ax1.fill_between(sim_result['t'], sv * 0.95, sv * 1.05, alpha=0.1, color='green')
-        ax1.set_xlabel('Time (s)')
-        ax1.set_ylabel('PV')
-        ax1.set_title(f'PV Response - {"整定失败" if not info["tuning_success"] else "仿真不稳定"}')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
+        # 使用 GridSpec 创建布局
+        gs = fig.add_gridspec(1, 2, wspace=0.25, width_ratios=[1.5, 1])
         
-        # 子图2: MV响应
-        ax2 = axes[0, 1]
-        ax2.plot(sim_result['t'], sim_result['mv'], 'g-', label='MV', linewidth=1.5)
-        ax2.set_xlabel('Time (s)')
-        ax2.set_ylabel('MV')
-        ax2.set_title('MV Response')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
+        # ===== 子图1: PV/SV/MV 合并图 =====
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax1.plot(sim_result['t'], sim_result['pv'], color=COLORS['pv'], 
+                 label='PV', linewidth=1.8, zorder=3)
+        ax1.plot(sim_result['t'], sim_result['sv'], color=COLORS['sv'], 
+                 linestyle='--', label='SV', linewidth=1.5, zorder=2)
+        ax1.axhline(y=sv * 1.05, color='gray', linestyle=':', alpha=0.6)
+        ax1.axhline(y=sv * 0.95, color='gray', linestyle=':', alpha=0.6)
+        ax1.fill_between(sim_result['t'], sv * 0.95, sv * 1.05, 
+                         alpha=0.15, color=COLORS['band'], label='±5%误差带')
+        ax1.set_xlabel('时间 (s)', fontweight='bold')
+        ax1.set_ylabel('PV / SV', fontweight='bold')
+        status_text = '整定失败' if not info['tuning_success'] else '仿真不稳定'
+        ax1.set_title(f'过程响应 - {status_text}', fontweight='bold', fontsize=12, color='#D32F2F')
+        ax1.legend(loc='upper left', fontsize=9, framealpha=0.9)
+        ax1.grid(True, alpha=0.4, color=COLORS['grid'])
         
-        # 子图3: 最后200点PV细节
-        ax3 = axes[1, 0]
-        last_n = min(200, len(sim_result['pv']))
-        t_last = sim_result['t'][-last_n:]
-        pv_last = sim_result['pv'][-last_n:]
-        ax3.plot(t_last, pv_last, 'b-', label='PV (last 200)', linewidth=1.5)
-        ax3.axhline(y=sv, color='r', linestyle='--', label='SV')
-        ax3.axhline(y=sv * 1.05, color='gray', linestyle=':', alpha=0.5)
-        ax3.axhline(y=sv * 0.95, color='gray', linestyle=':', alpha=0.5)
-        ax3.fill_between(t_last, sv * 0.95, sv * 1.05, alpha=0.1, color='green')
-        ax3.set_xlabel('Time (s)')
-        ax3.set_ylabel('PV')
-        ax3.set_title('Last 200 Points Detail')
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
+        # 添加 MV 到右侧 Y 轴
+        ax1_mv = ax1.twinx()
+        ax1_mv.plot(sim_result['t'], sim_result['mv'], color=COLORS['mv'], 
+                    label='MV', linewidth=1.2, alpha=0.7, zorder=1)
+        ax1_mv.set_ylabel('MV (%)', fontweight='bold', color=COLORS['mv'])
+        ax1_mv.tick_params(axis='y', labelcolor=COLORS['mv'])
+        ax1_mv.legend(loc='upper right', fontsize=9, framealpha=0.9)
         
-        # 子图4: 场景信息
-        ax4 = axes[1, 1]
-        ax4.axis('off')
+        # ===== 子图2: 参数信息卡片 =====
+        ax2 = fig.add_subplot(gs[0, 1])
+        ax2.axis('off')
         
-        info_text = f"""
-场景 #{idx}: {scenario['name']}
-回路类型: {info['loop_type']}
-描述: {scenario.get('description', 'N/A')}
-
-【过程参数(变化后)】
-  K  = {process_changed['K']:.2f}
-  T1 = {process_changed['T1']:.1f}s
-  L  = {process_changed['L']:.1f}s
-
-【整定结果】
-  整定成功: {'是' if info['tuning_success'] else '否'}
-  仿真稳定: {'是' if info['sim_stable'] else '否'}
-  
-【PID参数】
-  Kp = {pid_params.get('kp', 'N/A')}
-  Ki = {pid_params.get('ki', 'N/A')}
-  Kd = {pid_params.get('kd', 'N/A')}
-  PB = {pid_params.get('pb', 'N/A')}%
-
-【仿真指标】
-  调节时间: {sim_result['settling_time']:.0f}s
-  超调量: {sim_result.get('overshoot', 0):.1f}%
-  稳态误差: {sim_result.get('steady_error', 0):.2f}%
-  振荡程度: {sim_result.get('oscillation', 0):.3f}
-"""
-        ax4.text(0.05, 0.95, info_text, transform=ax4.transAxes, fontsize=10,
-                 verticalalignment='top', fontfamily='monospace',
-                 bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+        # 使用中文显示
+        info_lines = [
+            ("场景信息", None),
+            ("─" * 35, None),
+            (f"场景 #{idx}: {scenario['name']}", None),
+            (f"回路类型: {info['loop_type']}", None),
+            ("", None),
+            ("过程参数 (变化后)", None),
+            ("─" * 35, None),
+            (f"  K  = {process_changed['K']:.3f}", None),
+            (f"  T1 = {process_changed['T1']:.1f}s", None),
+            (f"  L  = {process_changed['L']:.1f}s", None),
+            ("", None),
+            ("整定结果", None),
+            ("─" * 35, None),
+            (f"  整定成功: {'是' if info['tuning_success'] else '否'}", 
+             '#4CAF50' if info['tuning_success'] else '#F44336'),
+            (f"  仿真稳定: {'是' if info['sim_stable'] else '否'}", 
+             '#4CAF50' if info['sim_stable'] else '#F44336'),
+            ("", None),
+            ("PID 参数", None),
+            ("─" * 35, None),
+            (f"  PB = {pid_params.get('pb', 'N/A')}%", None),
+            (f"  Ti = {pid_params.get('ti', 'N/A')}s", None),
+            (f"  Td = {pid_params.get('td', 'N/A')}s", None),
+            ("", None),
+            ("仿真指标", None),
+            ("─" * 35, None),
+            (f"  调节时间: {sim_result['settling_time']:.0f}s", None),
+            (f"  超调量: {sim_result.get('overshoot', 0):.1f}%", None),
+            (f"  稳态误差: {sim_result.get('steady_error', 0):.2f}%", None),
+            (f"  振荡程度: {sim_result.get('oscillation', 0):.3f}", None),
+        ]
         
+        y_pos = 0.98
+        for line, color in info_lines:
+            if color:
+                ax2.text(0.05, y_pos, line, transform=ax2.transAxes, fontsize=10,
+                         verticalalignment='top',
+                         color=color, fontweight='bold')
+            else:
+                ax2.text(0.05, y_pos, line, transform=ax2.transAxes, fontsize=10,
+                         verticalalignment='top')
+            y_pos -= 0.035
+        
+        # 主标题
         fig.suptitle(f'失败场景 #{idx}: {scenario["name"]} ({info["loop_type"]})', 
-                     fontsize=14, fontweight='bold')
-        plt.tight_layout()
+                     fontsize=14, fontweight='bold', color='#D32F2F')
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
         
-        # 保存
-        filename = f'failed_{idx:02d}_{info["loop_type"]}_{scenario["name"].replace(" ", "_")[:20]}.png'
+        # 保存 - 使用固定文件名覆盖
+        safe_name = scenario["name"].replace(" ", "_").replace("/", "_")[:25]
+        filename = f'failed_{idx:03d}_{info["loop_type"]}_{safe_name}.png'
         filepath = os.path.join(output_dir, filename)
-        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white', edgecolor='none')
         plt.close()
         
-        print(f"  保存: {filename}")
+        print(f"  已保存: {filename}")
     
     # 保存汇总文件
     summary_path = os.path.join(output_dir, 'summary.txt')
