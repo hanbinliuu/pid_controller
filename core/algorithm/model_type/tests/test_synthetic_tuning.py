@@ -1270,7 +1270,8 @@ def generate_synthetic_data() -> Tuple[List[Dict], Dict, Dict]:
 def simulate_with_new_pid(process_params: Dict, pid_params: Dict,
                           sv: float, duration: float = 300, dt: float = 1.0,
                           error_band_pct: float = 0.05, seed: int = None,
-                          valve_params: Dict = None) -> Dict:
+                          valve_params: Dict = None,
+                          disturbance_std: float = 0.0) -> Dict:
     """用PID参数仿真，计算性能指标
     
     Args:
@@ -1282,6 +1283,7 @@ def simulate_with_new_pid(process_params: Dict, pid_params: Dict,
         error_band_pct: 误差带百分比（默认5%）
         seed: 随机种子，确保可重复性
         valve_params: 阀门参数 {deadband, stiction, mv_saturation}
+        disturbance_std: 持续扰动标准差（占SV的比例），模拟真实工业环境
     """
     # 固定随机种子确保可重复性
     if seed is not None:
@@ -1319,10 +1321,29 @@ def simulate_with_new_pid(process_params: Dict, pid_params: Dict,
     t_history, pv_history, sv_history, mv_history = [], [], [], []
     pv = pv_initial
     
+    # 计算扰动参数
+    disturbance_amplitude = sv * disturbance_std if disturbance_std > 0 else 0
+    # 振荡周期：基于过程时间常数估算典型振荡周期（约为 4-6 倍时间常数）
+    T1 = process_params.get('T1', 30)
+    oscillation_period = T1 * 5  # 振荡周期约为时间常数的 2 倍（更慢更真实）
+    
     for step in range(steps):
         t = step * dt
         mv = controller.compute(sv, pv)
         pv = process.step(mv)
+        
+        # 添加不规则周期性扰动（模拟真实工业振荡环境）
+        if disturbance_amplitude > 0:
+            # 1. 振幅调制：振幅随时间变化（0.5~1.5倍）
+            amplitude_mod = 0.5 + np.random.random()
+            # 2. 频率抖动：周期在 80%~120% 范围内随机变化
+            freq_mod = 0.8 + 0.4 * np.random.random()
+            current_period = oscillation_period * freq_mod
+            # 3. 主振荡 + 随机噪声
+            periodic_disturbance = disturbance_amplitude * amplitude_mod * np.sin(2 * np.pi * t / current_period)
+            random_noise = np.random.normal(0, disturbance_amplitude * 0.5)
+            pv += periodic_disturbance + random_noise
+        
         t_history.append(t)
         pv_history.append(pv)
         sv_history.append(sv)
@@ -2390,217 +2411,234 @@ def visualize_scenario_comparison(scenario: Dict, metadata: Dict, data: List[Dic
                                    pid_rule: Dict, pid_llm: Dict,
                                    result: Dict, scenario_idx: int,
                                    tuning_method: str = 'unknown'):
-    """为单个场景生成可视化对比图（包含原始数据：稳态+振荡）
+    """为单个场景生成可视化对比图（简化版：移除 LLM 对比）
     
     Args:
         scenario: 场景配置
         metadata: 元数据
         data: 原始历史数据（稳态+振荡）
-        sim_old/sim_rule/sim_llm: 仿真结果
-        pid_rule/pid_llm: PID参数
+        sim_old/sim_rule: 仿真结果（sim_llm 保留参数兼容但不使用）
+        pid_rule: PID参数（pid_llm 保留参数兼容但不使用）
         result: 对比结果
         scenario_idx: 场景索引
-        tuning_method: 整定方法（oscillation_critical/model_fitting等）
+        tuning_method: 整定方法
     """
+    # 现代配色方案
+    COLORS = {
+        'pv': '#1E88E5',        # 深蓝
+        'sv': '#E53935',        # 橙红
+        'mv': '#43A047',        # 翠绿
+        'old_pid': '#7E57C2',   # 紫色
+        'rule': '#FF9800',      # 橙色
+        'band': '#4CAF50',      # 绿色
+        'grid': '#E0E0E0',      # 浅灰
+    }
+    
     plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
     plt.rcParams['axes.unicode_minus'] = False
+    plt.rcParams['axes.facecolor'] = '#FAFAFA'
+    plt.rcParams['figure.facecolor'] = '#FFFFFF'
     
-    fig = plt.figure(figsize=(18, 12))
+    fig = plt.figure(figsize=(16, 10))
     
-    # 标题
-    winner_emoji = {'LLM': '🤖', 'Rule': '📏', 'Tie': '🤝', 'Both Failed': '❌'}.get(result['winner'], '?')
-    method_str = 'Critical Method (临界法)' if 'oscillation' in tuning_method else 'Model Fitting (模型辨识)'
-    fig.suptitle(f"Scenario {scenario_idx}: {scenario['name']} - {scenario['description']}\n"
-                 f"Tuning Method: {method_str} | Winner: {winner_emoji} {result['winner']}", 
-                 fontsize=12, fontweight='bold')
+    # 标题（移除 LLM 相关标识）
+    rule_stable = sim_rule['is_stable']
+    status_text = 'STABLE' if rule_stable else 'UNSTABLE'
+    status_color = '#4CAF50' if rule_stable else '#F44336'
+    method_str = 'Critical Method' if 'oscillation' in tuning_method else 'Model Fitting'
+    
+    fig.suptitle(f"Scenario {scenario_idx}: {scenario['name']}\n"
+                 f"{scenario['description']} | Method: {method_str}", 
+                 fontsize=14, fontweight='bold', color='#333333')
     
     sv = metadata['sv']
     pid_old = scenario['original_pid']
     
     # 提取原始数据
     timestamps = [d['timestamp'] for d in data]
-    time_seconds = [(ts - timestamps[0]) / 1000 for ts in timestamps]  # 转换为秒
+    time_seconds = [(ts - timestamps[0]) / 1000 for ts in timestamps]
     pv_array = np.array([d['pv'] for d in data])
     sv_array = np.array([d['sv'] for d in data])
     mv_array = np.array([d['mv'] for d in data])
     
     # 找到系统变化时间点
-    change_idx = 300  # 默认稳态300秒
+    change_idx = 300
     if metadata.get('change_time'):
         for i, ts in enumerate(timestamps):
             if ts >= metadata['change_time']:
                 change_idx = i
                 break
     
-    # ========== 子图1: 原始数据 PV/SV（稳态+振荡）==========
-    ax1 = fig.add_subplot(3, 3, 1)
-    ax1.plot(time_seconds, pv_array, 'b-', label='PV', linewidth=0.8, alpha=0.8)
-    ax1.plot(time_seconds, sv_array, 'r--', label='SV', linewidth=1.2)
-    ax1.axvline(x=time_seconds[change_idx], color='red', linestyle='--', linewidth=2, alpha=0.7, label='System Changed')
-    ax1.fill_between(time_seconds[:change_idx], sv * 0.95, sv * 1.05, alpha=0.1, color='blue', label='Steady State')
-    ax1.fill_between(time_seconds[change_idx:], sv * 0.95, sv * 1.05, alpha=0.1, color='orange', label='Oscillation')
-    ax1.set_ylabel('PV / SV')
+    # ========== 2x3 布局 ==========
+    
+    # ========== 子图1: 原始数据 PV/SV + MV（双Y轴）==========
+    ax1 = fig.add_subplot(2, 3, 1)
+    ax1.plot(time_seconds, pv_array, color=COLORS['pv'], label='PV', linewidth=1.2, alpha=0.9)
+    ax1.plot(time_seconds, sv_array, color=COLORS['sv'], linestyle='--', label='SV', linewidth=1.5)
+    ax1.axvline(x=time_seconds[change_idx], color='#FF5722', linestyle='--', linewidth=2, alpha=0.8, label='Change')
+    ax1.fill_between(time_seconds, sv * 0.95, sv * 1.05, alpha=0.12, color=COLORS['band'])
+    ax1.set_ylabel('PV / SV', fontweight='bold', color=COLORS['pv'])
     ax1.set_xlabel('Time (s)')
-    ax1.set_title('Original Data: Steady State → Oscillation')
-    ax1.legend(loc='upper right', fontsize=7)
-    ax1.grid(True, alpha=0.3)
+    ax1.set_title('Original Data: PV, SV & MV', fontweight='bold', fontsize=11)
+    ax1.tick_params(axis='y', labelcolor=COLORS['pv'])
+    ax1.grid(True, alpha=0.4, color=COLORS['grid'])
+    ax1.set_xlim([0, time_seconds[-1]])
     
-    # ========== 子图2: 原始数据 MV ==========
-    ax2 = fig.add_subplot(3, 3, 2)
-    ax2.plot(time_seconds, mv_array, 'g-', label='MV', linewidth=0.8)
-    ax2.axvline(x=time_seconds[change_idx], color='red', linestyle='--', linewidth=2, alpha=0.7)
-    ax2.set_ylabel('MV')
-    ax2.set_xlabel('Time (s)')
-    ax2.set_title('MV (Control Output)')
-    ax2.legend(loc='upper right', fontsize=8)
-    ax2.grid(True, alpha=0.3)
+    # 添加 MV 到右侧 Y 轴
+    ax1_mv = ax1.twinx()
+    ax1_mv.plot(time_seconds, mv_array, color=COLORS['mv'], label='MV', linewidth=1.0, alpha=0.7)
+    ax1_mv.set_ylabel('MV (%)', fontweight='bold', color=COLORS['mv'])
+    ax1_mv.tick_params(axis='y', labelcolor=COLORS['mv'])
     
-    # ========== 子图3: 振荡段放大 ==========
-    ax3 = fig.add_subplot(3, 3, 3)
+    # 合并图例
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax1_mv.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=7, framealpha=0.9)
+    
+    # ========== 子图2: 振荡段放大（PV/SV + MV）==========
+    ax2 = fig.add_subplot(2, 3, 2)
     osc_start = max(0, change_idx - 20)
-    ax3.plot(time_seconds[osc_start:], pv_array[osc_start:], 'b-', label='PV', linewidth=1.0)
-    ax3.plot(time_seconds[osc_start:], sv_array[osc_start:], 'r--', label='SV', linewidth=1.2)
-    ax3.axhline(y=sv * 1.05, color='gray', linestyle=':', alpha=0.5)
-    ax3.axhline(y=sv * 0.95, color='gray', linestyle=':', alpha=0.5)
-    ax3.set_ylabel('PV / SV')
+    ax2.plot(time_seconds[osc_start:], pv_array[osc_start:], color=COLORS['pv'], label='PV', linewidth=1.2)
+    ax2.plot(time_seconds[osc_start:], sv_array[osc_start:], color=COLORS['sv'], linestyle='--', label='SV', linewidth=1.5)
+    ax2.axhline(y=sv * 1.05, color='#9E9E9E', linestyle=':', alpha=0.7)
+    ax2.axhline(y=sv * 0.95, color='#9E9E9E', linestyle=':', alpha=0.7)
+    ax2.fill_between(time_seconds[osc_start:], sv * 0.95, sv * 1.05, alpha=0.12, color=COLORS['band'])
+    ax2.set_ylabel('PV / SV', fontweight='bold', color=COLORS['pv'])
+    ax2.set_xlabel('Time (s)')
+    ax2.set_title('Oscillation Segment (Zoomed)', fontweight='bold', fontsize=11)
+    ax2.tick_params(axis='y', labelcolor=COLORS['pv'])
+    ax2.grid(True, alpha=0.4, color=COLORS['grid'])
+    
+    # 添加 MV 到右侧 Y 轴
+    ax2_mv = ax2.twinx()
+    ax2_mv.plot(time_seconds[osc_start:], mv_array[osc_start:], color=COLORS['mv'], label='MV', linewidth=1.0, alpha=0.7)
+    ax2_mv.set_ylabel('MV (%)', fontweight='bold', color=COLORS['mv'])
+    ax2_mv.tick_params(axis='y', labelcolor=COLORS['mv'])
+    
+    lines1, labels1 = ax2.get_legend_handles_labels()
+    lines2, labels2 = ax2_mv.get_legend_handles_labels()
+    ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=7, framealpha=0.9)
+    
+    # ========== 子图3: Old PID vs New PID 对比（含 MV）==========
+    ax3 = fig.add_subplot(2, 3, 3)
+    ax3.plot(sim_old['t'], sim_old['pv'], color=COLORS['old_pid'], linestyle='--', label='Old PV', linewidth=1.5, alpha=0.8)
+    ax3.plot(sim_rule['t'], sim_rule['pv'], color=COLORS['rule'], label='Tuned PV', linewidth=2)
+    ax3.plot(sim_old['t'], sim_old['sv'], color=COLORS['sv'], linestyle='--', label='SV', linewidth=1.2, alpha=0.7)
+    ax3.fill_between(sim_old['t'], sv * 0.95, sv * 1.05, alpha=0.12, color=COLORS['band'])
+    old_status = 'Stable' if sim_old['is_stable'] else 'Oscillating'
+    new_status = 'STABLE' if sim_rule['is_stable'] else 'Oscillating'
+    ax3.set_title(f"Old ({old_status}) vs Tuned ({new_status})", fontweight='bold', fontsize=11)
+    ax3.set_ylabel('PV', fontweight='bold', color=COLORS['pv'])
     ax3.set_xlabel('Time (s)')
-    ax3.set_title('Oscillation Segment (Zoomed)')
-    ax3.legend(loc='upper right', fontsize=8)
-    ax3.grid(True, alpha=0.3)
+    ax3.tick_params(axis='y', labelcolor=COLORS['pv'])
+    ax3.grid(True, alpha=0.4, color=COLORS['grid'])
     
-    # ========== 子图4: Old PID 响应（新系统）==========
-    ax4 = fig.add_subplot(3, 3, 4)
-    ax4.plot(sim_old['t'], sim_old['pv'], 'b-', label='PV', linewidth=1.5)
-    ax4.plot(sim_old['t'], sim_old['sv'], 'r--', label='SV', linewidth=1.2)
-    ax4.axhline(y=sv * 1.05, color='gray', linestyle=':', alpha=0.5)
-    ax4.axhline(y=sv * 0.95, color='gray', linestyle=':', alpha=0.5)
-    ax4.fill_between(sim_old['t'], sv * 0.95, sv * 1.05, alpha=0.1, color='green')
-    status = 'Stable' if sim_old['is_stable'] else 'OSCILLATING'
-    ax4.set_title(f"Old PID on Changed System: {status}\nKp={pid_old['Kp']}, Ki={pid_old['Ki']}")
-    ax4.set_ylabel('PV')
-    ax4.set_xlabel('Time (s)')
-    ax4.legend(loc='lower right', fontsize=8)
-    ax4.grid(True, alpha=0.3)
+    # 添加 MV 到右侧 Y 轴
+    ax3_mv = ax3.twinx()
+    ax3_mv.plot(sim_old['t'], sim_old['mv'], color=COLORS['old_pid'], linestyle=':', label='Old MV', linewidth=1.0, alpha=0.5)
+    ax3_mv.plot(sim_rule['t'], sim_rule['mv'], color=COLORS['rule'], linestyle=':', label='Tuned MV', linewidth=1.0, alpha=0.6)
+    ax3_mv.set_ylabel('MV (%)', fontweight='bold', color=COLORS['mv'])
+    ax3_mv.tick_params(axis='y', labelcolor=COLORS['mv'])
     
-    # ========== 子图5: Rule Engine 响应 ==========
-    ax5 = fig.add_subplot(3, 3, 5)
-    ax5.plot(sim_rule['t'], sim_rule['pv'], 'orange', label='PV', linewidth=1.5)
-    ax5.plot(sim_rule['t'], sim_rule['sv'], 'r--', label='SV', linewidth=1.2)
-    ax5.axhline(y=sv * 1.05, color='gray', linestyle=':', alpha=0.5)
-    ax5.axhline(y=sv * 0.95, color='gray', linestyle=':', alpha=0.5)
-    ax5.fill_between(sim_rule['t'], sv * 0.95, sv * 1.05, alpha=0.1, color='green')
-    status = 'STABLE' if sim_rule['is_stable'] else 'Oscillating'
-    ax5.set_title(f"Rule Engine: {status}\npb={pid_rule.get('pb', 'N/A')}%, Kp={pid_rule.get('kp', 0):.3f}")
-    ax5.set_ylabel('PV')
-    ax5.set_xlabel('Time (s)')
-    ax5.legend(loc='lower right', fontsize=8)
-    ax5.grid(True, alpha=0.3)
+    # 合并图例
+    lines1, labels1 = ax3.get_legend_handles_labels()
+    lines2, labels2 = ax3_mv.get_legend_handles_labels()
+    ax3.legend(lines1 + lines2, labels1 + labels2, loc='lower right', fontsize=6, framealpha=0.9, ncol=2)
+
     
-    # ========== 子图6: LLM 响应 ==========
-    ax6 = fig.add_subplot(3, 3, 6)
-    ax6.plot(sim_llm['t'], sim_llm['pv'], 'g-', label='PV', linewidth=1.5)
-    ax6.plot(sim_llm['t'], sim_llm['sv'], 'r--', label='SV', linewidth=1.2)
-    ax6.axhline(y=sv * 1.05, color='gray', linestyle=':', alpha=0.5)
-    ax6.axhline(y=sv * 0.95, color='gray', linestyle=':', alpha=0.5)
-    ax6.fill_between(sim_llm['t'], sv * 0.95, sv * 1.05, alpha=0.1, color='green')
-    status = 'STABLE' if sim_llm['is_stable'] else 'Oscillating'
-    ax6.set_title(f"LLM: {status}\npb={pid_llm.get('pb', 'N/A')}%, Kp={pid_llm.get('kp', 0):.3f}")
-    ax6.set_ylabel('PV')
-    ax6.set_xlabel('Time (s)')
-    ax6.legend(loc='lower right', fontsize=8)
-    ax6.grid(True, alpha=0.3)
-    
-    # ========== 子图7: 三方对比 ==========
-    ax7 = fig.add_subplot(3, 3, 7)
-    ax7.plot(sim_old['t'], sim_old['pv'], 'b--', label='Old PID', linewidth=1.2, alpha=0.7)
-    ax7.plot(sim_rule['t'], sim_rule['pv'], 'orange', label='Rule Engine', linewidth=1.5)
-    ax7.plot(sim_llm['t'], sim_llm['pv'], 'g-', label='LLM', linewidth=1.5)
-    ax7.plot(sim_old['t'], sim_old['sv'], 'r--', label='SV', linewidth=1.2)
-    ax7.fill_between(sim_old['t'], sv * 0.95, sv * 1.05, alpha=0.1, color='green', label='5% Band')
-    ax7.set_title('Comparison: Old PID vs Rule Engine vs LLM')
-    ax7.set_ylabel('PV')
-    ax7.set_xlabel('Time (s)')
-    ax7.legend(loc='upper right', fontsize=8)
-    ax7.grid(True, alpha=0.3)
-    
-    # ========== 子图8: 性能指标柱状图 ==========
-    ax8 = fig.add_subplot(3, 3, 8)
-    metrics = ['Settling Time (s)', 'Overshoot (%)', 'IAE/100']
+    # ========== 子图4: 性能指标柱状图 ==========
+    ax4 = fig.add_subplot(2, 3, 4)
+    metrics = ['Settling\nTime (s)', 'Overshoot\n(%)', 'IAE\n(×100)']
     old_vals = [min(sim_old['settling_time'], 300), sim_old['overshoot'], sim_old.get('iae', 0) / 100]
     rule_vals = [min(sim_rule['settling_time'], 300), sim_rule['overshoot'], sim_rule.get('iae', 0) / 100]
-    llm_vals = [min(sim_llm['settling_time'], 300), sim_llm['overshoot'], sim_llm.get('iae', 0) / 100]
     
     x = np.arange(len(metrics))
-    width = 0.25
-    bars1 = ax8.bar(x - width, old_vals, width, label='Old PID', color='blue', alpha=0.7)
-    bars2 = ax8.bar(x, rule_vals, width, label='Rule Engine', color='orange', alpha=0.7)
-    bars3 = ax8.bar(x + width, llm_vals, width, label='LLM', color='green', alpha=0.7)
+    width = 0.35
+    bars1 = ax4.bar(x - width/2, old_vals, width, label='Old PID', color=COLORS['old_pid'], alpha=0.8)
+    bars2 = ax4.bar(x + width/2, rule_vals, width, label='Tuned PID', color=COLORS['rule'], alpha=0.8)
     
     # 标记不稳定的
     if not sim_old['is_stable']:
         bars1[0].set_hatch('//')
+        bars1[0].set_edgecolor('#333333')
     if not sim_rule['is_stable']:
         bars2[0].set_hatch('//')
-    if not sim_llm['is_stable']:
-        bars3[0].set_hatch('//')
+        bars2[0].set_edgecolor('#333333')
     
-    ax8.set_ylabel('Value')
-    ax8.set_title('Performance Metrics (hatched = unstable)')
-    ax8.set_xticks(x)
-    ax8.set_xticklabels(metrics)
-    ax8.legend(fontsize=8)
-    ax8.grid(True, alpha=0.3)
+    # 添加数值标签
+    for bar, val in zip(bars1, old_vals):
+        ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2, 
+                f'{val:.1f}', ha='center', va='bottom', fontsize=8, color='#555555')
+    for bar, val in zip(bars2, rule_vals):
+        ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2, 
+                f'{val:.1f}', ha='center', va='bottom', fontsize=8, color='#555555')
     
-    # ========== 子图9: 详细信息 ==========
-    ax9 = fig.add_subplot(3, 3, 9)
-    ax9.axis('off')
+    ax4.set_ylabel('Value', fontweight='bold')
+    ax4.set_title('Performance Metrics', fontweight='bold', fontsize=11)
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(metrics, fontsize=9)
+    ax4.legend(fontsize=9, framealpha=0.9)
+    ax4.grid(True, alpha=0.4, axis='y', color=COLORS['grid'])
     
-    llm_decision = pid_llm.get('llm_decision', {})
-    strategy = llm_decision.get('strategy_params', {}) if llm_decision else {}
+    # ========== 子图5: 参数信息卡片 ==========
+    ax5 = fig.add_subplot(2, 3, 5)
+    ax5.axis('off')
     
-    info = f"""
-SCENARIO INFO
-{'='*50}
-Process Original: K={scenario['process_original']['K']}, T1={scenario['process_original']['T1']}s
-Process Changed:  K={scenario['process_changed']['K']}, T1={scenario['process_changed']['T1']}s, L={scenario['process_changed']['L']}s
-Loop Type: {scenario.get('loop_type', 'flow')}
-Tuning Method: {tuning_method}
-
-PERFORMANCE COMPARISON
-{'='*50}
-                Old PID    Rule       LLM
-Stable:         {'Yes' if sim_old['is_stable'] else 'No':<10} {'Yes' if sim_rule['is_stable'] else 'No':<10} {'Yes' if sim_llm['is_stable'] else 'No'}
-Settling (s):   {sim_old['settling_time']:<10.0f} {sim_rule['settling_time']:<10.0f} {sim_llm['settling_time']:.0f}
-Overshoot (%):  {sim_old['overshoot']:<10.1f} {sim_rule['overshoot']:<10.1f} {sim_llm['overshoot']:.1f}
-IAE:            {sim_old.get('iae', 0):<10.0f} {sim_rule.get('iae', 0):<10.0f} {sim_llm.get('iae', 0):.0f}
-
-PID PARAMETERS
-{'='*50}
-                Old PID    Rule       LLM
-Kp:             {pid_old['Kp']:<10} {pid_rule.get('kp', 0):<10.4f} {pid_llm.get('kp', 0):.4f}
-Ki:             {pid_old['Ki']:<10} {pid_rule.get('ki', 0):<10.4f} {pid_llm.get('ki', 0):.4f}
-pb (%):         -          {str(pid_rule.get('pb', 'N/A')):<10} {pid_llm.get('pb', 'N/A')}
-
-LLM STRATEGY (if used)
-{'='*50}
-safety_factor:    {strategy.get('safety_factor', 'N/A')}
-pb_extra_factor:  {strategy.get('pb_extra_factor', 'N/A')}
-ti_multiplier:    {strategy.get('ti_multiplier', 'N/A')}
-"""
-    ax9.text(0.02, 0.98, info, transform=ax9.transAxes, fontsize=8,
-             verticalalignment='top', fontfamily='monospace',
-             bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+    # 构建简洁的信息卡片
+    info_lines = [
+        ("PROCESS PARAMETERS", None),
+        ("─" * 35, None),
+        (f"Original: K={scenario['process_original']['K']:.2f}, T1={scenario['process_original']['T1']:.1f}s", None),
+        (f"Changed:  K={scenario['process_changed']['K']:.2f}, T1={scenario['process_changed']['T1']:.1f}s, L={scenario['process_changed']['L']:.1f}s", None),
+        ("", None),
+        ("PID PARAMETERS", None),
+        ("─" * 35, None),
+        (f"{'Parameter':<12} {'Old PID':<12} {'Tuned PID':<12}", None),
+        (f"{'PB (%)':<12} {100/pid_old['Kp'] if pid_old.get('Kp', 0) != 0 else '-':<12.1f} {pid_rule.get('pb', 100):<12.1f}", None),
+        (f"{'Ti (s)':<12} {pid_old['Kp']/pid_old['Ki'] if pid_old.get('Ki', 0) != 0 else '-':<12.1f} {pid_rule.get('ti', 0):<12.1f}", None),
+        (f"{'Td (s)':<12} {pid_old['Kd']/pid_old['Kp'] if pid_old.get('Kp', 0) != 0 and pid_old.get('Kd', 0) != 0 else 0:<12.1f} {pid_rule.get('td', 0):<12.1f}", None),
+        ("", None),
+        ("TUNING RESULT", None),
+        ("─" * 35, None),
+    ]
     
-    plt.tight_layout()
+    # 状态行
+    if sim_rule['is_stable']:
+        info_lines.append((f"Status: STABLE (Ts={sim_rule['settling_time']:.0f}s)", '#4CAF50'))
+    else:
+        info_lines.append((f"Status: UNSTABLE (not settled)", '#F44336'))
     
-    # 保存图片到 stability 子目录
+    info_lines.append((f"Method: {method_str}", None))
+    info_lines.append((f"Loop Type: {scenario.get('loop_type', 'unknown')}", None))
+    
+    # 绘制信息
+    y_pos = 0.95
+    for text, color in info_lines:
+        text_color = color if color else '#333333'
+        fontweight = 'bold' if text.isupper() or 'Status' in text else 'normal'
+        ax5.text(0.05, y_pos, text, transform=ax5.transAxes, fontsize=10,
+                 verticalalignment='top', fontfamily='monospace',
+                 color=text_color, fontweight=fontweight)
+        y_pos -= 0.055
+    
+    # 添加背景框
+    from matplotlib.patches import FancyBboxPatch
+    bbox = FancyBboxPatch((0.02, 0.02), 0.96, 0.96, 
+                          boxstyle="round,pad=0.02,rounding_size=0.02",
+                          facecolor='#F5F5F5', edgecolor='#BDBDBD',
+                          transform=ax5.transAxes, zorder=-1)
+    ax5.add_patch(bbox)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    
+    # 保存图片
     stability_dir = os.path.join(CONFIG['output_dir'], 'stability')
     os.makedirs(stability_dir, exist_ok=True)
     safe_name = scenario['name'].replace(' ', '_').replace('/', '_')
-    filename = f'scenario_{scenario_idx:02d}_{safe_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
+    filename = f'scenario_{scenario_idx:02d}_{safe_name}.png'  # 固定文件名，覆盖旧图
     filepath = os.path.join(stability_dir, filename)
-    plt.savefig(filepath, dpi=150, bbox_inches='tight')
-    print(f"   📊 Scenario chart saved: {filepath}")
+    plt.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white', edgecolor='none')
+    print(f"   Chart saved: {filepath}")
     plt.close()
 
 
@@ -2801,9 +2839,10 @@ def run_stability_test():
             # ===== 生成可视化图表 =====
             print("   📊 生成可视化图表...")
             
-            # 仿真老PID参数（在变化后的系统上）
+            # 仿真老PID参数（在变化后的系统上，添加持续扰动模拟真实环境）
             pid_old = scenario['original_pid']
-            sim_old = simulate_with_new_pid(process_changed, pid_old, sv, duration=300)
+            sim_old = simulate_with_new_pid(process_changed, pid_old, sv, duration=sim_duration,
+                                           disturbance_std=0.02)  # 2% 持续扰动
             
             # 如果没有LLM结果，用规则引擎结果替代
             if sim_llm is None:

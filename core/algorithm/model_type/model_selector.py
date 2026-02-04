@@ -209,7 +209,7 @@ class ModelSelector(LoggerMixin):
         fitting_result = result.get('fitting_result', {})
         fitting_result['recommendation'] = recommendation
         
-        # 构建新的 pid_parameters，保留 llm_decision
+        # 构建新的 pid_parameters
         new_pid_params = {
             'pb': round(float(Pb), 2),
             'ti': round(float(Ti), 2),
@@ -218,10 +218,6 @@ class ModelSelector(LoggerMixin):
             'ki': round(float(Ki), 2),
             'kd': round(float(Kd), 2)
         }
-        
-        # 保留 LLM 决策信息（如果有）
-        if 'llm_decision' in pid_params:
-            new_pid_params['llm_decision'] = pid_params['llm_decision']
         
         # 输出最终 PID 参数（verbose 模式）
         self.log(f"\n{'='*60}")
