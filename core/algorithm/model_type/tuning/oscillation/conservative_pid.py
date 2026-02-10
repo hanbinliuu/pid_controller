@@ -17,6 +17,7 @@ import numpy as np
 from typing import Dict, Any, Optional, Tuple
 
 from ...config import Config
+from ...config.loop_presets import get_loop_preset, get_adjusted_pb_range, get_adjusted_safety_factor
 from ...logger import LoggerMixin
 from ..strategies.loop_type_strategies import get_loop_strategy, LoopTypeStrategy
 
@@ -267,15 +268,15 @@ class ConservativePIDCalculator(LoggerMixin):
         else:
             pb_max = min(pb_max_config * 1.2, 550.0)
         
-        # 按回路类型设置 pb_max 上限 (适度放宽以提高稳态率)
-        if self._loop_type == 'flow':
-            pb_max = min(pb_max, 220.0)  # 流量: 放宽 180→220
-        elif self._loop_type == 'pressure':
-            pb_max = min(pb_max, 280.0)  # 压力: 放宽 250→280
-        elif self._loop_type == 'temperature':
-            pb_max = min(pb_max, 450.0)  # 温度: 放宽 400→450
-        elif self._loop_type == 'level':
-            pb_max = min(pb_max, 450.0)  # 液位: 放宽 400→450
+        # 按回路类型动态调整pb范围 (使用回路预设)
+        preset = get_loop_preset(self._loop_type)
+        pb_min_preset, pb_max_preset = preset['pb_min'], preset['pb_max']
+        pb_max = min(pb_max, pb_max_preset)
+        
+        # 应用回路类型的安全系数
+        loop_safety = preset.get('safety_factor', 1.0)
+        if loop_safety != 1.0:
+            self.log(f"   📊 回路类型[{self._loop_type}]安全系数: ×{loop_safety:.2f}")
         
         pb_k_factor = osc_config.get('pb_k_adjustment_factor', 0.3)
         if K_approx > 0.01:

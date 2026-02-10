@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from ..types import ValveIssues, ConservativePIDParams
 
 from ...config import Config, ModelType
+from ...config.loop_presets import get_loop_preset
 from ...data_models import SegmentResult, HistoricalData, FusionResult
 from ...utils import calculate_r2, calculate_rmse
 from ...logger import LoggerMixin
@@ -455,17 +456,12 @@ class OscillationTuner(LoggerMixin):
         if T1_approx > t1_threshold:
             pb_base *= 1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 150.0)  # 恢复
         
-        # 按回路类型设置不同pb_max上限 (适度放宽以提高稳态率)
-        if self._loop_type == 'flow':
-            pb_max_limit = 220.0  # 流量: 放宽 180→220
-        elif self._loop_type == 'pressure':
-            pb_max_limit = 280.0  # 压力: 放宽 250→280
-        elif self._loop_type in ['temperature', 'level']:
-            pb_max_limit = osc_config.get('pb_max', 450.0)  # 温度/液位: 放宽至450
-        else:
-            pb_max_limit = osc_config.get('pb_max', 400.0)
+        # 按回路类型获取pb范围限制 (使用回路预设)
+        preset = get_loop_preset(self._loop_type)
+        pb_max_limit = preset.get('pb_max', osc_config.get('pb_max', 400.0))
+        pb_min_limit = preset.get('pb_min', osc_config.get('pb_min', 60.0))
         
-        pb_safe = np.clip(pb_base, osc_config.get('pb_min', 80.0), pb_max_limit)
+        pb_safe = np.clip(pb_base, pb_min_limit, pb_max_limit)
         conservative_Kp = 100.0 / pb_safe
         
         ti_base_min = 10.0 if self._loop_type == 'level' else 5.0

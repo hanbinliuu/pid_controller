@@ -162,6 +162,8 @@ class ModelSelector(LoggerMixin):
             return self._empty_result_new(params)
         
         if not qualified_windows:
+            # 没有扰动窗口（tuning_segment未检测到振荡）→ 不需要整定
+            self.log("⚠️ 无扰动窗口（tuning_segment未检测到振荡），跳过整定")
             return self._empty_result_new(params)
         
         tuning_input = {
@@ -303,35 +305,52 @@ class ModelSelector(LoggerMixin):
         
         self.log(f"📥 输入: {len(input_data.tuning_window)} 个扰动窗口, {len(raw_data)} 条数据")
         
-        # Step 1: 检测扰动段（原有逻辑）
+        # Step 1: 检测扰动段（来自 tuning_segment 的振荡/扰动窗口）
         segments = self._segment_processor.extract_segments(hist_data, input_data.tuning_window)
         disturbance_segs, disturbance_results = self._segment_processor.filter_invalid_segments(segments)
         
+        self.log(f"📊 扰动段: {len(disturbance_segs)} 个有效")
+        
+        from_sv_step = False  # 标记是否来自SV阶跃（闭环数据）
+        
         if not disturbance_segs:
-            self.log("⚠️ 无有效扰动段")
+            # 无有效扰动段 → 不需要整定
+            self.log("⚠️ 无有效扰动段，跳过整定")
             return self._empty_result(input_data)
         
-        self.log(f"📊 检测到 {len(disturbance_segs)} 个有效扰动段")
+        # 有扰动/振荡段 → 尝试找更好的数据用于模型辨识
+        # Step 1.4: 检测 SV 阶跃响应段（优先于扰动段）
+        sv_step_segs, sv_step_results = self._segment_processor.detect_sv_step_segments(hist_data)
         
-        # Step 1.5: 有扰动发生，尝试找整定段（基于MV阶跃变化）
-        tuning_segs_mv, tuning_results_mv = self._segment_processor.detect_tuning_segments(hist_data)
-        
-        # Step 1.6: 决定使用哪种段进行整定
-        if tuning_segs_mv:
-            # 找到整定段：优先使用整定段，并尝试与扰动段合并时间窗口
-            self.log(f"✅ 找到 {len(tuning_segs_mv)} 个整定段")
-            valid_segments, segment_results = self._merge_tuning_and_disturbance(
-                tuning_segs_mv, tuning_results_mv,
-                disturbance_segs, disturbance_results,
-                hist_data  # 传入原始数据用于重新提取合并段
-            )
+        if sv_step_segs:
+            # SV 阶跃段找到 → 优先使用（更适合模型辨识）
+            self.log(f"✅ 找到 {len(sv_step_segs)} 个 SV 阶跃响应段（优先使用）")
+            valid_segments = sv_step_segs
+            segment_results = sv_step_results
             use_tuning_segments = True
+            from_sv_step = True
         else:
-            # 没找到整定段：使用扰动段（原有逻辑）
-            self.log(f"⚠️ 未找到整定段，使用 {len(disturbance_segs)} 个扰动段")
-            valid_segments = disturbance_segs
-            segment_results = disturbance_results
-            use_tuning_segments = False
+            self.log(f"📊 无SV阶跃段，使用 {len(disturbance_segs)} 个扰动段")
+            
+            # Step 1.5: 尝试找整定段（基于MV阶跃变化）
+            tuning_segs_mv, tuning_results_mv = self._segment_processor.detect_tuning_segments(hist_data)
+            
+            # Step 1.6: 决定使用哪种段进行整定
+            if tuning_segs_mv:
+                # 找到整定段：优先使用整定段，并尝试与扰动段合并时间窗口
+                self.log(f"✅ 找到 {len(tuning_segs_mv)} 个整定段")
+                valid_segments, segment_results = self._merge_tuning_and_disturbance(
+                    tuning_segs_mv, tuning_results_mv,
+                    disturbance_segs, disturbance_results,
+                    hist_data  # 传入原始数据用于重新提取合并段
+                )
+                use_tuning_segments = True
+            else:
+                # 没找到整定段：使用扰动段（振荡段）
+                self.log(f"⚠️ 未找到整定段，使用 {len(disturbance_segs)} 个扰动段")
+                valid_segments = disturbance_segs
+                segment_results = disturbance_results
+                use_tuning_segments = False
         
         # 保存原始段数据用于可视化（降采样前）
         # 使用深拷贝避免后续修改影响原始数据
@@ -458,6 +477,10 @@ class ModelSelector(LoggerMixin):
         # Step 4: 融合各段参数（只使用拟合成功的正常段）
         fusion_result = self._fuse_parameters(segment_results_fitted, best_model_type, fitting_segs)
         
+        # Step 4.5: 闭环数据修正（SV阶跃段辨识的是闭环模型参数）
+        if from_sv_step:
+            fusion_result = self._apply_closed_loop_correction(fusion_result)
+        
         # Step 5: 验证一致性与仿真匹配度
         fusion_result = self._validate_and_refine(fusion_result, fitting_segs, hist_data)
         
@@ -506,6 +529,34 @@ class ModelSelector(LoggerMixin):
         return self._build_output(fusion_result, hist_data, time_range, lambda_factor, 
                                   input_data.tuning_window, quality_info,
                                   original_results, original_segments)
+    
+    def _apply_closed_loop_correction(self, fusion: FusionResult) -> FusionResult:
+        """
+        闭环数据修正：SV阶跃段辨识的是闭环模型参数
+        
+        闭环辨识的T1是闭环时间常数，通常比开环T1小2~3倍。
+        直接用闭环T1做SIMC/Lambda整定会导致PID参数过于激进。
+        
+        修正逻辑：
+        - T1_openloop ≈ T1_closedloop × correction_factor
+        - K保持不变（闭环下MV→PV的增益已经是开环增益的近似）
+        """
+        cfg = self._segment_processor._tuning_config
+        t1_factor = cfg.get('sv_closed_loop_t1_factor', 3.0)
+        
+        T1_original = fusion.T1
+        T1_corrected = fusion.T1 * t1_factor
+        
+        self.log(f"\n{'='*60}")
+        self.log("📊 Step 4.5: 闭环数据修正（SV阶跃段）")
+        self.log('='*60)
+        self.log(f"   闭环T1 = {T1_original:.2f}s → 开环T1(估) = {T1_corrected:.2f}s "
+                f"(×{t1_factor})")
+        self.log(f"   K = {fusion.K:.4f} (保持不变)")
+        
+        fusion.T1 = T1_corrected
+        
+        return fusion
     
     def _build_quality_info(self, valid_segments: List[HistoricalData],
                             segment_results: List[SegmentResult],

@@ -53,14 +53,14 @@ OSCILLATION_TUNING = {
     
     # ========== 基础pb计算参数 ==========
     'pb_from_k_factor': 1.5,             # 基于K计算pb的保守系数
-    'kp_from_ku_factor': 0.35,           # 基于Ku计算Kp的系数（ZN法是0.45，保守用0.35）
+    'kp_from_ku_factor': 0.40,           # 基于Ku计算Kp的系数（ZN法是0.45）[优化: 0.35→0.40]
     
     # ========== 慢系统调整 ==========
     'slow_system_pu_thresholds': [30.0, 15.0],  # Pu阈值
     'slow_system_factors': [1.3, 1.15, 1.0],    # 对应因子
     
     # ========== 原因微调因子 ==========
-    'high_gain_extra_factor': 1.1,       # Ku过大时的额外保守系数
+    'high_gain_extra_factor': 1.05,      # Ku过大时的额外保守系数 [优化: 1.1→1.05]
     
     # ========== 数据质量调整 ==========
     'quality_adjustment_threshold': 0.5, # 数据质量低于此值开始调整
@@ -76,7 +76,7 @@ OSCILLATION_TUNING = {
     'valve_saturation_factor': 1.1,      # 饱和调整因子
     
     # ========== 振荡比自适应安全系数 ==========
-    'safety_factor_base': 1.2,           # 基础安全系数 (osc < 0.5)
+    'safety_factor_base': 1.1,           # 基础安全系数 (osc < 0.5) [优化: 1.2→1.1]
     'safety_factor_thresholds': [0.5, 0.7, 0.85],  # 振荡比阈值
     'safety_factor_slopes': [0.4, 0.8, 1.5],       # 各区间斜率（降低，转移到Ti）
     
@@ -122,17 +122,17 @@ OSCILLATION_TUNING = {
     'level_fallback_ti_factor': 2.5,     # 液位回路fallback时的Ti乘数（新增）
     
     # ========== pb范围 (恢复稳定性) ==========
-    'pb_min': 80.0,                      # pb下限
+    'pb_min': 60.0,                      # pb下限 [优化: 80→60, 适应流量回路快速响应]
     'pb_max': 450.0,                     # pb上限 (恢复: 350→450)
     'pb_max_large_delay': 600.0,         # 大滞后系统pb上限 (恢复: 500→600)
     
     # ========== 大滞后系统专用配置（L/T1 > 0.5）(恢复稳定性) ==========
     'large_delay_ratio_threshold': 0.5,  # 大滞后比阈值
     'large_delay_lambda_factor': 2.5,    # 大滞后时Lambda因子 (恢复)
-    'large_delay_pb_boost': 1.8,         # 大滞后时pb额外增益 (恢复: 1.6→1.8)
+    'large_delay_pb_boost': 1.5,         # 大滞后时pb额外增益 [优化: 1.8→1.5, 石化大滞后常见]
     'large_delay_ti_boost': 1.5,         # 大滞后时Ti额外增益 (恢复: 1.4→1.5)
     'extreme_delay_ratio_threshold': 0.8, # 极大滞后比阈值
-    'extreme_delay_pb_boost': 2.5,       # 极大滞后时pb额外增益 (恢复: 2.2→2.5)
+    'extreme_delay_pb_boost': 2.0,       # 极大滞后时pb额外增益 [优化: 2.5→2.0]
     'large_delay_absolute_threshold': 15.0, # 绝对滞后阈值（秒）
     
     # ========== 极慢系统配置（T1 > 100s 或 Pu > 100s）==========

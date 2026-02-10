@@ -364,6 +364,314 @@ class SegmentProcessor(LoggerMixin):
         self.log(f"   📊 检测到 {len(tuning_segments)} 个有效整定段")
         return tuning_segments, segment_results
     
+    def detect_sv_step_segments(self, hist_data: HistoricalData
+                                ) -> Tuple[List[HistoricalData], List[SegmentResult]]:
+        """
+        基于SV阶跃变化检测整定段（适合模型辨识的数据段）
+        
+        SV阶跃响应段是模型辨识最理想的数据：SV有明显阶跃变化，PV跟随响应。
+        优先级高于MV阶跃段和扰动段。
+        
+        Args:
+            hist_data: 历史数据
+        
+        Returns:
+            (sv_step_segments, segment_results)
+        """
+        cfg = self._tuning_config
+        sv_min_step = cfg.get('sv_min_step_size', 0.5)
+        sv_stable_window = cfg.get('sv_stable_window', 20)
+        sv_pre_step_points = cfg.get('sv_pre_step_points', 30)
+        sv_max_response = cfg.get('sv_max_response_time', 3000)
+        sv_min_response = cfg.get('sv_min_response_time', 30)
+        
+        self.log(f"\n{'='*60}")
+        self.log("📊 SV阶跃响应段检测")
+        self.log('='*60)
+        
+        sv = hist_data.sv
+        pv = hist_data.pv
+        mv = hist_data.mv
+        timestamp = hist_data.timestamp
+        n = len(sv)
+        
+        if n < sv_min_response * 3:
+            self.log("   数据长度不足")
+            return [], []
+        
+        # Step 1: 检测SV阶跃变化点
+        sv_steps = self._detect_sv_steps(sv, sv_min_step, sv_stable_window)
+        self.log(f"   检测到 {len(sv_steps)} 个SV阶跃变化点")
+        
+        if not sv_steps:
+            self.log("   ⚠️ 未检测到SV阶跃变化")
+            return [], []
+        
+        # Step 2: 确定每个阶跃的响应区间（index范围）
+        step_ranges = []  # [(pre_start, end_idx, step_idx, step_size, step_dir), ...]
+        
+        for i, (step_idx, step_size, step_dir) in enumerate(sv_steps):
+            pre_start = max(0, step_idx - sv_pre_step_points)
+            
+            # 找下一个SV阶跃点
+            if i + 1 < len(sv_steps):
+                next_step_idx = sv_steps[i + 1][0]
+                end_idx = min(next_step_idx, step_idx + sv_max_response)
+            else:
+                end_idx = min(step_idx + sv_max_response, n)
+            
+            # 检查响应区间长度
+            response_len = end_idx - step_idx
+            if response_len < sv_min_response:
+                self.log(f"   SV阶跃@{step_idx}: 响应区间太短({response_len}点), 跳过")
+                continue
+            
+            step_ranges.append((pre_start, end_idx, step_idx, step_size, step_dir))
+        
+        if not step_ranges:
+            self.log("   ⚠️ 无有效SV阶跃区间")
+            return [], []
+        
+        # Step 3: 合并相邻/重叠的区间
+        # 相邻阈值：两个区间之间的间隔 <= merge_gap 点，则合并
+        merge_gap = sv_pre_step_points * 2  # 允许一定间隔
+        merged_ranges = []  # [(start, end), ...]
+        
+        current_start, current_end = step_ranges[0][0], step_ranges[0][1]
+        for i in range(1, len(step_ranges)):
+            r_start, r_end = step_ranges[i][0], step_ranges[i][1]
+            if r_start <= current_end + merge_gap:
+                # 重叠或相邻，合并
+                current_end = max(current_end, r_end)
+            else:
+                # 不相邻，保存当前合并段
+                merged_ranges.append((current_start, current_end))
+                current_start, current_end = r_start, r_end
+        merged_ranges.append((current_start, current_end))
+        
+        self.log(f"   合并后: {len(step_ranges)} 个阶跃区间 → {len(merged_ranges)} 个合并段")
+        
+        # Step 4: 从合并后的区间提取段数据并评估质量
+        sv_step_segments = []
+        segment_results = []
+        
+        for m_start, m_end in merged_ranges:
+            seg = HistoricalData(
+                timestamp=timestamp[m_start:m_end],
+                pv=pv[m_start:m_end],
+                sv=sv[m_start:m_end],
+                mv=mv[m_start:m_end]
+            )
+            seg_len = m_end - m_start
+            
+            # 找到该合并段内的第一个阶跃点作为评估参考
+            first_step_in_range = None
+            for r in step_ranges:
+                if r[0] >= m_start and r[0] < m_end:
+                    first_step_in_range = r
+                    break
+            
+            if first_step_in_range is None:
+                continue
+            
+            _, _, step_idx, step_size, step_dir = first_step_in_range
+            pre_points = step_idx - m_start
+            
+            # 评估整个合并段的PV响应质量
+            quality_score, is_good_response = self._evaluate_sv_step_response(
+                seg.pv, seg.sv, seg.mv, step_size, step_dir,
+                pre_points=pre_points
+            )
+            
+            result = SegmentResult(
+                segment_idx=len(sv_step_segments),
+                start_idx=m_start,
+                end_idx=m_end,
+                data_points=seg_len,
+                is_valid=is_good_response
+            )
+            
+            # 分析数据质量
+            quality = self._preprocessor.analyze_quality(seg.pv, seg.mv)
+            result.quality_score = quality.quality_score
+            result.nonlinearity_score = quality.nonlinearity_score
+            result.step_response_score = quality_score
+            result.oscillation_ratio = quality.oscillation_ratio
+            result.is_nonlinear = quality.is_nonlinear
+            
+            # 统计该合并段内包含多少个阶跃
+            steps_in_range = sum(1 for r in step_ranges if r[0] >= m_start and r[0] < m_end)
+            
+            if is_good_response:
+                self.log(f"   合并段[{m_start}:{m_end}]: {seg_len}点, "
+                        f"{steps_in_range}个阶跃, 质量={quality_score:.2f} ✓")
+                sv_step_segments.append(seg)
+                segment_results.append(result)
+            else:
+                self.log(f"   合并段[{m_start}:{m_end}]: {seg_len}点, "
+                        f"{steps_in_range}个阶跃, 质量={quality_score:.2f} ✗")
+        
+        self.log(f"   📊 检测到 {len(sv_step_segments)} 个有效SV阶跃响应段")
+        return sv_step_segments, segment_results
+    
+    def _detect_sv_steps(self, sv: np.ndarray, min_step_size: float = 0.5,
+                         stable_window: int = 20) -> List[Tuple[int, float, int]]:
+        """
+        检测SV阶跃变化点
+        
+        Args:
+            sv: SV数据数组
+            min_step_size: 最小SV阶跃幅度
+            stable_window: 稳定窗口大小
+        
+        Returns:
+            [(step_idx, step_size, step_dir), ...]
+        """
+        n = len(sv)
+        steps = []
+        
+        if n < stable_window * 3:
+            return steps
+        
+        i = stable_window
+        while i < n - stable_window:
+            before_window = sv[max(0, i - stable_window):i]
+            after_window = sv[i:min(n, i + stable_window)]
+            
+            before_std = np.std(before_window)
+            before_mean = np.mean(before_window)
+            after_mean = np.mean(after_window)
+            step_size = after_mean - before_mean
+            
+            # SV阶跃：变化量大且变化前SV稳定
+            if abs(step_size) >= min_step_size and before_std < abs(step_size) * 0.3:
+                step_dir = 1 if step_size > 0 else -1
+                steps.append((i, step_size, step_dir))
+                # 跳过阶跃区域
+                i += stable_window * 2
+            else:
+                i += 1
+        
+        return steps
+    
+    def _evaluate_sv_step_response(self, pv: np.ndarray, sv: np.ndarray,
+                                    mv: np.ndarray, step_size: float,
+                                    step_dir: int, pre_points: int = 30
+                                    ) -> Tuple[float, bool]:
+        """
+        评估PV对SV阶跃的响应质量
+        
+        与MV阶跃评估不同，SV阶跃是闭环响应：
+        - PV应该跟随SV变化
+        - MV应该有相应的调节动作
+        - 响应可以有超调但最终应该收敛
+        
+        Args:
+            pv: PV数据
+            sv: SV数据
+            mv: MV数据
+            step_size: SV阶跃幅度
+            step_dir: 阶跃方向
+            pre_points: 阶跃前稳态点数
+        
+        Returns:
+            (quality_score, is_good_response)
+        """
+        n = len(pv)
+        if n < 30:
+            return 0.0, False
+        
+        scores = []
+        
+        # 响应区域（排除前置稳态）
+        resp_pv = pv[pre_points:]
+        resp_sv = sv[pre_points:]
+        resp_mv = mv[pre_points:]
+        resp_n = len(resp_pv)
+        
+        if resp_n < 20:
+            return 0.0, False
+        
+        # ========== 1. PV跟随SV变化 ==========
+        # PV应该向SV新值方向变化
+        pv_initial = np.mean(pv[max(0, pre_points - 10):pre_points]) if pre_points > 5 else pv[0]
+        pv_final = np.mean(resp_pv[-min(20, resp_n):])
+        sv_new = np.mean(resp_sv[-min(20, resp_n):])
+        
+        pv_change = pv_final - pv_initial
+        expected_change = sv_new - pv_initial
+        
+        # 方向一致性
+        if abs(expected_change) > 0.1:
+            direction_match = (pv_change * expected_change) > 0
+            # 计算跟随比例
+            follow_ratio = abs(pv_change) / abs(expected_change) if abs(expected_change) > 0 else 0
+            
+            if direction_match and follow_ratio > 0.5:
+                scores.append(1.0)
+            elif direction_match and follow_ratio > 0.2:
+                scores.append(0.7)
+            elif direction_match:
+                scores.append(0.5)
+            else:
+                scores.append(0.2)
+        else:
+            # SV变化很小，检查PV是否有任何响应
+            if np.ptp(resp_pv) > 0.5:
+                scores.append(0.5)
+            else:
+                scores.append(0.3)
+        
+        # ========== 2. MV有调节动作 ==========
+        mv_range = np.ptp(resp_mv)
+        mv_initial = np.mean(mv[max(0, pre_points - 10):pre_points]) if pre_points > 5 else mv[0]
+        mv_change = abs(np.mean(resp_mv[:min(30, resp_n)]) - mv_initial)
+        
+        if mv_range > 1.0 or mv_change > 0.5:
+            scores.append(1.0)
+        elif mv_range > 0.3:
+            scores.append(0.7)
+        else:
+            # MV没有明显变化 — 可能是手动模式或控制器未动
+            scores.append(0.3)
+        
+        # ========== 3. PV收敛性 ==========
+        # 后1/3的PV应该比前1/3更接近新SV
+        first_third = resp_pv[:resp_n // 3]
+        last_third = resp_pv[resp_n * 2 // 3:]
+        
+        if len(last_third) > 5 and len(first_third) > 5:
+            error_first = abs(np.mean(first_third) - sv_new)
+            error_last = abs(np.mean(last_third) - sv_new)
+            
+            if error_last < error_first * 0.5:
+                scores.append(1.0)
+            elif error_last < error_first:
+                scores.append(0.7)
+            else:
+                # 没有收敛但可能是积分过程或大延迟 — 不完全拒绝
+                scores.append(0.4)
+        
+        # ========== 4. PV有足够的动态变化 ==========
+        pv_range = np.ptp(resp_pv)
+        if pv_range > abs(step_size) * 0.3:
+            scores.append(1.0)
+        elif pv_range > abs(step_size) * 0.1:
+            scores.append(0.7)
+        elif pv_range > 0.5:
+            scores.append(0.5)
+        else:
+            scores.append(0.2)
+        
+        # ========== 综合评分 ==========
+        quality_score = np.mean(scores) if scores else 0.0
+        
+        # SV阶跃响应段的通过阈值可以比MV阶跃低一些，
+        # 因为闭环数据本身就是有价值的
+        is_good_response = quality_score >= 0.5
+        
+        return float(quality_score), is_good_response
+    
     def _detect_mv_steps(self, mv: np.ndarray, min_step_size: float = None,
                          stable_window: int = None) -> List[Tuple[int, float, int]]:
         """检测MV阶跃变化点"""

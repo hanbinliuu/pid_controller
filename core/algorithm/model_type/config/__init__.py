@@ -50,6 +50,12 @@ from .preprocessing import (
     TUNING_SEGMENT,
     PREPROCESSING,
 )
+from .loop_presets import (
+    LOOP_TYPE_PRESETS,
+    get_loop_preset,
+    get_adjusted_pb_range,
+    get_adjusted_safety_factor,
+)
 
 
 class Config:
@@ -71,7 +77,8 @@ class Config:
     TUNING_DEFAULTS = TUNING_DEFAULTS
     MODEL_SELECTOR = MODEL_SELECTOR
     PREPROCESSING = PREPROCESSING
+    LOOP_TYPE_PRESETS = LOOP_TYPE_PRESETS
 
 
 # 导出
-__all__ = ['Config', 'ModelType']
+__all__ = ['Config', 'ModelType', 'get_loop_preset', 'get_adjusted_pb_range', 'get_adjusted_safety_factor']

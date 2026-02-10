@@ -802,7 +802,21 @@ class StabilityDetector:
                     
                     # 先检查是否是正常的SV跟随响应
                     if self._is_normal_sv_response(change_pv, change_sv, sv_change_magnitude):
-                        # 正常响应，不是扰动，跳过
+                        # 正常响应 → 但仍检查PV是否在跟随SV时有振荡
+                        # SV阶跃后PV的超调/回调是有效的整定数据
+                        if sv_change_magnitude >= 1.0 and len(change_pv) >= 30:
+                            error_signal = change_pv - change_sv
+                            # PV跨越SV的次数（error信号过零）
+                            sv_crossings = int(np.sum(np.abs(np.diff(np.sign(error_signal))) > 0))
+                            # PV方向变化次数
+                            pv_diff = np.diff(change_pv)
+                            pv_diff_nonzero = pv_diff[pv_diff != 0]
+                            direction_changes = 0
+                            if len(pv_diff_nonzero) >= 2:
+                                direction_changes = int(np.sum(np.abs(np.diff(np.sign(pv_diff_nonzero))) > 0))
+                            # PV跨越SV ≥ 2次 或 有方向变化 → 有效振荡数据
+                            if sv_crossings >= 2 or direction_changes >= 2:
+                                non_steady_segments.append((change_start, change_end, current_sv))
                         continue
                     
                     if sv_change_magnitude < 0.5:

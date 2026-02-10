@@ -284,17 +284,24 @@ class OutputBuilder(LoggerMixin):
                 self.log(f"   ⚠️ 振荡整定也失败，保持原参数")
         
         # 计算 model_rating
+        # 运行预测仿真（从实际工作点）
+        pred_stable, pred_metrics = self._pid_calculator.simulate_prediction(
+            fusion, pid_params, hist_data=hist_data, verbose=self._verbose
+        )
+        
         model_rating, score_details = self._pid_calculator.calculate_model_rating(
-            fusion, total_data_points, cl_metrics=cl_metrics, verbose=self._verbose
+            fusion, total_data_points, cl_metrics=cl_metrics,
+            prediction_metrics=pred_metrics, verbose=self._verbose
         )
         
         if self._verbose:
+            w = score_details.get('weights', {})
             self.log(f"\n   📊 评分详情:")
-            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × 30%")
-            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × 20%")
-            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × 15%")
-            self.log(f"      数据覆盖度 ({fusion.n_segments_used}段/{total_data_points}点): {score_details.get('coverage_score', 0):.1f}/10 × 10%")
-            self.log(f"      闭环稳定性: {score_details.get('stability_score', 0):.1f}/10 × 25%")
+            self.log(f"      闭环阶跃稳定性: {score_details.get('stability_score', 0):.1f}/10 × {w.get('stability', 0.35)*100:.0f}%")
+            self.log(f"      预测仿真稳定性: {score_details.get('prediction_score', 0):.1f}/10 × {w.get('prediction', 0.30)*100:.0f}%")
+            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × {w.get('r2', 0.15)*100:.0f}%")
+            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × {w.get('consistency', 0.10)*100:.0f}%")
+            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × {w.get('validity', 0.10)*100:.0f}%")
             self.log(f"      → 综合评分: {model_rating}/10")
         
         closed_loop_info = {
@@ -446,17 +453,24 @@ class OutputBuilder(LoggerMixin):
         )
         
         # 计算 model_rating
+        # 运行预测仿真（从实际工作点）
+        pred_stable, pred_metrics = self._pid_calculator.simulate_prediction(
+            fusion, pid_params, hist_data=hist_data, verbose=self._verbose
+        )
+        
         model_rating, score_details = self._pid_calculator.calculate_model_rating(
-            fusion, total_data_points, cl_metrics=cl_metrics, verbose=self._verbose
+            fusion, total_data_points, cl_metrics=cl_metrics,
+            prediction_metrics=pred_metrics, verbose=self._verbose
         )
         
         if self._verbose:
+            w = score_details.get('weights', {})
             self.log(f"\n   📊 评分详情:")
-            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × 30%")
-            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × 20%")
-            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × 15%")
-            self.log(f"      数据覆盖度 ({fusion.n_segments_used}段/{total_data_points}点): {score_details.get('coverage_score', 0):.1f}/10 × 10%")
-            self.log(f"      闭环稳定性: {score_details.get('stability_score', 0):.1f}/10 × 25%")
+            self.log(f"      闭环阶跃稳定性: {score_details.get('stability_score', 0):.1f}/10 × {w.get('stability', 0.35)*100:.0f}%")
+            self.log(f"      预测仿真稳定性: {score_details.get('prediction_score', 0):.1f}/10 × {w.get('prediction', 0.30)*100:.0f}%")
+            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × {w.get('r2', 0.15)*100:.0f}%")
+            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × {w.get('consistency', 0.10)*100:.0f}%")
+            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × {w.get('validity', 0.10)*100:.0f}%")
             self.log(f"      → 综合评分: {model_rating}/10")
         
         closed_loop_info = {

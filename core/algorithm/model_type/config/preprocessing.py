@@ -69,6 +69,14 @@ TUNING_SEGMENT = {
     'steady_osc_ratio': 0.3,         # 稳态振荡比阈值
     'steady_settling_quality': 0.5,  # 稳态收敛质量阈值
     'steady_r2': 0.4,                # 稳态R²阈值
+    
+    # ========== SV 阶跃段检测参数 ==========
+    'sv_min_step_size': 0.5,         # SV 最小阶跃幅度
+    'sv_stable_window': 20,          # SV 稳定窗口大小（采样点数）
+    'sv_pre_step_points': 30,        # 阶跃前需要的稳态点数
+    'sv_max_response_time': 3000,    # SV 阶跃后最大响应时间（采样点数）
+    'sv_min_response_time': 30,      # SV 阶跃后最小响应时间（采样点数）
+    'sv_closed_loop_t1_factor': 3.0, # 闭环T1→开环T1修正系数（闭环T1通常为开环的1/2~1/3）
 }
 
 # ============================================================

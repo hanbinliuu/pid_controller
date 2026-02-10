@@ -37,14 +37,14 @@ from core.algorithm.model_type.tuning_difficulty_analyzer import TuningDifficult
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", 
-    'loop_uri': "/pid_zd/0b521c82a96d4107a564e4c2678bdeca",  #101
+    'loop_uri': "/pid_zd/5989fb05a2ce4828a7ae36c682906f2b",  #101
     # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        {'start_time': '2026-01-09 00:39:41', 'end_time': '2026-01-09 13:39:41'},
+        {'start_time': '2025-12-19 10:39:00', 'end_time': '2025-12-19 19:58:00'},
         # {'start_time': '2026-01-05 00:39:41', 'end_time': '2026-01-05 13:39:41'},
     ],
     
@@ -427,6 +427,99 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     ax1.grid(True, alpha=0.3)
     ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
     
+    # ========== 在子图1和子图2上追加新PID仿真预测 ==========
+    pid_params = fitting_result.get('pid_parameters', {})
+    model_params = fitting_result.get('model_parameters', {})
+    if pid_params.get('kp') and fitting_result.get('success'):
+        K_sim = model_params.get('K', 1.0)
+        T1_sim = model_params.get('T1', 10.0)
+        T2_sim = model_params.get('T2', 0.0)
+        L_sim = model_params.get('L', 0.0)
+        Kp_sim = pid_params.get('kp', 1.0)
+        Ki_sim = pid_params.get('ki', 0.0)
+        Kd_sim = pid_params.get('kd', 0.0)
+        
+        # 采样间隔
+        if len(timestamps) > 1:
+            dt_sim = (timestamps[1] - timestamps[0]) / 1000.0
+        else:
+            dt_sim = 1.0
+        
+        # 仿真时长：显示足够长的未来
+        sim_duration = max(T1_sim * 40, 3600)
+        sim_duration = min(sim_duration, 36000)
+        n_sim_steps = int(sim_duration / dt_sim)
+        n_sim_steps = max(2000, min(n_sim_steps, 50000))
+        
+        # 初始条件
+        pv_init = pv_array[-1]
+        mv_init = mv_array[-1]
+        sv_target = sv_array[-1]
+        
+        # MV饱和处理
+        mv_saturated = (mv_init > 95) or (mv_init < 5)
+        if mv_saturated:
+            pv_init = np.mean(pv_array)
+            mv_init = 50.0
+            sv_target = pv_init + np.ptp(pv_array) * 0.1
+        else:
+            initial_error = abs(sv_target - pv_init)
+            sv_range = max(np.ptp(sv_array), 1.0)
+            if initial_error < sv_range * 0.05:
+                sv_target = sv_target + sv_range * 0.1
+        
+        # 未来时间序列
+        last_timestamp = timestamps[-1]
+        dt_ms = int(dt_sim * 1000)
+        future_timestamps = [last_timestamp + i * dt_ms for i in range(1, n_sim_steps + 1)]
+        future_time_array = [datetime.fromtimestamp(ts / 1000) for ts in future_timestamps]
+        
+        # 仿真状态初始化
+        pv_sim = np.zeros(n_sim_steps)
+        mv_sim = np.zeros(n_sim_steps)
+        x1_s, x2_s = 0.0, 0.0
+        integral_s = 0.0
+        prev_error_s = sv_target - pv_init
+        delay_steps = max(1, int(L_sim / dt_sim)) if L_sim > 0 else 1
+        mv_history_sim = [mv_init] * delay_steps
+        pv_current_s = pv_init
+        
+        for i in range(n_sim_steps):
+            error_s = sv_target - pv_current_s
+            integral_s += error_s * dt_sim
+            derivative_s = (error_s - prev_error_s) / dt_sim if dt_sim > 0 else 0.0
+            prev_error_s = error_s
+            integral_s = np.clip(integral_s, -100 / (Ki_sim + 1e-10), 100 / (Ki_sim + 1e-10))
+            mv_out = mv_init + Kp_sim * error_s + Ki_sim * integral_s + Kd_sim * derivative_s
+            mv_out = np.clip(mv_out, 0.0, 100.0)
+            mv_sim[i] = mv_out
+            mv_history_sim.append(mv_out)
+            mv_delayed = mv_history_sim.pop(0)
+            delta_mv = mv_delayed - mv_init
+            T1_eff = max(T1_sim, dt_sim)
+            if model_type in ['SOPDT', 'SO', 'SECOND_ORDER'] and T2_sim > 0:
+                T2_eff = max(T2_sim, dt_sim)
+                dx1 = (K_sim * delta_mv - x1_s) / T1_eff
+                dx2 = (x1_s - x2_s) / T2_eff
+                x1_s += dx1 * dt_sim
+                x2_s += dx2 * dt_sim
+                delta_pv = x2_s
+            else:
+                dx1 = (K_sim * delta_mv - x1_s) / T1_eff
+                x1_s += dx1 * dt_sim
+                delta_pv = x1_s
+            pv_current_s = pv_init + delta_pv
+            pv_sim[i] = pv_current_s
+        
+        # 在子图1上绘制仿真PV
+        ax1.plot(future_time_array, pv_sim, color='#00AA00', linestyle='-', 
+                 label='新参数PV (仿真)', linewidth=2.0, alpha=0.9)
+        ax1.plot(future_time_array, np.full(n_sim_steps, sv_target), 'r--', linewidth=1.0)
+        ax1.axvline(x=time_array[-1], color='purple', linestyle='--', linewidth=1.5, 
+                    label='仿真起点', alpha=0.7)
+        ax1.axvspan(time_array[-1], future_time_array[-1], alpha=0.05, color='green')
+        ax1.legend(loc='upper right')  # 更新legend
+    
     # ========== 子图2: MV ==========
     ax2 = fig.add_subplot(n_plots, 1, 2, sharex=ax1)
     ax2.plot(time_array, mv_array, 'g-', label='MV', linewidth=0.8)
@@ -455,6 +548,15 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
             color = 'green' if seg_type == 'tuning' else 'red'
             alpha = 0.3 if seg_type == 'tuning' else 0.1
             ax2.axvspan(start_dt, end_dt, alpha=alpha, color=color)
+    
+    # 在子图2上追加仿真MV
+    try:
+        ax2.plot(future_time_array, mv_sim, color='#00AA00', linestyle='-',
+                 label='新参数MV (仿真)', linewidth=2.0, alpha=0.9)
+        ax2.axvline(x=time_array[-1], color='purple', linestyle='--', linewidth=1.5, alpha=0.7)
+        ax2.axvspan(time_array[-1], future_time_array[-1], alpha=0.05, color='green')
+    except NameError:
+        pass  # 仿真变量未定义时跳过
     
     ax2.set_ylabel('MV')
     ax2.set_title('操作值(MV)')
@@ -572,9 +674,9 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         dt = min(0.1, T_min / 10)
         dt = max(0.01, dt)
         T_max = max(T_ref, T2_val)
-        sim_time = max(200, T_max * 25)  # 增加仿真时间确保看到稳态
+        sim_time = max(300, T_max * 40)  # 加长仿真时间确保看到完整稳态过程
         n_steps = int(sim_time / dt)
-        n_steps = min(n_steps, 10000)  # 增加最大步数
+        n_steps = min(n_steps, 20000)  # 允许更多步数以展示长时间行为
         
         # 直接使用 fusion 中的模型参数（振荡整定已经估算了合理的参数）
         K_est = fusion.K
@@ -834,13 +936,13 @@ def visualize_new_pid_simulation(data: List[Dict], fitting_result: Dict, scenari
         dt = 1.0
     
     # ========== 从最后一个点开始仿真未来轨迹 ==========
-    # 仿真时间：基于模型时间常数，确保足够收敛到稳态
-    # 一般需要 5*T1 才能达到 99% 稳态，使用 max(15*T1, 600秒)
+    # 仿真时间：足够长以展示新PID参数的控制效果
+    # 使用 max(50*T1, 3600秒) 确保能看到完整的调节过程
     original_duration = (timestamps[-1] - timestamps[0]) / 1000.0  # 秒
-    T1_based_duration = max(T1 * 15, 600)  # 至少 15 倍时间常数或 600 秒
-    sim_duration = min(T1_based_duration, 10000)  # 上限 10000 秒（约2.8小时）
+    T1_based_duration = max(T1 * 50, 3600)  # 至少 50 倍时间常数或 1 小时
+    sim_duration = min(T1_based_duration, 36000)  # 上限 36000 秒（10小时）
     n_sim_steps = int(sim_duration / dt)
-    n_sim_steps = max(1000, min(n_sim_steps, 20000))  # 限制在 1000~20000 步
+    n_sim_steps = max(2000, min(n_sim_steps, 50000))  # 限制在 2000~50000 步
     
     # 初始条件：原始数据的最后一个点
     pv_init = pv_array[-1]
@@ -958,9 +1060,14 @@ def visualize_new_pid_simulation(data: List[Dict], fitting_result: Dict, scenari
     # ========== 子图1: PV/SV ==========
     ax1 = fig.add_subplot(2, 1, 1)
     
-    # 原始数据
-    ax1.plot(time_array, pv_array, 'b-', label='原始PV (实测)', linewidth=0.8, alpha=0.8)
-    ax1.plot(time_array, sv_array, 'r--', label='SV (设定值)', linewidth=1.0)
+    # 只显示最后2小时的历史数据，避免仿真部分被挤压
+    show_history_seconds = 7200  # 显示最后2小时的历史数据
+    show_history_points = int(show_history_seconds / dt)
+    hist_start = max(0, len(time_array) - show_history_points)
+    
+    # 原始数据（仅最后部分）
+    ax1.plot(time_array[hist_start:], pv_array[hist_start:], 'b-', label='原始PV (实测)', linewidth=0.8, alpha=0.8)
+    ax1.plot(time_array[hist_start:], sv_array[hist_start:], 'r--', label='SV (设定值)', linewidth=1.0)
     
     # 未来仿真轨迹 (绿色，加粗)
     ax1.plot(future_time_array, pv_sim, 'g-', label='新参数PV (仿真预测)', linewidth=2.0)
@@ -982,8 +1089,8 @@ def visualize_new_pid_simulation(data: List[Dict], fitting_result: Dict, scenari
     # ========== 子图2: MV ==========
     ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
     
-    # 原始数据
-    ax2.plot(time_array, mv_array, 'b-', label='原始MV (实测)', linewidth=0.8, alpha=0.8)
+    # 原始数据（仅最后部分）
+    ax2.plot(time_array[hist_start:], mv_array[hist_start:], 'b-', label='原始MV (实测)', linewidth=0.8, alpha=0.8)
     
     # 未来仿真轨迹
     ax2.plot(future_time_array, mv_sim, 'g-', label='新参数MV (仿真预测)', linewidth=2.0)
@@ -1128,10 +1235,7 @@ if __name__ == "__main__":
         step2_elapsed = time.time() - step2_start
         qualified_windows = tuning_input.get('qualified_windows', [])
         if not qualified_windows:
-            print("⚠️ 未检测到扰动段")
-            # 即使没有扰动段，也可视化原始数据
-            scenario_name = start_time_str.replace(' ', '_').replace(':', '-')
-            visualize_raw_data(data, scenario_name)
+            print("⚠️ 未检测到扰动段，无需整定，跳过")
             continue
         
         # Step 3: 执行模型拟合

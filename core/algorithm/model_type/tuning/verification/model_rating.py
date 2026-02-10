@@ -2,17 +2,17 @@
 模型评分模块 (Model Rating Module)
 =================================
 
-计算综合模型评分，评估模型质量和PID整定可靠性。
+计算综合模型评分，评估PID整定可靠性。
 
-评分维度：
-- 拟合质量 (R²)
-- 参数一致性
-- 参数物理合理性
-- 数据覆盖度
-- 闭环稳定性
+评分维度（按权重）：
+1. 闭环阶跃稳定性 (35%) — 标准阶跃仿真的控制品质
+2. 预测仿真稳定性 (30%) — 从实际工作点的仿真预测
+3. 拟合质量 R²     (15%) — 模型对历史数据的拟合度
+4. 参数一致性      (10%) — 多段辨识参数的一致性
+5. 参数合理性      (10%) — 参数物理范围检查
 """
 
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 from ...data_models import FusionResult
 from ..core.data_classes import ClosedLoopMetrics
@@ -29,20 +29,29 @@ class ModelRatingMixin:
     def calculate_model_rating(self, fusion: FusionResult, 
                                 total_data_points: int,
                                 cl_metrics: ClosedLoopMetrics = None,
+                                prediction_metrics: ClosedLoopMetrics = None,
                                 verbose: bool = False) -> Tuple[float, Dict[str, float]]:
         """
         计算综合模型评分 (0-10分)
         
         综合考虑以下维度：
-        1. 拟合质量 (R²)        - 30%
-        2. 参数一致性            - 20%
-        3. 参数物理合理性        - 15%
-        4. 数据覆盖度            - 10%
-        5. 闭环稳定性            - 25%
+        1. 闭环阶跃稳定性        - 35%
+        2. 预测仿真稳定性        - 30%
+        3. 拟合质量 (R²)         - 15%
+        4. 参数一致性             - 10%
+        5. 参数合理性             - 10%
         """
         score_details = {}
         
-        # 1. 拟合质量评分 (0-10) - 权重 30%
+        # 1. 闭环阶跃稳定性评分 (0-10) - 权重 35%
+        stability_score = self._score_closed_loop_metrics(cl_metrics)
+        score_details['stability_score'] = round(stability_score, 2)
+        
+        # 2. 预测仿真稳定性评分 (0-10) - 权重 30%
+        prediction_score = self._score_closed_loop_metrics(prediction_metrics)
+        score_details['prediction_score'] = round(prediction_score, 2)
+        
+        # 3. 拟合质量评分 (0-10) - 权重 15%
         r2 = fusion.global_r2
         if r2 >= 0.95:
             r2_score = 10.0
@@ -60,7 +69,7 @@ class ModelRatingMixin:
             r2_score = r2 * 5
         score_details['r2_score'] = round(r2_score, 2)
         
-        # 2. 参数一致性评分 (0-10) - 权重 20%
+        # 4. 参数一致性评分 (0-10) - 权重 10%
         consistency_score = 10.0
         
         if fusion.n_segments_used > 1:
@@ -84,7 +93,7 @@ class ModelRatingMixin:
         consistency_score = min(10.0, max(0.0, consistency_score))
         score_details['consistency_score'] = round(consistency_score, 2)
         
-        # 3. 参数物理合理性评分 (0-10) - 权重 15%
+        # 5. 参数合理性评分 (0-10) - 权重 10%
         validity_score = 10.0
         penalties = []
         
@@ -122,133 +131,114 @@ class ModelRatingMixin:
         validity_score = max(0.0, validity_score)
         score_details['validity_score'] = round(validity_score, 2)
         
-        # 4. 数据覆盖度评分 (0-10) - 权重 10%
-        n_segments = fusion.n_segments_used
-        
-        if n_segments >= 4:
-            segment_score = 9.0 + min(1.0, (n_segments - 4) * 0.25)
-        elif n_segments == 3:
-            segment_score = 8.5
-        elif n_segments == 2:
-            segment_score = 7.0
-        elif n_segments == 1:
-            segment_score = 5.0
-        else:
-            segment_score = 0.0
-        
-        if total_data_points >= 500:
-            data_score = 10.0
-        elif total_data_points >= 200:
-            data_score = 7.0 + (total_data_points - 200) / 100
-        elif total_data_points >= 100:
-            data_score = 5.0 + (total_data_points - 100) / 50
-        elif total_data_points >= 50:
-            data_score = 3.0 + (total_data_points - 50) / 25
-        else:
-            data_score = total_data_points / 50 * 3
-        
-        coverage_score = 0.6 * segment_score + 0.4 * data_score
-        coverage_score = min(10.0, coverage_score)
-        score_details['coverage_score'] = round(coverage_score, 2)
-        score_details['n_segments'] = n_segments
-        score_details['total_data_points'] = total_data_points
-        
-        # 5. 闭环稳定性评分 (0-10) - 权重 25%
-        stability_score = 5.0
-        
-        if cl_metrics is not None:
-            if cl_metrics.is_stable:
-                stability_score = 6.0
-            else:
-                stability_score = 1.0
-            
-            overshoot = cl_metrics.overshoot
-            if overshoot <= 5:
-                stability_score += 1.5
-            elif overshoot <= 15:
-                stability_score += 1.0
-            elif overshoot <= 30:
-                stability_score += 0.5
-            elif overshoot <= 50:
-                stability_score -= 0.5
-            else:
-                stability_score -= 1.5
-            
-            rise_time = cl_metrics.rise_time
-            if rise_time < float('inf'):
-                if 1.0 <= rise_time <= 10.0:
-                    stability_score += 1.0
-                elif 0.5 <= rise_time < 1.0 or 10.0 < rise_time <= 20.0:
-                    stability_score += 0.5
-                elif rise_time < 0.5:
-                    stability_score -= 0.5
-                else:
-                    stability_score -= 0.5
-            
-            sse = cl_metrics.steady_state_error
-            if sse <= 1:
-                stability_score += 1.0
-            elif sse <= 2:
-                stability_score += 0.5
-            elif sse <= 5:
-                pass
-            elif sse <= 10:
-                stability_score -= 0.5
-            else:
-                stability_score -= 1.0
-            
-            osc_count = cl_metrics.oscillation_count
-            if osc_count == 0:
-                stability_score += 0.5
-            elif osc_count <= 2:
-                stability_score += 1.0
-            elif osc_count <= 4:
-                stability_score += 0.5
-            elif osc_count <= 6:
-                stability_score -= 0.5
-            else:
-                stability_score -= 1.0
-            
-            decay_ratio = cl_metrics.decay_ratio
-            if decay_ratio <= 0.25:
-                stability_score += 1.0
-            elif decay_ratio <= 0.5:
-                stability_score += 0.5
-            elif decay_ratio <= 1.0:
-                pass
-            else:
-                stability_score -= 1.0
-            
-            stability_score = min(10.0, max(0.0, stability_score))
-        
-        score_details['stability_score'] = round(stability_score, 2)
-        
-        # 综合评分
+        # 综合评分（以闭环稳定性为主）
         weights = {
-            'r2': 0.30,
-            'consistency': 0.20,
-            'validity': 0.15,
-            'coverage': 0.10,
-            'stability': 0.25
+            'stability': 0.35,     # 闭环阶跃稳定性
+            'prediction': 0.30,    # 预测仿真稳定性
+            'r2': 0.15,            # 拟合质量
+            'consistency': 0.10,   # 参数一致性
+            'validity': 0.10,      # 参数合理性
         }
         
         final_score = (
+            weights['stability'] * stability_score +
+            weights['prediction'] * prediction_score +
             weights['r2'] * r2_score +
             weights['consistency'] * consistency_score +
-            weights['validity'] * validity_score +
-            weights['coverage'] * coverage_score +
-            weights['stability'] * stability_score
+            weights['validity'] * validity_score
         )
         
+        # 硬约束：R²太低时封顶
         if r2 < 0.3:
             final_score = min(final_score, 3.0)
         elif r2 < 0.5:
             final_score = min(final_score, 5.0)
         
+        # 硬约束：闭环不稳定时封顶
         if cl_metrics is not None and not cl_metrics.is_stable:
             final_score = min(final_score, 5.0)
+        
+        # 硬约束：预测仿真不稳定时封顶
+        if prediction_metrics is not None and not prediction_metrics.is_stable:
+            final_score = min(final_score, 6.0)
         
         final_score = round(min(10.0, max(0.0, final_score)), 2)
         score_details['weights'] = weights
         
         return final_score, score_details
+    
+    def _score_closed_loop_metrics(self, metrics: Optional[ClosedLoopMetrics]) -> float:
+        """
+        根据闭环仿真指标计算评分 (0-10)
+        
+        复用于闭环阶跃仿真和预测仿真。
+        """
+        if metrics is None:
+            return 5.0
+        
+        # 基础分：稳定6分，不稳定1分
+        score = 6.0 if metrics.is_stable else 1.0
+        
+        # 超调量
+        overshoot = metrics.overshoot
+        if overshoot <= 5:
+            score += 1.5
+        elif overshoot <= 15:
+            score += 1.0
+        elif overshoot <= 30:
+            score += 0.5
+        elif overshoot <= 50:
+            score -= 0.5
+        else:
+            score -= 1.5
+        
+        # 上升时间
+        rise_time = metrics.rise_time
+        if rise_time < float('inf'):
+            if 1.0 <= rise_time <= 10.0:
+                score += 1.0
+            elif 0.5 <= rise_time < 1.0 or 10.0 < rise_time <= 20.0:
+                score += 0.5
+            elif rise_time < 0.5:
+                score -= 0.5
+            else:
+                score -= 0.5
+        
+        # 稳态误差
+        sse = metrics.steady_state_error
+        if sse <= 1:
+            score += 1.0
+        elif sse <= 2:
+            score += 0.5
+        elif sse <= 5:
+            pass
+        elif sse <= 10:
+            score -= 0.5
+        else:
+            score -= 1.0
+        
+        # 振荡次数
+        osc_count = metrics.oscillation_count
+        if osc_count == 0:
+            score += 0.5
+        elif osc_count <= 2:
+            score += 1.0
+        elif osc_count <= 4:
+            score += 0.5
+        elif osc_count <= 6:
+            score -= 0.5
+        else:
+            score -= 1.0
+        
+        # 衰减比
+        decay_ratio = metrics.decay_ratio
+        if decay_ratio <= 0.25:
+            score += 1.0
+        elif decay_ratio <= 0.5:
+            score += 0.5
+        elif decay_ratio <= 1.0:
+            pass
+        else:
+            score -= 1.0
+        
+        return min(10.0, max(0.0, score))

@@ -286,3 +286,70 @@ class ClosedLoopSimMixin:
         )
         
         return metrics.is_stable, metrics
+    
+    def simulate_prediction(self, fusion: FusionResult,
+                             pid_params: Dict[str, float],
+                             hist_data = None,
+                             sim_duration_factor: float = 30.0,
+                             verbose: bool = False) -> Tuple[bool, ClosedLoopMetrics]:
+        """
+        预测仿真：从历史数据最后一个点开始，使用新PID参数预测未来走势
+        
+        与 verify_pid_stability (标准阶跃仿真) 不同：
+        - 从真实工作点出发（实际PV、MV、SV）
+        - 模拟实际控制场景（可能PV已接近SV，需引入小阶跃检验）
+        
+        Args:
+            fusion: 融合后的模型参数
+            pid_params: PID参数
+            hist_data: 历史数据（用于获取最后工作点）
+            sim_duration_factor: 仿真时长倍数（相对T1）
+            
+        Returns:
+            (is_stable, metrics)
+        """
+        K = fusion.K
+        T1 = fusion.T1
+        T2 = fusion.T2
+        L = fusion.L
+        model_type = fusion.model_type
+        
+        # 获取最后工作点
+        if hist_data is not None and len(hist_data.pv) > 0:
+            pv_init = float(hist_data.pv[-1])
+            sv_target = float(hist_data.sv[-1])
+            mv_init = float(hist_data.mv[-1])
+        else:
+            # 无历史数据时使用标准阶跃
+            return self.verify_pid_stability(fusion, pid_params, verbose=verbose)
+        
+        # 如果PV已接近SV，引入小阶跃扰动（10% SV范围）
+        sv_range = max(float(np.ptp(hist_data.sv)), 1.0)
+        initial_error = abs(sv_target - pv_init)
+        
+        if initial_error < sv_range * 0.05:
+            sv_target = sv_target + sv_range * 0.1
+        
+        # 仿真参数
+        T_min = min(T1, T2 if T2 > 0 else T1)
+        dt = min(0.1, T_min / 10)
+        dt = max(0.01, dt)
+        
+        sim_time = max(200, T1 * sim_duration_factor)
+        sim_time = min(sim_time, 5000)
+        n_steps = min(int(sim_time / dt), 30000)
+        
+        # 运行闭环仿真（从真实工作点）
+        metrics = self.simulate_closed_loop(
+            K=K, T1=T1, T2=T2, L=L,
+            model_type=model_type,
+            Kp=pid_params['Kp'], Ki=pid_params['Ki'], Kd=pid_params['Kd'],
+            sp_initial=pv_init,   # 从真实PV出发
+            sp_final=sv_target,    # 到目标SV
+            pv_initial=pv_init,
+            n_steps=n_steps,
+            dt=dt
+        )
+        
+        return metrics.is_stable, metrics
+
