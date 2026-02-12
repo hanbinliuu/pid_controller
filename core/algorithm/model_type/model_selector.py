@@ -21,6 +21,7 @@ from .simulation import ModelSimulator
 # 其他模块
 from .output_builder import OutputBuilder
 from .logger import LoggerMixin
+from .config.loop_type_inferrer import infer_loop_type, infer_loop_type_from_data, format_inference_log
 
 
 class ModelSelector(LoggerMixin):
@@ -305,6 +306,9 @@ class ModelSelector(LoggerMixin):
         
         self.log(f"📥 输入: {len(input_data.tuning_window)} 个扰动窗口, {len(raw_data)} 条数据")
         
+        # Step 0.5: 早期回路类型推断（基于原始数据特征）
+        self._early_infer_loop_type(hist_data)
+        
         # Step 1: 检测扰动段（来自 tuning_segment 的振荡/扰动窗口）
         segments = self._segment_processor.extract_segments(hist_data, input_data.tuning_window)
         disturbance_segs, disturbance_results = self._segment_processor.filter_invalid_segments(segments)
@@ -478,11 +482,28 @@ class ModelSelector(LoggerMixin):
         fusion_result = self._fuse_parameters(segment_results_fitted, best_model_type, fitting_segs)
         
         # Step 4.5: 闭环数据修正（SV阶跃段辨识的是闭环模型参数）
+        corrected_T1 = None
+        corrected_K = None
         if from_sv_step:
             fusion_result = self._apply_closed_loop_correction(fusion_result)
+            # 保存修正值，因为 Step 5 的全量优化可能覆盖
+            corrected_T1 = fusion_result.T1
+            corrected_K = fusion_result.K
+        
+        # Step 4.6: 回路类型自动推断（仅当未外部指定时）
+        self._auto_infer_loop_type(fusion_result, best_model_type, segment_results_fitted)
         
         # Step 5: 验证一致性与仿真匹配度
         fusion_result = self._validate_and_refine(fusion_result, fitting_segs, hist_data)
+        
+        # Step 5.1: 恢复闭环修正值（如果 Step 5 优化覆盖了修正）
+        # Step 5 的全量优化会重新拟合模型，但闭环数据的 T1 需要修正
+        if corrected_T1 is not None:
+            if abs(fusion_result.T1 - corrected_T1) > 0.01:
+                self.log(f"   ⚠️ Step 5优化改变了闭环修正值 (T1: {corrected_T1:.2f} → {fusion_result.T1:.2f})")
+                self.log(f"   → 恢复闭环修正 T1={corrected_T1:.2f}s, K={corrected_K:.4f}")
+                fusion_result.T1 = corrected_T1
+                fusion_result.K = corrected_K
         
         # Step 5.5: 检查融合参数是否有效
         if abs(fusion_result.K) < self._epsilon or fusion_result.T1 < self._epsilon:
@@ -557,6 +578,127 @@ class ModelSelector(LoggerMixin):
         fusion.T1 = T1_corrected
         
         return fusion
+    
+    def _early_infer_loop_type(self, hist_data: HistoricalData):
+        """
+        Step 0.5: 早期回路类型推断（基于原始数据特征）
+        
+        在 Step 1 之前执行，让振荡整定和模型辨识两条路径都能使用 loop_type。
+        仅当 process_context 未外部指定 loop_type 时生效。
+        """
+        # 检查是否已外部指定
+        current_loop_type = ''
+        if self._process_context:
+            current_loop_type = self._process_context.get('loop_type', '')
+        
+        if current_loop_type:
+            self.log(f"\n📊 Step 0.5: 回路类型（外部指定: {current_loop_type}，跳过推断）")
+            return
+        
+        # 执行早期推断
+        loop_type, confidence, reason = infer_loop_type_from_data(
+            hist_data.pv, hist_data.mv, hist_data.timestamp
+        )
+        
+        self.log(f"\n{'='*60}")
+        self.log("📊 Step 0.5: 早期回路类型推断（基于数据特征）")
+        self.log('='*60)
+        self.log(f"   {format_inference_log(loop_type, confidence, reason)}")
+        
+        # 更新 process_context
+        if self._process_context is None:
+            self._process_context = {}
+        self._process_context['loop_type'] = loop_type
+        self._process_context['loop_type_inferred'] = True
+        self._process_context['loop_type_confidence'] = confidence
+        self._process_context['loop_type_source'] = 'early_data'
+        
+        # 传播到下游模块（振荡整定器需要在 Step 1.95 前就拿到 loop_type）
+        loop_name = self._process_context.get('loop_name', '')
+        self._oscillation_tuner.set_llm_client(
+            self._llm_client, loop_type, loop_name
+        )
+    
+    def _auto_infer_loop_type(self, fusion_result: FusionResult, model_type: str, segment_results: List[SegmentResult] = None):
+        """
+        Step 4.6: 回路类型精确推断（基于模型参数）
+        
+        使用辨识出的模型参数进行更精确的推断。
+        - 若外部指定了 loop_type → 跳过
+        - 若早期推断已执行 → 仅当精确推断置信度更高时覆盖
+        """
+        # 检查是否已外部指定（非推断来源）
+        if self._process_context:
+            loop_type_source = self._process_context.get('loop_type_source', '')
+            current_loop_type = self._process_context.get('loop_type', '')
+            if current_loop_type and loop_type_source not in ('early_data', ''):
+                self.log(f"   📊 Step 4.6: 回路类型（外部指定: {current_loop_type}）")
+                return
+        
+        # [NEW] 检查模型参数有效性
+        # 如果模型参数无效(K=0或T1=0)，说明融合失败，此时不能用于推断
+        if abs(fusion_result.K) < 1e-6 or fusion_result.T1 < 1e-6:
+            self.log(f"   ⚠️ 模型参数无效(K={fusion_result.K:.4f}, T1={fusion_result.T1:.2f})，跳过模型推断")
+            return
+        
+        # 收集模型参数
+        model_params = {
+            'K': fusion_result.K,
+            'T1': fusion_result.T1,
+            'T2': fusion_result.T2,
+            'L': fusion_result.L,
+        }
+        
+        # 执行精确推断
+        loop_type, confidence, reason = infer_loop_type(model_params, model_type)
+        
+        # 检查是否比早期推断更有信心
+        early_confidence = self._process_context.get('loop_type_confidence', 0) if self._process_context else 0
+        early_loop_type = self._process_context.get('loop_type', '') if self._process_context else ''
+        
+        self.log(f"\n{'='*60}")
+        self.log("📊 Step 4.6: 回路类型精确推断（基于模型参数）")
+        self.log('='*60)
+        self.log(f"   {format_inference_log(loop_type, confidence, reason)}")
+        
+        if early_loop_type and early_loop_type != loop_type:
+            # [NEW] 振荡保护：如果存在明显振荡，模型参数（特别是T1）可能严重失真（偏小）
+            # 此时禁止覆盖早期推断（早期推断基于数据特征，通常对振荡类型识别更准）
+            is_oscillating = False
+            max_osc_ratio = 0.0
+            if segment_results:
+                max_osc_ratio = max((r.oscillation_ratio for r in segment_results if hasattr(r, 'oscillation_ratio')), default=0.0)
+                if max_osc_ratio > 0.15:  # 振荡阈值 (0.15 = 轻微振荡)
+                    is_oscillating = True
+            
+            if is_oscillating:
+                self.log(f"   ⚠️ 检测到振荡(ratio={max_osc_ratio:.2f})，禁止模型推断覆盖早期推断")
+                self.log(f"   → 保持早期推断: {early_loop_type}(置信度{early_confidence:.0%})，防止模型参数失真误判")
+                return
+
+            if confidence > early_confidence:
+                self.log(f"   ↑ 覆盖早期推断: {early_loop_type}(置信度{early_confidence:.0%}) → {loop_type}(置信度{confidence:.0%})")
+            else:
+                self.log(f"   → 保持早期推断: {early_loop_type}(置信度{early_confidence:.0%})，模型推断置信度不足")
+                return  # 保持早期推断结果
+        elif early_loop_type == loop_type:
+            self.log(f"   ✓ 与早期推断一致: {loop_type}")
+        
+        # 更新 process_context
+        if self._process_context is None:
+            self._process_context = {}
+        self._process_context['loop_type'] = loop_type
+        self._process_context['loop_type_inferred'] = True
+        self._process_context['loop_type_confidence'] = confidence
+        self._process_context['loop_type_source'] = 'model_params'
+        
+        # 传播到下游模块
+        loop_name = self._process_context.get('loop_name', '')
+        self._oscillation_tuner.set_llm_client(
+            self._llm_client, loop_type, loop_name
+        )
+
+
     
     def _build_quality_info(self, valid_segments: List[HistoricalData],
                             segment_results: List[SegmentResult],
@@ -1326,9 +1468,12 @@ class ModelSelector(LoggerMixin):
                       segment_results: List[SegmentResult] = None,
                       segments: List[HistoricalData] = None) -> Dict[str, Any]:
         """构建最终输出（委托给 OutputBuilder）"""
+        # 获取回路类型（外部指定或自动推断）
+        loop_type = self._process_context.get('loop_type', '') if self._process_context else ''
         return self._output_builder.build_full_output(
             fusion, hist_data, time_range, lambda_factor,
-            tuning_windows, quality_info, segment_results, segments
+            tuning_windows, quality_info, segment_results, segments,
+            loop_type=loop_type
         )
     
     def _build_segment_info(self, segments: List[HistoricalData], 

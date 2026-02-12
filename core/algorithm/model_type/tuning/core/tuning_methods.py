@@ -11,6 +11,7 @@ PID整定方法模块 (Tuning Methods Module)
 
 from typing import Tuple
 from ...config import Config, ModelType
+from ...config.loop_presets import get_loop_preset
 
 
 class TuningMethodsMixin:
@@ -46,27 +47,49 @@ class TuningMethodsMixin:
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
         use_simc = self._should_use_simc(loop_type)
         
+        # 获取回路预设参数
+        preset = get_loop_preset(loop_type)
+        preset_tau_c_factor = preset.get('tau_c_factor', None)
+        preset_ti_multiplier = preset.get('ti_multiplier', 1.0)
+        
         if use_simc:
-            tau_c_factor = simc_cfg.get('tau_c_factor', 1.0)
+            tau_c_factor = preset_tau_c_factor if preset_tau_c_factor else simc_cfg.get('tau_c_factor', 1.0)
             tau_c = T1 * lambda_factor * tau_c_factor * (conservative_level / baseline)
             denom = K * tau_c
             if denom < self._epsilon:
                 return self._get_fallback_params(Ti_override=T1)
             Kp = T1 / denom
             ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
-            Ti = min(T1, ti_limit_factor * tau_c)
+            
+            # Ti 限幅逻辑优化：对于积分过程或慢速回路（multiplier > 1），允许 Ti > T1
+            if preset_ti_multiplier > 1.0:
+                Ti = min(T1 * preset_ti_multiplier, ti_limit_factor * tau_c)
+            else:
+                Ti = min(T1, ti_limit_factor * tau_c)
         else:
-            lambda_val = T1 * lambda_factor * conservative_level
+            # Lambda 整定法: 也需要应用回路预设的 tau_c_factor
+            tau_c_factor = preset_tau_c_factor if preset_tau_c_factor else 1.0
+            lambda_val = T1 * lambda_factor * tau_c_factor * conservative_level
             denom = K * lambda_val
             if denom < self._epsilon:
                 return self._get_fallback_params(Ti_override=T1)
             Kp = T1 / denom
             Ti = T1
         
+        # 应用回路预设的Ti乘数
+        Ti *= preset_ti_multiplier
+        
         max_Kp = self._get_max_kp(pb_min)
         if Kp > max_Kp:
             Kp = max_Kp
+        
+        # 应用回路预设的Td
         Td = 0.0
+        if preset.get('td_enable', False):
+            td_ratio = preset.get('td_ratio', 0.15)
+            td_max = preset.get('td_max', 999.0)
+            Td = min(Ti * td_ratio, td_max)
+        
         return Kp, Ti, Td
     
     def _tune_fopdt(self, K: float, T1: float, L: float, 
@@ -76,6 +99,11 @@ class TuningMethodsMixin:
         """一阶加纯滞后系统整定（根据回路类型选择 SIMC 或 Lambda）"""
         simc_cfg = getattr(Config, 'SIMC_TUNING', {})
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
+        
+        # 获取回路预设参数
+        preset = get_loop_preset(loop_type)
+        preset_tau_c_factor = preset.get('tau_c_factor', None)
+        preset_ti_multiplier = preset.get('ti_multiplier', 1.0)
         
         if method == 'cohen_coon' and L > self._epsilon:
             cc_factor = self._pid_constraints.get('cohen_coon_conservative_factor', 0.85)
@@ -93,7 +121,7 @@ class TuningMethodsMixin:
         else:
             use_simc = self._should_use_simc(loop_type)
             if use_simc:
-                tau_c_factor = simc_cfg.get('tau_c_factor', 1.0)
+                tau_c_factor = preset_tau_c_factor if preset_tau_c_factor else simc_cfg.get('tau_c_factor', 1.0)
                 tau_c = T1 * lambda_factor * tau_c_factor * (conservative_level / baseline)
                 tau_c_min_factor = simc_cfg.get('tau_c_min_factor', 0.5)
                 tau_c = max(tau_c, L * tau_c_min_factor)
@@ -102,16 +130,34 @@ class TuningMethodsMixin:
                     return self._get_fallback_params(Ti_override=T1)
                 Kp = T1 / denom
                 ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
-                Ti = min(T1, ti_limit_factor * (tau_c + L))
+                
+                # Ti 限幅逻辑优化
+                if preset_ti_multiplier > 1.0:
+                    Ti = min(T1 * preset_ti_multiplier, ti_limit_factor * (tau_c + L))
+                else:
+                    Ti = min(T1, ti_limit_factor * (tau_c + L))
                 Td = 0.0
             else:
-                lambda_val = T1 * lambda_factor * (conservative_level / baseline)
+                # Lambda 整定法: 也需要应用回路预设的 tau_c_factor
+                tau_c_factor = preset_tau_c_factor if preset_tau_c_factor else 1.0
+                lambda_val = T1 * lambda_factor * tau_c_factor * (conservative_level / baseline)
                 denom = K * (lambda_val + L / 2)
                 if denom < self._epsilon:
                     return self._get_fallback_params(Ti_override=T1 + L / 2)
                 Kp = (T1 + L / 2) / denom
                 Ti = T1 + L / 2
                 Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
+        
+        # 应用回路预设的Ti乘数
+        Ti *= preset_ti_multiplier
+        
+        # 应用回路预设的Td（如果当前Td=0且预设启用微分）
+        if Td == 0.0 and preset.get('td_enable', False):
+            td_ratio = preset.get('td_ratio', 0.15)
+            Td = Ti * td_ratio
+        # 应用 Td 绝对上限
+        td_max = preset.get('td_max', 999.0)
+        Td = min(Td, td_max)
         
         max_Kp = self._get_max_kp(pb_min)
         if Kp > max_Kp:

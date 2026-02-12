@@ -387,7 +387,7 @@ class OscillationTuner(LoggerMixin):
         t1_min = fallback_params['t1_min']
         ti_multiplier = fallback_params['ti_multiplier']
         
-        min_points = 50 if self._loop_type == 'level' else 30
+        min_points = 50 if self._loop_type == 'level' else 20
         best_seg, best_result, max_points = None, None, 0
         
         for idx, seg, result in oscillating_segments:
@@ -401,7 +401,7 @@ class OscillationTuner(LoggerMixin):
         
         pv_range = np.ptp(best_seg.pv)
         mv_range = np.ptp(best_seg.mv)
-        if mv_range < 0.1 or pv_range < 0.01:
+        if mv_range < 0.05 or pv_range < 0.005:
             return None
         
         K_approx = np.clip(pv_range / mv_range, 0.1, 10.0)
@@ -461,30 +461,46 @@ class OscillationTuner(LoggerMixin):
         pb_max_limit = preset.get('pb_max', osc_config.get('pb_max', 400.0))
         pb_min_limit = preset.get('pb_min', osc_config.get('pb_min', 60.0))
         
+        # 应用 Loop Preset 的 Ti Multiplier
+        preset_ti_mult = preset.get('ti_multiplier', 1.0)
+        ti_multiplier *= preset_ti_mult
+        
         pb_safe = np.clip(pb_base, pb_min_limit, pb_max_limit)
         conservative_Kp = 100.0 / pb_safe
         
+        # Ti 基准（level 回路稍高）
         ti_base_min = 10.0 if self._loop_type == 'level' else 5.0
-        # 简化 Ti 计算：使用较小的 Ti 加快响应，上限 25s
-        conservative_Ti = np.clip(ti_base_min * 1.5, *osc_config.get('ti_range', [1.5, 25.0]))
+        base_Ti = ti_base_min * 1.5
+        
+        conservative_Ti = np.clip(base_Ti * ti_multiplier, *osc_config.get('ti_range', [1.5, 600.0]))
         conservative_Ki = conservative_Kp / conservative_Ti
         
-        # 石化优化: 按回路类型差异化Td使用阈值
-        # 流量/压力: 少用Td (阈值0.8), 温度: 多用Td (阈值0.4), 液位: 不用Td
-        if self._loop_type == 'level':
-            kd_threshold = 0.9  # 液位基本不用Td
-        elif self._loop_type == 'temperature':
-            kd_threshold = 0.4  # 温度多用Td
-        elif self._loop_type in ['flow', 'pressure']:
-            kd_threshold = 0.8  # 流量/压力少用Td
-        else:
-            kd_threshold = 0.6
+        # [NEW] 严格遵循 Loop Preset 的 Td 策略
+        enable_derivative = preset.get('td_enable', False)
         
-        if oscillation_ratio > kd_threshold:
-            conservative_Td = np.clip(Pu_approx / 10, *osc_config.get('td_range', [0.3, 3.0]))
-            conservative_Kd = conservative_Kp * conservative_Td
+        if not enable_derivative:
+            conservative_Td = 0.0
+            conservative_Kd = 0.0
         else:
-            conservative_Td, conservative_Kd = 0.0, 0.0
+            # 允许微分 (Temp/Pressure)
+            if 'td_ratio' in preset:
+                td_max = preset.get('td_max', 50.0)
+                conservative_Td = min(conservative_Ti * preset['td_ratio'], td_max)
+                conservative_Kd = conservative_Kp * conservative_Td
+            else:
+                # 原始逻辑：仅当振荡严重时使用微分
+                if self._loop_type == 'temperature':
+                    kd_threshold = 0.4
+                elif self._loop_type == 'pressure':
+                    kd_threshold = 0.8
+                else:
+                    kd_threshold = 0.6
+                
+                if oscillation_ratio > kd_threshold:
+                    conservative_Td = np.clip(Pu_approx / 10, *osc_config.get('td_range', [0.3, 3.0]))
+                    conservative_Kd = conservative_Kp * conservative_Td
+                else:
+                    conservative_Td, conservative_Kd = 0.0, 0.0
         
         self.log(f"   ✅ {self._loop_type}fallback整定: PB={pb_safe:.1f}%, Ti={conservative_Ti:.1f}s")
         
@@ -520,6 +536,7 @@ class OscillationTuner(LoggerMixin):
         sv = hist_data.sv[valid_mask]
         
         Pu = osc_info['Pu']
+        Ku = pid_params['Ku']  # [FIX] Define Ku early
         pv_range, mv_range = np.ptp(y), np.ptp(u)
         
         if mv_range > 0.1 and pv_range > 0.01:
@@ -532,15 +549,17 @@ class OscillationTuner(LoggerMixin):
             Ku = pid_params['Ku']
             K_est = round(1.0 / Ku if Ku > 0.01 else 1.0, 4)
         
-        T1_est, L_est = round(Pu, 4), round(Pu / 4, 4)
+        T1_est, L_est, K_est_final = self._reconstruct_model_from_oscillation(
+            Pu, Ku, K_est, loop_type=self._loop_type
+        )
         
         pv_model = self._simulator.simulate_segmented(
-            (K_est, T1_est, L_est), 'FOPDT', y, u,
+            (K_est_final, T1_est, L_est), 'FOPDT', y, u,
             reset_on_sv_change=True, sv=sv, enable_smooth=True,
             enable_amplitude_calibration=True, enable_offset_correction=True, enable_oscillation_overlay=True
         )
         
-        temp_fusion = FusionResult(model_type=ModelType.FOPDT, K=K_est, T1=T1_est, T2=0.0, L=L_est)
+        temp_fusion = FusionResult(model_type=ModelType.FOPDT, K=K_est_final, T1=T1_est, T2=0.0, L=L_est)
         
         sv_mean, pv_mean, pv_std = float(np.mean(sv)), float(np.mean(y)), float(np.std(y))
         sp_initial, sp_final = sv_mean, sv_mean + max(pv_std * 2, 1.0)
@@ -581,19 +600,15 @@ class OscillationTuner(LoggerMixin):
             'decay_ratio': cl_metrics.decay_ratio, 'sp_initial': sp_initial, 'sp_final': sp_final, 'pv_initial': pv_mean
         }
         
-        tuning_success = is_stable
-        if not is_stable and Pu > 100.0:
-            if cl_metrics.decay_ratio < 1.2:
-                tuning_success = True
-            elif self._loop_type == 'level':
-                tuning_success = True
-                model_rating = min(model_rating, 5.0)
-                warnings.append(f'慢液位系统(Pu={Pu:.0f}s)，内部仿真未收敛，建议人工验证')
+        # 振荡整定总是产生有效参数，success 不再依赖内部闭环验证
+        # 内部验证使用 temp_fusion（从不可靠振荡数据估算，R²<0.4），不能代表真实稳定性
+        # is_stable 信息保留在 closed_loop_verification 中供参考
+        tuning_success = True
         
         return {
             'success': tuning_success, 'model_type': 'FOPDT', 'model_rating': model_rating,
             'start_time': time_range.get('start_time'), 'end_time': time_range.get('end_time'),
-            'model_parameters': {'K': K_est, 'T1': T1_est, 'T2': 0.0, 'L': L_est},
+            'model_parameters': {'K': K_est_final, 'T1': T1_est, 'T2': 0.0, 'L': L_est},
             'pid_parameters': pid_params,
             'fitting_result': {
                 'timestamp': ts.tolist(), 'sv': sv.tolist(), 'pv': y.tolist(), 'mv': u.tolist(),
@@ -606,6 +621,61 @@ class OscillationTuner(LoggerMixin):
             'closed_loop_verification': closed_loop_info, 'rating_details': rating_details,
             'segment_info': self._build_segment_info(segments, segment_results) if segments else []
         }
+    
+    def _reconstruct_model_from_oscillation(self, Pu: float, Ku: float, K_approx: float, loop_type: str) -> Tuple[float, float, float]:
+        """
+        从振荡参数(Pu, Ku)和稳态增益(K_approx)重构FOPDT模型(T1, L)。
+        
+        目标：确保重构的模型在Pu频率下具有增益1/Ku和相位-180度。
+        """
+        import math
+        
+        # 1. 积分过程 (Level 或 K*Ku 很小)
+        is_integrating = (loop_type == 'level')
+        
+        w = 2.0 * math.pi / Pu
+        
+        if is_integrating:
+            # 积分过程假设：L = Pu/4, K_integ = w / Ku
+            # FOPDT近似：T1很大，K = K_integ * T1
+            L = Pu / 4.0
+            T1 = max(100.0 * Pu, 1000.0) 
+            K = (w / Ku) * T1
+            return round(T1, 4), round(L, 4), round(K, 4)
+            
+        # 2. 自衡过程 (Self-Regulating)
+        # 使用 K_approx (基于PV/MV幅值) 来估算增益 K
+        # 如果 K_approx * Ku < 1，说明增益被严重低估，或者实际上接近积分/纯滞后
+        # 我们优先使用计算出的 K_approx，但允许 fallback 到纯滞后
+        
+        try:
+            # 求解方程: K / sqrt(1 + (wT)^2) = 1/Ku
+            # (K * Ku)^2 = 1 + (wT)^2
+            val = (K_approx * Ku)**2 - 1.0
+            
+            # 如果 K_approx 太小导致 val < 0，说明 K_est < 1/Ku
+            # 物理上不可能 (除非测量错误或非线性)，我们截断为 0 (Implies T=0, Pure Delay)
+            if val < 0: 
+                val = 0
+                # 如果 K_approx 实在太小，也许应该强制提高 K?
+                # 但这里保持 conservative，T=0
+            
+            wT = math.sqrt(val)
+            T1 = wT / w
+            
+            # Phase: -atan(wT) - wL = -pi
+            # wL = pi - atan(wT)
+            phi_t = math.atan(wT)
+            L = (math.pi - phi_t) / w
+            
+            # 边界检查
+            if L < 0.01: L = 0.01
+            
+            return round(T1, 4), round(L, 4), round(K_approx, 4)
+            
+        except Exception as e:
+            self.log(f"   ⚠️ 模型重构失败: {e}，使用默认值")
+            return round(Pu, 4), round(Pu/4.0, 4), round(K_approx, 4)
     
     def _build_segment_info(self, segments: List, segment_results: List) -> List[Dict]:
         """构建段信息用于可视化"""

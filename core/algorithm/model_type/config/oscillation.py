@@ -52,12 +52,12 @@ OSCILLATION_TUNING = {
     'ku_low_threshold': 0.1,             # Ku绝对下限（极端情况）
     
     # ========== 基础pb计算参数 ==========
-    'pb_from_k_factor': 1.5,             # 基于K计算pb的保守系数
-    'kp_from_ku_factor': 0.40,           # 基于Ku计算Kp的系数（ZN法是0.45）[优化: 0.35→0.40]
+    'pb_from_k_factor': 1.0,             # 基于K计算pb的系数 [降低：1.5→1.0，避免基础PB就过高]
+    'kp_from_ku_factor': 0.45,           # 基于Ku计算Kp的系数（ZN法是0.45）[优化: 0.40→0.45，提升增益]
     
     # ========== 慢系统调整 ==========
     'slow_system_pu_thresholds': [30.0, 15.0],  # Pu阈值
-    'slow_system_factors': [1.3, 1.15, 1.0],    # 对应因子
+    'slow_system_factors': [1.15, 1.05, 1.0],   # 对应因子 [降低：1.3/1.15→1.15/1.05，避免与oscillation_adjustment叠加]
     
     # ========== 原因微调因子 ==========
     'high_gain_extra_factor': 1.05,      # Ku过大时的额外保守系数 [优化: 1.1→1.05]
@@ -76,16 +76,16 @@ OSCILLATION_TUNING = {
     'valve_saturation_factor': 1.1,      # 饱和调整因子
     
     # ========== 振荡比自适应安全系数 ==========
-    'safety_factor_base': 1.1,           # 基础安全系数 (osc < 0.5) [优化: 1.2→1.1]
+    'safety_factor_base': 1.0,           # 基础安全系数 (osc < 0.5) [降低：1.1→1.0，中性基准]
     'safety_factor_thresholds': [0.5, 0.7, 0.85],  # 振荡比阈值
-    'safety_factor_slopes': [0.4, 0.8, 1.5],       # 各区间斜率（降低，转移到Ti）
+    'safety_factor_slopes': [0.2, 0.4, 0.8],       # 各区间斜率 [降低：0.4/0.8/1.5→0.2/0.4/0.8，减少PB膨胀]
     
     # ========== 总乘数上限 ==========
-    'max_multiplier_normal': 2.0,        # 正常振荡时的乘数上限
-    'max_multiplier_high_osc': 2.5,      # 高振荡(>0.85)时的乘数上限
+    'max_multiplier_normal': 1.6,        # 正常振荡时的乘数上限 [降低：2.0→1.6]
+    'max_multiplier_high_osc': 2.0,      # 高振荡(>0.85)时的乘数上限 [降低：2.5→2.0]
     
     # ========== 自适应整定参数（渐进式策略，动态pb调整） ==========
-    'pb_gradient': 1.0,                  # pb渐进系数
+    'pb_gradient': 0.6,                  # pb渐进系数 [降低：1.0→0.6，减少振荡对PB的影响]
     'pb_oscillation_start': 0.4,         # 开始应用渐进调整的振荡比阈值
     
     # ========== 自适应微分作用 ==========
@@ -101,7 +101,7 @@ OSCILLATION_TUNING = {
     'ti_osc_factor': 0.8,                # Ti振荡调整系数（增大，补偿pb减小）
     'ti_slow_pu_thresholds': [30.0, 15.0],  # Ti慢系统Pu阈值（增大以更早识别慢系统）
     'ti_slow_factors': [1.25, 1.12, 1.0],   # Ti慢系统乘数（增大）
-    'ti_range': [1.5, 25.0],             # Ti范围限制（增大上限以支持慢液位回路）
+    'ti_range': [1.5, 600.0],             # Ti范围限制（增大上限以支持慢温控/液位回路）
     'ti_min_base': 1.5,                  # Ti基础最小值
     
     # ========== 液位回路专用配置（积分过程特性）==========

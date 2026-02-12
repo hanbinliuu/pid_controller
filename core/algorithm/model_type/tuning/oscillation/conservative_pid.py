@@ -191,15 +191,13 @@ class ConservativePIDCalculator(LoggerMixin):
         T1_approx = Pu * (1.0 + 1.0 / max(K_approx, 0.5)) / 4.0
         delay_ratio = estimated_L / max(T1_approx, 1.0)
         
-        # 恢复稳定性: 提高滞后因子
+        # 滞后因子：只在真正大滞后时生效 [阈值从0.4提高到0.6，避免与其他因子叠加]
         if delay_ratio > 0.8:
-            delay_factor = 2.3  # 恢复
+            delay_factor = 1.8  # 极大滞后 [降低：2.3→1.8]
         elif delay_ratio > 0.6:
-            delay_factor = min(1.6 + (delay_ratio - 0.6) * 3.5, 2.2)
-        elif delay_ratio > 0.4:
-            delay_factor = 1.3 + (delay_ratio - 0.4) * 1.5
+            delay_factor = 1.2 + (delay_ratio - 0.6) * 3.0  # [降低起始：1.6→1.2]
         else:
-            delay_factor = 1.0
+            delay_factor = 1.0  # 中等滞后不再额外放大 [阈值从0.4提高到0.6]
         
         if delay_factor > 1.0:
             pb_base *= delay_factor
@@ -237,6 +235,16 @@ class ConservativePIDCalculator(LoggerMixin):
                 prev_value = safety_base + (safety_thresholds[1] - safety_thresholds[0]) * safety_slopes[0]
                 prev_value += (safety_thresholds[2] - safety_thresholds[1]) * safety_slopes[1]
                 safety_factor = prev_value + (oscillation_ratio - safety_thresholds[2]) * safety_slopes[2]
+
+            # [NEW] 叠加 Loop Preset 的 safety_factor (例如 Flow=1.1, Pressure=1.1)
+            # 这确保针对特定回路的优化在振荡回退模式下也能生效
+            preset = get_loop_preset(self._loop_type)
+            loop_safety_factor = preset.get('safety_factor', 1.05)
+            if loop_safety_factor != 1.05:  # 仅当非默认值时记录
+                 safety_factor *= loop_safety_factor
+                 self.log(f"   📊 回路类型[{self._loop_type}] 安全系数调整: ×{loop_safety_factor:.2f} -> {safety_factor:.2f}")
+            else:
+                 safety_factor *= loop_safety_factor # 默认也要乘，保持一致性
         
         total_multiplier = safety_factor
         if llm_strategy is not None:
@@ -273,10 +281,9 @@ class ConservativePIDCalculator(LoggerMixin):
         pb_min_preset, pb_max_preset = preset['pb_min'], preset['pb_max']
         pb_max = min(pb_max, pb_max_preset)
         
-        # 应用回路类型的安全系数
-        loop_safety = preset.get('safety_factor', 1.0)
-        if loop_safety != 1.0:
-            self.log(f"   📊 回路类型[{self._loop_type}]安全系数: ×{loop_safety:.2f}")
+        # 注意：loop safety_factor 不再乘入 PB
+        # 因为 _apply_oscillation_adjustment 已经应用了 safety_factor
+        # 双重应用是导致 PB 中位数卡住 pb_max 的主因
         
         pb_k_factor = osc_config.get('pb_k_adjustment_factor', 0.3)
         if K_approx > 0.01:
@@ -296,43 +303,68 @@ class ConservativePIDCalculator(LoggerMixin):
                          llm_strategy: Any) -> Tuple[float, float, float, float]:
         """计算保守的 Ti 和 Td 值"""
         osc_config = Config.OSCILLATION_TUNING
+        preset = get_loop_preset(self._loop_type)
+        
         ti_min_base = osc_config.get('ti_min_base', 1.5)
         
-        # 简化 Ti 计算：使用固定的较小值加快响应，不再依赖 Pu
-        # 基础 Ti = 10s，最大 25s
+        # 基础 Ti 最小值
         base_Ti = max(10.0, ti_min_base)
         
         ti_osc_start = osc_config.get('ti_osc_start', 0.6)
         ti_osc_factor = osc_config.get('ti_osc_factor', 0.5)
         ti_multiplier = 1.0 + np.sqrt(oscillation_ratio - ti_osc_start) * ti_osc_factor if oscillation_ratio > ti_osc_start else 1.0
         
-        # 移除慢系统 Ti 增大逻辑，保持 Ti 较小
-        
         if llm_strategy is None:
             ti_multiplier = self._strategy.adjust_ti_multiplier(ti_multiplier, K_approx, Pu, oscillation_ratio, osc_config, log_func=self.log)
         else:
             ti_multiplier *= llm_strategy.ti_multiplier
+            
+        # [FIX] 应用 Loop Preset 的 Ti Multiplier，但 Pu-based 模式下跳过
+        # Pu-based base_Ti 已经包含慢系统补偿，不需要再叠加
+        preset_ti_mult = preset.get('ti_multiplier', 1.0)
+        if Pu <= 200.0 and preset_ti_mult != 1.0:
+            ti_multiplier *= preset_ti_mult
+            self.log(f"   📊 回路类型[{self._loop_type}] Ti调整: ×{preset_ti_mult:.2f}")
+        elif Pu > 200.0 and preset_ti_mult != 1.0:
+            self.log(f"   📊 慢系统(Pu={Pu:.0f}s): 跳过preset Ti乘数×{preset_ti_mult:.2f}")
         
-        conservative_Ti = np.clip(base_Ti * ti_multiplier, *osc_config.get('ti_range', [1.5, 25.0]))
+        conservative_Ti = np.clip(base_Ti * ti_multiplier, *osc_config.get('ti_range', [1.5, 600.0]))
         
         conservative_Td = 0.0
         td_multiplier = 0.0
-        enable_derivative = osc_config.get('enable_adaptive_derivative', True)
-        derivative_threshold = osc_config.get('derivative_oscillation_threshold', 0.5)
         
-        if llm_strategy is not None:
-            enable_derivative = llm_strategy.enable_derivative
+        # [NEW] 检查 Loop Preset 是否允许微分
+        enable_derivative = preset.get('td_enable', osc_config.get('enable_adaptive_derivative', True))
         
-        if enable_derivative and (oscillation_ratio > derivative_threshold or (llm_strategy and llm_strategy.enable_derivative)):
-            # 增大基础除数：默认 12 而非 8，让 Td 不容易触顶
-            td_base_divisor = osc_config.get('td_base_divisor', 12.0)
-            base_Td = Pu / td_base_divisor if Pu > 0 else 0.5
-            td_mult_factor = osc_config.get('td_multiplier_factor', 1.5)
-            effective_osc = max(0, oscillation_ratio - derivative_threshold)
-            td_multiplier = 1.0 + np.sqrt(effective_osc) * td_mult_factor
-            if llm_strategy is not None and llm_strategy.td_factor > 0:
-                td_multiplier *= llm_strategy.td_factor
-            conservative_Td = np.clip(base_Td * td_multiplier, *osc_config.get('td_range', [0.3, 3.0]))
+        if not enable_derivative:
+            # 强制禁用微分 (Flow/Level)
+            conservative_Td = 0.0
+            td_multiplier = 0.0
+        else:
+            # 允许微分 (Temp/Pressure)
+            derivative_threshold = osc_config.get('derivative_oscillation_threshold', 0.5)
+            
+            if llm_strategy is not None:
+                enable_derivative = llm_strategy.enable_derivative
+            
+            # 如果预设指定了 td_ratio (如 Temp=0.25)，优先使用
+            preset_td_ratio = preset.get('td_ratio', 0.0)
+            
+            if preset_td_ratio > 0:
+                # 使用预设比例，并应用 td_max 上限
+                td_max = preset.get('td_max', 50.0)
+                conservative_Td = min(conservative_Ti * preset_td_ratio, td_max)
+                td_multiplier = 1.0
+            elif oscillation_ratio > derivative_threshold or (llm_strategy and llm_strategy.enable_derivative):
+                # 自适应微分
+                td_base_divisor = osc_config.get('td_base_divisor', 12.0)
+                base_Td = Pu / td_base_divisor if Pu > 0 else 0.5
+                td_mult_factor = osc_config.get('td_multiplier_factor', 1.5)
+                effective_osc = max(0, oscillation_ratio - derivative_threshold)
+                td_multiplier = 1.0 + np.sqrt(effective_osc) * td_mult_factor
+                if llm_strategy is not None and llm_strategy.td_factor > 0:
+                    td_multiplier *= llm_strategy.td_factor
+                conservative_Td = np.clip(base_Td * td_multiplier, *osc_config.get('td_range', [0.3, 3.0]))
         
         return conservative_Ti, conservative_Td, ti_multiplier, td_multiplier
     

@@ -19,11 +19,11 @@ LOOP_TYPE_PRESETS = {
     # 特点：快速响应、积分特性强、允许较激进整定
     'flow': {
         'pb_min': 50.0,           # 流量需要快速响应，允许更小的PB
-        'pb_max': 200.0,          # 上限适中
+        'pb_max': 300.0,          # 上限提高 [从200提高到300，应对大滞后流量回路]
         'tau_c_factor': 1.2,      # τc较小，快速响应
-        'safety_factor': 1.0,     # 不额外保守
-        'ti_multiplier': 1.0,     # 标准Ti
-        'td_enable': False,       # 一般不需要微分
+        'safety_factor': 1.1,     # 略微保守 [从1.05提高到1.1，增强鲁棒性，应对高噪声/非线性]
+        'ti_multiplier': 1.1,     # Ti略大
+        'td_enable': False,       # 流量严禁微分 [行业铁律]
         'aggressive': True,       # 允许激进整定
         'description': '流量回路：快速响应，积分特性',
     },
@@ -32,12 +32,13 @@ LOOP_TYPE_PRESETS = {
     # 特点：慢速系统、大滞后、热容量大
     'temperature': {
         'pb_min': 80.0,           # 温度系统较慢，PB可以稍大
-        'pb_max': 450.0,          # 允许较大PB应对大滞后
+        'pb_max': 300.0,          # 允许较大PB应对大滞后 [从450降低到300，增加增益]
         'tau_c_factor': 2.0,      # τc较大，避免振荡 [保持保守]
-        'safety_factor': 1.15,    # 略微保守 [从1.1提高]
-        'ti_multiplier': 1.2,     # Ti增大，平滑控制
+        'safety_factor': 1.1,     # 保守整定 [降低：1.2→1.1，避免PB叠加过大]
+        'ti_multiplier': 1.5,     # Ti适度增大 [降低：2.2→1.5，避免响应过慢]
         'td_enable': True,        # 温度回路可用微分改善响应
-        'td_ratio': 0.2,          # Td = Ti * 0.2
+        'td_ratio': 0.25,         # Td = Ti * 0.25 [增强微分作用]
+        'td_max': 15.0,           # Td绝对上限15s [工业温度回路标准]
         'aggressive': False,      # 保守整定
         'description': '温度回路：慢速系统，大热容量',
     },
@@ -46,10 +47,10 @@ LOOP_TYPE_PRESETS = {
     # 特点：积分过程、需平滑控制、避免MV频繁动作
     'level': {
         'pb_min': 100.0,          # 液位积分过程，需要较大PB
-        'pb_max': 500.0,          # 允许非常保守的控制
-        'tau_c_factor': 3.0,      # τc较大，平滑控制 [从2.5提高]
-        'safety_factor': 1.25,    # 保守 [从1.2提高，积分过程需要更保守]
-        'ti_multiplier': 2.2,     # Ti大幅增大，避免MV频繁动作 [从2.0提高]
+        'pb_max': 400.0,          # 允许保守控制 [从500降至400，提升增益]
+        'tau_c_factor': 3.0,      # τc较平滑 [从4.0降低到3.0，加快响应，避免超时]
+        'safety_factor': 1.1,     # 适当降低安全系数 [降低：1.15→1.1，避免PB叠加过大]
+        'ti_multiplier': 2.0,     # Ti增大 [降低：3.0→2.0，避免响应太慢]
         'td_enable': False,       # 液位一般不用微分
         'aggressive': False,      # 保守整定
         'integrating_mode': True, # 标记为积分过程
@@ -61,11 +62,12 @@ LOOP_TYPE_PRESETS = {
     'pressure': {
         'pb_min': 60.0,           # 压力需要快速响应 [从50提高，更稳定]
         'pb_max': 200.0,          # 上限不宜太大 [从180提高]
-        'tau_c_factor': 1.2,      # τc较小，快速响应 [从1.0提高]
-        'safety_factor': 1.05,    # 略微保守 [从1.0提高]
-        'ti_multiplier': 0.9,     # Ti稍小，快速消除偏差
+        'tau_c_factor': 1.5,      # τc加大 [从1.2提高到1.5，增加阻尼，应对高增益敏感]
+        'safety_factor': 1.1,     # 保守 [从1.05提高]
+        'ti_multiplier': 1.0,     # Ti标准
         'td_enable': True,        # 可用微分改善响应
         'td_ratio': 0.15,         # Td = Ti * 0.15
+        'td_max': 10.0,           # Td绝对上限10s [工业压力回路标准]
         'aggressive': False,      # 不过于激进 [从true改为false]
         'description': '压力回路：快速响应，需及时调节',
     },

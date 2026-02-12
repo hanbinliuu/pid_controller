@@ -56,6 +56,7 @@ from .loop_presets import (
     get_adjusted_pb_range,
     get_adjusted_safety_factor,
 )
+from .loop_type_inferrer import infer_loop_type, infer_loop_type_from_data, format_inference_log
 
 
 class Config:
@@ -81,4 +82,5 @@ class Config:
 
 
 # 导出
-__all__ = ['Config', 'ModelType', 'get_loop_preset', 'get_adjusted_pb_range', 'get_adjusted_safety_factor']
+__all__ = ['Config', 'ModelType', 'get_loop_preset', 'get_adjusted_pb_range', 'get_adjusted_safety_factor',
+           'infer_loop_type', 'format_inference_log']

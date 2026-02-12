@@ -1,0 +1,68 @@
+flowchart TD
+    START["fit() 开始<br/>输入: raw_data, tuning_input"] --> PARSE["解析输入数据<br/>hist_data = HistoricalData.from_json()"]
+    
+    PARSE --> STEP05{"Step 0.5<br/>外部指定了 loop_type?"}
+    
+    STEP05 -->|"是 (如 temperature)"| SKIP05["跳过推断<br/>使用外部指定值"]
+    STEP05 -->|"否"| EARLY["早期推断 _early_infer_loop_type()"]
+    
+    EARLY --> FEAT["提取数据特征"]
+    FEAT --> F1["① PV自相关衰减时间"]
+    FEAT --> F2["② FFT主振荡周期"]
+    FEAT --> F3["③ 积分漂移检测"]
+    FEAT --> F4["④ MV→PV互相关延迟"]
+    
+    F1 & F2 & F3 & F4 --> RULES["推断规则"]
+    RULES --> R1{"积分漂移?"}
+    R1 -->|是| LEVEL["level 液位 (65%)"]
+    R1 -->|否| R2{"衰减>120s or 周期>120s?"}
+    R2 -->|是| TEMP1["temperature 温度 (70%)"]
+    R2 -->|否| R3{"衰减<15s?"}
+    R3 -->|是| FLOW1["flow 流量 (55-70%)"]
+    R3 -->|否| PRESS1["pressure 压力 (45%)"]
+    
+    LEVEL & TEMP1 & FLOW1 & PRESS1 --> STORE05["写入 process_context<br/>传播到 OscillationTuner"]
+    
+    SKIP05 & STORE05 --> STEP1["Step 1: 提取扰动段"]
+    STEP1 --> STEP195{"Step 1.95: 振荡预检<br/>全部为高振荡段?"}
+    
+    STEP195 -->|"是 → 振荡路径"| OSC_PATH
+    STEP195 -->|"否 → 模型辨识路径"| MODEL_PATH
+    
+    subgraph OSC_PATH["振荡整定路径"]
+        direction TB
+        OSC1["OscillationTuner<br/>try_oscillation_tuning()"]
+        OSC1 --> OSC2["ConservativePIDCalculator<br/>calculate()"]
+        OSC2 --> OSC_PRESET["get_loop_preset(loop_type)<br/>✅ 现在有值了!"]
+        OSC_PRESET --> OSC_APPLY["应用预设参数:<br/>• pb_min/pb_max 约束PB范围<br/>• safety_factor × 安全系数<br/>• loop_type_strategy 极端调整"]
+        OSC_APPLY --> OSC_OUT["输出振荡整定 PID"]
+    end
+    
+    subgraph MODEL_PATH["模型辨识路径"]
+        direction TB
+        M1["Step 2-4: 模型拟合 + 参数融合<br/>得到 K, T1, T2, L"]
+        M1 --> STEP46{"Step 4.6: 精确推断<br/>基于模型参数"}
+        
+        STEP46 --> PRECISE["infer_loop_type()<br/>基于 K/T1/L + 模型类型"]
+        PRECISE --> OVERRIDE{"精确推断置信度 ><br/>早期推断置信度?"}
+        OVERRIDE -->|"是"| REPLACE["覆盖: 用精确推断结果"]
+        OVERRIDE -->|"否"| KEEP["保持: 沿用早期推断结果"]
+        
+        REPLACE & KEEP --> BUILD["_build_output()"]
+        BUILD --> CALC["PIDCalculator.calculate(loop_type=...)"]
+        CALC --> CALC_SF["应用预设 safety_factor<br/>conservative_level × safety"]
+        CALC_SF --> TUNE["_tune_fo / _tune_fopdt(loop_type=...)"]
+        TUNE --> TUNE_PRESET["应用预设参数:<br/>• tau_c_factor 覆盖SIMC默认<br/>• ti_multiplier × Ti乘数<br/>• td_enable → 启用微分<br/>• td_ratio → Td = Ti × ratio"]
+        TUNE_PRESET --> MODEL_OUT["输出模型整定 PID"]
+    end
+    
+    OSC_OUT & MODEL_OUT --> FINAL["返回整定结果"]
+
+    style STEP05 fill:#FF9800,color:#fff
+    style EARLY fill:#4CAF50,color:#fff
+    style STEP46 fill:#4CAF50,color:#fff
+    style OSC_PRESET fill:#2196F3,color:#fff
+    style OSC_APPLY fill:#2196F3,color:#fff
+    style CALC_SF fill:#2196F3,color:#fff
+    style TUNE_PRESET fill:#2196F3,color:#fff
+    style OVERRIDE fill:#FF9800,color:#fff

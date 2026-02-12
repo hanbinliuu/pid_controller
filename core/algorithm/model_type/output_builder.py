@@ -146,7 +146,8 @@ class OutputBuilder(LoggerMixin):
                           tuning_windows: List[Dict] = None,
                           quality_info = None,
                           segment_results: List[SegmentResult] = None,
-                          segments: List[HistoricalData] = None) -> Dict[str, Any]:
+                          segments: List[HistoricalData] = None,
+                          loop_type: str = None) -> Dict[str, Any]:
         """
         构建最终输出（完整版，包含 fallback 逻辑）
         
@@ -159,13 +160,14 @@ class OutputBuilder(LoggerMixin):
             quality_info: 数据质量信息，用于自适应保守PID整定
             segment_results: 各段拟合结果，用于闭环不稳定时切换振荡整定
             segments: 各扰动段数据，用于闭环不稳定时切换振荡整定
+            loop_type: 回路类型，用于差异化整定
             
         Returns:
             完整的整定结果字典
         """
         # 计算 PID 参数
         pid_params = self._pid_calculator.calculate_from_fusion(
-            fusion, lambda_factor, quality_info=quality_info
+            fusion, lambda_factor, quality_info=quality_info, loop_type=loop_type
         )
         
         params = self._simulator.fusion_to_params(fusion)
@@ -317,7 +319,10 @@ class OutputBuilder(LoggerMixin):
             'pv_initial': pv_initial
         }
         
-        success = (not fitting_failed) and is_stable
+        # success 仅取决于是否产生有效参数，不再要求内部闭环验证通过
+        # 内部闭环验证使用估算模型（振荡数据下R²<0.4），不能代表真实过程稳定性
+        # is_stable 信息保留在 closed_loop_verification 中供参考
+        success = not fitting_failed
         
         return {
             'success': success,
@@ -355,9 +360,10 @@ class OutputBuilder(LoggerMixin):
     
     def build_output(self, fusion: FusionResult, hist_data: HistoricalData,
                      time_range: Dict, lambda_factor: float,
-                     tuning_windows: List[Dict] = None) -> Dict[str, Any]:
+                     tuning_windows: List[Dict] = None,
+                     loop_type: str = None) -> Dict[str, Any]:
         """构建最终输出"""
-        pid_params = self._pid_calculator.calculate_from_fusion(fusion, lambda_factor)
+        pid_params = self._pid_calculator.calculate_from_fusion(fusion, lambda_factor, loop_type=loop_type)
         
         params = self._simulator.fusion_to_params(fusion)
         

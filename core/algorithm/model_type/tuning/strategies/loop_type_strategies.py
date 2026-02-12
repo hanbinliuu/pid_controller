@@ -218,7 +218,7 @@ class FlowLoopStrategy(LoopTypeStrategy):
     
     def get_fallback_params(self) -> Dict[str, float]:
         # 平衡优化: 流量回路恢复稳定性
-        return {'pb_base': 100.0, 't1_divisor': 5.0, 't1_min': 5.0, 'ti_multiplier': 0.8}
+        return {'pb_base': 70.0, 't1_divisor': 5.0, 't1_min': 5.0, 'ti_multiplier': 0.8}
 
 
 class TemperatureLoopStrategy(LoopTypeStrategy):
@@ -284,7 +284,7 @@ class TemperatureLoopStrategy(LoopTypeStrategy):
     
     def get_fallback_params(self) -> Dict[str, float]:
         # 平衡优化: 温度回路恢复稳定性
-        return {'pb_base': 180.0, 't1_divisor': 3.0, 't1_min': 25.0, 'ti_multiplier': 2.2}
+        return {'pb_base': 60.0, 't1_divisor': 3.0, 't1_min': 25.0, 'ti_multiplier': 2.2}
 
 
 class PressureLoopStrategy(LoopTypeStrategy):
@@ -346,7 +346,7 @@ class PressureLoopStrategy(LoopTypeStrategy):
     
     def get_fallback_params(self) -> Dict[str, float]:
         # 平衡优化: 压力回路恢复稳定性
-        return {'pb_base': 120.0, 't1_divisor': 4.0, 't1_min': 10.0, 'ti_multiplier': 1.0}
+        return {'pb_base': 90.0, 't1_divisor': 4.0, 't1_min': 10.0, 'ti_multiplier': 1.0}
 
 
 class LevelLoopStrategy(LoopTypeStrategy):
@@ -406,7 +406,7 @@ class LevelLoopStrategy(LoopTypeStrategy):
     
     def get_fallback_params(self) -> Dict[str, float]:
         # 平衡优化: 液位回路恢复稳定性
-        return {'pb_base': 200.0, 't1_divisor': 3.0, 't1_min': 35.0, 'ti_multiplier': 2.8}
+        return {'pb_base': 120.0, 't1_divisor': 3.0, 't1_min': 35.0, 'ti_multiplier': 2.8}
 
 
 class DefaultLoopStrategy(LoopTypeStrategy):
@@ -426,7 +426,7 @@ class DefaultLoopStrategy(LoopTypeStrategy):
     
     def get_fallback_params(self) -> Dict[str, float]:
         # 石化优化v2: 默认回路
-        return {'pb_base': 120.0, 't1_divisor': 4.0, 't1_min': 12.0, 'ti_multiplier': 1.2}
+        return {'pb_base': 80.0, 't1_divisor': 4.0, 't1_min': 12.0, 'ti_multiplier': 1.2}
 
 
 # 策略注册表

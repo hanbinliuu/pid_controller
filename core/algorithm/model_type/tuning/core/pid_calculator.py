@@ -22,6 +22,7 @@ from .tuning_methods import TuningMethodsMixin
 from ..oscillation.oscillation_analysis import OscillationAnalysisMixin
 from ..verification.closed_loop_sim import ClosedLoopSimMixin
 from ..verification.model_rating import ModelRatingMixin
+from ...config.loop_presets import get_loop_preset
 
 
 EPSILON = Config.EPSILON
@@ -70,6 +71,13 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         T2 = max(T2, 0.0)
         
         conservative_level, pb_min = self._calculate_conservative_level(quality_info, response_mode)
+        
+        # 应用回路类型预设的安全系数
+        if loop_type:
+            preset = get_loop_preset(loop_type)
+            safety = preset.get('safety_factor', 1.0)
+            if safety != 1.0:
+                conservative_level *= safety
         
         if model_type == ModelType.FO:
             Kp, Ti, Td = self._tune_fo(K_abs, T1, lambda_factor, method,
@@ -190,11 +198,13 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
     def calculate_from_fusion(self, fusion: FusionResult, 
                                lambda_factor: float,
                                quality_info: Optional[DataQualityInfo] = None,
-                               response_mode: str = 'balanced') -> Dict[str, float]:
+                               response_mode: str = 'balanced',
+                               loop_type: str = None) -> Dict[str, float]:
         """从FusionResult计算PID参数"""
         return self.calculate(
             fusion.K, fusion.T1, fusion.T2, fusion.L,
             fusion.model_type, lambda_factor,
             quality_info=quality_info,
-            response_mode=response_mode
+            response_mode=response_mode,
+            loop_type=loop_type
         )
