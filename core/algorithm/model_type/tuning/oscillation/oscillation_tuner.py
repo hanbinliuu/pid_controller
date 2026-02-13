@@ -76,7 +76,6 @@ class OscillationTuner(LoggerMixin):
             'deadband_size': 0.0, 'stiction_severity': 0.0, 'saturation_ratio': 0.0,
             'issues_detected': []
         }
-        
         if len(mv) < 20 or len(pv) < 20:
             return result
         
@@ -239,7 +238,8 @@ class OscillationTuner(LoggerMixin):
             if success_total_points < min_points_threshold:
                 force_oscillation_tuning = True
             
-            if avg_osc_ratio > 0.7 and len(oscillating_segments) >= total_segments // 2:
+            osc_threshold = 0.85 if self._loop_type in ['flow', 'pressure'] else 0.7
+            if avg_osc_ratio > osc_threshold and len(oscillating_segments) >= total_segments // 2:
                 force_oscillation_tuning = True
         
         if successful_segments and not force_oscillation_tuning and not force:
@@ -268,7 +268,7 @@ class OscillationTuner(LoggerMixin):
         if not oscillation_analyses:
             self.log("   ⚠️ 无法从振荡数据中提取有效特征")
             if oscillating_segments:
-                return self._generic_fallback(oscillating_segments, segments, segment_results)
+                return self._generic_fallback(oscillating_segments, segments, segment_results, current_pid)
             return None
         
         # 选择最佳分析结果
@@ -373,12 +373,12 @@ class OscillationTuner(LoggerMixin):
         return self._rating_calculator.calculate(is_stable, cl_metrics, pid_params, osc_info, osc_result)
     
     def _generic_fallback(self, oscillating_segments: List, segments: List[HistoricalData],
-                          segment_results: List[SegmentResult]) -> Optional[Dict]:
+                          segment_results: List[SegmentResult], current_pid: Dict = None) -> Optional[Dict]:
         """通用 fallback 整定机制"""
-        return self._fallback_tuning(oscillating_segments, segments, segment_results)
+        return self._fallback_tuning(oscillating_segments, segments, segment_results, current_pid)
 
     def _fallback_tuning(self, oscillating_segments: List, segments: List[HistoricalData],
-                          segment_results: List[SegmentResult]) -> Optional[Dict]:
+                          segment_results: List[SegmentResult], current_pid: Dict = None) -> Optional[Dict]:
         """统一的 fallback 整定机制"""
         osc_config = Config.OSCILLATION_TUNING
         fallback_params = self._strategy.get_fallback_params()
@@ -409,17 +409,50 @@ class OscillationTuner(LoggerMixin):
         data_duration = len(best_seg.pv) * dt
         T1_approx = max(data_duration / t1_divisor, t1_min)
         
-        # 估算滞后
+        # 估算滞后与符号 (v3.9 增强)
         try:
             from scipy import signal
             pv_smooth = np.convolve(best_seg.pv, np.ones(5)/5, mode='same')
             mv_smooth = np.convolve(best_seg.mv, np.ones(5)/5, mode='same')
-            correlation = signal.correlate(pv_smooth - np.mean(pv_smooth), mv_smooth - np.mean(mv_smooth), mode='full')
-            lags = signal.correlation_lags(len(pv_smooth), len(mv_smooth), mode='full')
+            
+            # 使用简单的相关系数作为基线 (v3.9)
+            pv_norm = pv_smooth - np.mean(pv_smooth)
+            mv_norm = mv_smooth[:len(pv_smooth)] - np.mean(mv_smooth[:len(pv_smooth)])
+            corr = 0.0
+            if np.std(pv_norm) > 1e-6 and np.std(mv_norm) > 1e-6:
+                corr = np.corrcoef(mv_norm, pv_norm)[0, 1]
+            
+            correlation = signal.correlate(pv_norm, mv_norm, mode='full')
+            lags = signal.correlation_lags(len(pv_norm), len(mv_norm), mode='full')
             max_corr_idx = np.argmax(np.abs(correlation))
             estimated_delay_samples = lags[max_corr_idx]
             L_approx = max(abs(estimated_delay_samples) * dt, T1_approx / 5)
-        except:
+            
+            # [FIX] 修正符号检测逻辑 (v3.11):
+            # 1. 优先使用 current_pid 的符号（如有）
+            # 2. 否则使用负相关性推断 (-sign(corr))
+            # 原逻辑错误导致正向作用回路(Kp>0)被反转为负
+            current_Kp = current_pid.get('Kp', 0.0) if current_pid else 0.0
+            if abs(current_Kp) > 1e-6:
+                sign = np.sign(current_Kp)
+                source = "current_pid"
+            else:
+                sign = -np.sign(corr) if abs(corr) > 0.1 else 1.0
+                source = "correlation"
+            
+            K_approx = abs(K_approx) * sign
+            self.log(f"   📊 fallback 符号检测({source}): corr={corr:.2f}, Kp={current_Kp:.2f} -> Sign={sign}")
+        except Exception as e:
+            # v3.7 兜底方案：使用相关系数判断符号
+            try:
+                corr = np.corrcoef(best_seg.mv[:len(best_seg.pv)], best_seg.pv)[0, 1]
+                if not np.isnan(corr):
+                    current_Kp = current_pid.get('Kp', 1.0) if current_pid else 1.0
+                    sign = np.sign(corr) * (1.0 if current_Kp > 0 else -1.0)
+                    K_approx *= sign
+                    self.log(f"   ⚠️ CCF解析失败, 使用相关系数判定符号: corr={corr:.2f}, Sign={sign}")
+            except:
+                pass
             L_approx = T1_approx / 5
         
         delay_ratio = L_approx / max(T1_approx, 1.0)
@@ -429,8 +462,8 @@ class OscillationTuner(LoggerMixin):
         large_delay_threshold = osc_config.get('large_delay_ratio_threshold', 0.5)
         
         if delay_ratio > extreme_delay_threshold or L_approx > 30.0:
-            # 极大滞后：应用保守的pb增益 (优化: 降低上限 2.5→1.8)
-            pb_base *= osc_config.get('extreme_delay_pb_boost', 1.8)  # 原: 2.5
+            # 极大滞后：增加保守性以恢复稳定性 (1.8 -> 2.2)
+            pb_base *= 2.2
             ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.4) * 1.1  # 原: 1.5 * 1.2
             self.log(f"   ⚠️ 检测到极大滞后系统 (L/T={delay_ratio:.2f})")
         elif delay_ratio > large_delay_threshold or L_approx > osc_config.get('large_delay_absolute_threshold', 15.0):
@@ -446,18 +479,32 @@ class OscillationTuner(LoggerMixin):
         data_quality = best_result.quality_score if best_result else 0.4
         
         # 恢复稳定性: 恢复增益调整系数
-        if K_approx > 2.0:
-            pb_base *= 1.0 + (K_approx - 2.0) * (0.18 if self._loop_type == 'level' else 0.22)  # 恢复
-        elif K_approx < 0.5 and self._loop_type != 'level':
-            pb_base *= 1.4  # 恢复
+        K_abs_approx = abs(K_approx)
+        if K_abs_approx > 2.0:
+            boost_factor = 0.22
+            if self._loop_type == 'level':
+                boost_factor = 0.18
+            elif self._loop_type == 'flow':
+                boost_factor = 0.1   # 对高增益更激进 (0.15 -> 0.1)
+            elif self._loop_type == 'pressure':
+                boost_factor = 0.08  # 回调 (0.1 -> 0.08)
+            pb_base *= 1.0 + (K_abs_approx - 2.0) * boost_factor
+        elif K_abs_approx < 0.5 and self._loop_type != 'level':
+            # 适度恢复低增益补偿以提升稳定性
+            low_gain_boost = 1.15 if self._loop_type in ['flow', 'pressure'] else 1.4
+            pb_base *= low_gain_boost
         
         # 恢复稳定性: 恢复慢系统调整系数
         t1_threshold = 80.0 if self._loop_type == 'level' else 60.0  # 恢复阈值
         if T1_approx > t1_threshold:
-            pb_base *= 1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 150.0)  # 恢复
+            # 减缓慢系统 PB 膨胀 (150 -> 300)
+            pb_base *= 1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 300.0)
         
-        # 按回路类型获取pb范围限制 (使用回路预设)
+        # 应用 Loop Preset 的安全系数和范围限制
         preset = get_loop_preset(self._loop_type)
+        safety_factor = preset.get('safety_factor', 1.05)
+        pb_base *= safety_factor
+        
         pb_max_limit = preset.get('pb_max', osc_config.get('pb_max', 400.0))
         pb_min_limit = preset.get('pb_min', osc_config.get('pb_min', 60.0))
         
@@ -465,6 +512,7 @@ class OscillationTuner(LoggerMixin):
         preset_ti_mult = preset.get('ti_multiplier', 1.0)
         ti_multiplier *= preset_ti_mult
         
+        # 严格遵守 PB 限制
         pb_safe = np.clip(pb_base, pb_min_limit, pb_max_limit)
         conservative_Kp = 100.0 / pb_safe
         
@@ -502,7 +550,13 @@ class OscillationTuner(LoggerMixin):
                 else:
                     conservative_Td, conservative_Kd = 0.0, 0.0
         
-        self.log(f"   ✅ {self._loop_type}fallback整定: PB={pb_safe:.1f}%, Ti={conservative_Ti:.1f}s")
+        # [NEW] 符号对齐：确保 PID 参数符号与过程增益一致，支持反向作用系统 (Reverse Acting)
+        sign = np.sign(K_approx) if abs(K_approx) > 0.001 else 1.0
+        conservative_Kp *= sign
+        conservative_Ki *= sign
+        conservative_Kd *= sign
+        
+        self.log(f"   ✅ {self._loop_type}fallback整定: PB={pb_safe:.1f}%, Ti={conservative_Ti:.1f}s, Sign={sign}")
         
         pid_params = {
             'Kp': round(conservative_Kp, 4), 'Ki': round(conservative_Ki, 4), 'Kd': round(conservative_Kd, 4),
@@ -549,6 +603,11 @@ class OscillationTuner(LoggerMixin):
             Ku = pid_params['Ku']
             K_est = round(1.0 / Ku if Ku > 0.01 else 1.0, 4)
         
+        # [FIX] 使用 pid_params 中的 Kp 符号校正最终 K_est (v3.10)
+        # pid_params 的 Sign 是在 _fallback_tuning 中通过 current_pid/corr 确定的
+        Kp_sign = np.sign(pid_params['Kp']) if abs(pid_params['Kp']) > 0.001 else 1.0
+        K_est *= Kp_sign
+        
         T1_est, L_est, K_est_final = self._reconstruct_model_from_oscillation(
             Pu, Ku, K_est, loop_type=self._loop_type
         )
@@ -585,6 +644,12 @@ class OscillationTuner(LoggerMixin):
                 nonlinearity=osc_result.get('nonlinearity', 0.0),
                 valve_issues=osc_result.get('valve_issues', {}), confidence=fallback_confidence
             )
+            
+            # [FIX] 无论如何应用符号校正 (v3.10)
+            pid_params['Kp'] *= Kp_sign
+            pid_params['Ki'] *= Kp_sign
+            pid_params['Kd'] *= Kp_sign
+            
             is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
                 temp_fusion, pid_params, sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_mean, verbose=self._verbose
             )
@@ -649,29 +714,37 @@ class OscillationTuner(LoggerMixin):
         # 我们优先使用计算出的 K_approx，但允许 fallback 到纯滞后
         
         try:
-            # 求解方程: K / sqrt(1 + (wT)^2) = 1/Ku
-            # (K * Ku)^2 = 1 + (wT)^2
-            val = (K_approx * Ku)**2 - 1.0
+            # 改进策略：防止纯滞后偏差 (Prevent Pure Delay Bias)
+            gain_product = K_approx * Ku
+            if gain_product < 1.05:
+                K_working = 1.1 / Ku
+                val = (K_working * Ku)**2 - 1.0
+                actual_K = K_working
+            else:
+                val = (K_approx * Ku)**2 - 1.0
+                actual_K = K_approx
             
-            # 如果 K_approx 太小导致 val < 0，说明 K_est < 1/Ku
-            # 物理上不可能 (除非测量错误或非线性)，我们截断为 0 (Implies T=0, Pure Delay)
-            if val < 0: 
-                val = 0
-                # 如果 K_approx 实在太小，也许应该强制提高 K?
-                # 但这里保持 conservative，T=0
+            if val < 0: val = 0 
             
             wT = math.sqrt(val)
             T1 = wT / w
             
             # Phase: -atan(wT) - wL = -pi
-            # wL = pi - atan(wT)
             phi_t = math.atan(wT)
             L = (math.pi - phi_t) / w
             
-            # 边界检查
+            # [NEW] 回路类型先验约束：防止由于阀门粘滞等非线性导致的“幻影慢系统”模型
+            # 流量和压力回路通常不会有几十秒的滞后或时间常数
+            if loop_type == 'flow':
+                T1 = min(T1, 40.0)
+                L = min(L, 15.0)
+            elif loop_type == 'pressure':
+                T1 = min(T1, 30.0)
+                L = min(L, 10.0)
+            
             if L < 0.01: L = 0.01
             
-            return round(T1, 4), round(L, 4), round(K_approx, 4)
+            return round(T1, 4), round(L, 4), round(actual_K, 4)
             
         except Exception as e:
             self.log(f"   ⚠️ 模型重构失败: {e}，使用默认值")

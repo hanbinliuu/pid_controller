@@ -54,7 +54,12 @@ class TuningMethodsMixin:
         
         if use_simc:
             tau_c_factor = preset_tau_c_factor if preset_tau_c_factor else simc_cfg.get('tau_c_factor', 1.0)
-            tau_c = T1 * lambda_factor * tau_c_factor * (conservative_level / baseline)
+            # 对于流量和压力回路，响应时间应与过程惯性 T1 无关，采用固定比例或考虑滞后
+            base_tau = T1
+            if loop_type in ['flow', 'pressure']:
+                base_tau = max(1.0, T1 / 5.0) # 无滞后情况下，以 T1 的一部分作为基准
+            
+            tau_c = base_tau * lambda_factor * tau_c_factor * (conservative_level / baseline)
             denom = K * tau_c
             if denom < self._epsilon:
                 return self._get_fallback_params(Ti_override=T1)
@@ -122,7 +127,12 @@ class TuningMethodsMixin:
             use_simc = self._should_use_simc(loop_type)
             if use_simc:
                 tau_c_factor = preset_tau_c_factor if preset_tau_c_factor else simc_cfg.get('tau_c_factor', 1.0)
-                tau_c = T1 * lambda_factor * tau_c_factor * (conservative_level / baseline)
+                # 对于快过程，tau_c 应与滞后 L 相关，而非大惯性 T1 (解决 PB 膨胀)
+                base_tau = T1
+                if loop_type in ['flow', 'pressure']:
+                    base_tau = max(L, T1 / 10.0) if L > 0.01 else T1 / 5.0
+                
+                tau_c = base_tau * lambda_factor * tau_c_factor * (conservative_level / baseline)
                 tau_c_min_factor = simc_cfg.get('tau_c_min_factor', 0.5)
                 tau_c = max(tau_c, L * tau_c_min_factor)
                 denom = K * (tau_c + L)
@@ -138,9 +148,13 @@ class TuningMethodsMixin:
                     Ti = min(T1, ti_limit_factor * (tau_c + L))
                 Td = 0.0
             else:
-                # Lambda 整定法: 也需要应用回路预设的 tau_c_factor
+                # Lambda 整定法: 同样修正基准时间
                 tau_c_factor = preset_tau_c_factor if preset_tau_c_factor else 1.0
-                lambda_val = T1 * lambda_factor * tau_c_factor * (conservative_level / baseline)
+                base_tau = T1
+                if loop_type in ['flow', 'pressure']:
+                    base_tau = max(L, T1 / 10.0) if L > 0.01 else T1 / 5.0
+                
+                lambda_val = base_tau * lambda_factor * tau_c_factor * (conservative_level / baseline)
                 denom = K * (lambda_val + L / 2)
                 if denom < self._epsilon:
                     return self._get_fallback_params(Ti_override=T1 + L / 2)

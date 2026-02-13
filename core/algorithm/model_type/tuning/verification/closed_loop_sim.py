@@ -200,12 +200,19 @@ class ClosedLoopSimMixin:
         else:
             decay_ratio = 0.0 if len(peaks) <= 1 else 1.0
         
-        is_stable = (
-            settling_time < float('inf') and
-            steady_state_error < 5.0 and
-            overshoot < 50.0 and
-            decay_ratio < 0.5
-        )
+        # 从配置读取判定阈值
+        limits = Config.CLOSED_LOOP
+        max_settling = limits.get('max_settling_time', 600.0)
+        max_overshoot = limits.get('overshoot_acceptable', 30.0)
+        
+        # 判定稳定性
+        is_settled = settling_time < max_settling
+        is_accurate = steady_state_error < 5.0
+        is_smooth = overshoot < max_overshoot
+        is_decaying = decay_ratio < 0.5
+        
+        is_stable = is_settled and is_accurate and is_smooth and is_decaying
+        
         
         return ClosedLoopMetrics(
             is_stable=is_stable,
@@ -257,11 +264,14 @@ class ClosedLoopSimMixin:
         Pu = pid_params.get('Pu', T_max)
         is_very_slow = T_max > very_slow_t1_threshold or Pu > very_slow_pu_threshold
         
+        # 确保仿真时长足够覆盖允许的最大调节时间
+        ensure_duration = Config.CLOSED_LOOP.get('max_settling_time', 600.0) * 1.5
+        
         if is_very_slow:
             sim_time = min((T_max + L) * very_slow_sim_factor, very_slow_max_duration)
-            sim_time = max(sim_time, 500)
+            sim_time = max(sim_time, ensure_duration)
         else:
-            sim_time = max(100, T_max * 20)
+            sim_time = max(100, T_max * 20, ensure_duration)
         
         n_steps = int(sim_time / dt)
         

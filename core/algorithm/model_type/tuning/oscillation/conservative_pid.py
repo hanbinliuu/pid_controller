@@ -122,10 +122,17 @@ class ConservativePIDCalculator(LoggerMixin):
     def _calculate_base_pb(self, Ku: float, K_approx: float, Pu: float) -> Tuple[float, float, float, float]:
         """计算基础 pb 值"""
         osc_config = Config.OSCILLATION_TUNING
-        pb_from_k_factor = osc_config.get('pb_from_k_factor', 1.5)
+        pb_from_k_factor = osc_config.get('pb_from_k_factor', 1.0)
+        kp_from_ku_factor = osc_config.get('kp_from_ku_factor', 0.45)
+        
+        # [NEW] 针对流量和压力回路，平衡符合度与稳定性 (v3.10 Final Push)
+        # [NEW] 针对流量和压力回路，平衡符合度与稳定性 (v3.10 Final Push)
+        # if self._loop_type in ['flow', 'pressure']:
+        #     pb_from_k_factor *= 0.85   # 决战 150% 目标 (0.72 -> 0.85 恢复稳定性)
+        #     kp_from_ku_factor = 0.75   # 保持响应速度
+            
         pb_from_K = 100.0 * K_approx * pb_from_k_factor if K_approx > 0.01 else 80.0
         
-        kp_from_ku_factor = osc_config.get('kp_from_ku_factor', 0.2)
         if Ku > 0.1:
             Kp_from_Ku = kp_from_ku_factor * Ku
             pb_from_Ku = 100.0 / max(Kp_from_Ku, 0.1)
@@ -133,7 +140,7 @@ class ConservativePIDCalculator(LoggerMixin):
             pb_from_Ku = 100.0
         
         pu_thresholds = osc_config.get('slow_system_pu_thresholds', [30.0, 15.0])
-        slow_factors = osc_config.get('slow_system_factors', [1.3, 1.15, 1.0])
+        slow_factors = osc_config.get('slow_system_factors', [1.15, 1.05, 1.0])
         slow_factor = slow_factors[-1]
         for i, threshold in enumerate(pu_thresholds):
             if Pu > threshold:
@@ -176,14 +183,16 @@ class ConservativePIDCalculator(LoggerMixin):
     def _apply_extreme_factors(self, pb_base: float, K_approx: float, 
                                Pu: float, oscillation_ratio: float) -> Tuple[float, float]:
         """应用极端场景因子 (恢复稳定性)"""
-        if K_approx > 4.0:
-            if K_approx > 6.0:
-                # 恢复稳定性: 提高因子
-                extreme_gain_factor = min(1.0 + (K_approx - 4.0) * 0.25, 2.5)
-            else:
-                extreme_gain_factor = min(1.0 + (K_approx - 4.0) * 0.15, 1.8)
-            pb_base *= extreme_gain_factor
-            self.log(f"   ⚠️ 极高增益场景(K={K_approx:.1f}): 保守因子 ×{extreme_gain_factor:.2f}")
+        # [FIX] 仅针对未知回路应用全局因子，避免与策略类叠加 (v3.7)
+        if self._loop_type in ['default', 'unknown', '']:
+            if K_approx > 4.0:
+                if K_approx > 6.0:
+                    # 恢复稳定性: 提高因子
+                    extreme_gain_factor = min(1.0 + (K_approx - 4.0) * 0.25, 2.5)
+                else:
+                    extreme_gain_factor = min(1.0 + (K_approx - 4.0) * 0.15, 1.8)
+                pb_base *= extreme_gain_factor
+                self.log(f"   ⚠️ 极高增益场景(K={K_approx:.1f}): 保守因子 ×{extreme_gain_factor:.2f}")
         
         pb_base = self._strategy.adjust_pb_for_extreme(pb_base, K_approx, Pu, log_func=self.log)
         
@@ -235,16 +244,17 @@ class ConservativePIDCalculator(LoggerMixin):
                 prev_value = safety_base + (safety_thresholds[1] - safety_thresholds[0]) * safety_slopes[0]
                 prev_value += (safety_thresholds[2] - safety_thresholds[1]) * safety_slopes[1]
                 safety_factor = prev_value + (oscillation_ratio - safety_thresholds[2]) * safety_slopes[2]
-
+ 
             # [NEW] 叠加 Loop Preset 的 safety_factor (例如 Flow=1.1, Pressure=1.1)
-            # 这确保针对特定回路的优化在振荡回退模式下也能生效
             preset = get_loop_preset(self._loop_type)
             loop_safety_factor = preset.get('safety_factor', 1.05)
-            if loop_safety_factor != 1.05:  # 仅当非默认值时记录
-                 safety_factor *= loop_safety_factor
-                 self.log(f"   📊 回路类型[{self._loop_type}] 安全系数调整: ×{loop_safety_factor:.2f} -> {safety_factor:.2f}")
-            else:
-                 safety_factor *= loop_safety_factor # 默认也要乘，保持一致性
+            safety_factor *= loop_safety_factor
+        
+        # [NEW] 回路类型自适应梯度：流量和压力回路对振荡更宽容，适度减缓 PB 增加速度(v3.10)
+        loop_gradient = pb_gradient
+        if self._loop_type in ['flow', 'pressure']:
+            loop_gradient = pb_gradient * 0.7   # 梯度压制 (0.45 -> 0.7 增加阻尼)
+            # safety_factor *= 0.95               # 安全系数终极减免 (0.95 保持)
         
         total_multiplier = safety_factor
         if llm_strategy is not None:
@@ -252,7 +262,7 @@ class ConservativePIDCalculator(LoggerMixin):
         
         if oscillation_ratio > pb_osc_start:
             effective_osc = oscillation_ratio - pb_osc_start
-            osc_multiplier = 1.0 + np.sqrt(effective_osc) * pb_gradient
+            osc_multiplier = 1.0 + np.sqrt(effective_osc) * loop_gradient
             total_multiplier *= osc_multiplier
             max_mult = osc_config.get('max_multiplier_high_osc', 3.0) if oscillation_ratio > safety_thresholds[2] else osc_config.get('max_multiplier_normal', 2.5)
             total_multiplier = min(total_multiplier, max_mult)
@@ -290,7 +300,7 @@ class ConservativePIDCalculator(LoggerMixin):
             pb_min_dynamic = min(pb_min_base * (1.0 + pb_k_factor / K_approx), 350.0)  # 恢复
         else:
             pb_min_dynamic = 350.0
-        pb_min = max(pb_min_base, pb_min_dynamic)
+        pb_min = max(pb_min_preset, pb_min_dynamic)
         
         if reason == 'low_gain':
             pb_min = min(pb_min * osc_config.get('ku_k_extreme_pb_factor', 1.4), 450.0)  # 恢复

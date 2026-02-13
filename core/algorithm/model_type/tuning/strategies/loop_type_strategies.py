@@ -40,6 +40,7 @@ class ExtremeScenario:
     is_fast_system: bool = False    # Pu < 15s
     is_very_fast_system: bool = False  # Pu < 8s
     is_high_delay_ratio: bool = False  # 估算 L/T1 > 0.5
+    is_very_high_delay_ratio: bool = False # 估算 L/T1 > 0.8
     is_high_oscillation: bool = False  # oscillation_ratio > 0.7
     delay_ratio: float = 0.0        # 估算的滞后比
     
@@ -50,7 +51,8 @@ class ExtremeScenario:
             self.is_high_gain, self.is_very_high_gain,
             self.is_slow_system, self.is_very_slow_system,
             self.is_fast_system, self.is_very_fast_system,
-            self.is_high_delay_ratio, self.is_high_oscillation
+            self.is_high_delay_ratio, self.is_very_high_delay_ratio,
+            self.is_high_oscillation
         ])
 
 
@@ -85,6 +87,7 @@ def detect_extreme_scenario(K_approx: float, Pu: float,
         is_fast_system=Pu < 15.0,
         is_very_fast_system=Pu < 8.0,
         is_high_delay_ratio=delay_ratio > 0.5,
+        is_very_high_delay_ratio=delay_ratio > 0.8,
         is_high_oscillation=oscillation_ratio > 0.7,
         delay_ratio=delay_ratio
     )
@@ -181,8 +184,8 @@ class FlowLoopStrategy(LoopTypeStrategy):
             factor = min(factor, 1.4)
             reason = f"大滞后比(L/T1={scenario.delay_ratio:.2f})"
         elif scenario.is_very_fast_system:
-            factor = 1.1 + (8.0 - Pu) * 0.03
-            factor = min(factor, 1.3)
+            factor = 1.05 + (8.0 - Pu) * 0.02
+            factor = min(factor, 1.1)    # 1.3 -> 1.1
             reason = f"极快系统(Pu={Pu:.1f}s)"
         
         if factor > 1.0:
@@ -201,9 +204,13 @@ class FlowLoopStrategy(LoopTypeStrategy):
             factor = 1.0 + (K_approx - 6.0) * 0.3
             factor = min(factor, 1.8)
             reason = f"高增益(K={K_approx:.1f})"
-        elif scenario.is_high_delay_ratio and scenario.delay_ratio > 0.6:
-            factor = 1.0 + (scenario.delay_ratio - 0.6) * 0.6
-            factor = min(factor, 1.3)
+        elif scenario.is_very_high_delay_ratio:
+            factor = 1.1 + (scenario.delay_ratio - 0.8) * 0.5
+            factor = min(factor, 1.2)  # 1.4 -> 1.2
+            reason = f"极大滞后比(L/T1={scenario.delay_ratio:.2f})"
+        elif scenario.is_high_delay_ratio:
+            factor = 1.05 + (scenario.delay_ratio - 0.6) * 0.4
+            factor = min(factor, 1.1)  # 1.4 -> 1.1
             reason = f"大滞后比(L/T1={scenario.delay_ratio:.2f})"
         elif scenario.is_high_oscillation:
             factor = 1.0 + (oscillation_ratio - 0.7) * 0.8
@@ -218,7 +225,7 @@ class FlowLoopStrategy(LoopTypeStrategy):
     
     def get_fallback_params(self) -> Dict[str, float]:
         # 平衡优化: 流量回路恢复稳定性
-        return {'pb_base': 70.0, 't1_divisor': 5.0, 't1_min': 5.0, 'ti_multiplier': 0.8}
+        return {'pb_base': 60.0, 't1_divisor': 5.0, 't1_min': 5.0, 'ti_multiplier': 0.8}
 
 
 class TemperatureLoopStrategy(LoopTypeStrategy):
@@ -346,7 +353,7 @@ class PressureLoopStrategy(LoopTypeStrategy):
     
     def get_fallback_params(self) -> Dict[str, float]:
         # 平衡优化: 压力回路恢复稳定性
-        return {'pb_base': 90.0, 't1_divisor': 4.0, 't1_min': 10.0, 'ti_multiplier': 1.0}
+        return {'pb_base': 70.0, 't1_divisor': 4.0, 't1_min': 10.0, 'ti_multiplier': 1.0}
 
 
 class LevelLoopStrategy(LoopTypeStrategy):

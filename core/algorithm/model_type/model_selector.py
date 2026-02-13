@@ -948,8 +948,14 @@ class ModelSelector(LoggerMixin):
         for seg, res in zip(segments, results):
             osc_ratio = getattr(res, 'oscillation_ratio', 0.0)
             
-            if osc_ratio > threshold:
-                self.log(f"   段{res.segment_idx+1}: 振荡比={osc_ratio:.2f} > {threshold}，跳过拟合")
+            # 回路类型自适应阈值：流量和压力回路通常比温度回路更容易表现出高频"振荡"（由于噪声或快动态）
+            loop_type = self._process_context.get('loop_type', 'unknown')
+            adapted_threshold = threshold
+            if loop_type in ['flow', 'pressure']:
+                adapted_threshold = 0.85  # 对流量/压力放宽到 0.85
+            
+            if osc_ratio > adapted_threshold:
+                self.log(f"   段{res.segment_idx+1}: 振荡比={osc_ratio:.2f} > {adapted_threshold}，跳过拟合")
                 osc_segs.append(seg)
                 osc_results.append(res)
             else:

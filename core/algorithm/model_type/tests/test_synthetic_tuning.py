@@ -2336,22 +2336,30 @@ def generate_scenario_data(scenario: Dict, seed: int = None) -> Tuple[List[Dict]
     K_original = scenario['process_original']['K']
     is_reverse_action = K_original < 0  # 反向作用系统
     
+    # [NEW] 支持负增益系统的 MV 范围 (Reverse Acting)
+    mv_min = -100.0 if is_reverse_action else 0.0
+    mv_max = 100.0
+    
     process = FOPDTProcess(
         K=scenario['process_original']['K'],
         T1=scenario['process_original']['T1'],
         L=scenario['process_original']['L'],
-        dt=dt
+        dt=dt,
+        mv_min=mv_min,
+        mv_max=mv_max
     )
     
     controller = PIDController(
         Kp=scenario['original_pid']['Kp'],
         Ki=scenario['original_pid']['Ki'],
         Kd=scenario['original_pid'].get('Kd', 0.0),
-        dt=dt
+        dt=dt,
+        mv_min=mv_min,
+        mv_max=mv_max
     )
     
-    # 计算稳态MV（考虑负增益）
-    mv_ss = sv / abs(K_original) if abs(K_original) > 0.001 else sv
+    # 计算稳态MV（考虑负增益，移除 abs 限制）
+    mv_ss = sv / K_original if abs(K_original) > 0.001 else sv
     process.reset(pv_initial=sv)
     controller.reset(mv_initial=mv_ss)
     
@@ -2714,6 +2722,7 @@ def run_stability_test():
                 'history_data': data,
                 'params': {},
                 'qualified_windows': qualified_windows,
+                'current_pid': scenario['original_pid'],
             }
             
             # 获取变化后的过程参数用于仿真

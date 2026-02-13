@@ -21,7 +21,7 @@ MODEL_FITTING = {
 # ============================================================
 CLOSED_LOOP = {
     'settling_threshold': 0.02,          # 稳态误差带（2%）
-    'max_settling_time': 300.0,          # 最大调节时间（秒）
+    'max_settling_time': 600.0,          # 最大调节时间（秒）[从300s放宽到600s，适应大滞后/积分过程]
     'overshoot_good': 10.0,              # 良好超调量（%）
     'overshoot_acceptable': 30.0,        # 可接受超调量（%）
     'rise_time_min': 1.0,                # 理想上升时间下限（秒）
@@ -39,7 +39,7 @@ PID_CONSTRAINTS = {
     
     # Ti约束
     'ti_min': 0.1,                   # Ti最小值（秒）
-    'ti_max': 120.0,                 # Ti最大值（秒）
+    'ti_max': 300.0,                 # Ti最大值（秒）[从120s提高到300s，解锁大积分时间]
     
     # Td约束
     'td_max_ratio': 0.25,            # Td最大比例（相对于Ti）
