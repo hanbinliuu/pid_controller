@@ -86,8 +86,8 @@ class WindowResult:
 
 
 @dataclass
-class FusionResult:
-    """融合结果"""
+class StrategyFusionResult:
+    """融合策略结果"""
     K: float
     T1: float
     T2: float
@@ -134,14 +134,14 @@ class PIDFusionStrategy(LoggerMixin):
         return K, T1, T2, L
     
     def fuse(self, window_results: List[WindowResult], 
-             force_strategy: Optional[FusionStrategy] = None) -> FusionResult:
+             force_strategy: Optional[FusionStrategy] = None) -> StrategyFusionResult:
         """融合多窗口参数"""
         if not window_results:
             raise ValueError("没有有效的窗口结果")
         
         if len(window_results) == 1:
             w = window_results[0]
-            return FusionResult(
+            return StrategyFusionResult(
                 K=w.K, T1=w.T1, T2=w.T2, L=w.L,
                 strategy_used=FusionStrategy.BEST_WINDOW,
                 confidence=min(w.r2, 1.0),
@@ -298,7 +298,7 @@ class PIDFusionStrategy(LoggerMixin):
             # K差异大，使用中位数更稳健
             return FusionStrategy.MEDIAN_FUSION, f"K差异大(CV={K_cv:.1%})，中位数融合"
     
-    def _weighted_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _weighted_fusion(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """R² 加权融合"""
         weights = [max(w.r2, 0.01) for w in windows]
         K, T1, T2, L = self._weighted_average_params(windows, weights)
@@ -307,7 +307,7 @@ class PIDFusionStrategy(LoggerMixin):
         K_cv = self._safe_cv([w.K for w in windows])
         confidence = r2_mean * (1 - min(K_cv, 0.5))
         
-        return FusionResult(
+        return StrategyFusionResult(
             K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.WEIGHTED_FUSION,
             confidence=min(confidence, 1.0),
@@ -315,10 +315,10 @@ class PIDFusionStrategy(LoggerMixin):
             reasoning=reasoning
         )
     
-    def _best_window(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _best_window(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """选择最佳窗口"""
         best = max(windows, key=lambda w: w.r2)
-        return FusionResult(
+        return StrategyFusionResult(
             K=best.K, T1=best.T1, T2=best.T2, L=best.L,
             strategy_used=FusionStrategy.BEST_WINDOW,
             confidence=min(best.r2, 1.0),
@@ -326,7 +326,7 @@ class PIDFusionStrategy(LoggerMixin):
             reasoning=reasoning
         )
     
-    def _conservative_selection(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _conservative_selection(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """保守选择"""
         sorted_by_k = sorted(windows, key=lambda w: w.K)
         mid_idx = len(sorted_by_k) // 2
@@ -337,7 +337,7 @@ class PIDFusionStrategy(LoggerMixin):
         
         best = max(candidates, key=lambda w: w.r2)
         
-        return FusionResult(
+        return StrategyFusionResult(
             K=best.K, T1=best.T1, T2=best.T2, L=best.L,
             strategy_used=FusionStrategy.CONSERVATIVE,
             confidence=min(best.r2 * 0.9, 1.0),
@@ -345,7 +345,7 @@ class PIDFusionStrategy(LoggerMixin):
             reasoning=reasoning
         )
     
-    def _recency_weighted(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _recency_weighted(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """时效加权"""
         sorted_windows = sorted(windows, key=lambda w: w.window_idx)
         n = len(sorted_windows)
@@ -357,7 +357,7 @@ class PIDFusionStrategy(LoggerMixin):
         
         r2_mean = np.mean([w.r2 for w in sorted_windows])
         
-        return FusionResult(
+        return StrategyFusionResult(
             K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.RECENCY_WEIGHTED,
             confidence=min(r2_mean, 1.0),
@@ -365,7 +365,7 @@ class PIDFusionStrategy(LoggerMixin):
             reasoning=reasoning
         )
     
-    def _cross_validation(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _cross_validation(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """
         交叉验证策略
         
@@ -412,7 +412,7 @@ class PIDFusionStrategy(LoggerMixin):
         if not windows_used:
             windows_used = [max(zip(windows, weights), key=lambda x: x[1])[0].window_idx]
         
-        return FusionResult(
+        return StrategyFusionResult(
             K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.CROSS_VALIDATION,
             confidence=min(confidence, 1.0),
@@ -420,7 +420,7 @@ class PIDFusionStrategy(LoggerMixin):
             reasoning=reasoning
         )
     
-    def _robust_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _robust_fusion(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """鲁棒融合策略"""
         if len(windows) < 2:
             return self._best_window(windows, reasoning)
@@ -445,7 +445,7 @@ class PIDFusionStrategy(LoggerMixin):
         total_weight = sum(robust_weights) if sum(robust_weights) > self.EPSILON else 1.0
         r2_weighted = sum(w.r2 * wt for w, wt in zip(windows, robust_weights)) / total_weight
         
-        return FusionResult(
+        return StrategyFusionResult(
             K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.ROBUST_FUSION,
             confidence=min(r2_weighted, 1.0),
@@ -453,7 +453,7 @@ class PIDFusionStrategy(LoggerMixin):
             reasoning=reasoning
         )
     
-    def _median_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _median_fusion(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """
         中位数融合策略
         
@@ -471,7 +471,7 @@ class PIDFusionStrategy(LoggerMixin):
         K_cv = self._safe_cv([w.K for w in windows])
         confidence = r2_median * (1 - min(K_cv, 0.5))
         
-        return FusionResult(
+        return StrategyFusionResult(
             K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.MEDIAN_FUSION,
             confidence=min(confidence, 1.0),
@@ -479,7 +479,7 @@ class PIDFusionStrategy(LoggerMixin):
             reasoning=reasoning
         )
     
-    def _quality_weighted_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _quality_weighted_fusion(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """
         质量加权融合策略
         
@@ -510,7 +510,7 @@ class PIDFusionStrategy(LoggerMixin):
         if not windows_used:
             windows_used = [max(zip(windows, weights), key=lambda x: x[1])[0].window_idx]
         
-        return FusionResult(
+        return StrategyFusionResult(
             K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.QUALITY_WEIGHTED,
             confidence=min(r2_weighted, 1.0),
@@ -518,7 +518,7 @@ class PIDFusionStrategy(LoggerMixin):
             reasoning=reasoning
         )
     
-    def _stability_weighted_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _stability_weighted_fusion(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """
         稳态加权融合策略
         
@@ -571,7 +571,7 @@ class PIDFusionStrategy(LoggerMixin):
         if not windows_used:
             windows_used = [max(zip(windows, stability_weights), key=lambda x: x[1])[0].window_idx]
         
-        return FusionResult(
+        return StrategyFusionResult(
             K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.STABILITY_WEIGHTED,
             confidence=min(confidence, 1.0),
@@ -579,7 +579,7 @@ class PIDFusionStrategy(LoggerMixin):
             reasoning=reasoning
         )
     
-    def _adaptive_fusion(self, windows: List[WindowResult], reasoning: str) -> FusionResult:
+    def _adaptive_fusion(self, windows: List[WindowResult], reasoning: str) -> StrategyFusionResult:
         """
         自适应融合策略（增强版 - 处理非线性和低质量段）
         
@@ -628,7 +628,7 @@ class PIDFusionStrategy(LoggerMixin):
                 r2_weighted = sum(w.r2 * wt for w, wt in zip(steady_windows, weights)) / total_weight
                 windows_used = [w.window_idx for w in steady_windows]
                 
-                return FusionResult(
+                return StrategyFusionResult(
                     K=K, T1=T1, T2=T2, L=L,
                     strategy_used=FusionStrategy.ADAPTIVE_FUSION,
                     confidence=min(r2_weighted, 1.0),
@@ -656,7 +656,7 @@ class PIDFusionStrategy(LoggerMixin):
                     K = 0.7 * K + 0.3 * unsteady_K
                     self.log(f"   微调K: 稳态={w_steady.K:.4f}, 非稳态均值={unsteady_K:.4f} → {K:.4f}")
             
-            return FusionResult(
+            return StrategyFusionResult(
                 K=K, T1=T1, T2=T2, L=L,
                 strategy_used=FusionStrategy.ADAPTIVE_FUSION,
                 confidence=min(w_steady.r2 * w_steady.stability_score, 1.0),
@@ -692,7 +692,7 @@ class PIDFusionStrategy(LoggerMixin):
         # 置信度降低（因为没有稳态段）
         confidence = max([w.effective_weight for w in windows]) * 0.8
         
-        return FusionResult(
+        return StrategyFusionResult(
             K=K, T1=T1, T2=T2, L=L,
             strategy_used=FusionStrategy.ADAPTIVE_FUSION,
             confidence=min(confidence, 1.0),

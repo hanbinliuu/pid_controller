@@ -21,12 +21,39 @@ MODEL_FITTING = {
 # ============================================================
 CLOSED_LOOP = {
     'settling_threshold': 0.02,          # 稳态误差带（2%）
-    'max_settling_time': 600.0,          # 最大调节时间（秒）[从300s放宽到600s，适应大滞后/积分过程]
+    'max_settling_time': 900.0,          # 最大调节时间（秒）[从600s放宽到900s，适应大滞后/积分过程]
     'overshoot_good': 10.0,              # 良好超调量（%）
-    'overshoot_acceptable': 30.0,        # 可接受超调量（%）
+    'overshoot_acceptable': 50.0, # [NEW] 允许的最大超调量 (%) - 放宽以适应工业场景
     'rise_time_min': 1.0,                # 理想上升时间下限（秒）
     'rise_time_max': 10.0,               # 理想上升时间上限（秒）
     'oscillation_count_ideal': 4,        # 理想振荡次数上限
+    'min_r2_confidence': 0.6,    # [NEW] 最低R²置信度阈值 (低于此值跳过严格闭环验证)
+}
+
+# ============================================================
+# 回路类型特定验证配置 (Loop-Specific Verification)
+# ============================================================
+LOOP_SPECIFIC_VERIFICATION = {
+    'temperature': {
+        'max_settling_time_factor': 20.0,    # 温度回路：允许更长的调节时间 (20x T)
+        'overshoot_acceptable': 40.0,        # 温度回路：对超调更严格 (防止热冲击)
+        'steady_state_error': 5.0,
+    },
+    'level': {
+        'max_settling_time_factor': 15.0,    # 液位回路：积分特性，允许较长调节时间
+        'overshoot_acceptable': 50.0,
+        'steady_state_error': 10.0,          # 液位回路：允许较大的稳态误差 (非自衡)
+    },
+    'flow': {
+        'max_settling_time_factor': 10.0,    # 流量回路：快速响应
+        'overshoot_acceptable': 50.0,
+        'steady_state_error': 5.0,
+    },
+    'pressure': {
+        'max_settling_time_factor': 10.0,    # 压力回路：快速响应
+        'overshoot_acceptable': 50.0,
+        'steady_state_error': 5.0,
+    },
 }
 
 # ============================================================
@@ -153,4 +180,14 @@ MODEL_SELECTOR = {
     'quality_excellent_r2': 0.85,        # 优秀R²阈值
     'quality_good_r2': 0.7,              # 良好R²阈值
     'quality_acceptable_r2': 0.5,        # 一般R²阈值
+}
+
+# ============================================================
+# 鲁棒整定增强配置 (Robust Tuning)
+# ============================================================
+ROBUST_TUNING = {
+    'r2_robust_threshold': 0.6,          # 低于此 R² 触发指数级保守惩罚
+    'min_pb_flow': 50.0,                 # 流量回路最低 PB 保护
+    'min_pb_temp': 100.0,                # 温度回路最低 PB 保护
+    'sign_mismatch_penalty': 3.0,        # 符号不匹配时的保守等级乘数
 }

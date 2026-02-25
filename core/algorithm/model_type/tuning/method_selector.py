@@ -289,53 +289,7 @@ class TuningMethodSelector(LoggerMixin):
             reasoning=f"振荡规则性={chars.oscillation_regularity:.2f}，周期数={chars.n_cycles}"
         )
 
-    
-    def _hybrid_tuning(self, segments: List[HistoricalData], model_params: Optional[Dict],
-                       lambda_factor: float, chars: DataCharacteristics, dt: float) -> TuningMethodResult:
-        """混合方法整定 - 结合模型辨识和继电反馈"""
-        self.log("\n🔧 使用混合方法整定")
-        results = []
-        
-        if model_params and model_params.get('K', 0) != 0:
-            model_result = self._model_based_tuning(segments, model_params, lambda_factor, chars)
-            if model_result.pid_params:
-                results.append(('model', model_result))
-        
-        relay_result = self._relay_feedback_tuning(segments, chars, dt)
-        if relay_result.method != TuningMethod.CONSERVATIVE:
-            results.append(('relay', relay_result))
-        
-        if not results:
-            return self._conservative_fallback("两种方法都失败")
-        if len(results) == 1:
-            return results[0][1]
-        
-        model_result = results[0][1] if results[0][0] == 'model' else results[1][1]
-        relay_result = results[1][1] if results[1][0] == 'relay' else results[0][1]
-        
-        model_verified = self._verify_stability(model_result)
-        relay_verified = self._verify_stability(relay_result)
-        
-        model_stable = model_verified.stability_margins and model_verified.stability_margins.is_stable
-        relay_stable = relay_verified.stability_margins and relay_verified.stability_margins.is_stable
-        
-        if model_stable and not relay_stable:
-            best = model_verified
-            best.reasoning = "混合方法: 模型辨识法稳定性更好"
-        elif relay_stable and not model_stable:
-            best = relay_verified
-            best.reasoning = "混合方法: 继电反馈法稳定性更好"
-        elif model_stable and relay_stable:
-            model_pm = model_verified.stability_margins.phase_margin
-            relay_pm = relay_verified.stability_margins.phase_margin
-            best = model_verified if model_pm >= relay_pm else relay_verified
-            best.reasoning = f"混合方法: 选择相位裕度更大的方法"
-        else:
-            best = self._adjust_for_stability(model_verified if model_result.confidence >= relay_result.confidence else relay_verified)
-            best.reasoning = "混合方法: 两者都不稳定，使用调整后的参数"
-        
-        best.method = TuningMethod.HYBRID
-        return best
+
 
     
     def _verify_stability(self, result: TuningMethodResult) -> TuningMethodResult:

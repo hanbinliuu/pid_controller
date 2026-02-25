@@ -2780,6 +2780,10 @@ def run_stability_test():
             # 只有整定成功且仿真稳定才算"稳态达成"
             tuning_success = result_rule.get('success', False)
             rule_stable = tuning_success and sim_rule['is_stable']
+
+            # 闭环稳定性验证
+            sim_rule_cl = result_rule['closed_loop_verification']
+            rule_stable_cl = tuning_success and sim_rule_cl['is_stable']
             
             # 收敛放松：保守整定可能未完全进入误差带，但正在收敛且稳态误差小
             if tuning_success and not sim_rule['is_stable']:
@@ -2794,20 +2798,14 @@ def run_stability_test():
             else:
                 print(f"      稳态(真实参数): {'✅ 是' if sim_rule['is_stable'] else '❌ 否'} (Ts={sim_rule['settling_time']:.0f}s)")
             
-            # ===== 闭环验证（用估算模型参数）=====
-            model_params = result_rule.get('model_parameters', {})
-            estimated_process = {
-                'K': model_params.get('K', 1.0),
-                'T1': model_params.get('T1', 30.0),
-                'L': model_params.get('L', model_params.get('delay', 5.0))
-            }
-            sim_rule_cl = simulate_with_new_pid(estimated_process, pid_rule, sv, duration=sim_duration, seed=sim_seed+10)
-            rule_stable_cl = tuning_success and sim_rule_cl['is_stable']
+            # ===== 闭环验证（使用算法内置验证引擎）=====
+            sim_rule_cl = result_rule.get('closed_loop_verification', {})
+            rule_stable_cl = tuning_success and sim_rule_cl.get('is_stable', False)
             if rule_stable_cl:
                 rule_stable_cl_count += 1
             
             if tuning_success:
-                print(f"      稳态(闭环验证): {'✅ 是' if sim_rule_cl['is_stable'] else '❌ 否'} (Ts={sim_rule_cl['settling_time']:.0f}s)")
+                print(f"      稳态(闭环验证): {'✅ 是' if sim_rule_cl.get('is_stable', False) else '❌ 否'} (Ts={sim_rule_cl.get('settling_time', -1):.0f}s)")
             
             # 统计同时满足两者的数量
             rule_stable_and_cl = rule_stable and rule_stable_cl

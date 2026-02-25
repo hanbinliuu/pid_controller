@@ -13,7 +13,7 @@
 
 from .model_identifier import ModelIdentifier, EnsembleIdentifier
 from .segment_fitter import SegmentFitter
-from .fusion_strategy import PIDFusionStrategy, WindowResult, FusionResult as StrategyFusionResult
+from .fusion_strategy import PIDFusionStrategy, WindowResult, StrategyFusionResult
 from .type_selector import UnifiedModelSelector, SegmentModelFit
 from .step_response_identifier import StepResponseIdentifier
 from .frequency_domain_identifier import FrequencyDomainIdentifier

@@ -70,15 +70,25 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         L = max(L, 0.0)
         T2 = max(T2, 0.0)
         
-        conservative_level, pb_min = self._calculate_conservative_level(quality_info, response_mode)
+        conservative_level, pb_min = self._calculate_conservative_level(quality_info, response_mode, loop_type)
         
-        # 应用回路类型预设的安全系数
+        # [NEW] 回路类型预设同步 (v3.11)
         if loop_type:
             preset = get_loop_preset(loop_type)
             safety = preset.get('safety_factor', 1.0)
             if safety != 1.0:
                 conservative_level *= safety
         
+        # [NEW] 符号冲突检测 (v3.11) - 移动到计算之前，确保对所有模型生效
+        if quality_info and abs(quality_info.correlation) > 0.3:
+            if (quality_info.correlation > 0.3 and K_sign < 0) or \
+               (quality_info.correlation < -0.3 and K_sign > 0):
+                self._log_robust(f"   ⚠️ 符号冲突检测: correlation={quality_info.correlation:.2f}, K_sign={K_sign}")
+                penalty = Config.ROBUST_TUNING.get('sign_mismatch_penalty', 3.0)
+                conservative_level *= penalty
+                pb_min = max(pb_min, 60.0) # 符号冲突时强行拉高 PB 下限
+                self._log_robust(f"   → 触发极端保守模式: pb_min={pb_min}, level={conservative_level:.1f}")
+
         if model_type == ModelType.FO:
             Kp, Ti, Td = self._tune_fo(K_abs, T1, lambda_factor, method,
                                         conservative_level, pb_min, loop_type)
@@ -110,7 +120,8 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         }
     
     def _calculate_conservative_level(self, quality_info: Optional[DataQualityInfo],
-                                       response_mode: str = 'balanced') -> Tuple[float, float]:
+                                       response_mode: str = 'balanced',
+                                       loop_type: str = None) -> Tuple[float, float]:
         """根据数据质量和响应模式计算自适应保守等级"""
         MODE_PARAMS = {
             'fast': {
@@ -141,6 +152,16 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         osc_ratio = quality_info.oscillation_ratio
         r2 = quality_info.r_squared
         consistency = quality_info.consistency_score
+        correlation = getattr(quality_info, 'correlation', 0.0)
+        
+        # [NEW] 指数级 R² 惩罚 (v3.11)
+        # 当 R² 低于 0.6 时，说明模型不可信，大幅增加保守度
+        r2_robust_th = Config.ROBUST_TUNING.get('r2_robust_threshold', 0.6)
+        r2_penalty = 0.0
+        if r2 < r2_robust_th:
+            # 这种惩罚会在 R²=0.4 时达到 ~8.8，R²=0.2 时更夸张，迫使进入极端保守模式
+            r2_penalty = 2.0 * (np.exp(2.5 * (r2_robust_th - r2)) - 1.0)
+
         
         quality_factor = 1.0 - q_score
         osc_factor = osc_ratio * 0.5
@@ -155,6 +176,9 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         
         conservativeness = (0.25 * quality_factor + 0.20 * osc_factor +
                            0.30 * r2_factor + 0.25 * consist_factor)
+        
+        # 应用指数惩罚
+        conservativeness += r2_penalty
         
         r2_multipliers = params['r2_multipliers']
         if r2 > 0.95:
@@ -193,8 +217,25 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         
         conservative_level = soft_clip(conservative_level, level_min, level_max)
         pb_min = soft_clip(pb_min, pb_min_range, pb_max_range)
+        
+        # [NEW] 回路特定最小 PB 保护 (v3.11)
+        # 防止由于模型严重低估增益导致的 PB 膨胀到不合理的低值
+        if r2 < 0.7:
+            robust_cfg = Config.ROBUST_TUNING
+            if loop_type in ['flow', 'pressure']:
+                pb_min = max(pb_min, robust_cfg.get('min_pb_flow', 50.0))
+            elif loop_type in ['temperature', 'level']:
+                pb_min = max(pb_min, robust_cfg.get('min_pb_temp', 100.0))
+                
         return conservative_level, pb_min
     
+    def _log_robust(self, msg: str):
+        """记录鲁棒整定相关的日志"""
+        if hasattr(self, 'log'):
+            self.log(msg)
+        else:
+            print(msg)
+            
     def calculate_from_fusion(self, fusion: FusionResult, 
                                lambda_factor: float,
                                quality_info: Optional[DataQualityInfo] = None,

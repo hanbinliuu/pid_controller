@@ -443,7 +443,6 @@ class NonlinearFitter(LoggerMixin):
         
         模型结构: deadband(u) -> FOPDT
         """
-        n = len(y)
         y0 = y[0]
         u0 = u[0]
         
@@ -522,7 +521,6 @@ class NonlinearFitter(LoggerMixin):
         
         模型结构: saturation(u) -> FOPDT
         """
-        n = len(y)
         y0 = y[0]
         u0 = u[0]
         

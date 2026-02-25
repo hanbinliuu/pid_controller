@@ -31,3 +31,5 @@ class DataQualityInfo:
     r_squared: float = 0.5          # 拟合R² (0~1)
     is_noisy: bool = False          # 是否高噪声
     consistency_score: float = 0.5  # 参数一致性 (0~1)
+    correlation: float = 0.0        # PV-MV相关性 (-1~1)
+    controller_sign: int = 1        # 当前控制器的Kp符号 (1或-1)

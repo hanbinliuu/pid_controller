@@ -44,7 +44,7 @@ def calculate_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     if ss_tot < EPSILON:
         return 0.0
     r2 = 1 - ss_res / ss_tot
-    return float(np.clip(r2, 0.0, 1.0))
+    return float(min(r2, 1.0))
 
 
 def calculate_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:

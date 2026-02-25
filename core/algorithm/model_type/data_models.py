@@ -54,6 +54,7 @@ class FusionResult:
     T1: float = 0.0
     T2: float = 0.0
     L: float = 0.0
+    loop_type: str = ""                  # 回路类型 (flow, level, pressure, temperature)
     
     # 融合统计
     fusion_method: str = ""             # 融合方法

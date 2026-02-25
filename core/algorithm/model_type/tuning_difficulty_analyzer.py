@@ -322,7 +322,7 @@ class TuningDifficultyAnalyzer:
                             confidence=float(nonlinearity),
                             evidence=f"正负偏差区响应差异{nonlinearity:.2f}"
                         ))
-                except:
+                except Exception:
                     pass
         
         # 4. 积分过程检测
@@ -341,7 +341,7 @@ class TuningDifficultyAnalyzer:
                         confidence=min(1.0, drift_rate),
                         evidence=f"漂移率{drift_rate:.2f}"
                     ))
-            except:
+            except Exception:
                 pass
         
         # 5. 反作用检测

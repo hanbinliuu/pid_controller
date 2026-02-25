@@ -301,6 +301,12 @@ class ModelSelector(LoggerMixin):
         if input_data is None or not input_data.tuning_window or not raw_data:
             return self._empty_result(input_data)
         
+        # [NEW] 提取当前控制器 Kp 符号作为辨识先验 (Phase G)
+        base_kp = 1.0
+        if current_pid:
+            base_kp = current_pid.get('Kp', current_pid.get('kp', 1.0))
+        current_kp_sign = 1 if base_kp >= 0 else -1
+        
         time_range = {'start_time': input_data.start_time, 'end_time': input_data.end_time}
         hist_data = HistoricalData.from_json(raw_data)
         
@@ -444,7 +450,9 @@ class ModelSelector(LoggerMixin):
             return self._empty_result(input_data)
         
         # Step 2: 只对正常段尝试模型拟合（使用 SegmentFitter）
-        segment_results_fitted = self._segment_fitter.fit_all_segments(fitting_segs, fitting_results)
+        segment_results_fitted = self._segment_fitter.fit_all_segments(
+            fitting_segs, fitting_results, controller_sign=current_kp_sign
+        )
         
         # Step 2.5: 检查是否需要振荡整定
         # 如果整定段拟合效果差，或者只有振荡段，尝试振荡整定
@@ -480,6 +488,12 @@ class ModelSelector(LoggerMixin):
         
         # Step 4: 融合各段参数（只使用拟合成功的正常段）
         fusion_result = self._fuse_parameters(segment_results_fitted, best_model_type, fitting_segs)
+        
+        # [NEW] 同步回路类型到 FusionResult
+        if self._process_context:
+            fusion_result.loop_type = self._process_context.get('loop_type', 'flow')
+        else:
+            fusion_result.loop_type = 'flow'
         
         # Step 4.5: 闭环数据修正（SV阶跃段辨识的是闭环模型参数）
         corrected_T1 = None
@@ -543,7 +557,9 @@ class ModelSelector(LoggerMixin):
             )
         
         # 构建数据质量信息，用于自适应保守PID整定
-        quality_info = self._build_quality_info(fitting_segs, segment_results_fitted, fusion_result)
+        quality_info = self._build_quality_info(
+            fitting_segs, segment_results_fitted, fusion_result, controller_sign=current_kp_sign
+        )
         
         # 构建最终输出（传入扰动段信息和质量信息）
         # 使用原始段数据（降采样前）用于可视化
@@ -697,12 +713,16 @@ class ModelSelector(LoggerMixin):
         self._oscillation_tuner.set_llm_client(
             self._llm_client, loop_type, loop_name
         )
+        
+        # [NEW] 同步推断结果到 FusionResult
+        fusion_result.loop_type = loop_type
 
 
     
     def _build_quality_info(self, valid_segments: List[HistoricalData],
                             segment_results: List[SegmentResult],
-                            fusion_result: FusionResult) -> DataQualityInfo:
+                            fusion_result: FusionResult,
+                            controller_sign: int = 1) -> DataQualityInfo:
         """
         构建数据质量信息，用于自适应保守PID整定
         
@@ -712,9 +732,10 @@ class ModelSelector(LoggerMixin):
         3. 拟合R² - 模型拟合质量
         4. 参数一致性 - 多段参数一致程度
         """
-        # 计算平均振荡比和质量评分（一次遍历，避免重复调用 analyze_quality）
+        # 一次遍历计算振荡比、质量评分和相关性（避免重复调用 analyze_quality）
         oscillation_ratios = []
         quality_scores = []
+        correlations = []
         is_noisy = False
         
         for seg in valid_segments:
@@ -724,30 +745,29 @@ class ModelSelector(LoggerMixin):
             osc_ratio = sign_changes / (len(y) - 2) if len(y) > 2 else 0
             oscillation_ratios.append(osc_ratio)
             
-            # 使用预处理器分析质量（只调用一次）
+            # 使用预处理器分析质量（每段只调用一次）
             quality = self._preprocessor.analyze_quality(y, seg.mv)
             quality_scores.append(quality.quality_score if hasattr(quality, 'quality_score') else 0.5)
             
-            # 检查是否有高噪声段
             if hasattr(quality, 'is_noisy') and quality.is_noisy:
                 is_noisy = True
+            
+            if hasattr(quality, 'correlation'):
+                correlations.append(quality.correlation)
         
         avg_oscillation = np.mean(oscillation_ratios) if oscillation_ratios else 0.0
         avg_quality = np.mean(quality_scores) if quality_scores else 0.5
+        avg_correlation = np.mean(correlations) if correlations else 0.0
         
         quality_info = DataQualityInfo(
             quality_score=avg_quality,
             oscillation_ratio=avg_oscillation,
             r_squared=fusion_result.global_r2,
             is_noisy=is_noisy,
-            consistency_score=fusion_result.consistency_score
+            consistency_score=fusion_result.consistency_score,
+            correlation=avg_correlation,
+            controller_sign=controller_sign
         )
-        
-        # 日志输出保守等级信息
-        conservative_level, pb_min = self._pid_calculator._calculate_conservative_level(quality_info)
-        self.log(f"   📊 自适应保守调整: 质量={avg_quality:.2f}, 振荡={avg_oscillation:.2f}, "
-                f"R²={fusion_result.global_r2:.2f}, 一致性={fusion_result.consistency_score:.2f}")
-        self.log(f"   → 保守等级={conservative_level:.1f}, pb最小值={pb_min:.0f}")
         
         return quality_info
     
@@ -1419,6 +1439,10 @@ class ModelSelector(LoggerMixin):
             'gain_margin': margins.gain_margin if margins else 0,
             'gain_margin_db': margins.gain_margin_db if margins else 0,
             'phase_margin': margins.phase_margin if margins else 0,
+            'settling_time': -1,  # Frequency domain method doesn't provide simulation metrics directly
+            'overshoot': -1,
+            'steady_state_error': -1,
+            'decay_ratio': -1
         }
         
         # 评分：基于稳定性裕度

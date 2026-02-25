@@ -198,7 +198,8 @@ class ModelIdentifier:
     
     @staticmethod
     def estimate_gain_from_oscillating_data(y: np.ndarray, u: np.ndarray, 
-                                             return_trend: bool = False) -> float:
+                                             return_trend: bool = False,
+                                             controller_sign: int = None) -> float:
         """
         从高振荡数据中估计增益K
         使用包络线趋势法 + 分段验证
@@ -262,9 +263,13 @@ class ModelIdentifier:
             
             K = K_magnitude
         
-        # 确定符号
-        corr = np.corrcoef(u_smooth, y_trend)[0, 1] if len(u) > 2 else 0
-        K_sign = 1.0 if np.isnan(corr) or corr >= 0 else -1.0
+        # 确定符号 (Phase G: controller-aware)
+        if controller_sign is not None:
+            K_sign = float(controller_sign)
+        else:
+            corr = np.corrcoef(u_smooth, y_trend)[0, 1] if len(u) > 2 else 0
+            K_sign = 1.0 if np.isnan(corr) or corr >= 0 else -1.0
+        
         K = np.clip(K * K_sign, -10.0, 10.0)
         
         if return_trend:
@@ -272,7 +277,8 @@ class ModelIdentifier:
         return K
     
     @staticmethod
-    def estimate_ktl_robust(y: np.ndarray, u: np.ndarray, t: np.ndarray) -> dict:
+    def estimate_ktl_robust(y: np.ndarray, u: np.ndarray, t: np.ndarray,
+                            controller_sign: int = None) -> dict:
         """
         稳健的KTL参数估计（专门用于高振荡数据）
         
@@ -399,7 +405,7 @@ class ModelIdentifier:
         
         # 使用趋势数据估计T和L
         initial = ModelIdentifier.estimate_initial_guess_from_operational_data(
-            t, y_trend, u_smooth, y_trend[0]
+            t, y_trend, u_smooth, y_trend[0], controller_sign=controller_sign
         )
         
         return {
@@ -626,7 +632,7 @@ class ModelIdentifier:
         return np.clip(T_est, 5.0, 300.0)
     
     @staticmethod
-    def estimate_initial_guess_from_operational_data(t, y, u, y0, sv=None, current_pid_params=None, use_closed_loop=False):
+    def estimate_initial_guess_from_operational_data(t, y, u, y0, sv=None, current_pid_params=None, use_closed_loop=False, controller_sign=None):
         """从正常运行数据估计 FOPDT 参数初始值"""
         n = len(t)
         if n < 20:
@@ -634,7 +640,10 @@ class ModelIdentifier:
         
         dt = t[1] - t[0] if n > 1 else 1.0
         L_est = ModelIdentifier._estimate_lag_from_correlation(u, y, dt)
-        K_est = ModelIdentifier._estimate_gain_from_correlation(u, y, y0)
+        if controller_sign is not None:
+            K_est = 0.5 * controller_sign # 使用先验符号做保守初始值
+        else:
+            K_est = ModelIdentifier._estimate_gain_from_correlation(u, y, y0)
         T_est = ModelIdentifier._estimate_time_constant_from_response_speed(t, y, u, L_est)
         
         return {
@@ -653,7 +662,7 @@ class ModelIdentifier:
         return tuple(clipped_params)
     
     @staticmethod
-    def _identify_model_unified(t, y, u, model_type='FOPDT', **kwargs):
+    def _identify_model_unified(t, y, u, model_type='FOPDT', controller_sign=None, **kwargs):
         """
         统一的模型辨识方法
         
@@ -677,12 +686,12 @@ class ModelIdentifier:
             
             if use_robust:
                 # 使用稳健的KTL估计方法
-                robust_ktl = ModelIdentifier.estimate_ktl_robust(y, u, t)
+                robust_ktl = ModelIdentifier.estimate_ktl_robust(y, u, t, controller_sign=controller_sign)
                 K_est = robust_ktl['K']
                 
                 # 提取趋势用于拟合
                 _, y_trend, u_smooth = ModelIdentifier.estimate_gain_from_oscillating_data(
-                    y, u, return_trend=True
+                    y, u, return_trend=True, controller_sign=controller_sign
                 )
                 y_proc, u_proc = y_trend, u_smooth
                 
@@ -699,13 +708,15 @@ class ModelIdentifier:
                 )
                 K_est = ModelIdentifier.estimate_gain_from_oscillating_data(y, u)
                 initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(
-                    t, y_proc, u_proc, y0
+                    t, y_proc, u_proc, y0, controller_sign=controller_sign
                 )
                 initial_guess_dict['K'] = K_est
                 y0_fit = y0
         else:
             y_proc, u_proc = y, u
-            initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(t, y, u, y0)
+            initial_guess_dict = ModelIdentifier.estimate_initial_guess_from_operational_data(
+                t, y, u, y0, controller_sign=controller_sign
+            )
             y0_fit = y0
         
         formatter = ModelIdentifier.INITIAL_GUESS_FORMATS.get(
@@ -781,29 +792,29 @@ class ModelIdentifier:
         return ModelIdentifier._clip_params(params, model_type)
     
     @staticmethod
-    def identify_fopdt(t, y, u, sv=None, current_pid_params=None):
+    def identify_fopdt(t, y, u, sv=None, current_pid_params=None, controller_sign=None):
         """辨识FOPDT模型参数"""
-        return ModelIdentifier._identify_model_unified(t, y, u, 'FOPDT')
+        return ModelIdentifier._identify_model_unified(t, y, u, 'FOPDT', controller_sign=controller_sign)
     
     @staticmethod
-    def identify_first_order(t, y, u):
+    def identify_first_order(t, y, u, controller_sign=None):
         """辨识FO模型参数"""
-        return ModelIdentifier._identify_model_unified(t, y, u, 'FO')
+        return ModelIdentifier._identify_model_unified(t, y, u, 'FO', controller_sign=controller_sign)
     
     @staticmethod
-    def identify_second_order(t, y, u):
+    def identify_second_order(t, y, u, controller_sign=None):
         """辨识SO模型参数"""
-        return ModelIdentifier._identify_model_unified(t, y, u, 'SO')
+        return ModelIdentifier._identify_model_unified(t, y, u, 'SO', controller_sign=controller_sign)
     
     @staticmethod
-    def identify_sopdt(t, y, u):
+    def identify_sopdt(t, y, u, controller_sign=None):
         """辨识SOPDT模型参数"""
-        return ModelIdentifier._identify_model_unified(t, y, u, 'SOPDT')
+        return ModelIdentifier._identify_model_unified(t, y, u, 'SOPDT', controller_sign=controller_sign)
     
     @staticmethod
-    def identify_integral_delay(t, y, u):
+    def identify_integral_delay(t, y, u, controller_sign=None):
         """辨识FOPI模型参数"""
-        return ModelIdentifier._identify_model_unified(t, y, u, 'FO_INTEGRATOR')
+        return ModelIdentifier._identify_model_unified(t, y, u, 'FO_INTEGRATOR', controller_sign=controller_sign)
 
 
 # 初始化模型仿真方法映射

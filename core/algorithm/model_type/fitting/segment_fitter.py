@@ -78,7 +78,8 @@ class SegmentFitter(LoggerMixin):
         self._nonlinear_fitter = NonlinearFitter(verbose=verbose)
     
     def fit_all_segments(self, segments: List[HistoricalData],
-                         segment_results: List[SegmentResult]) -> List[SegmentResult]:
+                         segment_results: List[SegmentResult],
+                         controller_sign: int = 1) -> List[SegmentResult]:
         """
         对每个有效段拟合所有候选模型
         
@@ -179,10 +180,10 @@ class SegmentFitter(LoggerMixin):
                 
                 try:
                     if use_multi_start:
-                        params_raw, _ = self._multi_start_fit(t, y_fit, u_fit, model_type)
+                        params_raw, _ = self._multi_start_fit(t, y_fit, u_fit, model_type, controller_sign=controller_sign)
                     else:
                         method = self.IDENTIFY_METHODS.get(model_type)
-                        params_raw = method(t, y_fit, u_fit)
+                        params_raw = method(t, y_fit, u_fit, controller_sign=controller_sign)
                     
                     params_dict = self._simulator.PARAM_FORMATS[model_type](params_raw)
                     y_pred = self._simulator.simulate(params_raw, model_type, t, u, y0)
@@ -214,38 +215,42 @@ class SegmentFitter(LoggerMixin):
                     
                     if fitted_k_raw < 0 and is_oscillating:
                         # 剧烈震荡（ratio > 0.5）时，负K很可能是相位偏移导致
-                        # 中等震荡（ratio > 0.3）时，需要进一步检查
-                        osc_negative_k_threshold = Config.OSCILLATION_TUNING.get('negative_k_oscillation_threshold', 0.3)
-                        osc_severe_threshold = Config.OSCILLATION_TUNING.get('negative_k_severe_threshold', 0.5)
-                        
-                        if oscillation_ratio > osc_severe_threshold:
-                            # 剧烈震荡：直接取绝对值
-                            params_raw = list(params_raw)
-                            params_raw[0] = abs(params_raw[0])
-                            params_raw = tuple(params_raw)
-                            params_dict = self._simulator.PARAM_FORMATS[model_type](params_raw)
-                            y_pred = self._simulator.simulate(params_raw, model_type, t, u, y0)
-                            r2 = calculate_r2(y, y_pred)
-                            k_sign_corrected = True
-                            self.log(f"   ⚠️ {model_type}: 剧烈震荡(ratio={oscillation_ratio:.2f})导致负K={fitted_k_raw:.4f}，"
-                                    f"自动校正为K={params_dict['K']:.4f}")
-                        elif oscillation_ratio > osc_negative_k_threshold:
-                            # 中等震荡：比较正负K的拟合效果
-                            params_raw_pos = list(params_raw)
-                            params_raw_pos[0] = abs(params_raw_pos[0])
-                            params_raw_pos = tuple(params_raw_pos)
-                            y_pred_pos = self._simulator.simulate(params_raw_pos, model_type, t, u, y0)
-                            r2_pos = calculate_r2(y, y_pred_pos)
+                        # [Phase G] 如果控制器符号为负且K也为负，说明辨识结果与现状一致，应保留
+                        if controller_sign == -1:
+                            self.log(f"   ℹ️ {model_type}: 检测到震荡且负K={fitted_k_raw:.4f}，"
+                                    f"与反向控制器符号一致，跳过校正。")
+                        else:
+                            osc_negative_k_threshold = Config.OSCILLATION_TUNING.get('negative_k_oscillation_threshold', 0.3)
+                            osc_severe_threshold = Config.OSCILLATION_TUNING.get('negative_k_severe_threshold', 0.5)
                             
-                            # 如果正K的R²更好或相近，使用正K
-                            if r2_pos >= r2 - 0.05:
-                                params_raw = params_raw_pos
+                            if oscillation_ratio > osc_severe_threshold:
+                                # 剧烈震荡：直接取绝对值
+                                params_raw = list(params_raw)
+                                params_raw[0] = abs(params_raw[0])
+                                params_raw = tuple(params_raw)
                                 params_dict = self._simulator.PARAM_FORMATS[model_type](params_raw)
-                                y_pred = y_pred_pos
-                                r2 = r2_pos
+                                y_pred = self._simulator.simulate(params_raw, model_type, t, u, y0)
+                                r2 = calculate_r2(y, y_pred)
                                 k_sign_corrected = True
-                                self.log(f"   ⚠️ {model_type}: 中等震荡(ratio={oscillation_ratio:.2f})，"
-                                        f"负K={fitted_k_raw:.4f}校正为K={params_dict['K']:.4f} (R²: {r2:.4f})")
+                                self.log(f"   ⚠️ {model_type}: 剧烈震荡(ratio={oscillation_ratio:.2f})导致负K={fitted_k_raw:.4f}，"
+                                        f"自动校正为K={params_dict['K']:.4f}")
+                            elif oscillation_ratio > osc_negative_k_threshold:
+                                # 中等震荡：比较正负K的拟合效果
+                                params_raw_pos = list(params_raw)
+                                params_raw_pos[0] = abs(params_raw_pos[0])
+                                params_raw_pos = tuple(params_raw_pos)
+                                y_pred_pos = self._simulator.simulate(params_raw_pos, model_type, t, u, y0)
+                                r2_pos = calculate_r2(y, y_pred_pos)
+                                
+                                # 如果正K的R²更好或相近，使用正K
+                                if r2_pos >= r2 - 0.05:
+                                    params_raw = params_raw_pos
+                                    params_dict = self._simulator.PARAM_FORMATS[model_type](params_raw)
+                                    y_pred = y_pred_pos
+                                    r2 = r2_pos
+                                    k_sign_corrected = True
+                                    self.log(f"   ⚠️ {model_type}: 中等震荡(ratio={oscillation_ratio:.2f})，"
+                                            f"负K={fitted_k_raw:.4f}校正为K={params_dict['K']:.4f} (R²: {r2:.4f})")
                     
                     fitted_k = abs(params_dict['K'])
                     k_reasonable = k_min <= fitted_k <= k_max
@@ -290,7 +295,7 @@ class SegmentFitter(LoggerMixin):
                     self.log(f"   {model_type}: R²={r2:.4f}, AIC={aic:.1f}, "
                              f"K={params_dict['K']:.4f} {k_flag}, T1={params_dict['T1']:.2f}{osc_flag}")
                     
-                except Exception as e:
+                except (ValueError, np.linalg.LinAlgError, RuntimeError, FloatingPointError) as e:
                     self.log(f"   {model_type}: 拟合失败 - {e}")
                     result.model_results[model_type] = {
                         'r2': 0.0, 'rss': float('inf'), 'aic': float('inf')
@@ -409,7 +414,7 @@ class SegmentFitter(LoggerMixin):
                 self.log(f"   ⚠️ 段{idx+1}所有模型R²<0.4或K值异常")
     
     def _multi_start_fit(self, t: np.ndarray, y: np.ndarray, u: np.ndarray,
-                         model_type: str, n_starts: int = 3) -> Tuple[tuple, float]:
+                         model_type: str, n_starts: int = 3, controller_sign: int = 1) -> Tuple[tuple, float]:
         """多起点拟合"""
         method = self.IDENTIFY_METHODS.get(model_type)
         bounds = self._get_bounds(model_type)
@@ -419,7 +424,7 @@ class SegmentFitter(LoggerMixin):
         best_r2 = -1
         
         try:
-            params = method(t, y, u)
+            params = method(t, y, u, controller_sign=controller_sign)
             y_pred = self._simulator.simulate(params, model_type, t, u, y0)
             r2 = calculate_r2(y, y_pred)
             if r2 > best_r2:
@@ -430,7 +435,7 @@ class SegmentFitter(LoggerMixin):
         
         try:
             y_f, u_f = self._preprocessor.preprocess(y, u)
-            params = method(t, y_f, u_f)
+            params = method(t, y_f, u_f, controller_sign=controller_sign)
             y_pred = self._simulator.simulate(params, model_type, t, u, y0)
             r2 = calculate_r2(y, y_pred)
             if r2 > best_r2:

@@ -21,7 +21,7 @@ LOOP_TYPE_PRESETS = {
         'pb_min': 60.0,           # 流量需要快速响应，从50.0调高到60.0以增加稳定性
         'pb_max': 300.0,          # 上限提高 [从200提高到300，应对大滞后流量回路]
         'tau_c_factor': 1.2,      # τc较小，快速响应
-        'safety_factor': 1.0,     # 核心公式已修，恢复标准系数 (0.95 -> 1.0)
+        'safety_factor': 1.15,    # [NEW] 提高安全系数，应对流量回路增益波动
         'ti_multiplier': 1.0,     # Ti恢复标准 (1.15 -> 1.0)
         'td_enable': False,       # 流量严禁微分 [行业铁律]
         'aggressive': True,       # 允许激进整定
@@ -63,7 +63,7 @@ LOOP_TYPE_PRESETS = {
         'pb_min': 80.0,           # 压力需要快速响应，从70.0提高到80.0以增强抗噪性
         'pb_max': 300.0,          # 上限提高 [从200提高到300，应对高增益压力回路]
         'tau_c_factor': 1.5,      # τc加大 [从1.2提高到1.5，增加阻尼，应对高增益敏感]
-        'safety_factor': 1.0,     # 恢复标准 (1.03 -> 1.0)
+        'safety_factor': 1.15,    # [NEW] 提高安全系数
         'ti_multiplier': 1.05,    # Ti标准 (1.1 -> 1.05)
         'td_enable': True,        # 可用微分改善响应
         'td_ratio': 0.15,         # Td = Ti * 0.15

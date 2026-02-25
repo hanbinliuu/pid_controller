@@ -618,21 +618,39 @@ class OscillationTuner(LoggerMixin):
             enable_amplitude_calibration=True, enable_offset_correction=True, enable_oscillation_overlay=True
         )
         
-        temp_fusion = FusionResult(model_type=ModelType.FOPDT, K=K_est_final, T1=T1_est, T2=0.0, L=L_est)
+        r_squared = calculate_r2(y, pv_model)
+        rmse = calculate_rmse(y, pv_model)
+        
+        temp_fusion = FusionResult(
+            model_type=ModelType.FOPDT, K=K_est_final, T1=T1_est, T2=0.0, L=L_est,
+            global_r2=r_squared, global_rmse=rmse
+        )
         
         sv_mean, pv_mean, pv_std = float(np.mean(sv)), float(np.mean(y)), float(np.std(y))
         sp_initial, sp_final = sv_mean, sv_mean + max(pv_std * 2, 1.0)
         
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
-            temp_fusion, pid_params, sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_mean, verbose=self._verbose
+            temp_fusion, pid_params, sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_mean, 
+            loop_type=self._loop_type, verbose=self._verbose
         )
+        
+        # [NEW] 置信度驱动的保守策略
+        # 如果模型R²很低 (<0.4)，说明模型不可信，闭环验证(跳过)返回的"稳定"也是虚的。
+        # 此时应强制进行多轮迭代，使用更保守的参数，而不是在第一轮就退出。
+        min_r2_confidence = Config.CLOSED_LOOP.get('min_r2_confidence', 0.4)
+        force_conservative = (r_squared < min_r2_confidence)
         
         # Fallback 尝试
         max_fallback_attempts = 3
         for fallback_attempt in range(1, max_fallback_attempts + 1):
-            if is_stable:
+            if is_stable and not force_conservative:
                 break
-            self.log(f"   ⚠️ 闭环不稳定，尝试更保守的参数 (第{fallback_attempt}次)...")
+            
+            if force_conservative:
+                self.log(f"   ⚠️ 模型置信度低 (R²={r_squared:.2f})，强制进行保守迭代 (第{fallback_attempt}次)...")
+            else:
+                self.log(f"   ⚠️ 闭环不稳定，尝试更保守的参数 (第{fallback_attempt}次)...")
+                
             K_approx = pv_range / mv_range if mv_range > 0.1 and pv_range > 0.01 else 1.0
             fallback_confidence = osc_info.get('confidence', 0.3) * (0.5 ** fallback_attempt)
             adjusted_osc_ratio = min(0.95, osc_info.get('oscillation_ratio', 0.5) + 0.15 * fallback_attempt)
@@ -651,7 +669,8 @@ class OscillationTuner(LoggerMixin):
             pid_params['Kd'] *= Kp_sign
             
             is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
-                temp_fusion, pid_params, sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_mean, verbose=self._verbose
+                temp_fusion, pid_params, sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_mean, 
+                loop_type=self._loop_type, verbose=self._verbose
             )
         
         model_rating, rating_details, warnings = self._calculate_oscillation_rating(
@@ -714,15 +733,17 @@ class OscillationTuner(LoggerMixin):
         # 我们优先使用计算出的 K_approx，但允许 fallback 到纯滞后
         
         try:
-            # 改进策略：防止纯滞后偏差 (Prevent Pure Delay Bias)
-            gain_product = K_approx * Ku
+            # 改进策略：使用绝对值进行计算 (Phase G: handle negative K)
+            K_sign = np.sign(K_approx) if abs(K_approx) > Config.EPSILON else 1.0
+            K_abs = abs(K_approx)
+            gain_product = K_abs * Ku
             if gain_product < 1.05:
                 K_working = 1.1 / Ku
                 val = (K_working * Ku)**2 - 1.0
-                actual_K = K_working
+                actual_K_abs = K_working
             else:
-                val = (K_approx * Ku)**2 - 1.0
-                actual_K = K_approx
+                val = (K_abs * Ku)**2 - 1.0
+                actual_K_abs = K_abs
             
             if val < 0: val = 0 
             
@@ -731,20 +752,22 @@ class OscillationTuner(LoggerMixin):
             
             # Phase: -atan(wT) - wL = -pi
             phi_t = math.atan(wT)
-            L = (math.pi - phi_t) / w
+            phase_lag = math.pi - phi_t
             
             # [NEW] 回路类型先验约束：防止由于阀门粘滞等非线性导致的“幻影慢系统”模型
             # 流量和压力回路通常不会有几十秒的滞后或时间常数
             if loop_type == 'flow':
                 T1 = min(T1, 40.0)
-                L = min(L, 15.0)
+                L = min(phase_lag / w, 15.0) # Use phase_lag here
             elif loop_type == 'pressure':
                 T1 = min(T1, 30.0)
-                L = min(L, 10.0)
+                L = min(phase_lag / w, 10.0) # Use phase_lag here
+            else:
+                L = phase_lag / w # Default for other loop types
             
             if L < 0.01: L = 0.01
             
-            return round(T1, 4), round(L, 4), round(actual_K, 4)
+            return round(float(T1), 4), round(float(L), 4), round(float(actual_K_abs * K_sign), 4)
             
         except Exception as e:
             self.log(f"   ⚠️ 模型重构失败: {e}，使用默认值")

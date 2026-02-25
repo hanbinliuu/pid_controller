@@ -76,9 +76,6 @@ class LoggerMixin:
                 self.log_warning("警告消息")
     """
     
-    _logger: Optional[logging.Logger] = None
-    _verbose: bool = False
-    
     def _init_logger(self, verbose: bool = False):
         """初始化日志器"""
         self._verbose = verbose
