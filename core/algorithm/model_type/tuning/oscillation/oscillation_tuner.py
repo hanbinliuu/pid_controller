@@ -437,10 +437,18 @@ class OscillationTuner(LoggerMixin):
                 sign = np.sign(current_Kp)
                 source = "current_pid"
             else:
-                sign = -np.sign(corr) if abs(corr) > 0.1 else 1.0
+                # [FIX] Scene-5: 移除符号反转
+                # Kp 应与 K 同号 (Positive Loop Gain condition). corr 与 K 同号.
+                # 所以 sign 应为 np.sign(corr)
+                sign = np.sign(corr) if abs(corr) > 0.1 else 1.0
                 source = "correlation"
             
             K_approx = abs(K_approx) * sign
+            
+            # [FIX] Scene-5: 反向作用保护
+            # 如果 current_pid 明确是负的，或者相关系数明确是负的，绝不要因为振荡比高而在后续逻辑中强制取绝对值
+            # 这里已经在 K_approx 中应用了符号，downstream consumer 应该尊重 K_approx 的符号
+            
             self.log(f"   📊 fallback 符号检测({source}): corr={corr:.2f}, Kp={current_Kp:.2f} -> Sign={sign}")
         except Exception as e:
             # v3.7 兜底方案：使用相关系数判断符号

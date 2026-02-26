@@ -158,37 +158,55 @@ class StabilityAnalyzer:
     @classmethod
     def _find_gain_crossover(cls, K: float, T1: float, L: float,
                               Kp: float, Ti: float,
-                              max_iter: int = 20) -> float:
+                              max_iter: int = 60) -> float:
         """
         寻找增益穿越频率 (|L(jω)| = 1)
+
+        改用严格二分法：
+        1. 先在对数空间扫描 [1e-3, 100] 找到包围 |L|=1 的区间 [ω_lo, ω_hi]
+        2. 对该区间做标准二分，确保收敛
+        3. 若找不到包围区间（系统在所有频率下增益均 <1 或均 >1），
+           返回 0.0 以触发调用方的安全兜底（phase_margin = 90°）
         """
         K_open = abs(Kp * K)
-        
+
         if K_open < cls.EPSILON:
             return 0.1
-        
-        # 初始猜测: |L(jω)| ≈ K_open / (ω * Ti) = 1 在低频
-        omega = K_open / Ti if Ti > cls.EPSILON else 1.0
-        
+
+        def _mag(w: float) -> float:
+            pi_mag = np.sqrt(1.0 + 1.0 / (w * Ti + cls.EPSILON) ** 2)
+            fopdt_mag = K / np.sqrt(1.0 + (w * T1) ** 2)
+            return abs(Kp) * pi_mag * fopdt_mag
+
+        # --- Step 1: 扫描对数空间，找包围区间 ---
+        omega_scan = np.logspace(-3, 2, 200)
+        mag_scan = np.array([_mag(w) for w in omega_scan])
+        diff_sign = np.diff(np.sign(mag_scan - 1.0))
+        crossover_indices = np.where(diff_sign != 0)[0]
+
+        if len(crossover_indices) == 0:
+            # 系统在整个频率范围内增益始终 <1 或始终 >1，无穿越频率
+            # 返回 0.0，调用方对 omega_gc <= EPSILON 已有兜底（phase_margin = 90°）
+            return 0.0
+
+        # 取最低频率的穿越点（通常是主穿越频率）
+        idx = crossover_indices[0]
+        w_lo, w_hi = float(omega_scan[idx]), float(omega_scan[idx + 1])
+
+        # --- Step 2: 标准二分法收敛 ---
         for _ in range(max_iter):
-            # |L(jω)| = Kp * sqrt(1 + 1/(ω*Ti)^2) * K / sqrt(1 + (ω*T1)^2)
-            pi_mag = np.sqrt(1 + 1/(omega * Ti + cls.EPSILON)**2)
-            fopdt_mag = K / np.sqrt(1 + (omega * T1)**2)
-            total_mag = abs(Kp) * pi_mag * fopdt_mag
-            
-            error = total_mag - 1.0
-            if abs(error) < 0.01:
-                return omega
-            
-            # 二分法调整
-            if total_mag > 1:
-                omega *= 1.2
+            w_mid = (w_lo + w_hi) / 2.0
+            mag_mid = _mag(w_mid)
+            err = mag_mid - 1.0
+            if abs(err) < 1e-4:
+                return w_mid
+            if (mag_scan[idx] - 1.0) * err > 0:
+                w_lo = w_mid
             else:
-                omega *= 0.8
-            
-            omega = np.clip(omega, 0.001, 100)
-        
-        return omega
+                w_hi = w_mid
+
+        # 二分法理论上必然收敛，此处作为最后防线
+        return (w_lo + w_hi) / 2.0
     
     @classmethod
     def _calculate_margins_numerical(cls, K: float, T1: float, T2: float, L: float,

@@ -179,6 +179,10 @@ class FlowLoopStrategy(LoopTypeStrategy):
             factor = 1.0 + (K_approx - 6.0) * 0.4
             factor = min(factor, 2.0)
             reason = f"极高增益(K={K_approx:.1f})"
+        elif scenario.is_high_gain:
+            factor = 1.0 + (K_approx - 5.0) * 0.2
+            factor = min(factor, 1.4)
+            reason = f"高增益(K={K_approx:.1f})"
         elif scenario.is_high_delay_ratio and scenario.delay_ratio > 0.6:
             factor = 1.1 + (scenario.delay_ratio - 0.6) * 0.8
             factor = min(factor, 1.4)
@@ -203,6 +207,10 @@ class FlowLoopStrategy(LoopTypeStrategy):
         if scenario.is_very_high_gain:
             factor = 1.0 + (K_approx - 6.0) * 0.3
             factor = min(factor, 1.8)
+            reason = f"极高增益(K={K_approx:.1f})"
+        elif scenario.is_high_gain:
+            factor = 1.0 + (K_approx - 5.0) * 0.15
+            factor = min(factor, 1.3)
             reason = f"高增益(K={K_approx:.1f})"
         elif scenario.is_very_high_delay_ratio:
             factor = 1.1 + (scenario.delay_ratio - 0.8) * 0.5

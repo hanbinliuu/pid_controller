@@ -97,7 +97,7 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
                                            conservative_level, pb_min, loop_type)
         elif model_type in [ModelType.SO, ModelType.SOPDT]:
             Kp, Ti, Td = self._tune_sopdt(K_abs, T1, T2, L, lambda_factor,
-                                           conservative_level, pb_min)
+                                           conservative_level, pb_min, loop_type)
         elif model_type == ModelType.FOPI:
             Kp, Ti, Td = self._tune_integrator(K_abs, T1, lambda_factor,
                                                 conservative_level, pb_min)
@@ -127,17 +127,18 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
             'fast': {
                 'level_range': (0.8, 1.5), 'pb_range': (8, 25),
                 'default_level': 1.0, 'default_pb': 15,
-                'r2_multipliers': {0.95: 0.3, 0.9: 0.4, 0.85: 0.5, 0.8: 0.65}
+                # [FIX] BUG-3: 补充 R2 < 0.8 的乘数
+                'r2_multipliers': {0.95: 0.3, 0.9: 0.4, 0.85: 0.5, 0.8: 0.65, 0.7: 0.75, 0.6: 0.85}
             },
             'balanced': {
                 'level_range': (1.0, 2.0), 'pb_range': (12, 35),
                 'default_level': 1.5, 'default_pb': 25,
-                'r2_multipliers': {0.95: 0.35, 0.9: 0.5, 0.85: 0.65, 0.8: 0.8}
+                'r2_multipliers': {0.95: 0.35, 0.9: 0.5, 0.85: 0.65, 0.8: 0.8, 0.7: 0.85, 0.6: 0.9}
             },
             'conservative': {
                 'level_range': (1.5, 3.0), 'pb_range': (25, 50),
                 'default_level': 2.0, 'default_pb': 35,
-                'r2_multipliers': {0.95: 0.5, 0.9: 0.65, 0.85: 0.75, 0.8: 0.85}
+                'r2_multipliers': {0.95: 0.5, 0.9: 0.65, 0.85: 0.75, 0.8: 0.85, 0.7: 0.9, 0.6: 0.95}
             }
         }
         
@@ -189,6 +190,10 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
             conservativeness *= r2_multipliers[0.85]
         elif r2 > 0.8:
             conservativeness *= r2_multipliers[0.8]
+        elif r2 > 0.7:
+            conservativeness *= r2_multipliers[0.7]
+        elif r2 > 0.6:
+            conservativeness *= r2_multipliers[0.6]
         
         valve_cfg = self._pid_constraints.get('valve_compensation', {})
         osc_th_high = valve_cfg.get('osc_threshold_high', 0.5)

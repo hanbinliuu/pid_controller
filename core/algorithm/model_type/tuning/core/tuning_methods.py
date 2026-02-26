@@ -180,11 +180,16 @@ class TuningMethodsMixin:
     
     def _tune_sopdt(self, K: float, T1: float, T2: float, L: float,
                     lambda_factor: float, conservative_level: float = 4.0,
-                    pb_min: float = 60.0) -> Tuple[float, float, float]:
+                    pb_min: float = 60.0, loop_type: str = None) -> Tuple[float, float, float]:
         """二阶系统整定（SIMC 半规则）"""
         simc_cfg = getattr(Config, 'SIMC_TUNING', {})
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
         use_half_rule = simc_cfg.get('use_half_rule', True)
+
+        # [FIX] BUG-6: SOPDT 支持 loop_type
+        preset = get_loop_preset(loop_type)
+        preset_tau_c_factor = preset.get('tau_c_factor', None)
+        preset_ti_multiplier = preset.get('ti_multiplier', 1.0)
         
         if use_half_rule and T2 > 0:
             T_eff = T1 + T2 / 2
@@ -193,7 +198,7 @@ class TuningMethodsMixin:
             T_eff = T1 + T2 if T2 > 0 else T1
             L_eff = L
         
-        tau_c_factor = simc_cfg.get('tau_c_factor', 1.0)
+        tau_c_factor = preset_tau_c_factor if preset_tau_c_factor else simc_cfg.get('tau_c_factor', 1.0)
         tau_c = T_eff * lambda_factor * tau_c_factor * (conservative_level / baseline)
         denom = K * (tau_c + L_eff)
         if denom < self._epsilon:
@@ -201,7 +206,12 @@ class TuningMethodsMixin:
         
         Kp = T_eff / denom
         ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
-        Ti = min(T_eff, ti_limit_factor * (tau_c + L_eff))
+        
+        # Ti 限幅逻辑优化 (SOPDT)
+        if preset_ti_multiplier > 1.0:
+            Ti = min(T_eff * preset_ti_multiplier, ti_limit_factor * (tau_c + L_eff))
+        else:
+            Ti = min(T_eff, ti_limit_factor * (tau_c + L_eff))
         Td = 0.0
         
         max_Kp = self._get_max_kp(pb_min)
@@ -270,7 +280,8 @@ class TuningMethodsMixin:
             Kp = kp_min * K_sign
         
         ti_min = cfg.get('ti_min', 0.1)
-        ti_max = cfg.get('ti_max', 120.0)
+        # [FIX] BUG-1: ti_max 默认值应该是 300.0
+        ti_max = cfg.get('ti_max', 300.0)
         Ti = max(ti_min, min(Ti, ti_max))
         
         td_max_ratio = cfg.get('td_max_ratio', 0.25)
