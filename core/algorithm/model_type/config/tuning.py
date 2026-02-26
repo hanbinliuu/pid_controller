@@ -187,7 +187,7 @@ MODEL_SELECTOR = {
 # ============================================================
 ROBUST_TUNING = {
     'r2_robust_threshold': 0.6,          # 低于此 R² 触发指数级保守惩罚
-    'min_pb_flow': 50.0,                 # 流量回路最低 PB 保护
-    'min_pb_temp': 100.0,                # 温度回路最低 PB 保护
+    'min_pb_flow': 30.0,                 # 流量回路最低 PB 保护 [50→30，与工业真实下限对齐]
+    'min_pb_temp': 80.0,                 # 温度回路最低 PB 保护 [100→80，配合 loop_presets pb_min 同步]
     'sign_mismatch_penalty': 3.0,        # 符号不匹配时的保守等级乘数
 }

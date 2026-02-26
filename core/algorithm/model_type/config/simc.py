@@ -10,8 +10,8 @@ SIMC 是工业界广泛认可的整定方法，核心特点：
 
 SIMC_TUNING = {
     'enable': True,                       # 启用 SIMC 整定
-    'tau_c_factor': 1.8,                  # 优化：τc = T1 * 1.8 [从2.0调整，平衡响应速度和稳定性]
-    'tau_c_min_factor': 1.8,              # 优化：τc >= L * 1.8 [从2.0调整]
+    'tau_c_factor': 1.5,                  # 优化：τc = T1 * 1.5 [1.8→1.5，降低全局基准τc以减小PB]
+    'tau_c_min_factor': 1.2,              # 优化：τc >= L * 1.2 [1.8→1.2，大滞后场景放宽τc下限]
     'integrating_tau_c_factor': 3.0,      # 优化：积分过程 τc = L * 3.0 [从3.5降低，加快响应]
     'ti_limit_factor': 10.0,              # Ti 上限：Ti <= 10 * (τc + L)
     'use_half_rule': True,                # 二阶系统使用 SIMC 半规则
