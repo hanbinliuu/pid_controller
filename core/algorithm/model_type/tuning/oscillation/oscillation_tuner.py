@@ -672,7 +672,6 @@ class OscillationTuner(LoggerMixin):
             K_from_osc = pv_amplitude / mv_amplitude if mv_amplitude > 0.01 else K_from_range
             K_est = round(np.clip(max(K_from_range, K_from_osc), 0.1, 10.0), 4)
         else:
-            Ku = pid_params['Ku']
             K_est = round(1.0 / Ku if Ku > 0.01 else 1.0, 4)
         
         # [FIX] 使用 pid_params 中的 Kp 符号校正最终 K_est (v3.10)
@@ -846,18 +845,6 @@ class OscillationTuner(LoggerMixin):
             return round(Pu, 4), round(Pu/4.0, 4), round(K_approx, 4)
     
     def _build_segment_info(self, segments: List, segment_results: List) -> List[Dict]:
-        """构建段信息用于可视化"""
-        segment_info = []
-        if not segments or not segment_results:
-            return segment_info
-        for i, (seg, result) in enumerate(zip(segments, segment_results)):
-            if len(seg.timestamp) > 0:
-                step_score = result.step_response_score if hasattr(result, 'step_response_score') else result.get('step_response_score', 0.5)
-                osc_ratio = result.oscillation_ratio if hasattr(result, 'oscillation_ratio') else result.get('oscillation_ratio', 0.5)
-                is_tuning = (step_score >= 0.5 and osc_ratio < 0.5)
-                segment_info.append({
-                    'index': i, 'start_time': int(seg.timestamp[0]), 'end_time': int(seg.timestamp[-1]),
-                    'data_points': len(seg.pv), 'step_response_score': round(step_score, 2),
-                    'oscillation_ratio': round(osc_ratio, 2), 'type': 'tuning' if is_tuning else 'oscillation'
-                })
-        return segment_info
+        """构建段信息用于可视化（委托给 OutputBuilder）"""
+        from ...output_builder import OutputBuilder
+        return OutputBuilder.build_segment_info(segments, segment_results)

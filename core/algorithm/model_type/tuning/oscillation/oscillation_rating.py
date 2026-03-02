@@ -96,9 +96,11 @@ class OscillationRatingCalculator:
     def _calculate_stability_score(self, is_stable: bool, 
                                    cl_metrics: ClosedLoopMetrics) -> float:
         """计算闭环稳定性评分"""
+        from dataclasses import replace
         from ..core.performance_rating import calculate_control_performance
         if cl_metrics and hasattr(cl_metrics, 'is_stable'):
-            cl_metrics.is_stable = is_stable
+            # 使用副本避免副作用修改原始对象
+            cl_metrics = replace(cl_metrics, is_stable=is_stable)
         return calculate_control_performance(cl_metrics)
     
     def _calculate_data_quality_score(self, osc_info: Dict, 
@@ -183,7 +185,7 @@ class OscillationRatingCalculator:
         
         # 闭环不稳定
         if not is_stable:
-            model_rating = min(model_rating, 4.0)
+            model_rating = min(model_rating, 5.0)
             warnings.append('闭环仿真不稳定')
         
         # 极高振荡

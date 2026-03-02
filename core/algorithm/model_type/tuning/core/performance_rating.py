@@ -57,9 +57,11 @@ def calculate_control_performance(metrics: Optional[ClosedLoopMetrics]) -> float
         score += 1.0           # 完美消除静差
     elif metrics.steady_state_error <= 2.0:
         score += 0.5
-    elif metrics.steady_state_error > 5.0 and metrics.steady_state_error <= 10.0:
+    elif metrics.steady_state_error <= 5.0:
+        pass                   # 轻微残余偏差，不加不扣
+    elif metrics.steady_state_error <= 10.0:
         score -= 0.5           # 有明显残余偏差
-    elif metrics.steady_state_error > 10.0:
+    else:
         score -= 1.0           # 无法消除静差
         
     # 【4】振荡控制评估 (衰减比与振荡次数)
