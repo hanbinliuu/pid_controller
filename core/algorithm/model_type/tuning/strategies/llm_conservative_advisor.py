@@ -10,7 +10,7 @@
 
 import json
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Dict, Optional, List
 
 from ...config import Config
 

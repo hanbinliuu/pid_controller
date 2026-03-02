@@ -17,8 +17,7 @@
 """
 
 import numpy as np
-from typing import Dict, Optional, Tuple
-from scipy.ndimage import uniform_filter1d
+from typing import Dict, Optional
 
 
 class StepResponseIdentifier:

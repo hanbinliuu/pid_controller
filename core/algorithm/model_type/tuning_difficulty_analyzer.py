@@ -13,8 +13,7 @@
 
 import numpy as np
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
-from scipy import signal
+from typing import Dict, List, Optional
 
 
 @dataclass

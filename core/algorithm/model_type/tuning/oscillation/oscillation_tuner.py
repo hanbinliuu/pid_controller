@@ -15,7 +15,7 @@
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 
-from ..types import ValveIssues, ConservativePIDParams
+from ..types import ConservativePIDParams
 
 from ...config import Config, ModelType
 from ...config.loop_presets import get_loop_preset

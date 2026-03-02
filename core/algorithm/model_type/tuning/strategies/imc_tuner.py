@@ -32,7 +32,7 @@ Skogestad, S. (2003). Simple analytic rules for model reduction and PID controll
 """
 
 import numpy as np
-from typing import Dict, Optional, Tuple
+from typing import Dict
 from dataclasses import dataclass
 
 

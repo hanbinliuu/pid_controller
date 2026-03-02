@@ -1,19 +1,12 @@
 """
-验证与评分子模块 (Verification Submodule)
-========================================
+验证模块 (Verification Module)
+==============================
 
-闭环仿真验证和模型评分。
-
-模块内容
---------
-- closed_loop_sim.py: 闭环仿真 (ClosedLoopSimMixin)
-- model_rating.py: 模型评分 (ModelRatingMixin)
+提供闭环仿真和模型评分功能。
 """
 
 from .closed_loop_sim import ClosedLoopSimMixin
 from .model_rating import ModelRatingMixin
+from .stability_analyzer import StabilityAnalyzer, StabilityMargins
 
-__all__ = [
-    'ClosedLoopSimMixin',
-    'ModelRatingMixin',
-]
+__all__ = ["ClosedLoopSimMixin", "ModelRatingMixin", "StabilityAnalyzer", "StabilityMargins"]

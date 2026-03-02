@@ -15,7 +15,7 @@
 5. **综合评分**: 加权计算最终评分
 """
 
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple
 
 from ...config import Config
 from ..core.data_classes import ClosedLoopMetrics

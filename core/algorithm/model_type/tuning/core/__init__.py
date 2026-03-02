@@ -1,20 +1,11 @@
 """
-核心PID计算子模块 (Core PID Calculation Submodule)
-=================================================
+整定核心模块 (Tuning Core Module)
+==================================
 
-包含PID参数计算的核心逻辑。
-
-模块结构:
-- pid_calculator.py: 主PID计算器 (PIDCalculator)
-- tuning_methods.py: 整定公式 (TuningMethodsMixin)
-- data_classes.py: 数据类 (ClosedLoopMetrics, DataQualityInfo)
+提供 PID 计算器和数据类定义。
 """
 
-from .data_classes import ClosedLoopMetrics, DataQualityInfo
 from .pid_calculator import PIDCalculator
+from .data_classes import DataQualityInfo, ClosedLoopMetrics
 
-__all__ = [
-    'PIDCalculator',
-    'ClosedLoopMetrics',
-    'DataQualityInfo',
-]
+__all__ = ["PIDCalculator", "DataQualityInfo", "ClosedLoopMetrics"]

@@ -17,7 +17,7 @@ from typing import Dict, Tuple, Optional
 from ...config import Config, ModelType
 from ...data_models import FusionResult
 
-from .data_classes import ClosedLoopMetrics, DataQualityInfo
+from .data_classes import DataQualityInfo
 from .tuning_methods import TuningMethodsMixin
 from ..oscillation.oscillation_analysis import OscillationAnalysisMixin
 from ..verification.closed_loop_sim import ClosedLoopSimMixin

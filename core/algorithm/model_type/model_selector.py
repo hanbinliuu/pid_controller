@@ -2,7 +2,6 @@ import numpy as np
 from typing import List, Dict, Any, Optional, Tuple, Union
 from scipy.optimize import least_squares
 
-from api.commond.time_util import parse_time_to_milliseconds
 from .config import Config, ModelType
 from .data_models import SegmentResult, FusionResult, TuningInput, HistoricalData
 from .utils import (
@@ -15,7 +14,7 @@ from .preprocessing import DataPreprocessor, SegmentProcessor, SegmentManager
 from .fitting import (
     ModelIdentifier, SegmentFitter, UnifiedModelSelector, SegmentModelFit, ParameterFusion
 )
-from .tuning import PIDCalculator, DataQualityInfo, OscillationTuner, TuningMethodSelector, StabilityAnalyzer
+from .tuning import PIDCalculator, DataQualityInfo, OscillationTuner, TuningMethodSelector
 from .simulation import ModelSimulator
 
 # 其他模块
