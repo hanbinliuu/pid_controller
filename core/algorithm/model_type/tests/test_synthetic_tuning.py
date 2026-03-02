@@ -1290,6 +1290,14 @@ def simulate_with_new_pid(process_params: Dict, pid_params: Dict,
         np.random.seed(seed)
     
     # 解析阀门参数
+
+    # FIXME: 对小增益系统，确保SV可达，避免MV始终在100%饱和
+    max_achievable_pv = process_params['K'] * 90.0  # 假定最大安全MV为90
+    if max_achievable_pv > 0 and sv > max_achievable_pv:
+        sv = max_achievable_pv
+    elif max_achievable_pv < 0 and sv < max_achievable_pv:
+        sv = max_achievable_pv
+
     vp = valve_params or {}
     mv_sat = vp.get('mv_saturation', [0, 100])
     

@@ -33,6 +33,9 @@ class StabilityMargins:
     phase_margin: float  # 相位裕度 (度)
     crossover_freq: float  # 穿越频率 (rad/s)
     is_stable: bool  # 是否满足稳定性要求
+    ms: float = 2.0  # 最大灵敏度 Ms = max|1/(1+L(jω))|
+    ms_frequency: float = 0.0  # Ms 对应频率 (rad/s)
+    ms_ok: bool = True  # Ms ≤ MAX_MS ?
     
 
 class StabilityAnalyzer:
@@ -45,6 +48,7 @@ class StabilityAnalyzer:
     # 默认稳定性要求
     MIN_GAIN_MARGIN = 2.0  # 最小增益裕度 (倍数)
     MIN_PHASE_MARGIN = 45.0  # 最小相位裕度 (度)
+    MAX_MS = 2.0  # 最大灵敏度上限（工业标准 Ms ≤ 2.0）
     
     EPSILON = 1e-9
     
@@ -212,7 +216,10 @@ class StabilityAnalyzer:
     def _calculate_margins_numerical(cls, K: float, T1: float, T2: float, L: float,
                                       Kp: float, Ti: float, Td: float) -> StabilityMargins:
         """
-        数值方法计算稳定性裕度（适用于复杂系统）
+        数值方法计算稳定性裕度 + 最大灵敏度 Ms（适用于复杂系统）
+        
+        Ms = max|S(jω)| = max|1/(1+L(jω))| 是 Nyquist 图上闭环与 (-1,0) 点
+        的最近距离的倒数。Ms ≤ 1.4 非常鲁棒, ≤ 2.0 工业标准, > 2.0 有风险。
         """
         # 频率扫描
         omega_range = np.logspace(-3, 2, 500)
@@ -221,6 +228,8 @@ class StabilityAnalyzer:
         gm_omega = 0.0
         gc_omega = 0.0
         gc_phase = 0.0
+        max_sensitivity = 0.0  # Ms
+        ms_omega = 0.0
         
         for omega in omega_range:
             s = 1j * omega
@@ -243,6 +252,13 @@ class StabilityAnalyzer:
             mag = abs(L_s)
             phase = np.angle(L_s, deg=True)
             
+            # 灵敏度函数 S(jω) = 1/(1+L(jω))
+            S = 1.0 / (1.0 + L_s)
+            ms_val = abs(S)
+            if ms_val > max_sensitivity:
+                max_sensitivity = ms_val
+                ms_omega = omega
+            
             # 增益穿越频率 (|L| = 1)
             if abs(mag - 1.0) < 0.1:
                 gc_omega = omega
@@ -255,16 +271,21 @@ class StabilityAnalyzer:
         
         gain_margin = 1.0 / (min_gain + cls.EPSILON) if min_gain < float('inf') else 10.0
         phase_margin = 180 + gc_phase
+        ms_ok = max_sensitivity <= cls.MAX_MS
         
         is_stable = (gain_margin >= cls.MIN_GAIN_MARGIN and 
-                    phase_margin >= cls.MIN_PHASE_MARGIN)
+                    phase_margin >= cls.MIN_PHASE_MARGIN and
+                    ms_ok)
         
         return StabilityMargins(
             gain_margin=float(np.clip(gain_margin, 0.1, 100)),
             gain_margin_db=float(20 * np.log10(np.clip(gain_margin, 0.1, 100))),
             phase_margin=float(np.clip(phase_margin, -180, 180)),
             crossover_freq=float(gc_omega),
-            is_stable=is_stable
+            is_stable=is_stable,
+            ms=float(np.clip(max_sensitivity, 0.0, 100.0)),
+            ms_frequency=float(ms_omega),
+            ms_ok=ms_ok
         )
     
     @classmethod
@@ -354,3 +375,108 @@ class StabilityAnalyzer:
             return cls.calculate_margins_fopdt_pid(K, T1, L, Kp, Ti, Td)
         else:
             return cls.calculate_margins_fopdt_pi(K, T1, L, Kp, Ti)
+    
+    @classmethod
+    def compute_bode_data(cls, K: float, T1: float, T2: float, L: float,
+                          Kp: float, Ti: float, Td: float = 0.0,
+                          n_points: int = 200) -> Dict:
+        """
+        计算 Bode 图 + 灵敏度函数结构化数据（v4.0 频域分析）
+        
+        返回完整的频域分析数据，可用于：
+        - Bode 图可视化（幅值+相位 vs 频率）
+        - 灵敏度函数分析
+        - Ms/GM/PM 的精确数值计算
+        
+        Returns:
+            dict: {
+                'omega': 频率数组 (rad/s),
+                'magnitude_db': 开环幅值 (dB),
+                'phase_deg': 开环相位 (度),
+                'sensitivity': |S(jω)| 灵敏度函数幅值,
+                'complementary_sensitivity': |T(jω)| 补灵敏度,
+                'ms': 最大灵敏度,
+                'ms_frequency': Ms 对应频率,
+                'gm': 增益裕度 (倍),
+                'gm_db': 增益裕度 (dB),
+                'pm': 相位裕度 (度),
+                'gc_freq': 增益穿越频率,
+                'pc_freq': 相位穿越频率
+            }
+        """
+        omega = np.logspace(-3, 2, n_points)
+        mag_db = np.zeros(n_points)
+        phase_deg = np.zeros(n_points)
+        sensitivity = np.zeros(n_points)
+        comp_sensitivity = np.zeros(n_points)
+        
+        max_sens = 0.0
+        ms_freq = 0.0
+        gc_freq = 0.0
+        gc_phase = 0.0
+        pc_freq = 0.0
+        pc_mag = float('inf')
+        
+        prev_phase = 0.0
+        
+        for i, w in enumerate(omega):
+            s = 1j * w
+            
+            # PID 控制器
+            if Ti > cls.EPSILON:
+                C = Kp * (1 + 1/(Ti * s) + Td * s)
+            else:
+                C = Kp * (1 + Td * s)
+            
+            # 过程
+            if T2 > cls.EPSILON:
+                G = K / ((T1 * s + 1) * (T2 * s + 1)) * np.exp(-L * s)
+            else:
+                G = K / (T1 * s + 1) * np.exp(-L * s)
+            
+            L_s = C * G
+            mag = abs(L_s)
+            phase = np.angle(L_s, deg=True)
+            
+            mag_db[i] = 20 * np.log10(max(mag, 1e-15))
+            phase_deg[i] = phase
+            
+            # 灵敏度函数 S = 1/(1+L) 和 补灵敏度 T = L/(1+L)
+            S = 1.0 / (1.0 + L_s)
+            T = L_s / (1.0 + L_s)
+            sensitivity[i] = abs(S)
+            comp_sensitivity[i] = abs(T)
+            
+            if abs(S) > max_sens:
+                max_sens = abs(S)
+                ms_freq = w
+            
+            # 增益穿越（|L|最接近1的点）
+            if i > 0 and ((mag_db[i-1] >= 0 and mag_db[i] < 0) or 
+                          (mag_db[i-1] < 0 and mag_db[i] >= 0)):
+                gc_freq = w
+                gc_phase = phase
+            
+            # 相位穿越（相位跨越-180°）
+            if i > 0 and ((phase_deg[i-1] > -180 and phase_deg[i] <= -180) or
+                          (phase_deg[i-1] <= -180 and phase_deg[i] > -180)):
+                pc_freq = w
+                pc_mag = mag
+        
+        gm = 1.0 / (pc_mag + cls.EPSILON) if pc_mag < float('inf') else 10.0
+        pm = 180 + gc_phase
+        
+        return {
+            'omega': omega,
+            'magnitude_db': mag_db,
+            'phase_deg': phase_deg,
+            'sensitivity': sensitivity,
+            'complementary_sensitivity': comp_sensitivity,
+            'ms': float(max_sens),
+            'ms_frequency': float(ms_freq),
+            'gm': float(np.clip(gm, 0.1, 100)),
+            'gm_db': float(20 * np.log10(np.clip(gm, 0.1, 100))),
+            'pm': float(np.clip(pm, -180, 180)),
+            'gc_freq': float(gc_freq),
+            'pc_freq': float(pc_freq)
+        }

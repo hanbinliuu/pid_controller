@@ -463,9 +463,68 @@ class OscillationTuner(LoggerMixin):
                 pass
             L_approx = T1_approx / 5
         
+        # [NEW] 频域辨识融合 (v4.0)
+        try:
+            from ...fitting.frequency_domain_identifier import FrequencyDomainIdentifier
+            dt_seg = (best_seg.timestamp[1] - best_seg.timestamp[0]) / 1000 if len(best_seg.timestamp) > 1 else 1.0
+            t_seg = np.arange(len(best_seg.pv)) * dt_seg
+            freq_result = FrequencyDomainIdentifier.identify_fopdt(t_seg, best_seg.pv, best_seg.mv)
+            if freq_result and freq_result.get('confidence', 0) > 0.8:
+                alpha = 0.15  # 频域权重（保守融合，仅作辅助修正）
+                freq_K = freq_result.get('K', K_approx)
+                freq_T1 = freq_result.get('T1', T1_approx)
+                freq_L = freq_result.get('L', L_approx)
+                # 符号保持一致
+                if np.sign(freq_K) != np.sign(K_approx) and abs(K_approx) > 0.01:
+                    freq_K = abs(freq_K) * np.sign(K_approx)
+                K_approx = (1-alpha)*K_approx + alpha*freq_K
+                T1_approx = (1-alpha)*T1_approx + alpha*freq_T1
+                L_approx = (1-alpha)*L_approx + alpha*freq_L
+                self.log(f"   📊 频域辨识融合(α={alpha}): K={K_approx:.3f}, T1={T1_approx:.1f}s, L={L_approx:.1f}s"
+                         f" (置信度={freq_result['confidence']:.2f})")
+        except Exception:
+            pass  # 频域辨识失败不影响主路径
+        
         delay_ratio = L_approx / max(T1_approx, 1.0)
         
-        # 大滞后系统处理（分级）
+        # [NEW] 近积分过程专用路径 (level 回路, K极小且T1极大)
+        if self._loop_type == 'level' and T1_approx > 200.0 and abs(K_approx) < 0.2:
+            # 积分过程整定：使用 Lambda 规则的积分过程版本
+            # G(s) ≈ K_int/s，其中 K_int = K/T1（归一化积分增益）
+            K_int = abs(K_approx) / max(T1_approx, 1.0)  # 积分增益 (%/s/%)
+            
+            # Lambda 法（积分过程）：Kp = 1/(K_int * (2λ + L))
+            # λ = max(3*L, 30) 保守选择
+            lambda_c = max(3.0 * L_approx, 30.0)
+            Kp_level = 1.0 / (K_int * (2.0 * lambda_c + L_approx)) if K_int > 1e-9 else 1.0
+            
+            # Ti = 4*(lambda_c + L)，积分过程的标准推荐
+            Ti_level = 4.0 * (lambda_c + L_approx)
+            
+            # PB 和 Ti 限制
+            pb_level = 100.0 / max(abs(Kp_level), 0.01)
+            pb_level = np.clip(pb_level, 80.0, 300.0)
+            Ti_level = np.clip(Ti_level, 30.0, 300.0)
+            
+            conservative_Kp = 100.0 / pb_level * sign
+            conservative_Ki = abs(conservative_Kp) / Ti_level
+            conservative_Kd = 0.0
+            conservative_Td = 0.0
+            
+            self.log(f"   🧊 积分过程专用整定: K_int={K_int:.6f}, λ={lambda_c:.1f}")
+            self.log(f"   ✅ {self._loop_type}fallback整定: PB={pb_level:.1f}%, Ti={Ti_level:.1f}s, Sign={sign}")
+            
+            return TuningResult(
+                method='integrating_fallback',
+                pid_params={'Kp': float(conservative_Kp), 'Ki': float(conservative_Ki),
+                           'Kd': 0.0, 'pb': float(pb_level), 
+                           'ti': float(Ti_level), 'td': 0.0},
+                model_params={'K': float(K_approx), 'T1': float(T1_approx), 'L': float(L_approx)},
+                confidence=0.5,
+                details={'K_int': float(K_int), 'lambda': float(lambda_c),
+                        'sign': float(sign), 'source': 'integrating_lambda'}
+            )
+
         extreme_delay_threshold = osc_config.get('extreme_delay_ratio_threshold', 0.8)
         large_delay_threshold = osc_config.get('large_delay_ratio_threshold', 0.5)
         
@@ -524,8 +583,13 @@ class OscillationTuner(LoggerMixin):
         pb_safe = np.clip(pb_base, pb_min_limit, pb_max_limit)
         conservative_Kp = 100.0 / pb_safe
         
-        # Ti 基准（level 回路稍高）
-        ti_base_min = 10.0 if self._loop_type == 'level' else 5.0
+        # Ti 基准（level 回路取决于 T1 大小）
+        if self._loop_type == 'level' and T1_approx > 100:
+            ti_base_min = max(20.0, T1_approx * 0.05)  # T1的5%，至少20s
+        elif self._loop_type == 'level':
+            ti_base_min = 15.0
+        else:
+            ti_base_min = 5.0
         base_Ti = ti_base_min * 1.5
         
         conservative_Ti = np.clip(base_Ti * ti_multiplier, *osc_config.get('ti_range', [1.5, 600.0]))

@@ -499,7 +499,10 @@ class ModelSelector(LoggerMixin):
         corrected_T1 = None
         corrected_K = None
         if from_sv_step:
-            fusion_result = self._apply_closed_loop_correction(fusion_result, current_pid)
+            fusion_result = self._apply_closed_loop_correction(
+                fusion_result, current_pid,
+                sv_step_segments=sv_step_segs
+            )
             # 保存修正值，因为 Step 5 的全量优化可能覆盖
             corrected_T1 = fusion_result.T1
             corrected_K = fusion_result.K
@@ -568,29 +571,68 @@ class ModelSelector(LoggerMixin):
                                   original_results, original_segments)
     
     def _apply_closed_loop_correction(self, fusion: FusionResult,
-                                       current_pid: dict = None) -> FusionResult:
+                                       current_pid: dict = None,
+                                       sv_step_segments: list = None) -> FusionResult:
         """
-        闭环数据修正：SV阶跃段辨识的是闭环模型参数
+        闭环数据修正：SV阶跃段辨识的是闭环模型参数（v4.0 CLHM+YS 升级版）
 
-        闭环辨识的 T1 是闭环时间常数，通常比开环 T1 小若干倍。
-        直接用闭环 T1 做 SIMC/Lambda 整定会导致 PID 参数过于激进。
-
-        修正逻辑（自适应）：
-        - 理想一阶闭环：T1_cl ≈ T1_ol / (1 + K * Kp)
-          因此：T1_ol ≈ T1_cl * (1 + K * Kp)
-          修正因子 = max(1 + K * Kp, 1.5)，约束在 [1.5, 6.0]
-        - 当无法获得 current_pid 时，退回配置中的固定因子（默认 3.0）
-        - K 保持不变（闭环下 MV→PV 的增益已是开环增益的近似）
+        三层修正架构：
+        - Layer 1: CLHM 稳态增益反推 (K_ol = ΔSV / ΔMV_ss)
+        - Layer 2a: Yuwana-Seborg 法 (从超调+峰值时间反推 T1, L)
+        - Layer 2b: CLHM 解析法 (T1_ol = T1_cl × (1+K_ol·Kp))
+        - Layer 3: 交叉验证与融合
         """
+        from .fitting.closed_loop_identifier import ClosedLoopIdentifier
+        
         cfg = self._segment_processor._tuning_config
         fallback_factor = cfg.get('sv_closed_loop_t1_factor', 3.0)
 
-        # --- 自适应修正因子 ---
+        self.log(f"\n{'='*60}")
+        self.log("📊 Step 4.5: 闭环数据修正（CLHM+YS 三层辨识）")
+        self.log('='*60)
+
+        T1_original = fusion.T1
+        K_original = fusion.K
+
+        # 尝试使用新的三层辨识器
+        if current_pid and sv_step_segments and len(sv_step_segments) > 0:
+            try:
+                identifier = ClosedLoopIdentifier(log_func=self.log)
+                
+                # 使用第一个 SV 阶跃段
+                seg = sv_step_segments[0]
+                
+                result = identifier.identify(
+                    pv=seg.pv,
+                    sv=seg.sv,
+                    mv=seg.mv,
+                    timestamp=seg.timestamp,
+                    current_pid=current_pid,
+                    fitted_K_cl=fusion.K,
+                    fitted_T1_cl=fusion.T1,
+                    fitted_L_cl=fusion.L
+                )
+                
+                # 应用修正
+                fusion.T1 = result.T1_ol
+                fusion.K = result.K_ol
+                if result.L_ol > 0.1:
+                    fusion.L = result.L_ol
+                
+                self.log(f"   修正方法: {result.method} (置信度={result.confidence:.2f})")
+                self.log(f"   K: {K_original:.4f} → {fusion.K:.4f}")
+                self.log(f"   T1: {T1_original:.2f}s → {fusion.T1:.2f}s")
+                self.log(f"   L: {fusion.L:.2f}s")
+                
+                return fusion
+            except Exception as e:
+                self.log(f"   ⚠️ 三层辨识失败({e})，回退到传统修正")
+
+        # ---- Fallback: 传统修正（兼容旧路径） ----
         adaptive_factor = None
         factor_source = 'config_fallback'
 
         if current_pid and abs(fusion.K) > self._epsilon:
-            # 优先使用 Kp；兼容 pb 格式
             kp_raw = current_pid.get('Kp', current_pid.get('kp', None))
             if kp_raw is None and 'pb' in current_pid:
                 pb = current_pid['pb']
@@ -598,23 +640,18 @@ class ModelSelector(LoggerMixin):
             if kp_raw is not None:
                 Kp_val = abs(float(kp_raw))
                 K_abs = abs(fusion.K)
-                # 一阶闭环近似：correction = 1 + K * Kp
                 raw_factor = 1.0 + K_abs * Kp_val
-                # 约束在合理区间，防止极端 Kp 导致无意义的修正
-                adaptive_factor = float(np.clip(raw_factor, 1.5, 6.0))
+                # v4.0: 上限从 6.0 放宽到 15.0
+                adaptive_factor = float(np.clip(raw_factor, 1.5, 15.0))
                 factor_source = f'adaptive(K={K_abs:.3f}×Kp={Kp_val:.3f})'
 
         t1_factor = adaptive_factor if adaptive_factor is not None else fallback_factor
 
-        T1_original = fusion.T1
         T1_corrected = fusion.T1 * t1_factor
 
-        self.log(f"\n{'='*60}")
-        self.log("📊 Step 4.5: 闭环数据修正（SV阶跃段）")
-        self.log('='*60)
         self.log(f"   修正因子来源: {factor_source} → ×{t1_factor:.2f}")
         self.log(f"   闭环T1 = {T1_original:.2f}s → 开环T1(估) = {T1_corrected:.2f}s")
-        self.log(f"   K = {fusion.K:.4f} (保持不变)")
+        self.log(f"   K = {fusion.K:.4f} (保持不变 - 传统模式)")
 
         fusion.T1 = T1_corrected
 
