@@ -161,7 +161,8 @@ class TuningMethodSelector(LoggerMixin):
     def select_and_tune(self, segments: List[HistoricalData],
                         segment_results: List[SegmentResult],
                         model_params: Optional[Dict] = None,
-                        lambda_factor: float = 0.8) -> TuningMethodResult:
+                        lambda_factor: float = 0.8,
+                        loop_type: str = '') -> TuningMethodResult:
         """
         选择整定方法并执行整定
         
@@ -185,7 +186,7 @@ class TuningMethodSelector(LoggerMixin):
         
         # 1. 尝试模型辨识法
         if model_params and model_params.get('K', 0) != 0:
-            model_result = self._model_based_tuning(segments, model_params, lambda_factor, chars)
+            model_result = self._model_based_tuning(segments, model_params, lambda_factor, chars, loop_type=loop_type)
             if model_result.model_params:
                 model_result = self._verify_stability(model_result)
                 candidates.append(model_result)
@@ -234,7 +235,8 @@ class TuningMethodSelector(LoggerMixin):
 
     
     def _model_based_tuning(self, segments: List[HistoricalData], model_params: Optional[Dict],
-                            lambda_factor: float, chars: DataCharacteristics) -> TuningMethodResult:
+                            lambda_factor: float, chars: DataCharacteristics,
+                            loop_type: str = '') -> TuningMethodResult:
         """模型辨识法整定"""
         self.log("\n🔧 使用模型辨识法整定")
         if model_params is None or model_params.get('K', 0) == 0:
@@ -249,7 +251,7 @@ class TuningMethodSelector(LoggerMixin):
         # 对近积分过程，FOPDT 拟合会系统性地压缩 T1（600→30）和放大 K（0.01→0.5）
         # 需要使用更保守的 lambda_factor 来补偿
         actual_lambda = lambda_factor
-        if self._loop_type == 'level':
+        if loop_type == 'level':
             actual_lambda = max(lambda_factor * 5.0, 4.0)  # 大幅放大，至少 4.0
             self.log(f"   🧊 Level 积分过程: lambda_factor {lambda_factor:.1f} → {actual_lambda:.1f}")
         
@@ -260,7 +262,7 @@ class TuningMethodSelector(LoggerMixin):
         )
         
         # [NEW] Level 回路 Ti/PB 保障
-        if self._loop_type == 'level':
+        if loop_type == 'level':
             # Ti 至少 60s（液位积分过程需要非常慢的积分作用）
             if pid_params.get('ti', 0) < 60.0:
                 old_ti = pid_params.get('ti', 10.0)

@@ -542,9 +542,11 @@ class ModelSelector(LoggerMixin):
             'K': fusion_result.K, 'T1': fusion_result.T1,
             'T2': fusion_result.T2, 'L': fusion_result.L
         }
+        loop_type = self._process_context.get('loop_type', '') if self._process_context else ''
         method_result = self._method_selector.select_and_tune(
             fitting_segs, segment_results_fitted,
-            model_params=model_params, lambda_factor=lambda_factor
+            model_params=model_params, lambda_factor=lambda_factor,
+            loop_type=loop_type
         )
         
         # 只有当继电反馈法的稳定性明显更好时才使用
