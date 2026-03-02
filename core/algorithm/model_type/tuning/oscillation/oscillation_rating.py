@@ -96,35 +96,10 @@ class OscillationRatingCalculator:
     def _calculate_stability_score(self, is_stable: bool, 
                                    cl_metrics: ClosedLoopMetrics) -> float:
         """计算闭环稳定性评分"""
-        stability_score = 6.0 if is_stable else 2.0
-        
-        if is_stable:
-            # 超调量评分
-            if cl_metrics.overshoot <= 5:
-                stability_score += 1.5
-            elif cl_metrics.overshoot <= 15:
-                stability_score += 1.0
-            elif cl_metrics.overshoot <= 30:
-                stability_score += 0.5
-            elif cl_metrics.overshoot > 50:
-                stability_score -= 1.0
-            
-            # 调节时间评分
-            if cl_metrics.settling_time < float('inf'):
-                if cl_metrics.settling_time <= 30:
-                    stability_score += 1.0
-                elif cl_metrics.settling_time <= 60:
-                    stability_score += 0.5
-                elif cl_metrics.settling_time > 120:
-                    stability_score -= 0.5
-            
-            # 振荡次数
-            if cl_metrics.oscillation_count <= 2:
-                stability_score += 0.5
-            elif cl_metrics.oscillation_count > 5:
-                stability_score -= 0.5
-        
-        return min(10.0, max(0.0, stability_score))
+        from ..core.performance_rating import calculate_control_performance
+        if cl_metrics and hasattr(cl_metrics, 'is_stable'):
+            cl_metrics.is_stable = is_stable
+        return calculate_control_performance(cl_metrics)
     
     def _calculate_data_quality_score(self, osc_info: Dict, 
                                       osc_result: Dict) -> Tuple[float, Dict]:

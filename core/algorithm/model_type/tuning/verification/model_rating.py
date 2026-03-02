@@ -172,73 +172,7 @@ class ModelRatingMixin:
         根据闭环仿真指标计算评分 (0-10)
         
         复用于闭环阶跃仿真和预测仿真。
+        通过统一的 performance_rating 计算获取分数，保证评估标尺单一化。
         """
-        if metrics is None:
-            return 5.0
-        
-        # 基础分：稳定6分，不稳定1分
-        score = 6.0 if metrics.is_stable else 1.0
-        
-        # 超调量
-        overshoot = metrics.overshoot
-        if overshoot <= 5:
-            score += 1.5
-        elif overshoot <= 15:
-            score += 1.0
-        elif overshoot <= 30:
-            score += 0.5
-        elif overshoot <= 50:
-            score -= 0.5
-        else:
-            score -= 1.5
-        
-        # 上升时间
-        rise_time = metrics.rise_time
-        if rise_time < float('inf'):
-            if 1.0 <= rise_time <= 10.0:
-                score += 1.0
-            elif 0.5 <= rise_time < 1.0 or 10.0 < rise_time <= 20.0:
-                score += 0.5
-            elif rise_time < 0.5:
-                score -= 0.5
-            else:
-                score -= 0.5
-        
-        # 稳态误差
-        sse = metrics.steady_state_error
-        if sse <= 1:
-            score += 1.0
-        elif sse <= 2:
-            score += 0.5
-        elif sse <= 5:
-            pass
-        elif sse <= 10:
-            score -= 0.5
-        else:
-            score -= 1.0
-        
-        # 振荡次数
-        osc_count = metrics.oscillation_count
-        if osc_count == 0:
-            score += 0.5
-        elif osc_count <= 2:
-            score += 1.0
-        elif osc_count <= 4:
-            score += 0.5
-        elif osc_count <= 6:
-            score -= 0.5
-        else:
-            score -= 1.0
-        
-        # 衰减比
-        decay_ratio = metrics.decay_ratio
-        if decay_ratio <= 0.25:
-            score += 1.0
-        elif decay_ratio <= 0.5:
-            score += 0.5
-        elif decay_ratio <= 1.0:
-            pass
-        else:
-            score -= 1.0
-        
-        return min(10.0, max(0.0, score))
+        from ..core.performance_rating import calculate_control_performance
+        return calculate_control_performance(metrics)
