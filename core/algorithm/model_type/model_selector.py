@@ -243,6 +243,7 @@ class ModelSelector(LoggerMixin):
             'fusion_info': result.get('fusion_info', {}),
             'closed_loop_verification': result.get('closed_loop_verification', {}),
             'rating_details': result.get('rating_details', {}),
+            'tuning_features': result.get('tuning_features', {}),
             'segment_info': result.get('segment_info', [])
         }
     
@@ -548,13 +549,42 @@ class ModelSelector(LoggerMixin):
             loop_type=loop_type
         )
         
-        # 只有当继电反馈法的稳定性明显更好时才使用
+        # 只有当继电反馈法的稳定性**显著优于**模型辨识法时才使用
         from .tuning import TuningMethod
+        use_relay = False
         if (method_result.method == TuningMethod.RELAY_FEEDBACK and 
             method_result.stability_margins and 
-            method_result.stability_margins.is_stable and
-            method_result.stability_margins.phase_margin > 50):
-            self.log(f"\n🎯 继电反馈法稳定性更好 (PM={method_result.stability_margins.phase_margin:.1f}°)")
+            method_result.stability_margins.is_stable):
+            
+            relay_pm = method_result.stability_margins.phase_margin
+            relay_gm = method_result.stability_margins.gain_margin
+            
+            # 检查 Pu 是否异常（触达上限）
+            Pu_relay = (method_result.critical_params or {}).get('Pu', 0)
+            if Pu_relay >= 500:
+                self.log(f"\n   ⚠️ 继电反馈法 Pu={Pu_relay:.1f}s 触达上限，放弃使用")
+            else:
+                # 用 StabilityAnalyzer 计算模型辨识法的裕度作对比基准
+                from .tuning.verification.stability_analyzer import StabilityAnalyzer
+                model_pid = self._pid_calculator.calculate_from_fusion(fusion_result, lambda_factor)
+                model_margins = StabilityAnalyzer.check_stability(model_params, model_pid)
+                model_pm = model_margins.phase_margin if model_margins else 0
+                model_gm = model_margins.gain_margin if model_margins else 0
+                
+                # 继电反馈法必须 PM 高出 ≥10°，且 GM 不低于模型辨识法的 50%
+                pm_advantage = relay_pm - model_pm
+                gm_ok = (model_gm < 0.01) or (relay_gm >= model_gm * 0.5)
+                
+                if pm_advantage >= 10 and gm_ok:
+                    use_relay = True
+                    self.log(f"\n🎯 继电反馈法显著更优 (PM={relay_pm:.1f}° vs {model_pm:.1f}°, "
+                            f"GM={relay_gm:.2f} vs {model_gm:.2f})，使用继电反馈法参数")
+                else:
+                    self.log(f"\n   继电反馈法未显著优于模型辨识法 "
+                            f"(PM差={pm_advantage:.1f}°, GM比={relay_gm:.2f}/{model_gm:.2f})，使用模型辨识法")
+        
+        if use_relay:
+            # 继电反馈法胜出：走 _build_method_selector_output，但增加闭环仿真验证
             return self._build_method_selector_output(
                 method_result, fusion_result, hist_data, time_range,
                 input_data.tuning_window, original_segments, original_results
@@ -1471,6 +1501,7 @@ class ModelSelector(LoggerMixin):
         """
         from .tuning import TuningMethod
         from .utils import calculate_r2, calculate_rmse
+        from .tuning.core.performance_rating import calculate_control_performance
         
         pid_params = method_result.pid_params
         model_params = method_result.model_params or {
@@ -1495,26 +1526,66 @@ class ModelSelector(LoggerMixin):
         r2 = calculate_r2(y, pv_model)
         rmse = calculate_rmse(y, pv_model)
         
-        # 稳定性信息
+        # 闭环时域仿真验证（统一评分）
+        temp_fusion = FusionResult(
+            model_type=ModelType.FOPDT,
+            K=model_params.get('K', 1.0),
+            T1=model_params.get('T1', 10.0),
+            T2=model_params.get('T2', 0.0),
+            L=model_params.get('L', 1.0),
+            global_r2=r2, global_rmse=rmse
+        )
+        
+        sv_mean = float(np.mean(sv))
+        pv_std = float(np.std(y))
+        sp_initial = sv_mean
+        sp_final = sv_mean + max(pv_std * 2, 1.0)
+        pv_initial = float(np.mean(y))
+        
+        loop_type = self._process_context.get('loop_type', '') if self._process_context else ''
+        is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
+            temp_fusion, pid_params,
+            sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
+            loop_type=loop_type, verbose=self._verbose
+        )
+        
+        # 使用统一的闭环仿真评分（与模型辨识和振荡整定一致）
+        model_rating = calculate_control_performance(cl_metrics)
+        
+        # 频域稳定性信息（补充参考）
         margins = method_result.stability_margins
-        stability_info = {
-            'is_stable': margins.is_stable if margins else False,
+        closed_loop_info = {
+            'is_stable': is_stable,
+            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
+            'overshoot': cl_metrics.overshoot,
+            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
+            'steady_state_error': cl_metrics.steady_state_error,
+            'oscillation_count': cl_metrics.oscillation_count,
+            'decay_ratio': cl_metrics.decay_ratio,
+            'sp_initial': sp_initial,
+            'sp_final': sp_final,
+            'pv_initial': pv_initial,
+            # 频域裕度（补充信息）
             'gain_margin': margins.gain_margin if margins else 0,
             'gain_margin_db': margins.gain_margin_db if margins else 0,
             'phase_margin': margins.phase_margin if margins else 0,
-            'settling_time': -1,  # Frequency domain method doesn't provide simulation metrics directly
-            'overshoot': -1,
-            'steady_state_error': -1,
-            'decay_ratio': -1
         }
         
-        # 评分：基于稳定性裕度
-        if margins and margins.is_stable:
-            gm_score = min(10, margins.gain_margin * 2)  # GM=2 -> 4分, GM=5 -> 10分
-            pm_score = min(10, margins.phase_margin / 9)  # PM=45 -> 5分, PM=90 -> 10分
-            model_rating = round((gm_score + pm_score) / 2, 1)
-        else:
-            model_rating = 3.0
+        # 构建整定特征
+        tuning_features = {
+            'tuning_method': 'relay_feedback',
+            'Ku': (method_result.critical_params or {}).get('Ku', 0),
+            'Pu': (method_result.critical_params or {}).get('Pu', 0),
+            'gain_margin': margins.gain_margin if margins else 0,
+            'phase_margin': margins.phase_margin if margins else 0,
+            'K': round(model_params.get('K', 0), 4),
+            'T1': round(model_params.get('T1', 0), 4),
+            'L': round(model_params.get('L', 0), 4),
+            'r_squared': round(r2, 4),
+            'method': method_result.method.value,
+            'confidence': method_result.confidence,
+            'loop_type': loop_type,
+        }
         
         return {
             'success': True,
@@ -1545,12 +1616,13 @@ class ModelSelector(LoggerMixin):
                 'tuning_method': method_result.method.value,
                 'critical_params': method_result.critical_params
             },
-            'closed_loop_verification': stability_info,
+            'closed_loop_verification': closed_loop_info,
             'rating_details': {
                 'method': method_result.method.value,
                 'reasoning': method_result.reasoning,
                 'warnings': method_result.warnings
             },
+            'tuning_features': tuning_features,
             'segment_info': OutputBuilder.build_segment_info(segments, segment_results) if segments else []
         }
     

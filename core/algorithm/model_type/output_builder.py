@@ -325,6 +325,37 @@ class OutputBuilder(LoggerMixin):
         # is_stable 信息保留在 closed_loop_verification 中供参考
         success = not fitting_failed
         
+        # 构建整定特征数据
+        delay_ratio = round(fusion.L / fusion.T1, 4) if fusion.T1 > 0 else 0.0
+        tuning_features = {
+            'tuning_method': 'model_identification',
+            # 模型辨识特征
+            'K': round(fusion.K, 4),
+            'T1': round(fusion.T1, 4),
+            'T2': round(fusion.T2, 4),
+            'L': round(fusion.L, 4),
+            'delay_ratio': delay_ratio,
+            'lambda_factor': lambda_factor,
+            'model_type': fusion.model_type,
+            'r_squared': round(fusion.global_r2, 4),
+            'rmse': round(fusion.global_rmse, 4),
+            # 融合信息
+            'fusion_method': fusion.fusion_method,
+            'n_segments_used': fusion.n_segments_used,
+            'K_std': round(fusion.K_std, 4),
+            'T1_std': round(fusion.T1_std, 4),
+        }
+        # 数据质量特征（来自 quality_info）
+        if quality_info is not None:
+            tuning_features.update({
+                'quality_score': round(quality_info.quality_score, 4),
+                'oscillation_ratio': round(quality_info.oscillation_ratio, 4),
+                'is_noisy': quality_info.is_noisy,
+                'consistency_score': round(quality_info.consistency_score, 4),
+                'correlation': round(quality_info.correlation, 4),
+                'controller_sign': quality_info.controller_sign,
+            })
+        
         return {
             'success': success,
             'model_type': fusion.model_type,
@@ -356,6 +387,7 @@ class OutputBuilder(LoggerMixin):
             },
             'closed_loop_verification': closed_loop_info,
             'rating_details': score_details,
+            'tuning_features': tuning_features,
             'segment_info': OutputBuilder.build_segment_info(segments, segment_results) if segments else []
         }
     

@@ -37,14 +37,14 @@ from core.algorithm.model_type.tuning_difficulty_analyzer import TuningDifficult
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", 
-    'loop_uri': "/pid_zd/5989fb05a2ce4828a7ae36c682906f2b",  #101
+    'loop_uri': "/pid_zd/7d3298f025b84c46a2ed898f66dcfa3f",  #101
     # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
     # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        {'start_time': '2025-12-12 00:39:00', 'end_time': '2025-12-12 23:58:00'},
+        {'start_time': '2026-03-03 00:00:00', 'end_time': '2026-03-03 23:00:00'},
         # {'start_time': '2026-01-05 00:39:41', 'end_time': '2026-01-05 13:39:41'},
     ],
     
@@ -1141,6 +1141,17 @@ def print_result_json(result: Dict):
         for k, v in model_params.items()
     }
     
+    # 格式化 tuning_features
+    tuning_features = result.get('tuning_features', {})
+    tuning_features_formatted = {}
+    for k, v in tuning_features.items():
+        if isinstance(v, float):
+            tuning_features_formatted[k] = round(v, 4)
+        elif isinstance(v, (bool, int, str, list, dict)):
+            tuning_features_formatted[k] = v
+        else:
+            tuning_features_formatted[k] = str(v)
+    
     output = {
         'success': bool(result.get('success')),  # 转换 numpy.bool_ 为 Python bool
         'model_type': result.get('model_type'),
@@ -1155,7 +1166,8 @@ def print_result_json(result: Dict):
             'rmse': round(fitting_result.get('rmse', 0), 4),
             'data_points': len(fitting_result.get('pv', [])),
             'recommendation': fitting_result.get('recommendation')
-        }
+        },
+        'tuning_features': tuning_features_formatted
     }
     
     print("\n" + "=" * 60)

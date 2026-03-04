@@ -760,6 +760,29 @@ class OscillationTuner(LoggerMixin):
         # is_stable 信息保留在 closed_loop_verification 中供参考
         tuning_success = True
         
+        # 构建整定特征数据
+        tuning_features = {
+            'tuning_method': 'oscillation_tuning',
+            # 振荡特征
+            'Pu': osc_info.get('Pu', 0),
+            'Ku': osc_info.get('Ku', 0),
+            'amplitude': osc_info.get('amplitude', 0),
+            'mv_amplitude': osc_info.get('mv_amplitude', 0),
+            'decay_ratio': osc_info.get('decay_ratio', 0),
+            'oscillation_type': osc_info.get('oscillation_type', ''),
+            'n_cycles': osc_info.get('n_cycles', 0),
+            'confidence': osc_info.get('confidence', 0),
+            'oscillation_ratio': osc_info.get('oscillation_ratio', 0),
+            # 数据质量
+            'K_approx': round(K_est, 4),
+            'data_quality': round(osc_result.get('data_quality', 0), 4),
+            'nonlinearity': round(osc_result.get('nonlinearity', 0), 4),
+            'valve_issues': osc_result.get('valve_issues', {}),
+            # 整定方法
+            'method': pid_params.get('method', ''),
+            'loop_type': self._loop_type,
+        }
+        
         return {
             'success': tuning_success, 'model_type': 'FOPDT', 'model_rating': model_rating,
             'start_time': time_range.get('start_time'), 'end_time': time_range.get('end_time'),
@@ -774,6 +797,7 @@ class OscillationTuner(LoggerMixin):
                 'oscillation_type': osc_info['oscillation_type'], 'oscillation_amplitude': osc_info['amplitude']
             },
             'closed_loop_verification': closed_loop_info, 'rating_details': rating_details,
+            'tuning_features': tuning_features,
             'segment_info': self._build_segment_info(segments, segment_results) if segments else []
         }
     

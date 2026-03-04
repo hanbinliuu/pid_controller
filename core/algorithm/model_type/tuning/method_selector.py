@@ -215,20 +215,42 @@ class TuningMethodSelector(LoggerMixin):
         return best
     
     def _select_best_by_stability(self, candidates: List[TuningMethodResult]) -> TuningMethodResult:
-        """基于稳定性裕度选择最优方法"""
+        """基于稳定性裕度选择最优方法（GM+PM 综合评分）"""
         if len(candidates) == 1:
             return candidates[0]
         
+        # 过滤掉 Pu 异常的继电反馈候选（Pu 打满上限说明估计不可靠）
+        valid_candidates = []
+        for c in candidates:
+            if c.method == TuningMethod.RELAY_FEEDBACK and c.critical_params:
+                Pu = c.critical_params.get('Pu', 0)
+                if Pu >= 500:  # Pu >= 500s 视为触达上限，不可靠
+                    self.log(f"   ⚠️ 继电反馈法 Pu={Pu:.1f}s 疑似触达上限，排除")
+                    continue
+            valid_candidates.append(c)
+        
+        if not valid_candidates:
+            valid_candidates = candidates  # 全部被排除时回退
+        
         # 分离稳定和不稳定的候选
-        stable_candidates = [c for c in candidates if c.stability_margins and c.stability_margins.is_stable]
+        stable_candidates = [c for c in valid_candidates if c.stability_margins and c.stability_margins.is_stable]
+        
+        def _stability_score(c):
+            """GM+PM 综合评分：GM 归一化到 [0,10]，PM 归一化到 [0,10]"""
+            m = c.stability_margins
+            gm_norm = min(10.0, m.gain_margin * 2)      # GM=5 → 10分
+            pm_norm = min(10.0, m.phase_margin / 9.0)    # PM=90 → 10分
+            return 0.4 * gm_norm + 0.6 * pm_norm
         
         if stable_candidates:
-            # 有稳定的候选，选择相位裕度最大的
-            best = max(stable_candidates, key=lambda c: c.stability_margins.phase_margin)
-            best.reasoning = f"选择相位裕度最大的方法 (PM={best.stability_margins.phase_margin:.1f}°)"
+            best = max(stable_candidates, key=_stability_score)
+            score = _stability_score(best)
+            best.reasoning = (f"GM+PM综合评分最优 "
+                            f"(GM={best.stability_margins.gain_margin:.2f}, "
+                            f"PM={best.stability_margins.phase_margin:.1f}°, "
+                            f"综合={score:.1f})")
         else:
-            # 都不稳定，选择相位裕度最接近45°的
-            best = max(candidates, key=lambda c: c.stability_margins.phase_margin if c.stability_margins else 0)
+            best = max(valid_candidates, key=lambda c: c.stability_margins.phase_margin if c.stability_margins else 0)
             best.reasoning = "所有方法都不满足稳定性要求，选择相位裕度最大的"
         
         return best
