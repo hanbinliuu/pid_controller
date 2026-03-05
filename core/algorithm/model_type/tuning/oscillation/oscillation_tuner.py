@@ -346,6 +346,27 @@ class OscillationTuner(LoggerMixin):
         if pid_params is None:
             return None
         
+        # [FIX] 符号校正：conservative PID 总是输出正 Kp，需要根据 current_pid 或数据相关性校正
+        if current_pid and abs(current_pid.get('Kp', 0)) > 1e-6:
+            original_sign = np.sign(current_pid['Kp'])
+            if original_sign < 0 and pid_params['Kp'] > 0:
+                # 反作用过程：current_pid.Kp 是负的，输出也应该是负的
+                pid_params['Kp'] = -abs(pid_params['Kp'])
+                pid_params['Ki'] = -abs(pid_params['Ki'])
+                if pid_params.get('Kd', 0) != 0:
+                    pid_params['Kd'] = -abs(pid_params['Kd'])
+                self.log(f"   🔄 反作用符号校正: current_pid.Kp={current_pid['Kp']:.2f} → Kp={pid_params['Kp']:.4f}")
+        elif best_seg is not None:
+            # 无 current_pid 时使用 MV-PV 相关性推断符号
+            try:
+                corr = np.corrcoef(best_seg.mv[:len(best_seg.pv)], best_seg.pv)[0, 1]
+                if not np.isnan(corr) and corr < -0.3:
+                    pid_params['Kp'] = -abs(pid_params['Kp'])
+                    pid_params['Ki'] = -abs(pid_params['Ki'])
+                    self.log(f"   🔄 相关性符号校正: corr={corr:.2f} → Kp={pid_params['Kp']:.4f}")
+            except Exception:
+                pass
+        
         self.log(f"   ✅ 临界法整定成功: Pu={Pu:.1f}s, Ku={pid_params['Ku']:.3f}")
         self.log(f"      Kp={pid_params['Kp']:.4f}, Ki={pid_params['Ki']:.4f}, Kd={pid_params['Kd']:.4f}")
         
