@@ -542,3 +542,298 @@ class ModelRating:
             'confidence_as_score': round(confidence_score, 2),
         }
         return final, details
+    
+    # ================================================================
+    # 一站式接口: 仿真 + 三层评分
+    # ================================================================
+    
+    @staticmethod
+    def simulate_step_response(model_params: Dict, pid_params: Dict,
+                                sp_initial: float = 50.0, sp_final: float = 60.0,
+                                pv_initial: float = None,
+                                n_steps: int = 500, dt: float = 1.0,
+                                loop_type: str = 'flow') -> Dict:
+        """
+        独立的闭环阶跃仿真（不依赖任何 Mixin）
+        
+        输入:
+            model_params: {'K': float, 'T1': float, 'T2': float, 'L': float}
+                - K:  过程增益
+                - T1: 主时间常数 (s)
+                - T2: 二阶时间常数 (s, 0 表示一阶)
+                - L:  纯滞后 (s)
+            pid_params: {'Kp': float, 'Ki': float, 'Kd': float} 或
+                        {'pb': float, 'ti': float, 'td': float}
+                - Kp/pb: 比例增益/比例带
+                - Ki/ti: 积分增益/积分时间
+                - Kd/td: 微分增益/微分时间
+            sp_initial: 设定值初值
+            sp_final: 设定值终值（阶跃后）
+            pv_initial: PV 初值，默认 = sp_initial
+            n_steps: 仿真步数
+            dt: 采样周期 (s)
+            loop_type: 回路类型 ('flow'/'temperature'/'level'/'pressure')
+            
+        输出:
+            {
+                'is_stable': bool,
+                'overshoot': float (%),
+                'settling_time': float (s),
+                'steady_state_error': float (%),
+                'oscillation_count': int,
+                'decay_ratio': float,
+                'rise_time': float (s),
+                'pv_history': list,
+                'mv_history': list,
+                'sp_history': list,
+            }
+        """
+        eps = 1e-10
+        
+        # 解析模型参数
+        K = model_params.get('K', 1.0)
+        T1 = max(model_params.get('T1', 10.0), eps)
+        T2 = model_params.get('T2', 0.0)
+        L = max(model_params.get('L', 0.0), 0.0)
+        
+        # 解析 PID 参数（兼容两种格式）
+        if 'Kp' in pid_params:
+            Kp = pid_params['Kp']
+            Ki = pid_params.get('Ki', 0.0)
+            Kd = pid_params.get('Kd', 0.0)
+        elif 'kp' in pid_params:
+            Kp = pid_params['kp']
+            Ki = pid_params.get('ki', 0.0)
+            Kd = pid_params.get('kd', 0.0)
+        else:
+            pb = pid_params.get('pb', 100.0)
+            ti = pid_params.get('ti', 0.0)
+            td = pid_params.get('td', 0.0)
+            Kp = 100.0 / pb if pb > 0 else 1.0
+            Ki = Kp / ti if ti > 0 else 0.0
+            Kd = Kp * td
+        
+        if pv_initial is None:
+            pv_initial = sp_initial
+        
+        # 仿真
+        pv_hist = np.zeros(n_steps)
+        mv_hist = np.zeros(n_steps)
+        sp_hist = np.zeros(n_steps)
+        
+        sp_change = sp_final - sp_initial
+        mv_mid = 50.0
+        if abs(K) > eps:
+            mv_offset = np.clip(-sp_change / K * 0.3, -25, 25)
+            mv0 = np.clip(mv_mid + mv_offset, 5, 95)
+        else:
+            mv0 = mv_mid
+        
+        delta_pv = 0.0
+        delta_x2 = 0.0
+        integral = 0.0
+        prev_error = 0.0
+        delay_steps = max(0, int(L / dt))
+        delta_mv_buf = [0.0] * (delay_steps + 1)
+        step_time = 10
+        
+        for t in range(n_steps):
+            sp = sp_initial if t < step_time else sp_final
+            sp_hist[t] = sp
+            pv = pv_initial + delta_pv
+            pv_hist[t] = pv
+            
+            error = sp - pv
+            integral += error * dt
+            integral_limit = 100.0 / (abs(Ki) + eps)
+            integral = np.clip(integral, -integral_limit, integral_limit)
+            derivative = (error - prev_error) / dt if t > 0 else 0.0
+            
+            mv = mv0 + Kp * error + Ki * integral + Kd * derivative
+            mv = np.clip(mv, 0.0, 100.0)
+            delta_mv = mv - mv0
+            
+            mv_hist[t] = mv
+            prev_error = error
+            
+            delta_mv_buf.append(delta_mv)
+            delta_mv_delayed = delta_mv_buf.pop(0)
+            
+            # 过程模型更新
+            alpha1 = dt / T1
+            if T2 > eps:
+                # 二阶
+                alpha2 = dt / max(T2, T1 * 0.1)
+                delta_pv_new = delta_pv + alpha1 * (K * delta_mv_delayed - delta_pv)
+                delta_x2 = delta_x2 + alpha2 * (delta_pv_new - delta_x2)
+                delta_pv = delta_x2
+            else:
+                # 一阶
+                delta_pv = delta_pv + alpha1 * (K * delta_mv_delayed - delta_pv)
+        
+        # 计算指标
+        pv_resp = pv_hist[step_time:]
+        
+        if len(pv_resp) < 10 or abs(sp_change) < eps:
+            return {
+                'is_stable': False, 'overshoot': 0.0, 'settling_time': float('inf'),
+                'steady_state_error': 100.0, 'oscillation_count': 0, 'decay_ratio': 1.0,
+                'rise_time': float('inf'),
+                'pv_history': pv_hist.tolist(), 'mv_history': mv_hist.tolist(),
+                'sp_history': sp_hist.tolist(),
+            }
+        
+        # 稳态误差
+        final_portion = pv_resp[-max(10, len(pv_resp)//10):]
+        sse = abs(np.mean(final_portion) - sp_final) / (abs(sp_change) + eps) * 100
+        
+        # 超调量
+        if sp_change > 0:
+            overshoot = max(0, (np.max(pv_resp) - sp_final) / sp_change * 100)
+        else:
+            overshoot = max(0, (sp_final - np.min(pv_resp)) / abs(sp_change) * 100)
+        
+        # 上升时间
+        t10 = sp_initial + 0.1 * sp_change
+        t90 = sp_initial + 0.9 * sp_change
+        r_start = r_end = None
+        for i, p in enumerate(pv_resp):
+            if sp_change > 0:
+                if r_start is None and p >= t10: r_start = i
+                if r_end is None and p >= t90: r_end = i; break
+            else:
+                if r_start is None and p <= t10: r_start = i
+                if r_end is None and p <= t90: r_end = i; break
+        rise_time = (r_end - r_start) * dt if r_start is not None and r_end is not None else float('inf')
+        
+        # 调节时间
+        tolerance = 0.02 * abs(sp_change)
+        settling_time = float('inf')
+        for i in range(len(pv_resp) - 1, -1, -1):
+            if abs(pv_resp[i] - sp_final) > tolerance:
+                if i < len(pv_resp) - 1:
+                    settling_time = (i + 1) * dt
+                break
+        else:
+            settling_time = 0.0
+        
+        # 振荡 + 衰减比
+        err_sig = pv_resp - sp_final
+        zero_cross = np.where(np.diff(np.signbit(err_sig)))[0]
+        osc_count = len(zero_cross) // 2
+        
+        peaks = []
+        for i in range(1, len(err_sig) - 1):
+            if err_sig[i] > err_sig[i-1] and err_sig[i] > err_sig[i+1]:
+                peaks.append(abs(err_sig[i]))
+            if len(peaks) >= 2:
+                break
+        decay_ratio = peaks[1] / peaks[0] if len(peaks) >= 2 and peaks[0] > eps else (0.0 if len(peaks) <= 1 else 1.0)
+        
+        # 稳定性判定
+        max_settling = 600.0
+        max_overshoot = 65.0 if decay_ratio <= 0.6 else 30.0
+        max_sse = 8.0
+        
+        is_settled = settling_time < max_settling
+        is_accurate = sse < max_sse
+        is_smooth = overshoot < max_overshoot
+        is_decaying = decay_ratio < 0.8
+        is_stable = is_settled and is_accurate and is_smooth and is_decaying
+        
+        # 边界容忍
+        if not is_stable and is_settled:
+            fail_count = sum([not is_accurate, not is_smooth, not is_decaying])
+            if fail_count == 1:
+                marginal = False
+                if not is_accurate and sse < max_sse * 1.5: marginal = True
+                if not is_smooth and overshoot < max_overshoot * 1.3: marginal = True
+                if not is_decaying and decay_ratio < 1.0: marginal = True
+                if marginal:
+                    is_stable = True
+        
+        return {
+            'is_stable': is_stable,
+            'overshoot': round(overshoot, 2),
+            'settling_time': round(settling_time, 2) if settling_time < float('inf') else -1,
+            'steady_state_error': round(sse, 2),
+            'oscillation_count': osc_count,
+            'decay_ratio': round(decay_ratio, 4),
+            'rise_time': round(rise_time, 2) if rise_time < float('inf') else -1,
+            'pv_history': pv_hist.tolist(),
+            'mv_history': mv_hist.tolist(),
+            'sp_history': sp_hist.tolist(),
+        }
+    
+    @staticmethod
+    def evaluate(model_params: Dict, pid_params: Dict,
+                  method: str = 'unknown',
+                  method_confidence: float = None,
+                  method_confidence_details: Dict = None,
+                  sp_initial: float = 50.0, sp_final: float = 60.0,
+                  n_steps: int = 500, dt: float = 1.0,
+                  loop_type: str = 'flow') -> Dict:
+        """
+        一站式评估接口：模型参数 + PID 参数 → 三层评分
+        
+        任何整定路径都可以调用，包括大模型。
+        
+        输入:
+            model_params: {'K': float, 'T1': float, 'T2': float, 'L': float}
+            pid_params:   {'Kp': float, 'Ki': float, 'Kd': float} 或 pb/ti/td 格式
+            method:       整定方法名 ('model_identification'/'oscillation'/'relay'/'llm')
+            method_confidence: Layer 2 置信度 (0-1)，不传则跳过 L2/L3
+            method_confidence_details: Layer 2 详情字典
+            sp_initial/sp_final: 仿真设定值
+            n_steps/dt: 仿真参数
+            loop_type: 回路类型
+        
+        输出:
+            {
+                'performance_score': float (0-10),     # Layer 1
+                'performance_details': dict,
+                'method_confidence': float (0-1),      # Layer 2
+                'method_confidence_details': dict,
+                'final_rating': float (0-10),           # Layer 3
+                'final_details': dict,
+                'simulation': dict,                     # 仿真原始结果
+            }
+        """
+        # 仿真
+        sim = ModelRating.simulate_step_response(
+            model_params, pid_params,
+            sp_initial=sp_initial, sp_final=sp_final,
+            n_steps=n_steps, dt=dt, loop_type=loop_type
+        )
+        
+        # 构造 metrics 对象给 performance_score
+        class _Metrics:
+            pass
+        m = _Metrics()
+        m.is_stable = sim['is_stable']
+        m.overshoot = sim['overshoot']
+        m.settling_time = sim['settling_time'] if sim['settling_time'] >= 0 else float('inf')
+        m.steady_state_error = sim['steady_state_error']
+        m.oscillation_count = sim['oscillation_count']
+        m.decay_ratio = sim['decay_ratio']
+        
+        # Layer 1
+        perf_score, perf_details = ModelRating.performance_score(m)
+        
+        result = {
+            'performance_score': perf_score,
+            'performance_details': perf_details,
+            'simulation': sim,
+        }
+        
+        # Layer 2 + Layer 3（如果提供了置信度）
+        if method_confidence is not None:
+            result['method_confidence'] = method_confidence
+            result['method_confidence_details'] = method_confidence_details or {'method': method}
+            
+            final, final_details = ModelRating.final_rating(perf_score, method_confidence)
+            result['final_rating'] = final
+            result['final_details'] = final_details
+        
+        return result
+
