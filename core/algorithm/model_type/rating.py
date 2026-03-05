@@ -9,40 +9,102 @@
     Layer 2: method_confidence (0-1)  — 方法置信度，各路径输入不同
     Layer 3: final_rating (0-10)      — 结合 L1 + L2 的最终评分，所有路径统一
 
-用法 1: 一站式调用 (推荐，适用于大模型等新路径)
------------------------------------------------
-    from core.algorithm.model_type.rating import ModelRating
+==============================================================================
+API 参考
+==============================================================================
 
-    result = ModelRating.evaluate(
-        model_params={'K': 1.5, 'T1': 30, 'T2': 0, 'L': 5},
-        pid_params={'Kp': 0.8, 'Ki': 0.02, 'Kd': 3.0},
-        method='llm',
-        method_confidence=0.6,   # Layer 2 置信度
-    )
-    # result['performance_score']  → 8.35   (Layer 1, 0-10)
-    # result['method_confidence']  → 0.6    (Layer 2, 0-1)
-    # result['final_rating']       → 7.64   (Layer 3, 0-10)
-    # result['simulation']         → 仿真原始数据
+一站式接口 (推荐):
+    ModelRating.evaluate(model_params, pid_params, ...) → dict
+    ├─ 入参:
+    │   model_params: dict  {'K': float, 'T1': float, 'T2': float, 'L': float}
+    │   │                    K=过程增益, T1=主时间常数(s), T2=二阶时间常数(s), L=纯滞后(s)
+    │   pid_params:   dict  {'Kp': float, 'Ki': float, 'Kd': float}
+    │   │                    或 {'pb': float, 'ti': float, 'td': float} (比例带格式)
+    │   method_confidence: float (0-1, 可选)  传入则计算 L3
+    │   sp_initial/sp_final: float  仿真设定值 (默认 50→60)
+    │   n_steps: int  仿真步数 (默认 500)
+    │   dt: float  采样周期 (默认 1.0s)
+    └─ 出参:
+        {
+            'performance_score':    float (0-10),  # Layer 1
+            'performance_details':  dict,          # 每项评分明细
+            'method_confidence':    float (0-1),   # Layer 2 (若传入)
+            'final_rating':         float (0-10),  # Layer 3 (若传入 L2)
+            'simulation': {                        # 仿真原始数据
+                'is_stable':          bool,
+                'overshoot':          float (%),
+                'settling_time':      float (s),  # -1 表示未收敛
+                'steady_state_error': float (%),
+                'oscillation_count':  int,
+                'decay_ratio':        float (0~1+),
+                'rise_time':          float (s),
+                'pv_history':         list[float],
+                'mv_history':         list[float],
+                'sp_history':         list[float],
+            }
+        }
 
-用法 2: 分步调用 (已有 cl_metrics 时)
---------------------------------------
-    # Layer 1: 所有路径一样
-    perf, details = ModelRating.performance_score(cl_metrics)
+------------------------------------------------------------------------------
+Layer 1 — performance_score(metrics) → (score, details)
+    入参: metrics 对象，需含以下属性:
+        is_stable:          bool   是否稳定 (False → 打折 ×0.4)
+        overshoot:          float  超调量 (%), 权重 25%
+        settling_time:      float  调节时间 (s), 权重 20%
+        steady_state_error: float  稳态误差 (%), 权重 25%
+        oscillation_count:  int    振荡次数, 权重 15%
+        decay_ratio:        float  衰减比, 权重 15%
+    出参: (score: float 0-10, details: dict 含每项子分及权重)
 
-    # Layer 2: 每条路径不同
-    conf, details = ModelRating.model_id_confidence(fusion)              # 模型辨识
-    conf, details, warn = ModelRating.oscillation_confidence(pid, osc_info, osc_result)  # 振荡
-    conf, details = ModelRating.relay_confidence(data_conf, gm, pm)      # 继电反馈
-    conf, details = ModelRating.llm_confidence(self_score, range_ok)     # 大模型
+------------------------------------------------------------------------------
+Layer 2a — model_id_confidence(fusion) → (confidence, details)
+    入参: fusion (FusionResult)，需含:
+        global_r2:         float   R² 拟合度
+        K, T1, T2, L:      float   模型参数
+        K_std, T1_std:      float   参数标准差
+        n_segments_used:    int     使用的数据段数
+        consistency_score:  float   一致性评分
+    出参: (confidence: float 0-1, details: dict)
+    维度: R²质量 40% + 参数一致性 30% + 参数合理性 30%
 
-    # Layer 3: 所有路径一样
-    final, details = ModelRating.final_rating(perf, conf)
+Layer 2b — oscillation_confidence(pid_params, osc_info, osc_result) → (conf, details, warnings)
+    入参:
+        pid_params: dict  {'pb': float, 'Ti': float, 'Kd': float, 'method': str}
+        osc_info:   dict  {'oscillation_ratio': float}
+        osc_result: dict  {'data_quality': float, 'nonlinearity': float,
+                           'valve_issues': {'has_stiction': bool, 'has_deadband': bool}}
+    出参: (confidence: float 0-1, details: dict, warnings: list[str])
+    维度: 数据质量 40% + 参数边界 30% + 方法可靠性 30%
 
-Layer 2 各路径输入说明:
-    模型辨识 — R²拟合质量 + 参数一致性 + 参数物理合理性
-    振荡整定 — 振荡比/数据质量 + PID参数边界 + 方法可靠性
-    继电反馈 — 数据置信度 + 增益裕度/相位裕度
-    大模型   — LLM自评分 + 参数范围合理性
+Layer 2c — relay_confidence(data_confidence, gain_margin, phase_margin) → (conf, details)
+    入参:
+        data_confidence: float (0-1)  继电识别数据置信度
+        gain_margin:     float        增益裕度 (理想 >2)
+        phase_margin:    float (°)    相位裕度 (理想 >45°)
+    出参: (confidence: float 0-1, details: dict)
+    维度: 数据置信度 50% + 稳定性裕度 50%
+
+Layer 2d — llm_confidence(llm_self_score, ...) → (conf, details)
+    入参:
+        llm_self_score:     float (0-1)  LLM 自评信心
+        param_range_ok:     bool         参数是否合理 (简单模式)
+        pid_params:         dict         PID 参数 (细化模式, 可选)
+        model_params:       dict         模型参数 (细化模式, 可选)
+        reasoning_quality:  float (0-1)  推理质量 (可选, 默认 0.5)
+        consistency_score:  float (0-1)  多次调用一致性 (可选, 默认 0.5)
+        process_type_match: bool         过程类型匹配 (可选, 默认 True)
+    出参: (confidence: float 0-1, details: dict)
+    维度: 自评 20% + 参数合理性 25% + 推理 20% + 一致性 20% + 匹配 15%
+
+------------------------------------------------------------------------------
+Layer 3 — final_rating(performance_score, method_confidence) → (final, details)
+    入参:
+        performance_score:  float (0-10)  Layer 1 评分
+        method_confidence:  float (0-1)   Layer 2 置信度
+        performance_weight: float         性能权重 (默认 0.7)
+        confidence_weight:  float         置信度权重 (默认 0.3)
+    出参: (final: float 0-10, details: dict)
+    公式: final = perf * 0.7 + conf * 10 * 0.3
+    硬约束: 不稳定(perf≤1)→封顶3, 品质差(perf≤3)→封顶5, 置信极低(conf<0.2)→封顶6
 """
 
 from typing import Dict, List, Optional, Tuple
