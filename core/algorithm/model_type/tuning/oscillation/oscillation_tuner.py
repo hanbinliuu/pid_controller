@@ -862,69 +862,58 @@ class OscillationTuner(LoggerMixin):
     
     def _reconstruct_model_from_oscillation(self, Pu: float, Ku: float, K_approx: float, loop_type: str) -> Tuple[float, float, float]:
         """
-        从振荡参数(Pu, Ku)和稳态增益(K_approx)重构FOPDT模型(T1, L)。
+        从振荡参数(Pu, Ku)和稳态增益(K_approx)逆推等效的 FOPDT 模型(T1, L)。
         
-        目标：确保重构的模型在Pu频率下具有增益1/Ku和相位-180度。
+        基于 Ziegler-Nichols 频域等效：
+        在临界频率 wu = 2pi/Pu 处，开环奈奎斯特曲线必须穿过 (-1, j0)。
+        这给出了建立等效模型的增益条件和相位条件。
         """
         import math
         
-        # 1. 积分过程 (Level 或 K*Ku 很小)
-        is_integrating = (loop_type == 'level')
-        
-        w = 2.0 * math.pi / Pu
-        
-        if is_integrating:
-            # 积分过程假设：L = Pu/4, K_integ = w / Ku
-            # FOPDT近似：T1很大，K = K_integ * T1
+        # 1. 如果积分特性太强 (比如 Level 回路)，使用纯积分器近似转化
+        if loop_type == 'level':
             L = Pu / 4.0
-            T1 = max(100.0 * Pu, 1000.0) 
-            K = (w / Ku) * T1
+            T1 = max(100.0 * Pu, 1000.0)
+            K = (2.0 * math.pi / (Pu * Ku)) * T1
             return round(T1, 4), round(L, 4), round(K, 4)
             
-        # 2. 自衡过程 (Self-Regulating)
-        # 使用 K_approx (基于PV/MV幅值) 来估算增益 K
-        # 如果 K_approx * Ku < 1，说明增益被严重低估，或者实际上接近积分/纯滞后
-        # 我们优先使用计算出的 K_approx，但允许 fallback 到纯滞后
-        
+        # 2. 正常自衡过程，使用标准的奈奎斯特反向推导
         try:
-            # 改进策略：使用绝对值进行计算 (Phase G: handle negative K)
-            K_sign = np.sign(K_approx) if abs(K_approx) > Config.EPSILON else 1.0
-            K_abs = abs(K_approx)
-            gain_product = K_abs * Ku
-            if gain_product < 1.05:
-                K_working = 1.1 / Ku
-                val = (K_working * Ku)**2 - 1.0
-                actual_K_abs = K_working
-            else:
-                val = (K_abs * Ku)**2 - 1.0
-                actual_K_abs = K_abs
+            # 稳态增益和临界增益必须有相同的符号（物理意义一致）
+            K = K_approx
+            Ku_val = Ku * np.sign(K) if K != 0 else Ku
             
-            if val < 0: val = 0 
+            # 理论上要求 |K * Ku| > 1 才能发生持续振荡。
+            # 如果不满足，说明 K_approx 从时域估计得太保守，强行提起到 1.05 保证方程有解
+            gain_product = abs(K * Ku_val)
+            if gain_product <= 1.0:
+                # 保持符号，放大 K 使得乘积大于 1
+                K = 1.05 / Ku_val
+                
+            omega_u = 2.0 * math.pi / Pu
             
-            wT = math.sqrt(val)
-            T1 = wT / w
+            # 幅值方程反推时间常数 T1
+            inside_sqrt = (K * Ku_val) ** 2 - 1.0
+            T1 = math.sqrt(max(0.01, inside_sqrt)) / omega_u
             
-            # Phase: -atan(wT) - wL = -pi
-            phi_t = math.atan(wT)
+            # 相位方程反推滞后时间 L
+            phi_t = math.atan(omega_u * T1)
             phase_lag = math.pi - phi_t
+            L = phase_lag / omega_u
             
-            # [NEW] 回路类型先验约束：防止由于阀门粘滞等非线性导致的“幻影慢系统”模型
-            # 流量和压力回路通常不会有几十秒的滞后或时间常数
+            # 回路约束：防止“幻影慢系统”造成仿真分数暴跌
             if loop_type == 'flow':
                 T1 = min(T1, 40.0)
-                L = min(phase_lag / w, 15.0) # Use phase_lag here
+                L = min(L, 15.0)
             elif loop_type == 'pressure':
                 T1 = min(T1, 30.0)
-                L = min(phase_lag / w, 10.0) # Use phase_lag here
-            else:
-                L = phase_lag / w # Default for other loop types
-            
-            if L < 0.01: L = 0.01
-            
-            return round(float(T1), 4), round(float(L), 4), round(float(actual_K_abs * K_sign), 4)
+                L = min(L, 10.0)
+                
+            return round(float(T1), 4), round(float(max(L, 0.01)), 4), round(float(K), 4)
             
         except Exception as e:
-            self.log(f"   ⚠️ 模型重构失败: {e}，使用默认值")
+            self.log(f"   ⚠️ 模型数学逆推失败: {e}，回退到经验比例")
+            # 出错时回退到 Yuwana-Seborg 经验公式
             return round(Pu, 4), round(Pu/4.0, 4), round(K_approx, 4)
     
     def _build_segment_info(self, segments: List, segment_results: List) -> List[Dict]:
