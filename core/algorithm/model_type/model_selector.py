@@ -1542,7 +1542,6 @@ class ModelSelector(LoggerMixin):
         """
         from .tuning import TuningMethod
         from .utils import calculate_r2, calculate_rmse
-        from .tuning.core.performance_rating import calculate_control_performance
         
         pid_params = method_result.pid_params
         model_params = method_result.model_params or {

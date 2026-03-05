@@ -24,7 +24,7 @@ from ...utils import calculate_r2, calculate_rmse
 from ...logger import LoggerMixin
 from ..strategies.loop_type_strategies import get_loop_strategy, LoopTypeStrategy
 from .conservative_pid import ConservativePIDCalculator
-from .oscillation_rating import OscillationRatingCalculator
+
 
 
 class OscillationTuner(LoggerMixin):
@@ -47,7 +47,7 @@ class OscillationTuner(LoggerMixin):
             verbose=verbose, llm_client=llm_client, 
             loop_type=loop_type, loop_name=loop_name
         )
-        self._rating_calculator = OscillationRatingCalculator()
+
         
         if llm_client is not None:
             self._init_llm_advisor(llm_client)
@@ -387,11 +387,7 @@ class OscillationTuner(LoggerMixin):
             nonlinearity=nonlinearity, valve_issues=valve_issues, confidence=confidence
         )
     
-    def _calculate_oscillation_rating(self, is_stable: bool, cl_metrics: Any,
-                                       pid_params: Dict, osc_info: Dict,
-                                       osc_result: Dict) -> Tuple[float, Dict, List[str]]:
-        """计算振荡整定的综合评分（委托给 OscillationRatingCalculator）"""
-        return self._rating_calculator.calculate(is_stable, cl_metrics, pid_params, osc_info, osc_result)
+
     
     def _generic_fallback(self, oscillating_segments: List, segments: List[HistoricalData],
                           segment_results: List[SegmentResult], current_pid: Dict = None) -> Optional[Dict]:
