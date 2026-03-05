@@ -476,27 +476,125 @@ class ModelRating:
     
     @staticmethod
     def llm_confidence(llm_self_score: float = 0.5,
-                        param_range_ok: bool = True) -> Tuple[float, Dict]:
+                        param_range_ok: bool = True,
+                        pid_params: Dict = None,
+                        model_params: Dict = None,
+                        reasoning_quality: float = None,
+                        consistency_score: float = None,
+                        process_type_match: bool = None) -> Tuple[float, Dict]:
         """
-        Layer 2: 大模型路径的方法置信度（预留扩展）
+        Layer 2: 大模型路径的方法置信度
+        
+        维度 (5项):
+        1. LLM 自评信心    (20%) — LLM 回复中的 confidence 字段
+        2. 参数合理性       (25%) — PID/模型参数是否在物理合理范围
+        3. 推理质量         (20%) — LLM 推理链是否有依据 (可选)
+        4. 多次调用一致性    (20%) — 同输入多次调用的变异系数 (可选)
+        5. 过程类型匹配     (15%) — LLM 判断的过程类型是否与数据一致 (可选)
         
         Args:
             llm_self_score: LLM 自评信心 (0-1)
-            param_range_ok: 参数是否在合理范围
+            param_range_ok: 参数是否在合理范围（简单 bool，向后兼容）
+            pid_params: PID 参数 {'Kp','Ki','Kd'} 或 {'pb','ti','td'}，用于细化参数合理性
+            model_params: 模型参数 {'K','T1','T2','L'}，用于交叉检验 PID 合理性
+            reasoning_quality: LLM 推理链质量 (0-1)，None 则用默认值 0.5
+            consistency_score: 多次调用一致性 (0-1)，None 则用默认值 0.5
+            process_type_match: 过程类型匹配，None 则用默认值 True
         
         Returns:
             (confidence, details)
         """
-        range_score = 0.8 if param_range_ok else 0.3
-        confidence = 0.6 * llm_self_score + 0.4 * range_score
-        confidence = round(min(1.0, max(0.0, confidence)), 4)
+        details = {'method': 'llm'}
         
-        details = {
-            'method': 'llm',
-            'llm_self_score': round(llm_self_score, 4),
-            'param_range_ok': param_range_ok,
-            'confidence_weights': {'self_score': 0.6, 'range_check': 0.4},
+        # --- 1. LLM 自评 (0-1) ---
+        self_score = min(1.0, max(0.0, llm_self_score))
+        details['llm_self_score'] = round(self_score, 4)
+        
+        # --- 2. 参数合理性 (0-1) ---
+        if pid_params is not None and model_params is not None:
+            # 细化检查
+            checks = {}
+            
+            # 解析 PID
+            Kp = pid_params.get('Kp', pid_params.get('kp', 0))
+            Ki = pid_params.get('Ki', pid_params.get('ki', 0))
+            Kd = pid_params.get('Kd', pid_params.get('kd', 0))
+            if 'pb' in pid_params:
+                pb = pid_params['pb']
+                Kp = 100.0 / pb if pb > 0 else 0
+                ti = pid_params.get('ti', 0)
+                Ki = Kp / ti if ti > 0 else 0
+                Kd = Kp * pid_params.get('td', 0)
+            
+            K = model_params.get('K', 1.0)
+            T1 = model_params.get('T1', 10.0)
+            L = model_params.get('L', 1.0)
+            
+            # 增益检查: Kp 不为零且方向合理
+            checks['kp_nonzero'] = abs(Kp) > 0.001
+            checks['kp_sign_ok'] = (Kp * K > 0) if abs(K) > 0.001 else True
+            
+            # 积分检查: Ki >= 0 (不反向积分)
+            checks['ki_nonneg'] = Ki >= 0
+            
+            # 微分检查: Kd 合理
+            checks['kd_reasonable'] = Kd >= 0 and (Kd < abs(Kp) * T1 * 2 if T1 > 0 else True)
+            
+            # 增益裕度粗估: Kp*K 不宜远超临界
+            kp_k = abs(Kp * K)
+            checks['gain_not_extreme'] = 0.01 < kp_k < 50
+            
+            # 积分时间 vs 过程时间常数
+            Ti_pid = Kp / Ki if Ki > 0.001 else float('inf')
+            checks['ti_vs_t1'] = 0.1 < Ti_pid / T1 < 20 if T1 > 0 and Ti_pid < float('inf') else True
+            
+            param_score = sum(checks.values()) / len(checks)
+            details['param_checks'] = checks
+        elif param_range_ok:
+            param_score = 0.8
+        else:
+            param_score = 0.3
+        param_score = min(1.0, max(0.0, param_score))
+        details['param_range_score'] = round(param_score, 4)
+        
+        # --- 3. 推理质量 (0-1) ---
+        rq = reasoning_quality if reasoning_quality is not None else 0.5
+        rq = min(1.0, max(0.0, rq))
+        details['reasoning_quality'] = round(rq, 4)
+        
+        # --- 4. 一致性 (0-1) ---
+        cs = consistency_score if consistency_score is not None else 0.5
+        cs = min(1.0, max(0.0, cs))
+        details['consistency_score'] = round(cs, 4)
+        
+        # --- 5. 过程匹配 (0-1) ---
+        pm = 0.9 if (process_type_match is True or process_type_match is None) else 0.3
+        details['process_match_score'] = round(pm, 4)
+        
+        # 加权
+        weights = {
+            'self_score': 0.20,
+            'param_range': 0.25,
+            'reasoning': 0.20,
+            'consistency': 0.20,
+            'process_match': 0.15,
         }
+        confidence = (
+            weights['self_score'] * self_score +
+            weights['param_range'] * param_score +
+            weights['reasoning'] * rq +
+            weights['consistency'] * cs +
+            weights['process_match'] * pm
+        )
+        
+        # 硬约束
+        if param_score < 0.3:
+            confidence = min(confidence, 0.4)  # 参数明显不合理
+        if self_score < 0.2:
+            confidence = min(confidence, 0.5)  # LLM 自己都没信心
+        
+        confidence = round(min(1.0, max(0.0, confidence)), 4)
+        details['confidence_weights'] = weights
         return confidence, details
     
     # ================================================================
