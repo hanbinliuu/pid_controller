@@ -324,7 +324,44 @@ class ModelSelector(LoggerMixin):
         from_sv_step = False  # 标记是否来自SV阶跃（闭环数据）
         
         if not disturbance_segs:
-            # 无有效扰动段 → 不需要整定
+            # 无有效扰动段 → 检查是否存在纯PV振荡（MV不变但PV有波动，常见于液位回路）
+            pv_range = np.ptp(hist_data.pv)
+            pv_mean = np.mean(np.abs(hist_data.pv)) + 1e-9
+            has_pv_oscillation = pv_range > pv_mean * 0.01  # PV波动超过1%
+            
+            if has_pv_oscillation and len(segments) > 0:
+                self.log(f"⚠️ 无有效扰动段(MV无变化)，但PV存在振荡(range={pv_range:.2f})，尝试振荡整定fallback")
+                try:
+                    loop_type = self._process_context.get('loop_type', '') if self._process_context else ''
+                    if isinstance(input_data, dict):
+                        current_pid = input_data.get('current_pid', {})
+                        windows = input_data.get('qualified_windows', [{}])
+                    else:
+                        current_pid = getattr(input_data, 'current_pid', {})
+                        windows = getattr(input_data, 'qualified_windows', [{}])
+                    
+                    # 构造 dummy SegmentResult
+                    dummy_results = [
+                        SegmentResult(segment_idx=i, start_idx=0, end_idx=len(seg.pv)-1,
+                                      data_points=len(seg.pv), is_valid=True)
+                        for i, seg in enumerate(segments)
+                    ]
+                    
+                    osc_result = self._oscillation_tuner.try_oscillation_tuning(
+                        segments, dummy_results, current_pid
+                    )
+                    if osc_result and osc_result.get('success'):
+                        self.log(f"✅ 振荡整定fallback成功")
+                        time_range = {
+                            'start_time': windows[0].get('start_time') if isinstance(windows[0], dict) else getattr(windows[0], 'start_time', None),
+                            'end_time': windows[-1].get('end_time') if isinstance(windows[-1], dict) else getattr(windows[-1], 'end_time', None),
+                        }
+                        return self._oscillation_tuner.build_oscillation_output(
+                            osc_result, hist_data, time_range, tuning_windows=None
+                        )
+                except Exception as e:
+                    self.log(f"   ⚠️ 振荡整定fallback失败: {e}")
+            
             self.log("⚠️ 无有效扰动段，跳过整定")
             return self._empty_result(input_data)
         

@@ -401,8 +401,19 @@ class OscillationTuner(LoggerMixin):
         
         pv_range = np.ptp(best_seg.pv)
         mv_range = np.ptp(best_seg.mv)
-        if mv_range < 0.05 or pv_range < 0.005:
+        if pv_range < 0.005:
             return None
+        
+        # 液位/积分过程特殊处理：MV 无变化时使用 PV 振荡特征
+        if mv_range < 0.05:
+            if self._loop_type == 'level':
+                self.log(f"   🧊 液位回路MV无变化(range={mv_range:.3f})，使用PV振荡特征估算")
+                # 从 current_pid 推算增益
+                current_Kp = abs(current_pid.get('Kp', 1.0)) if current_pid else 1.0
+                K_approx = 1.0 / max(current_Kp, 0.01)  # 使用 1/Kp 作为K的粗略估计
+                mv_range = pv_range / max(K_approx, 0.01)  # 虚拟 mv_range 用于后续计算
+            else:
+                return None
         
         K_approx = np.clip(pv_range / mv_range, 0.1, 10.0)
         dt = (best_seg.timestamp[1] - best_seg.timestamp[0]) / 1000 if len(best_seg.timestamp) > 1 else 1.0
@@ -487,8 +498,9 @@ class OscillationTuner(LoggerMixin):
         
         delay_ratio = L_approx / max(T1_approx, 1.0)
         
-        # [NEW] 近积分过程专用路径 (level 回路, K极小且T1极大)
-        if self._loop_type == 'level' and T1_approx > 200.0 and abs(K_approx) < 0.2:
+        # [NEW] 近积分过程专用路径 (level 回路, 或低增益+大时间常数)
+        is_integrating = (self._loop_type == 'level') or (T1_approx > 100.0 and abs(K_approx) < 0.3)
+        if is_integrating:
             # 积分过程整定：使用 Lambda 规则的积分过程版本
             # G(s) ≈ K_int/s，其中 K_int = K/T1（归一化积分增益）
             K_int = abs(K_approx) / max(T1_approx, 1.0)  # 积分增益 (%/s/%)
@@ -514,16 +526,29 @@ class OscillationTuner(LoggerMixin):
             self.log(f"   🧊 积分过程专用整定: K_int={K_int:.6f}, λ={lambda_c:.1f}")
             self.log(f"   ✅ {self._loop_type}fallback整定: PB={pb_level:.1f}%, Ti={Ti_level:.1f}s, Sign={sign}")
             
-            return TuningResult(
-                method='integrating_fallback',
-                pid_params={'Kp': float(conservative_Kp), 'Ki': float(conservative_Ki),
-                           'Kd': 0.0, 'pb': float(pb_level), 
-                           'ti': float(Ti_level), 'td': 0.0},
-                model_params={'K': float(K_approx), 'T1': float(T1_approx), 'L': float(L_approx)},
-                confidence=0.5,
-                details={'K_int': float(K_int), 'lambda': float(lambda_c),
-                        'sign': float(sign), 'source': 'integrating_lambda'}
-            )
+            pid_params = {
+                'Kp': round(float(conservative_Kp), 4),
+                'Ki': round(float(conservative_Ki), 4),
+                'Kd': 0.0,
+                'Ti': round(float(Ti_level), 2),
+                'Td': 0.0,
+                'pb': round(float(pb_level), 2),
+                'method': 'integrating_fallback',
+                'Pu': round(float(T1_approx), 2),
+                'Ku': round(float(1.0 / max(abs(K_approx), 0.01)), 2),
+            }
+            osc_info = {
+                'Pu': T1_approx, 'Ku': 1.0 / max(abs(K_approx), 0.01),
+                'amplitude': pv_range / 2, 'mv_amplitude': mv_range / 2,
+                'decay_ratio': 1.0, 'oscillation_type': 'integrating',
+                'n_cycles': 1, 'is_valid': True,
+                'confidence': 0.5, 'oscillation_ratio': 0.3,
+            }
+            return {
+                'success': True, 'pid_params': pid_params, 'oscillation_info': osc_info,
+                'segment_idx': 0, 'method': 'integrating_fallback',
+                'data_quality': 0.5, 'nonlinearity': 0.0, 'valve_issues': {}
+            }
 
         extreme_delay_threshold = osc_config.get('extreme_delay_ratio_threshold', 0.8)
         large_delay_threshold = osc_config.get('large_delay_ratio_threshold', 0.5)

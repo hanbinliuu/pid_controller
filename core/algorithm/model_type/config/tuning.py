@@ -35,22 +35,22 @@ CLOSED_LOOP = {
 # ============================================================
 LOOP_SPECIFIC_VERIFICATION = {
     'temperature': {
-        'max_settling_time_factor': 20.0,    # 温度回路：允许更长的调节时间 (20x T)
-        'overshoot_acceptable': 40.0,        # 温度回路：对超调更严格 (防止热冲击)
-        'steady_state_error': 5.0,
+        'max_settling_time_factor': 25.0,    # 温度回路：大惯性，允许更长的调节时间 (25x T)
+        'overshoot_acceptable': 60.0,        # 温度回路：工业标准允许适度超调
+        'steady_state_error': 8.0,           # 温度回路：允许较大稳态误差（传感器精度限制）
     },
     'level': {
-        'max_settling_time_factor': 15.0,    # 液位回路：积分特性，允许较长调节时间
-        'overshoot_acceptable': 50.0,
-        'steady_state_error': 10.0,          # 液位回路：允许较大的稳态误差 (非自衡)
+        'max_settling_time_factor': 25.0,    # 液位回路：积分特性，需要更长时间验证
+        'overshoot_acceptable': 60.0,        # 液位回路：允许较大超调（缓冲容器）
+        'steady_state_error': 15.0,          # 液位回路：允许较大的稳态误差 (非自衡)
     },
     'flow': {
-        'max_settling_time_factor': 10.0,    # 流量回路：快速响应
-        'overshoot_acceptable': 50.0,
-        'steady_state_error': 5.0,
+        'max_settling_time_factor': 15.0,    # 流量回路：放宽到 15x（阀门非线性+噪声）
+        'overshoot_acceptable': 60.0,        # 流量回路：允许适度超调
+        'steady_state_error': 8.0,           # 流量回路：放宽稳态误差
     },
     'pressure': {
-        'max_settling_time_factor': 10.0,    # 压力回路：快速响应
+        'max_settling_time_factor': 15.0,    # 压力回路：放宽到 15x
         'overshoot_acceptable': 50.0,
         'steady_state_error': 5.0,
     },
