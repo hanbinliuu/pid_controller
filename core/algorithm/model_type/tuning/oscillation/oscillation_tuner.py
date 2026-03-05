@@ -794,6 +794,10 @@ class OscillationTuner(LoggerMixin):
             is_stable=is_stable, cl_metrics=cl_metrics, pid_params=pid_params, osc_info=osc_info, osc_result=osc_result
         )
         
+        # 提取两层评分
+        method_confidence = rating_details.get('method_confidence', 0.0)
+        method_confidence_details = rating_details.get('method_confidence_details', {})
+        
         closed_loop_info = {
             'is_stable': is_stable, 'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
             'overshoot': cl_metrics.overshoot, 'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
@@ -801,15 +805,10 @@ class OscillationTuner(LoggerMixin):
             'decay_ratio': cl_metrics.decay_ratio, 'sp_initial': sp_initial, 'sp_final': sp_final, 'pv_initial': pv_mean
         }
         
-        # 振荡整定总是产生有效参数，success 不再依赖内部闭环验证
-        # 内部验证使用 temp_fusion（从不可靠振荡数据估算，R²<0.4），不能代表真实稳定性
-        # is_stable 信息保留在 closed_loop_verification 中供参考
         tuning_success = True
         
-        # 构建整定特征数据
         tuning_features = {
             'tuning_method': 'oscillation_tuning',
-            # 振荡特征
             'Pu': osc_info.get('Pu', 0),
             'Ku': osc_info.get('Ku', 0),
             'amplitude': osc_info.get('amplitude', 0),
@@ -819,18 +818,18 @@ class OscillationTuner(LoggerMixin):
             'n_cycles': osc_info.get('n_cycles', 0),
             'confidence': osc_info.get('confidence', 0),
             'oscillation_ratio': osc_info.get('oscillation_ratio', 0),
-            # 数据质量
             'K_approx': round(K_est, 4),
             'data_quality': round(osc_result.get('data_quality', 0), 4),
             'nonlinearity': round(osc_result.get('nonlinearity', 0), 4),
             'valve_issues': osc_result.get('valve_issues', {}),
-            # 整定方法
             'method': pid_params.get('method', ''),
             'loop_type': self._loop_type,
         }
         
         return {
             'success': tuning_success, 'model_type': 'FOPDT', 'model_rating': model_rating,
+            'method_confidence': method_confidence,
+            'method_confidence_details': method_confidence_details,
             'start_time': time_range.get('start_time'), 'end_time': time_range.get('end_time'),
             'model_parameters': {'K': K_est_final, 'T1': T1_est, 'T2': 0.0, 'L': L_est},
             'pid_parameters': pid_params,

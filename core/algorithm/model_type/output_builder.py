@@ -297,15 +297,18 @@ class OutputBuilder(LoggerMixin):
             prediction_metrics=pred_metrics, verbose=self._verbose
         )
         
+        # 提取两层评分
+        method_confidence = score_details.get('method_confidence', 0.0)
+        method_confidence_details = score_details.get('method_confidence_details', {})
+        
         if self._verbose:
-            w = score_details.get('weights', {})
-            self.log(f"\n   📊 评分详情:")
-            self.log(f"      闭环阶跃稳定性: {score_details.get('stability_score', 0):.1f}/10 × {w.get('stability', 0.35)*100:.0f}%")
-            self.log(f"      预测仿真稳定性: {score_details.get('prediction_score', 0):.1f}/10 × {w.get('prediction', 0.30)*100:.0f}%")
-            self.log(f"      拟合质量 (R²={fusion.global_r2:.3f}): {score_details.get('r2_score', 0):.1f}/10 × {w.get('r2', 0.15)*100:.0f}%")
-            self.log(f"      参数一致性: {score_details.get('consistency_score', 0):.1f}/10 × {w.get('consistency', 0.10)*100:.0f}%")
-            self.log(f"      参数合理性: {score_details.get('validity_score', 0):.1f}/10 × {w.get('validity', 0.10)*100:.0f}%")
-            self.log(f"      → 综合评分: {model_rating}/10")
+            self.log(f"\n   📊 两层评分:")
+            self.log(f"      Layer 1 - 闭环性能评分: {model_rating}/10")
+            self.log(f"      Layer 2 - 方法置信度: {method_confidence:.2f}")
+            if method_confidence_details:
+                self.log(f"         R²质量: {method_confidence_details.get('r2_quality', 0):.2f}")
+                self.log(f"         参数一致性: {method_confidence_details.get('param_consistency', 0):.2f}")
+                self.log(f"         参数合理性: {method_confidence_details.get('param_validity', 0):.2f}")
         
         closed_loop_info = {
             'is_stable': is_stable,
@@ -326,32 +329,24 @@ class OutputBuilder(LoggerMixin):
         success = not fitting_failed
         
         # 构建整定特征数据
-        delay_ratio = round(fusion.L / fusion.T1, 4) if fusion.T1 > 0 else 0.0
         tuning_features = {
             'tuning_method': 'model_identification',
-            # 模型辨识特征
             'K': round(fusion.K, 4),
             'T1': round(fusion.T1, 4),
             'T2': round(fusion.T2, 4),
             'L': round(fusion.L, 4),
-            'delay_ratio': delay_ratio,
-            'lambda_factor': lambda_factor,
             'model_type': fusion.model_type,
             'r_squared': round(fusion.global_r2, 4),
             'rmse': round(fusion.global_rmse, 4),
-            # 融合信息
-            'fusion_method': fusion.fusion_method,
-            'n_segments_used': fusion.n_segments_used,
-            'K_std': round(fusion.K_std, 4),
-            'T1_std': round(fusion.T1_std, 4),
+            'n_segments': fusion.n_segments_used,
+            'consistency_score': round(fusion.consistency_score, 4),
+            'loop_type': loop_type,
         }
+        
         # 数据质量特征（来自 quality_info）
         if quality_info is not None:
             tuning_features.update({
                 'quality_score': round(quality_info.quality_score, 4),
-                'oscillation_ratio': round(quality_info.oscillation_ratio, 4),
-                'is_noisy': quality_info.is_noisy,
-                'consistency_score': round(quality_info.consistency_score, 4),
                 'correlation': round(quality_info.correlation, 4),
                 'controller_sign': quality_info.controller_sign,
             })
@@ -360,6 +355,8 @@ class OutputBuilder(LoggerMixin):
             'success': success,
             'model_type': fusion.model_type,
             'model_rating': model_rating,
+            'method_confidence': method_confidence,
+            'method_confidence_details': method_confidence_details,
             'start_time': time_range.get('start_time'),
             'end_time': time_range.get('end_time'),
             'model_parameters': {

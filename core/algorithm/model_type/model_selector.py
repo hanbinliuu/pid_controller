@@ -235,6 +235,8 @@ class ModelSelector(LoggerMixin):
             'model_type': result.get('model_type', 'FOPDT'),
             'turning_type': turning_type,
             'model_rating': model_rating,
+            'method_confidence': result.get('method_confidence', 0.0),
+            'method_confidence_details': result.get('method_confidence_details', {}),
             'start_time': result.get('start_time'),
             'end_time': result.get('end_time'),
             'model_parameters': result.get('model_parameters', {}),
@@ -254,6 +256,8 @@ class ModelSelector(LoggerMixin):
             'model_type': params.get('model_type') or 'FOPDT',
             'turning_type': params.get('turning_type') or 'PID',
             'model_rating': 0.0,
+            'method_confidence': 0.0,
+            'method_confidence_details': {},
             'start_time': None,
             'end_time': None,
             'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
@@ -1608,6 +1612,22 @@ class ModelSelector(LoggerMixin):
             'phase_margin': margins.phase_margin if margins else 0,
         }
         
+        # 计算方法置信度 (Layer 2)
+        gm = margins.gain_margin if margins else 1.0
+        pm = margins.phase_margin if margins else 0.0
+        gm_score = min(1.0, gm / 5.0)  # GM=5 → 1.0
+        pm_score = min(1.0, pm / 90.0)  # PM=90 → 1.0
+        stability_confidence = 0.4 * gm_score + 0.6 * pm_score
+        method_confidence = round(0.5 * method_result.confidence + 0.5 * stability_confidence, 4)
+        method_confidence_details = {
+            'method': 'relay_feedback',
+            'data_confidence': round(method_result.confidence, 4),
+            'stability_confidence': round(stability_confidence, 4),
+            'gain_margin': round(gm, 4),
+            'phase_margin': round(pm, 4),
+            'confidence_weights': {'data': 0.5, 'stability': 0.5},
+        }
+        
         # 构建整定特征
         tuning_features = {
             'tuning_method': 'relay_feedback',
@@ -1628,6 +1648,8 @@ class ModelSelector(LoggerMixin):
             'success': True,
             'model_type': 'FOPDT',
             'model_rating': model_rating,
+            'method_confidence': method_confidence,
+            'method_confidence_details': method_confidence_details,
             'start_time': time_range.get('start_time'),
             'end_time': time_range.get('end_time'),
             'model_parameters': {
@@ -1657,7 +1679,9 @@ class ModelSelector(LoggerMixin):
             'rating_details': {
                 'method': method_result.method.value,
                 'reasoning': method_result.reasoning,
-                'warnings': method_result.warnings
+                'warnings': method_result.warnings,
+                'method_confidence': method_confidence,
+                'method_confidence_details': method_confidence_details,
             },
             'tuning_features': tuning_features,
             'segment_info': OutputBuilder.build_segment_info(segments, segment_results) if segments else []
