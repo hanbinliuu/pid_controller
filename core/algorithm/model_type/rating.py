@@ -66,16 +66,17 @@ class ModelRating:
         """
         Layer 1: 纯闭环阶跃响应的控制品质评分
         
-        基于五个维度:
-        1. 超调量 (overshoot)
-        2. 调节时间 (settling_time)
-        3. 稳态误差 (steady_state_error)
-        4. 振荡次数 (oscillation_count)
-        5. 衰减比 (decay_ratio)
+        始终基于所有五个维度评分，不存在一票否决：
+        1. 超调量 (overshoot)        — 权重 25%
+        2. 调节时间 (settling_time)   — 权重 20%
+        3. 稳态误差 (steady_state_error) — 权重 25%
+        4. 振荡次数 (oscillation_count)  — 权重 15%
+        5. 衰减比 (decay_ratio)       — 权重 15%
+        
+        稳定性作为乘性因子，不稳定时整体打折而非直接归零。
         
         Args:
-            metrics: ClosedLoopMetrics 对象，需包含 is_stable, overshoot, 
-                     settling_time, steady_state_error, oscillation_count, decay_ratio
+            metrics: ClosedLoopMetrics 对象
         
         Returns:
             (score, details) — score 范围 0.0~10.0
@@ -85,89 +86,137 @@ class ModelRating:
         if metrics is None:
             return 5.0, {'reason': 'no_metrics'}
         
-        # 一票否决：不稳定直接 1.0 分
-        if not metrics.is_stable:
-            return 1.0, {'reason': 'unstable'}
+        is_stable = getattr(metrics, 'is_stable', True)
+        details['is_stable'] = is_stable
         
-        # 稳定基础分 6.0
-        score = 6.0
-        
-        # 【1】超调量 (理想: <5%)
+        # 【1】超调量评分 (0-10)，权重 25%
         overshoot = getattr(metrics, 'overshoot', 0)
-        if overshoot <= 5:
-            os_score = 1.5
+        if overshoot <= 2:
+            os_score = 10.0
+        elif overshoot <= 5:
+            os_score = 9.0
+        elif overshoot <= 10:
+            os_score = 8.0
         elif overshoot <= 15:
-            os_score = 1.0
-        elif overshoot <= 30:
-            os_score = 0.5
-        elif overshoot <= 50:
-            os_score = -0.5
+            os_score = 7.0
+        elif overshoot <= 25:
+            os_score = 6.0
+        elif overshoot <= 40:
+            os_score = 4.0
+        elif overshoot <= 60:
+            os_score = 2.5
+        elif overshoot <= 100:
+            os_score = 1.5
         else:
-            os_score = -1.5
-        score += os_score
+            os_score = max(0.0, 1.0 - (overshoot - 100) / 200)
         details['overshoot'] = round(overshoot, 2)
-        details['overshoot_score'] = os_score
+        details['overshoot_score'] = round(os_score, 2)
         
-        # 【2】调节时间 (理想: <30s)
+        # 【2】调节时间评分 (0-10)，权重 20%
         settling_time = getattr(metrics, 'settling_time', float('inf'))
         if settling_time < float('inf'):
-            if settling_time <= 30:
-                st_score = 1.0
+            if settling_time <= 15:
+                st_score = 10.0
+            elif settling_time <= 30:
+                st_score = 9.0
             elif settling_time <= 60:
-                st_score = 0.5
-            elif settling_time > 120:
-                st_score = -0.5
+                st_score = 7.5
+            elif settling_time <= 120:
+                st_score = 6.0
+            elif settling_time <= 300:
+                st_score = 4.0
+            elif settling_time <= 600:
+                st_score = 2.0
             else:
-                st_score = 0.0
+                st_score = 1.0
         else:
-            st_score = -0.5
-        score += st_score
+            st_score = 0.0  # 未收敛
         details['settling_time'] = round(settling_time, 2) if settling_time < float('inf') else -1
-        details['settling_time_score'] = st_score
+        details['settling_time_score'] = round(st_score, 2)
         
-        # 【3】稳态误差 (理想: <1%)
+        # 【3】稳态误差评分 (0-10)，权重 25%
         sse = getattr(metrics, 'steady_state_error', 0)
-        if sse <= 1.0:
-            sse_score = 1.0
+        if sse <= 0.5:
+            sse_score = 10.0
+        elif sse <= 1.0:
+            sse_score = 9.0
         elif sse <= 2.0:
-            sse_score = 0.5
+            sse_score = 7.5
         elif sse <= 5.0:
-            sse_score = 0.0
+            sse_score = 5.5
         elif sse <= 10.0:
-            sse_score = -0.5
+            sse_score = 3.5
+        elif sse <= 20.0:
+            sse_score = 2.0
         else:
-            sse_score = -1.0
-        score += sse_score
+            sse_score = max(0.0, 1.0 - (sse - 20) / 50)
         details['steady_state_error'] = round(sse, 2)
-        details['steady_state_error_score'] = sse_score
+        details['steady_state_error_score'] = round(sse_score, 2)
         
-        # 【4】振荡次数 (理想: 1-2次)
+        # 【4】振荡次数评分 (0-10)，权重 15%
         osc_count = getattr(metrics, 'oscillation_count', 0)
         if osc_count == 0:
-            oc_score = 0.5    # 过阻尼
+            oc_score = 7.0    # 过阻尼，没有振荡
         elif osc_count <= 2:
-            oc_score = 1.0    # 经典 4:1 衰减
+            oc_score = 10.0   # 经典欠阻尼，最优
         elif osc_count <= 4:
-            oc_score = 0.5
+            oc_score = 7.0
+        elif osc_count <= 6:
+            oc_score = 5.0
+        elif osc_count <= 10:
+            oc_score = 3.0
         else:
-            oc_score = -0.5
-        score += oc_score
+            oc_score = max(0.0, 2.0 - (osc_count - 10) / 5)
         details['oscillation_count'] = osc_count
-        details['oscillation_count_score'] = oc_score
+        details['oscillation_count_score'] = round(oc_score, 2)
         
-        # 【5】衰减比 (理想: <0.25)
+        # 【5】衰减比评分 (0-10)，权重 15%
         decay_ratio = getattr(metrics, 'decay_ratio', 0)
-        if decay_ratio <= 0.25:
-            dr_score = 0.5
-        elif decay_ratio >= 0.8:
-            dr_score = -1.0
+        if decay_ratio <= 0.1:
+            dr_score = 10.0
+        elif decay_ratio <= 0.25:
+            dr_score = 9.0   # 经典 4:1 衰减
+        elif decay_ratio <= 0.5:
+            dr_score = 6.0
+        elif decay_ratio <= 0.8:
+            dr_score = 3.0
+        elif decay_ratio <= 1.0:
+            dr_score = 1.0
         else:
-            dr_score = 0.0
-        score += dr_score
+            dr_score = 0.0   # 发散
         details['decay_ratio'] = round(decay_ratio, 4)
-        details['decay_ratio_score'] = dr_score
+        details['decay_ratio_score'] = round(dr_score, 2)
         
+        # 加权综合
+        weights = {
+            'overshoot': 0.25,
+            'settling_time': 0.20,
+            'steady_state_error': 0.25,
+            'oscillation_count': 0.15,
+            'decay_ratio': 0.15,
+        }
+        raw_score = (
+            weights['overshoot'] * os_score +
+            weights['settling_time'] * st_score +
+            weights['steady_state_error'] * sse_score +
+            weights['oscillation_count'] * oc_score +
+            weights['decay_ratio'] * dr_score
+        )
+        
+        # 稳定性因子：不稳定时整体打折（而非一票否决）
+        if is_stable:
+            stability_factor = 1.0
+        else:
+            # 不稳定 → 最高只能拿到 raw_score 的 40%
+            stability_factor = 0.4
+        
+        score = raw_score * stability_factor
         score = round(min(10.0, max(0.0, score)), 2)
+        
+        details['raw_score'] = round(raw_score, 2)
+        details['stability_factor'] = stability_factor
+        details['weights'] = weights
+        
         return score, details
     
     # ================================================================
