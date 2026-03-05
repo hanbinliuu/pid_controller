@@ -9,6 +9,5 @@
 """
 
 from .oscillation_tuner import OscillationTuner
-from .oscillation_rating import OscillationRatingCalculator
 
-__all__ = ["OscillationTuner", "OscillationRatingCalculator"]
+__all__ = ["OscillationTuner"]

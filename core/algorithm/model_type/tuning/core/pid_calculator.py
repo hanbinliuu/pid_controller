@@ -21,7 +21,6 @@ from .data_classes import DataQualityInfo
 from .tuning_methods import TuningMethodsMixin
 from ..oscillation.oscillation_analysis import OscillationAnalysisMixin
 from ..verification.closed_loop_sim import ClosedLoopSimMixin
-from ..verification.model_rating import ModelRatingMixin
 from ...config.loop_presets import get_loop_preset
 
 
@@ -29,7 +28,7 @@ EPSILON = Config.EPSILON
 
 
 class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin, 
-                    ClosedLoopSimMixin, ModelRatingMixin):
+                    ClosedLoopSimMixin):
     """
     PID参数计算器
     
@@ -37,7 +36,6 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
     - TuningMethodsMixin: 整定公式 (_tune_fo, _tune_fopdt, 等)
     - OscillationAnalysisMixin: 振荡分析 (analyze_oscillation, 等)
     - ClosedLoopSimMixin: 闭环仿真 (simulate_closed_loop, 等)
-    - ModelRatingMixin: 模型评分 (calculate_model_rating)
     """
     
     def __init__(self):

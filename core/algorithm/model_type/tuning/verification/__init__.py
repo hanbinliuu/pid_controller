@@ -6,7 +6,6 @@
 """
 
 from .closed_loop_sim import ClosedLoopSimMixin
-from .model_rating import ModelRatingMixin
 from .stability_analyzer import StabilityAnalyzer, StabilityMargins
 
-__all__ = ["ClosedLoopSimMixin", "ModelRatingMixin", "StabilityAnalyzer", "StabilityMargins"]
+__all__ = ["ClosedLoopSimMixin", "StabilityAnalyzer", "StabilityMargins"]
