@@ -2,7 +2,7 @@
 统一评分模块 (Unified Rating Module)
 ====================================
 
-三层评分架构，所有整定路径复用同一套接口。
+三层评分架构，所有整定路径复用同一套评分函数。
 
 架构:
     Layer 1: performance_score (0-10) — 闭环性能评分，所有路径统一
@@ -10,101 +10,56 @@
     Layer 3: final_rating (0-10)      — 结合 L1 + L2 的最终评分，所有路径统一
 
 ==============================================================================
-API 参考
+Layer 1 统一输入格式 (核心: 所有路径必须产出相同格式的 cl_metrics)
 ==============================================================================
 
-一站式接口 (推荐):
-    ModelRating.evaluate(model_params, pid_params, ...) → dict
-    ├─ 入参:
-    │   model_params: dict  {'K': float, 'T1': float, 'T2': float, 'L': float}
-    │   │                    K=过程增益, T1=主时间常数(s), T2=二阶时间常数(s), L=纯滞后(s)
-    │   pid_params:   dict  {'Kp': float, 'Ki': float, 'Kd': float}
-    │   │                    或 {'pb': float, 'ti': float, 'td': float} (比例带格式)
-    │   method_confidence: float (0-1, 可选)  传入则计算 L3
-    │   sp_initial/sp_final: float  仿真设定值 (默认 50→60)
-    │   n_steps: int  仿真步数 (默认 500)
-    │   dt: float  采样周期 (默认 1.0s)
-    └─ 出参:
-        {
-            'performance_score':    float (0-10),  # Layer 1
-            'performance_details':  dict,          # 每项评分明细
-            'method_confidence':    float (0-1),   # Layer 2 (若传入)
-            'final_rating':         float (0-10),  # Layer 3 (若传入 L2)
-            'simulation': {                        # 仿真原始数据
-                'is_stable':          bool,
-                'overshoot':          float (%),
-                'settling_time':      float (s),  # -1 表示未收敛
-                'steady_state_error': float (%),
-                'oscillation_count':  int,
-                'decay_ratio':        float (0~1+),
-                'rise_time':          float (s),
-                'pv_history':         list[float],
-                'mv_history':         list[float],
-                'sp_history':         list[float],
-            }
-        }
+    performance_score(cl_metrics) → (score: 0-10, details: dict)
 
-------------------------------------------------------------------------------
-Layer 1 — performance_score(metrics) → (score, details)
-    入参: metrics 对象，需含以下属性:
-        is_stable:          bool   是否稳定 (False → 打折 ×0.4)
-        overshoot:          float  超调量 (%), 权重 25%
-        settling_time:      float  调节时间 (s), 权重 20%
-        steady_state_error: float  稳态误差 (%), 权重 25%
-        oscillation_count:  int    振荡次数, 权重 15%
-        decay_ratio:        float  衰减比, 权重 15%
-    出参: (score: float 0-10, details: dict 含每项子分及权重)
+    cl_metrics 统一包含 6 个字段 (不管从哪条路径来，格式相同):
+        is_stable:          bool   是否稳定
+        overshoot:          float  超调量 (%)         权重 25%
+        settling_time:      float  调节时间 (s)       权重 20%
+        steady_state_error: float  稳态误差 (%)       权重 25%
+        oscillation_count:  int    振荡次数           权重 15%
+        decay_ratio:        float  衰减比             权重 15%
 
-------------------------------------------------------------------------------
-Layer 2a — model_id_confidence(fusion) → (confidence, details)
-    入参: fusion (FusionResult)，需含:
-        global_r2:         float   R² 拟合度
-        K, T1, T2, L:      float   模型参数
-        K_std, T1_std:      float   参数标准差
-        n_segments_used:    int     使用的数据段数
-        consistency_score:  float   一致性评分
-    出参: (confidence: float 0-1, details: dict)
-    维度: R²质量 40% + 参数一致性 30% + 参数合理性 30%
+    各路径如何产出 cl_metrics (格式相同，来源不同):
+        模型辨识路径: K,T1,L + PID → 模型仿真    → cl_metrics  (模型准，仿真可靠)
+        振荡整定路径: 真实振荡数据  → 直接提取    → cl_metrics  (数据真实，无需仿真)
+        继电反馈路径: 继电实验数据  → 直接提取    → cl_metrics  (数据真实，无需仿真)
+        大模型路径:   K,T1,L + PID → 模型仿真    → cl_metrics  (可用 evaluate() 快捷调用)
 
-Layer 2b — oscillation_confidence(pid_params, osc_info, osc_result) → (conf, details, warnings)
-    入参:
-        pid_params: dict  {'pb': float, 'Ti': float, 'Kd': float, 'method': str}
-        osc_info:   dict  {'oscillation_ratio': float}
-        osc_result: dict  {'data_quality': float, 'nonlinearity': float,
-                           'valve_issues': {'has_stiction': bool, 'has_deadband': bool}}
-    出参: (confidence: float 0-1, details: dict, warnings: list[str])
-    维度: 数据质量 40% + 参数边界 30% + 方法可靠性 30%
+==============================================================================
+Layer 2 各路径输入不同
+==============================================================================
 
-Layer 2c — relay_confidence(data_confidence, gain_margin, phase_margin) → (conf, details)
-    入参:
-        data_confidence: float (0-1)  继电识别数据置信度
-        gain_margin:     float        增益裕度 (理想 >2)
-        phase_margin:    float (°)    相位裕度 (理想 >45°)
-    出参: (confidence: float 0-1, details: dict)
-    维度: 数据置信度 50% + 稳定性裕度 50%
+    2a model_id_confidence(fusion) → (confidence: 0-1, details)
+        R²质量 40% + 参数一致性 30% + 参数合理性 30%
 
-Layer 2d — llm_confidence(llm_self_score, ...) → (conf, details)
-    入参:
-        llm_self_score:     float (0-1)  LLM 自评信心
-        param_range_ok:     bool         参数是否合理 (简单模式)
-        pid_params:         dict         PID 参数 (细化模式, 可选)
-        model_params:       dict         模型参数 (细化模式, 可选)
-        reasoning_quality:  float (0-1)  推理质量 (可选, 默认 0.5)
-        consistency_score:  float (0-1)  多次调用一致性 (可选, 默认 0.5)
-        process_type_match: bool         过程类型匹配 (可选, 默认 True)
-    出参: (confidence: float 0-1, details: dict)
-    维度: 自评 20% + 参数合理性 25% + 推理 20% + 一致性 20% + 匹配 15%
+    2b oscillation_confidence(pid_params, osc_info, osc_result) → (conf, details, warnings)
+        数据质量 40% + 参数边界 30% + 方法可靠性 30%
 
-------------------------------------------------------------------------------
-Layer 3 — final_rating(performance_score, method_confidence) → (final, details)
-    入参:
-        performance_score:  float (0-10)  Layer 1 评分
-        method_confidence:  float (0-1)   Layer 2 置信度
-        performance_weight: float         性能权重 (默认 0.7)
-        confidence_weight:  float         置信度权重 (默认 0.3)
-    出参: (final: float 0-10, details: dict)
-    公式: final = perf * 0.7 + conf * 10 * 0.3
-    硬约束: 不稳定(perf≤1)→封顶3, 品质差(perf≤3)→封顶5, 置信极低(conf<0.2)→封顶6
+    2c relay_confidence(data_confidence, gain_margin, phase_margin) → (conf, details)
+        数据置信度 50% + 稳定性裕度 50%
+
+    2d llm_confidence(llm_self_score, ...) → (conf, details)
+        自评 20% + 参数合理性 25% + 推理 20% + 一致性 20% + 匹配 15%
+
+==============================================================================
+Layer 3 统一公式
+==============================================================================
+
+    final_rating(perf_score, method_confidence) → (final: 0-10, details)
+    公式: final = perf×0.7 + conf×10×0.3
+    硬约束: perf≤1→封顶3, perf≤3→封顶5, conf<0.2→封顶6
+
+==============================================================================
+快捷接口 (仅适用于有模型参数的路径: 模型辨识/大模型)
+==============================================================================
+
+    evaluate(model_params, pid_params, ...) → dict
+    功能: 自动执行 仿真→cl_metrics→L1→L2(可选)→L3(可选)
+    注意: 振荡/继电路径不应使用此接口，应直接调用 performance_score(cl_metrics)
 """
 
 from typing import Dict, List, Optional, Tuple
