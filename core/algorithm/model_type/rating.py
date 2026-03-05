@@ -2,34 +2,47 @@
 统一评分模块 (Unified Rating Module)
 ====================================
 
-三层评分架构，独立于任何整定路径，可被所有路径复用。
+三层评分架构，所有整定路径复用同一套接口。
 
-Layer 1: performance_score (0-10)
-    纯闭环阶跃响应的控制品质评分。
-    基于: 超调量、调节时间、稳态误差、振荡次数、衰减比
+架构:
+    Layer 1: performance_score (0-10) — 闭环性能评分，所有路径统一
+    Layer 2: method_confidence (0-1)  — 方法置信度，各路径输入不同
+    Layer 3: final_rating (0-10)      — 结合 L1 + L2 的最终评分，所有路径统一
 
-Layer 2: method_confidence (0-1)
-    各整定路径对自身结果的置信度。
-    - 模型辨识: R²、参数一致性、参数物理合理性
-    - 振荡整定: 数据质量、参数边界、方法可靠性
-    - 继电反馈: 数据置信度、稳定性裕度
-    - 大模型:   (预留扩展)
-
-Layer 3: final_rating (0-10)
-    结合 Layer 1 和 Layer 2 的最终综合评分。
-
-使用示例
---------
+用法 1: 一站式调用 (推荐，适用于大模型等新路径)
+-----------------------------------------------
     from core.algorithm.model_type.rating import ModelRating
 
-    # Layer 1
-    perf = ModelRating.performance_score(cl_metrics)
+    result = ModelRating.evaluate(
+        model_params={'K': 1.5, 'T1': 30, 'T2': 0, 'L': 5},
+        pid_params={'Kp': 0.8, 'Ki': 0.02, 'Kd': 3.0},
+        method='llm',
+        method_confidence=0.6,   # Layer 2 置信度
+    )
+    # result['performance_score']  → 8.35   (Layer 1, 0-10)
+    # result['method_confidence']  → 0.6    (Layer 2, 0-1)
+    # result['final_rating']       → 7.64   (Layer 3, 0-10)
+    # result['simulation']         → 仿真原始数据
 
-    # Layer 2
-    conf, details = ModelRating.model_id_confidence(fusion)
+用法 2: 分步调用 (已有 cl_metrics 时)
+--------------------------------------
+    # Layer 1: 所有路径一样
+    perf, details = ModelRating.performance_score(cl_metrics)
 
-    # Layer 3
-    final = ModelRating.final_rating(perf, conf)
+    # Layer 2: 每条路径不同
+    conf, details = ModelRating.model_id_confidence(fusion)              # 模型辨识
+    conf, details, warn = ModelRating.oscillation_confidence(pid, osc_info, osc_result)  # 振荡
+    conf, details = ModelRating.relay_confidence(data_conf, gm, pm)      # 继电反馈
+    conf, details = ModelRating.llm_confidence(self_score, range_ok)     # 大模型
+
+    # Layer 3: 所有路径一样
+    final, details = ModelRating.final_rating(perf, conf)
+
+Layer 2 各路径输入说明:
+    模型辨识 — R²拟合质量 + 参数一致性 + 参数物理合理性
+    振荡整定 — 振荡比/数据质量 + PID参数边界 + 方法可靠性
+    继电反馈 — 数据置信度 + 增益裕度/相位裕度
+    大模型   — LLM自评分 + 参数范围合理性
 """
 
 from typing import Dict, List, Optional, Tuple
