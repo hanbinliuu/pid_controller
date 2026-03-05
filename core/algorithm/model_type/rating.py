@@ -761,8 +761,8 @@ class ModelRating:
         delta_x2 = 0.0
         integral = 0.0
         prev_error = 0.0
-        delay_steps = max(0, int(L / dt))
-        delta_mv_buf = [0.0] * (delay_steps + 1)
+        from collections import deque
+        delta_mv_buf = deque([0.0] * (delay_steps + 1))
         step_time = 10
         
         for t in range(n_steps):
@@ -785,7 +785,7 @@ class ModelRating:
             prev_error = error
             
             delta_mv_buf.append(delta_mv)
-            delta_mv_delayed = delta_mv_buf.pop(0)
+            delta_mv_delayed = delta_mv_buf.popleft()
             
             # 过程模型更新
             alpha1 = dt / T1
@@ -934,16 +934,17 @@ class ModelRating:
             n_steps=n_steps, dt=dt, loop_type=loop_type
         )
         
+        from types import SimpleNamespace
+        
         # 构造 metrics 对象给 performance_score
-        class _Metrics:
-            pass
-        m = _Metrics()
-        m.is_stable = sim['is_stable']
-        m.overshoot = sim['overshoot']
-        m.settling_time = sim['settling_time'] if sim['settling_time'] >= 0 else float('inf')
-        m.steady_state_error = sim['steady_state_error']
-        m.oscillation_count = sim['oscillation_count']
-        m.decay_ratio = sim['decay_ratio']
+        m = SimpleNamespace(
+            is_stable=sim['is_stable'],
+            overshoot=sim['overshoot'],
+            settling_time=sim['settling_time'] if sim['settling_time'] >= 0 else float('inf'),
+            steady_state_error=sim['steady_state_error'],
+            oscillation_count=sim['oscillation_count'],
+            decay_ratio=sim['decay_ratio']
+        )
         
         # Layer 1
         perf_score, perf_details = ModelRating.performance_score(m)
