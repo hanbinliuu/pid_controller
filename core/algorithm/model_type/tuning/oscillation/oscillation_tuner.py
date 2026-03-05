@@ -790,13 +790,31 @@ class OscillationTuner(LoggerMixin):
                 loop_type=self._loop_type, verbose=self._verbose
             )
         
-        model_rating, rating_details, warnings = self._calculate_oscillation_rating(
-            is_stable=is_stable, cl_metrics=cl_metrics, pid_params=pid_params, osc_info=osc_info, osc_result=osc_result
+        # ====== 三层评分 ======
+        from ...rating import ModelRating
+        
+        # Layer 1: 闭环性能评分
+        perf_score, perf_details = ModelRating.performance_score(cl_metrics)
+        
+        # Layer 2: 振荡整定置信度
+        from ...config import Config as OscConfig
+        osc_config = OscConfig.OSCILLATION_TUNING
+        method_confidence, confidence_details, warnings = ModelRating.oscillation_confidence(
+            pid_params, osc_info, osc_result, config=osc_config
         )
         
-        # 提取两层评分
-        method_confidence = rating_details.get('method_confidence', 0.0)
-        method_confidence_details = rating_details.get('method_confidence_details', {})
+        # Layer 3: 最终综合评分
+        model_rating, final_details = ModelRating.final_rating(perf_score, method_confidence)
+        
+        rating_details = {
+            'performance_score': perf_score,
+            'performance_details': perf_details,
+            'method_confidence': method_confidence,
+            'method_confidence_details': confidence_details,
+            'final_rating': model_rating,
+            'final_details': final_details,
+            'warnings': warnings,
+        }
         
         closed_loop_info = {
             'is_stable': is_stable, 'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
@@ -829,7 +847,7 @@ class OscillationTuner(LoggerMixin):
         return {
             'success': tuning_success, 'model_type': 'FOPDT', 'model_rating': model_rating,
             'method_confidence': method_confidence,
-            'method_confidence_details': method_confidence_details,
+            'method_confidence_details': confidence_details,
             'start_time': time_range.get('start_time'), 'end_time': time_range.get('end_time'),
             'model_parameters': {'K': K_est_final, 'T1': T1_est, 'T2': 0.0, 'L': L_est},
             'pid_parameters': pid_params,

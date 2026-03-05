@@ -1590,8 +1590,11 @@ class ModelSelector(LoggerMixin):
             loop_type=loop_type, verbose=self._verbose
         )
         
-        # 使用统一的闭环仿真评分（与模型辨识和振荡整定一致）
-        model_rating = calculate_control_performance(cl_metrics)
+        # ====== 三层评分 ======
+        from .rating import ModelRating
+        
+        # Layer 1: 闭环性能评分
+        perf_score, perf_details = ModelRating.performance_score(cl_metrics)
         
         # 频域稳定性信息（补充参考）
         margins = method_result.stability_margins
@@ -1606,27 +1609,21 @@ class ModelSelector(LoggerMixin):
             'sp_initial': sp_initial,
             'sp_final': sp_final,
             'pv_initial': pv_initial,
-            # 频域裕度（补充信息）
             'gain_margin': margins.gain_margin if margins else 0,
             'gain_margin_db': margins.gain_margin_db if margins else 0,
             'phase_margin': margins.phase_margin if margins else 0,
         }
         
-        # 计算方法置信度 (Layer 2)
+        # Layer 2: 继电反馈置信度
         gm = margins.gain_margin if margins else 1.0
         pm = margins.phase_margin if margins else 0.0
-        gm_score = min(1.0, gm / 5.0)  # GM=5 → 1.0
-        pm_score = min(1.0, pm / 90.0)  # PM=90 → 1.0
-        stability_confidence = 0.4 * gm_score + 0.6 * pm_score
-        method_confidence = round(0.5 * method_result.confidence + 0.5 * stability_confidence, 4)
-        method_confidence_details = {
-            'method': 'relay_feedback',
-            'data_confidence': round(method_result.confidence, 4),
-            'stability_confidence': round(stability_confidence, 4),
-            'gain_margin': round(gm, 4),
-            'phase_margin': round(pm, 4),
-            'confidence_weights': {'data': 0.5, 'stability': 0.5},
-        }
+        method_confidence, confidence_details = ModelRating.relay_confidence(
+            data_confidence=method_result.confidence,
+            gain_margin=gm, phase_margin=pm
+        )
+        
+        # Layer 3: 最终综合评分
+        model_rating, final_details = ModelRating.final_rating(perf_score, method_confidence)
         
         # 构建整定特征
         tuning_features = {
@@ -1649,7 +1646,7 @@ class ModelSelector(LoggerMixin):
             'model_type': 'FOPDT',
             'model_rating': model_rating,
             'method_confidence': method_confidence,
-            'method_confidence_details': method_confidence_details,
+            'method_confidence_details': confidence_details,
             'start_time': time_range.get('start_time'),
             'end_time': time_range.get('end_time'),
             'model_parameters': {
@@ -1677,11 +1674,14 @@ class ModelSelector(LoggerMixin):
             },
             'closed_loop_verification': closed_loop_info,
             'rating_details': {
+                'performance_score': perf_score,
+                'method_confidence': method_confidence,
+                'method_confidence_details': confidence_details,
+                'final_rating': model_rating,
+                'final_details': final_details,
                 'method': method_result.method.value,
                 'reasoning': method_result.reasoning,
                 'warnings': method_result.warnings,
-                'method_confidence': method_confidence,
-                'method_confidence_details': method_confidence_details,
             },
             'tuning_features': tuning_features,
             'segment_info': OutputBuilder.build_segment_info(segments, segment_results) if segments else []

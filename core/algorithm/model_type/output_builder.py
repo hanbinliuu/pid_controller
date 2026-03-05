@@ -286,29 +286,32 @@ class OutputBuilder(LoggerMixin):
             else:
                 self.log(f"   ⚠️ 振荡整定也失败，保持原参数")
         
-        # 计算 model_rating
-        # 运行预测仿真（从实际工作点）
-        pred_stable, pred_metrics = self._pid_calculator.simulate_prediction(
-            fusion, pid_params, hist_data=hist_data, verbose=self._verbose
-        )
+        # ====== 三层评分 ======
+        from .rating import ModelRating
         
-        model_rating, score_details = self._pid_calculator.calculate_model_rating(
-            fusion, total_data_points, cl_metrics=cl_metrics,
-            prediction_metrics=pred_metrics, verbose=self._verbose
-        )
+        # Layer 1: 闭环性能评分
+        perf_score, perf_details = ModelRating.performance_score(cl_metrics)
         
-        # 提取两层评分
-        method_confidence = score_details.get('method_confidence', 0.0)
-        method_confidence_details = score_details.get('method_confidence_details', {})
+        # Layer 2: 模型辨识置信度
+        method_confidence, confidence_details = ModelRating.model_id_confidence(fusion)
+        
+        # Layer 3: 最终综合评分
+        model_rating, final_details = ModelRating.final_rating(perf_score, method_confidence)
+        
+        score_details = {
+            'performance_score': perf_score,
+            'performance_details': perf_details,
+            'method_confidence': method_confidence,
+            'method_confidence_details': confidence_details,
+            'final_rating': model_rating,
+            'final_details': final_details,
+        }
         
         if self._verbose:
-            self.log(f"\n   📊 两层评分:")
-            self.log(f"      Layer 1 - 闭环性能评分: {model_rating}/10")
+            self.log(f"\n   📊 三层评分:")
+            self.log(f"      Layer 1 - 闭环性能: {perf_score}/10")
             self.log(f"      Layer 2 - 方法置信度: {method_confidence:.2f}")
-            if method_confidence_details:
-                self.log(f"         R²质量: {method_confidence_details.get('r2_quality', 0):.2f}")
-                self.log(f"         参数一致性: {method_confidence_details.get('param_consistency', 0):.2f}")
-                self.log(f"         参数合理性: {method_confidence_details.get('param_validity', 0):.2f}")
+            self.log(f"      Layer 3 - 最终评分: {model_rating}/10")
         
         closed_loop_info = {
             'is_stable': is_stable,
@@ -356,7 +359,7 @@ class OutputBuilder(LoggerMixin):
             'model_type': fusion.model_type,
             'model_rating': model_rating,
             'method_confidence': method_confidence,
-            'method_confidence_details': method_confidence_details,
+            'method_confidence_details': confidence_details,
             'start_time': time_range.get('start_time'),
             'end_time': time_range.get('end_time'),
             'model_parameters': {

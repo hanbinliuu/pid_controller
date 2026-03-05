@@ -1,0 +1,495 @@
+"""
+统一评分模块 (Unified Rating Module)
+====================================
+
+三层评分架构，独立于任何整定路径，可被所有路径复用。
+
+Layer 1: performance_score (0-10)
+    纯闭环阶跃响应的控制品质评分。
+    基于: 超调量、调节时间、稳态误差、振荡次数、衰减比
+
+Layer 2: method_confidence (0-1)
+    各整定路径对自身结果的置信度。
+    - 模型辨识: R²、参数一致性、参数物理合理性
+    - 振荡整定: 数据质量、参数边界、方法可靠性
+    - 继电反馈: 数据置信度、稳定性裕度
+    - 大模型:   (预留扩展)
+
+Layer 3: final_rating (0-10)
+    结合 Layer 1 和 Layer 2 的最终综合评分。
+
+使用示例
+--------
+    from core.algorithm.model_type.rating import ModelRating
+
+    # Layer 1
+    perf = ModelRating.performance_score(cl_metrics)
+
+    # Layer 2
+    conf, details = ModelRating.model_id_confidence(fusion)
+
+    # Layer 3
+    final = ModelRating.final_rating(perf, conf)
+"""
+
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+
+import numpy as np
+
+
+@dataclass
+class ClosedLoopMetrics:
+    """闭环性能指标 (仅用于类型提示，实际使用 tuning.core.data_classes.ClosedLoopMetrics)"""
+    is_stable: bool
+    settling_time: float
+    overshoot: float
+    rise_time: float
+    steady_state_error: float
+    oscillation_count: int
+    decay_ratio: float
+
+
+class ModelRating:
+    """
+    统一三层评分器
+    
+    所有方法均为 @staticmethod，无状态，可随时调用。
+    """
+    
+    # ================================================================
+    # Layer 1: 闭环性能评分 (0-10)
+    # ================================================================
+    
+    @staticmethod
+    def performance_score(metrics) -> Tuple[float, Dict[str, float]]:
+        """
+        Layer 1: 纯闭环阶跃响应的控制品质评分
+        
+        基于五个维度:
+        1. 超调量 (overshoot)
+        2. 调节时间 (settling_time)
+        3. 稳态误差 (steady_state_error)
+        4. 振荡次数 (oscillation_count)
+        5. 衰减比 (decay_ratio)
+        
+        Args:
+            metrics: ClosedLoopMetrics 对象，需包含 is_stable, overshoot, 
+                     settling_time, steady_state_error, oscillation_count, decay_ratio
+        
+        Returns:
+            (score, details) — score 范围 0.0~10.0
+        """
+        details = {}
+        
+        if metrics is None:
+            return 5.0, {'reason': 'no_metrics'}
+        
+        # 一票否决：不稳定直接 1.0 分
+        if not metrics.is_stable:
+            return 1.0, {'reason': 'unstable'}
+        
+        # 稳定基础分 6.0
+        score = 6.0
+        
+        # 【1】超调量 (理想: <5%)
+        overshoot = getattr(metrics, 'overshoot', 0)
+        if overshoot <= 5:
+            os_score = 1.5
+        elif overshoot <= 15:
+            os_score = 1.0
+        elif overshoot <= 30:
+            os_score = 0.5
+        elif overshoot <= 50:
+            os_score = -0.5
+        else:
+            os_score = -1.5
+        score += os_score
+        details['overshoot'] = round(overshoot, 2)
+        details['overshoot_score'] = os_score
+        
+        # 【2】调节时间 (理想: <30s)
+        settling_time = getattr(metrics, 'settling_time', float('inf'))
+        if settling_time < float('inf'):
+            if settling_time <= 30:
+                st_score = 1.0
+            elif settling_time <= 60:
+                st_score = 0.5
+            elif settling_time > 120:
+                st_score = -0.5
+            else:
+                st_score = 0.0
+        else:
+            st_score = -0.5
+        score += st_score
+        details['settling_time'] = round(settling_time, 2) if settling_time < float('inf') else -1
+        details['settling_time_score'] = st_score
+        
+        # 【3】稳态误差 (理想: <1%)
+        sse = getattr(metrics, 'steady_state_error', 0)
+        if sse <= 1.0:
+            sse_score = 1.0
+        elif sse <= 2.0:
+            sse_score = 0.5
+        elif sse <= 5.0:
+            sse_score = 0.0
+        elif sse <= 10.0:
+            sse_score = -0.5
+        else:
+            sse_score = -1.0
+        score += sse_score
+        details['steady_state_error'] = round(sse, 2)
+        details['steady_state_error_score'] = sse_score
+        
+        # 【4】振荡次数 (理想: 1-2次)
+        osc_count = getattr(metrics, 'oscillation_count', 0)
+        if osc_count == 0:
+            oc_score = 0.5    # 过阻尼
+        elif osc_count <= 2:
+            oc_score = 1.0    # 经典 4:1 衰减
+        elif osc_count <= 4:
+            oc_score = 0.5
+        else:
+            oc_score = -0.5
+        score += oc_score
+        details['oscillation_count'] = osc_count
+        details['oscillation_count_score'] = oc_score
+        
+        # 【5】衰减比 (理想: <0.25)
+        decay_ratio = getattr(metrics, 'decay_ratio', 0)
+        if decay_ratio <= 0.25:
+            dr_score = 0.5
+        elif decay_ratio >= 0.8:
+            dr_score = -1.0
+        else:
+            dr_score = 0.0
+        score += dr_score
+        details['decay_ratio'] = round(decay_ratio, 4)
+        details['decay_ratio_score'] = dr_score
+        
+        score = round(min(10.0, max(0.0, score)), 2)
+        return score, details
+    
+    # ================================================================
+    # Layer 2: 方法置信度 (0-1)
+    # ================================================================
+    
+    @staticmethod
+    def model_id_confidence(fusion, epsilon: float = 1e-10) -> Tuple[float, Dict]:
+        """
+        Layer 2: 模型辨识路径的方法置信度
+        
+        维度:
+        1. R² 拟合质量   (40%)
+        2. 参数一致性     (30%)
+        3. 参数物理合理性 (30%)
+        
+        Args:
+            fusion: FusionResult 对象
+            epsilon: 数值稳定小量
+            
+        Returns:
+            (confidence, details) — confidence 范围 0.0~1.0
+        """
+        details = {'method': 'model_identification'}
+        
+        # 1. R² 质量 (0-1)
+        r2 = getattr(fusion, 'global_r2', 0.5)
+        if r2 >= 0.95:
+            r2_q = 1.0
+        elif r2 >= 0.9:
+            r2_q = 0.9 + (r2 - 0.9) * 2
+        elif r2 >= 0.8:
+            r2_q = 0.75 + (r2 - 0.8) * 1.5
+        elif r2 >= 0.6:
+            r2_q = 0.5 + (r2 - 0.6) * 1.25
+        elif r2 >= 0.4:
+            r2_q = 0.3 + (r2 - 0.4) * 1.0
+        elif r2 >= 0.2:
+            r2_q = 0.1 + (r2 - 0.2) * 1.0
+        else:
+            r2_q = max(0.0, r2 * 0.5)
+        details['r2_quality'] = round(r2_q, 4)
+        
+        # 2. 参数一致性 (0-1)
+        n_seg = getattr(fusion, 'n_segments_used', 1)
+        consistency = 1.0
+        if n_seg > 1:
+            k_mean = abs(getattr(fusion, 'K', 1.0)) + epsilon
+            k_cv = getattr(fusion, 'K_std', 0.0) / k_mean
+            t1_mean = abs(getattr(fusion, 'T1', 1.0)) + epsilon
+            t1_cv = getattr(fusion, 'T1_std', 0.0) / t1_mean
+            k_c = max(0, 1.0 - k_cv * 1.5)
+            t1_c = max(0, 1.0 - t1_cv * 1.5)
+            consistency = 0.6 * k_c + 0.4 * t1_c
+            cs = getattr(fusion, 'consistency_score', 0)
+            if cs > 0:
+                consistency = 0.7 * consistency + 0.3 * cs
+        else:
+            cs = getattr(fusion, 'consistency_score', 0)
+            consistency = cs if cs > 0 else 0.6
+        consistency = min(1.0, max(0.0, consistency))
+        details['param_consistency'] = round(consistency, 4)
+        
+        # 3. 参数合理性 (0-1)
+        validity = 1.0
+        K = getattr(fusion, 'K', 1.0)
+        T1 = getattr(fusion, 'T1', 10.0)
+        L = getattr(fusion, 'L', 1.0)
+        T2 = getattr(fusion, 'T2', 0.0)
+        
+        if abs(K) < 0.001:     validity -= 0.4
+        elif abs(K) > 50:      validity -= 0.2
+        elif abs(K) < 0.01:    validity -= 0.1
+        if T1 <= 0:            validity -= 0.5
+        elif T1 < 0.1:         validity -= 0.2
+        elif T1 > 500:         validity -= 0.15
+        if L < 0:              validity -= 0.3
+        elif L > T1 * 2 and T1 > 0: validity -= 0.1
+        if T2 < 0:             validity -= 0.2
+        validity = max(0.0, validity)
+        details['param_validity'] = round(validity, 4)
+        
+        # 加权
+        confidence = 0.4 * r2_q + 0.3 * consistency + 0.3 * validity
+        
+        # 硬约束
+        if r2 < 0.3:
+            confidence = min(confidence, 0.3)
+        elif r2 < 0.5:
+            confidence = min(confidence, 0.5)
+        
+        confidence = round(min(1.0, max(0.0, confidence)), 4)
+        details['confidence_weights'] = {'r2': 0.4, 'consistency': 0.3, 'validity': 0.3}
+        return confidence, details
+    
+    @staticmethod
+    def oscillation_confidence(pid_params: Dict, osc_info: Dict,
+                                osc_result: Dict,
+                                config: Dict = None) -> Tuple[float, Dict, List[str]]:
+        """
+        Layer 2: 振荡整定路径的方法置信度
+        
+        维度:
+        1. 数据质量   (40%)
+        2. 参数边界   (30%)
+        3. 方法可靠性 (30%)
+        
+        Args:
+            pid_params: PID 参数字典 (Kp, Ki, Kd, pb, Ti, method...)
+            osc_info: 振荡分析信息 (oscillation_ratio, ...)
+            osc_result: 振荡整定结果 (data_quality, nonlinearity, valve_issues...)
+            config: 振荡整定配置 (pb_min, pb_max...), 默认使用标准值
+            
+        Returns:
+            (confidence, details, warnings)
+        """
+        if config is None:
+            config = {'pb_min': 120.0, 'pb_max': 600.0}
+        
+        details = {'method': 'oscillation_tuning'}
+        warnings = []
+        
+        # 1. 数据质量 (0-1)
+        osc_ratio = osc_info.get('oscillation_ratio', 0.5)
+        raw_quality = osc_result.get('data_quality', 0.5)
+        nonlinearity = osc_result.get('nonlinearity', 0.0)
+        
+        if osc_ratio < 0.4:      dq = 0.9
+        elif osc_ratio < 0.6:    dq = 0.7 - (osc_ratio - 0.4) * 1.0
+        elif osc_ratio < 0.8:    dq = 0.5 - (osc_ratio - 0.6) * 1.0
+        else:                    dq = 0.3 - (osc_ratio - 0.8) * 1.5
+        dq -= max(0, (0.4 - raw_quality) * 0.5)
+        dq -= max(0, (nonlinearity - 0.5) * 0.3)
+        dq = max(0.1, min(0.95, dq))
+        details['data_quality'] = round(dq, 4)
+        details['oscillation_ratio'] = round(osc_ratio, 4)
+        
+        # 2. 参数边界 (0-1)
+        pb = pid_params.get('pb', 200)
+        pb_min = config.get('pb_min', 120.0)
+        pb_max = config.get('pb_max', 600.0)
+        pb_range = pb_max - pb_min
+        pb_margin = min(pb - pb_min, pb_max - pb) / (pb_range / 2) if pb_range > 0 else 0.5
+        boundary = 0.5 + pb_margin * 0.5
+        if pb <= pb_min * 1.05 or pb >= pb_max * 0.95:
+            boundary = 0.3
+        Ti = pid_params.get('Ti', 2.5)
+        if Ti <= 1.6 or Ti >= 9.5:
+            boundary -= 0.1
+        boundary = min(1.0, max(0.0, boundary))
+        details['param_boundary'] = round(boundary, 4)
+        
+        # 3. 方法可靠性 (0-1)
+        method = pid_params.get('method', 'unknown')
+        if 'low_gain' in method or 'high_gain' in method:
+            rel = 0.5
+        elif 'oscillation' in method:
+            rel = 0.6
+        elif 'integrating' in method:
+            rel = 0.55
+        else:
+            rel = 0.55
+        if pid_params.get('Kd', 0) > 0:
+            rel += 0.05
+        rel = min(1.0, rel)
+        details['method_reliability'] = round(rel, 4)
+        
+        # 加权
+        confidence = 0.4 * dq + 0.3 * boundary + 0.3 * rel
+        
+        # 特殊限制
+        valve_issues = osc_result.get('valve_issues', {})
+        if osc_ratio > 0.9:
+            confidence = min(confidence, 0.5)
+            warnings.append(f'极高振荡({osc_ratio:.0%})')
+        elif osc_ratio > 0.85:
+            confidence = min(confidence, 0.6)
+            warnings.append(f'高振荡({osc_ratio:.0%})')
+        if pb <= pb_min * 1.02 or pb >= pb_max * 0.98:
+            confidence = min(confidence, 0.5)
+            warnings.append('PID参数触达边界')
+        if raw_quality < 0.3:
+            confidence = min(confidence, 0.5)
+            warnings.append(f'数据质量极差({raw_quality:.2f})')
+        if nonlinearity > 0.6:
+            confidence = min(confidence, 0.55)
+            warnings.append(f'高非线性({nonlinearity:.2f})')
+        if valve_issues.get('has_stiction', False):
+            confidence = min(confidence, 0.5)
+            warnings.append('阀门粘滞')
+        if valve_issues.get('has_deadband', False):
+            confidence = min(confidence, 0.55)
+            warnings.append('阀门死区')
+        
+        # 多重风险
+        risk = sum([
+            osc_ratio > 0.85,
+            raw_quality < 0.35,
+            valve_issues.get('has_stiction', False) or valve_issues.get('has_deadband', False),
+        ])
+        if risk >= 2:
+            confidence = min(confidence, 0.4)
+            warnings.append('❗多重风险因素')
+        
+        confidence = round(min(1.0, max(0.0, confidence)), 4)
+        details['confidence_weights'] = {'data_quality': 0.4, 'param_boundary': 0.3, 'method_reliability': 0.3}
+        return confidence, details, warnings
+    
+    @staticmethod
+    def relay_confidence(data_confidence: float,
+                          gain_margin: float = 1.0,
+                          phase_margin: float = 0.0) -> Tuple[float, Dict]:
+        """
+        Layer 2: 继电反馈路径的方法置信度
+        
+        维度:
+        1. 数据置信度   (50%)
+        2. 稳定性裕度   (50%)
+        
+        Args:
+            data_confidence: 继电识别的数据质量置信度 (0-1)
+            gain_margin: 增益裕度 (理想 > 2)
+            phase_margin: 相位裕度 (理想 > 45°)
+        
+        Returns:
+            (confidence, details)
+        """
+        gm_score = min(1.0, gain_margin / 5.0)
+        pm_score = min(1.0, phase_margin / 90.0)
+        stability_conf = 0.4 * gm_score + 0.6 * pm_score
+        
+        confidence = 0.5 * data_confidence + 0.5 * stability_conf
+        confidence = round(min(1.0, max(0.0, confidence)), 4)
+        
+        details = {
+            'method': 'relay_feedback',
+            'data_confidence': round(data_confidence, 4),
+            'stability_confidence': round(stability_conf, 4),
+            'gain_margin': round(gain_margin, 4),
+            'phase_margin': round(phase_margin, 4),
+            'confidence_weights': {'data': 0.5, 'stability': 0.5},
+        }
+        return confidence, details
+    
+    @staticmethod
+    def llm_confidence(llm_self_score: float = 0.5,
+                        param_range_ok: bool = True) -> Tuple[float, Dict]:
+        """
+        Layer 2: 大模型路径的方法置信度（预留扩展）
+        
+        Args:
+            llm_self_score: LLM 自评信心 (0-1)
+            param_range_ok: 参数是否在合理范围
+        
+        Returns:
+            (confidence, details)
+        """
+        range_score = 0.8 if param_range_ok else 0.3
+        confidence = 0.6 * llm_self_score + 0.4 * range_score
+        confidence = round(min(1.0, max(0.0, confidence)), 4)
+        
+        details = {
+            'method': 'llm',
+            'llm_self_score': round(llm_self_score, 4),
+            'param_range_ok': param_range_ok,
+            'confidence_weights': {'self_score': 0.6, 'range_check': 0.4},
+        }
+        return confidence, details
+    
+    # ================================================================
+    # Layer 3: 最终综合评分 (0-10)
+    # ================================================================
+    
+    @staticmethod
+    def final_rating(performance_score: float,
+                      method_confidence: float,
+                      performance_weight: float = 0.7,
+                      confidence_weight: float = 0.3) -> Tuple[float, Dict]:
+        """
+        Layer 3: 结合 Layer 1 和 Layer 2 给出最终评分
+        
+        公式: final = performance_score * perf_weight + (confidence * 10) * conf_weight
+        
+        可通过 performance_weight 和 confidence_weight 调整两层的相对重要性。
+        默认 70% 看控制品质，30% 看方法可信度。
+        
+        Args:
+            performance_score: Layer 1 闭环性能评分 (0-10)
+            method_confidence: Layer 2 方法置信度 (0-1)
+            performance_weight: 性能评分权重，默认 0.7
+            confidence_weight:  置信度权重，默认 0.3
+        
+        Returns:
+            (final_score, details) — final_score 范围 0.0~10.0
+        """
+        # 归一化权重
+        total_w = performance_weight + confidence_weight
+        pw = performance_weight / total_w
+        cw = confidence_weight / total_w
+        
+        # 置信度映射到 0-10 尺度
+        confidence_score = method_confidence * 10.0
+        
+        final = pw * performance_score + cw * confidence_score
+        
+        # 硬约束：性能极差时，置信度再高也封顶
+        if performance_score <= 1.0:
+            final = min(final, 3.0)   # 不稳定
+        elif performance_score <= 3.0:
+            final = min(final, 5.0)   # 控制品质很差
+        
+        # 硬约束：置信度极低时，性能分打折
+        if method_confidence < 0.2:
+            final = min(final, 6.0)   # 方法极不可靠
+        
+        final = round(min(10.0, max(0.0, final)), 2)
+        
+        details = {
+            'performance_score': round(performance_score, 2),
+            'method_confidence': round(method_confidence, 4),
+            'performance_weight': round(pw, 2),
+            'confidence_weight': round(cw, 2),
+            'confidence_as_score': round(confidence_score, 2),
+        }
+        return final, details
