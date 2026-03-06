@@ -48,6 +48,42 @@
   - 接口: `ModelRating.final_rating(performance_score, method_confidence)`
   - 输入: 拿上述 L1 输出的 `score` 和 L2 输出的 `confidence` 传进来。
   - 输出: `(final_score: float(0->10), details: dict)`。带有不合格自动熔断骨折机制。
+
+==============================================================================
+代码使用示例 (以大模型整定为例)
+==============================================================================
+
+    from core.algorithm.model_type.rating import ModelRating
+
+    # 1. 大模型输出的参数及自带信心
+    pid_params = {'Kp': 1.5, 'Ki': 0.1, 'Kd': 0.0}
+    model_params = {'K': 1.2, 'T1': 15.0, 'T2': 0.0, 'L': 2.0}
+    llm_self_conf = 0.8
+    reasoning_quality = 0.9
+
+    # 2. 先算大模型专享的 Layer 2 置信度
+    method_conf, conf_details = ModelRating.llm_confidence(
+        llm_self_score=llm_self_conf,
+        model_params=model_params,
+        pid_params=pid_params,
+        reasoning_quality=reasoning_quality,
+        consistency_score=0.85,
+        process_match_score=1.0
+    )
+
+    # 3. 把参数和刚算好的 置信度 扔进 evaluate 进行一条龙打分
+    result = ModelRating.evaluate(
+        model_params=model_params,
+        pid_params=pid_params,
+        method='llm',
+        method_confidence=method_conf,           # <--- 注入 Layer 2 分数
+        method_confidence_details=conf_details
+    )
+
+    print(f"闭环性能 (Layer 1): {result['performance_score']}")
+    print(f"方法置信度 (Layer 2): {result['method_confidence']}")
+    print(f"最终总分 (Layer 3): {result['final_rating']}")
+
 """
 
 from typing import Dict, List, Optional, Tuple
