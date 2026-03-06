@@ -2,62 +2,52 @@
 统一评分模块 (Unified Rating Module)
 ====================================
 
-架构:
-    Layer 1: performance_score (0-10) — 闭环性能评分，所有路径统一
-    Layer 2: method_confidence (0-1)  — 方法置信度，各路径输入不同
-    Layer 3: final_rating (0-10)      — 结合 L1 + L2 的最终评分，所有路径统一
+提供了三层评分架构，所有整定算法必须按照此规范统一打分。
 
-==============================================================================
-Layer 1 统一输入格式 (核心: 所有路径必须产出相同格式的 cl_metrics)
-==============================================================================
+📌【核心接口说明】📌
 
-    performance_score(cl_metrics) → (score: 0-10, details: dict)
+1. 一键全自动打分 (推荐所有整定算法使用!)
+----------------------------------------
+接口: `ModelRating.evaluate(model_params, pid_params, **kwargs)`
+输入:
+    - model_params (Dict): 用来充当考场的虚拟沙盘，必须包含 {'K', 'T1', 'T2', 'L'}。
+                           如果方法算不出全局参数(如振荡/继电)，必须提交倒推的局域参数。
+    - pid_params (Dict):   考生的控制参数，必须包含 {'Kp', 'Ki', 'Kd'} 或 {'pb', 'ti', 'td'}。
+    - **kwargs: 
+        - method (str): 算法名称 ('model_identification' / 'oscillation' / 'llm' / 'relay')
+        - method_confidence (float): (可选) 该算法第二层的背景置信分。如果传了，会自动算 Layer 3 总分。
+        - method_confidence_details (Dict): (可选) 置信度计算细节明细。
+        - 仿真环境参数 (loop_type, sp_initial, sp_final, n_steps, dt)
+输出 (Dict): 
+    {
+        'performance_score': 8.5,           # Layer 1 仿真控制品质得分 (0-10)
+        'performance_details': dict,        # 超调、时间等具体明细
+        'method_confidence': 0.8,           # Layer 2 算法置信度分数 (原样透传)
+        'method_confidence_details': dict,  # 原样透传
+        'final_rating': 8.35,               # Layer 3 考虑硬约束后的最终加权总分 (0-10)
+        'final_details': dict,              # 各层在计算总分时的生效权重信息
+        'simulation': dict,                 # 原始那 500 步的每一步历史仿真曲线数组
+    }
 
-    cl_metrics 统一包含 6 个字段 (不管从哪条路径来，格式相同):
-        is_stable:          bool   是否稳定
-        overshoot:          float  超调量 (%)         权重 25%
-        settling_time:      float  调节时间 (s)       权重 20%
-        steady_state_error: float  稳态误差 (%)       权重 25%
-        oscillation_count:  int    振荡次数           权重 15%
-        decay_ratio:        float  衰减比             权重 15%
+2. 手动三层打分接口 (用于特殊解耦场景)
+----------------------------------------
+如果你不想用上方的仿真器自动算，你需要自己走完三步：
 
-    各路径如何产出 cl_metrics (格式相同，来源不同):
-        模型辨识路径: K,T1,L + PID → 模型仿真    → cl_metrics  (模型准，仿真可靠)
-        振荡整定路径: 真实振荡数据  → 直接提取    → cl_metrics  (数据真实，无需仿真)
-        继电反馈路径: 继电实验数据  → 直接提取    → cl_metrics  (数据真实，无需仿真)
-        大模型路径:   K,T1,L + PID → 模型仿真    → cl_metrics  (可用 evaluate() 快捷调用)
+- [Layer 1 物理考核]
+  - 接口: `ModelRating.performance_score(metrics)`
+  - 输入: 一个具有特定属性的对象 (is_stable:bool, overshoot:float, settling_time:float, 
+          steady_state_error:float, oscillation_count:int, decay_ratio:float)
+  - 输出: `(score: float(0->10), details: dict)`
 
-==============================================================================
-Layer 2 各路径输入不同
-==============================================================================
+- [Layer 2 方法背调]
+  - 接口: 这里有 4 个不同的函数，因材施教 (例如 `llm_confidence`, `oscillation_confidence`)。
+  - 输入: 个性化指标。模型法看 `FusionResult`；LLM法看 `self_score`, `reasoning_quality`...
+  - 输出: `(confidence_score: float(0->1), details: dict)` 
 
-    2a model_id_confidence(fusion) → (confidence: 0-1, details)
-        R²质量 40% + 参数一致性 30% + 参数合理性 30%
-
-    2b oscillation_confidence(pid_params, osc_info, osc_result) → (conf, details, warnings)
-        数据质量 40% + 参数边界 30% + 方法可靠性 30%
-
-    2c relay_confidence(data_confidence, gain_margin, phase_margin) → (conf, details)
-        数据置信度 50% + 稳定性裕度 50%
-
-    2d llm_confidence(llm_self_score, ...) → (conf, details)
-        自评 20% + 参数合理性 25% + 推理 20% + 一致性 20% + 匹配 15%
-
-==============================================================================
-Layer 3 统一公式
-==============================================================================
-
-    final_rating(perf_score, method_confidence) → (final: 0-10, details)
-    公式: final = perf×0.7 + conf×10×0.3
-    硬约束: perf≤1→封顶3, perf≤3→封顶5, conf<0.2→封顶6
-
-==============================================================================
-快捷接口 (现在支持所有路径)
-==============================================================================
-
-    evaluate(model_params, pid_params, ...) → dict
-    功能: 自动执行 仿真→cl_metrics→L1→L2(可选)→L3(可选)
-    说明: 目前所有整定路径(包括振荡法和继电反馈)都具备了局域 K,T1,L 生成能力，均可直接调用此仿真入口。
+- [Layer 3 综合判决]
+  - 接口: `ModelRating.final_rating(performance_score, method_confidence)`
+  - 输入: 拿上述 L1 输出的 `score` 和 L2 输出的 `confidence` 传进来。
+  - 输出: `(final_score: float(0->10), details: dict)`。带有不合格自动熔断骨折机制。
 """
 
 from typing import Dict, List, Optional, Tuple
