@@ -142,7 +142,12 @@ class TuningMethodsMixin:
                 ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
                 
                 # Ti 限幅逻辑优化
-                if preset_ti_multiplier > 1.0:
+                is_integrating = preset.get('integrating_mode', False)
+                if is_integrating and T1 > 50.0:
+                    # 对于自带积分特性的系统（如Level），不能被极大T1拖慢积分响应
+                    # 直接使用 SIMC 针对近似积分过程的 Ti 推荐公式
+                    Ti = ti_limit_factor * (tau_c + L)
+                elif preset_ti_multiplier > 1.0:
                     Ti = min(T1 * preset_ti_multiplier, ti_limit_factor * (tau_c + L))
                 else:
                     Ti = min(T1, ti_limit_factor * (tau_c + L))
@@ -159,7 +164,14 @@ class TuningMethodsMixin:
                 if denom < self._epsilon:
                     return self._get_fallback_params(Ti_override=T1 + L / 2)
                 Kp = (T1 + L / 2) / denom
-                Ti = T1 + L / 2
+                
+                is_integrating = preset.get('integrating_mode', False)
+                if is_integrating and T1 > 50.0:
+                    # Lambda针对近似积分的推荐
+                    Ti = 4 * (lambda_val + L)
+                else:
+                    Ti = T1 + L / 2
+                
                 Td = T1 * L / (2 * T1 + L) if (2 * T1 + L) > self._epsilon else 0.0
         
         # 应用回路预设的Ti乘数

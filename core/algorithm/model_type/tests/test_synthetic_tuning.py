@@ -1087,6 +1087,15 @@ def generate_oscillation_data() -> Tuple[List[Dict], Dict, Dict]:
     dt = cfg['dt']
     sv = cfg['sv']
     
+    # [FIX] 对小增益系统，确保SV可达，避免MV始终在100%饱和
+    max_achievable_pv = cfg['process_original']['K'] * 90.0  # 假定最大安全MV为90
+    if max_achievable_pv > 0 and sv > max_achievable_pv:
+        sv = max_achievable_pv
+    elif max_achievable_pv < 0 and sv < max_achievable_pv:
+        sv = max_achievable_pv
+        
+    cfg['sv'] = sv  # Update in cfg so other parts use the clamped sv
+    
     # 使用工厂函数创建过程模型
     process = create_process(cfg['process_original'], cfg, dt)
     
@@ -1179,6 +1188,15 @@ def generate_step_response_data() -> Tuple[List[Dict], Dict, Dict]:
     cfg = CONFIG
     dt = cfg['dt']
     sv = cfg['sv']
+    
+    # [FIX] 对小增益系统，确保SV可达，避免MV始终在100%饱和
+    max_achievable_pv = cfg['process_original']['K'] * 90.0  # 假定最大安全MV为90
+    if max_achievable_pv > 0 and sv > max_achievable_pv:
+        sv = max_achievable_pv
+    elif max_achievable_pv < 0 and sv < max_achievable_pv:
+        sv = max_achievable_pv
+        
+    cfg['sv'] = sv  # Update in cfg so other parts use the clamped sv
     
     K = cfg['process_original']['K']
     T1 = cfg['process_original']['T1']
@@ -2338,6 +2356,14 @@ def generate_scenario_data(scenario: Dict, seed: int = None) -> Tuple[List[Dict]
     
     dt = 1.0
     sv = 50.0
+    
+    # [FIX] 对小增益系统，确保SV可达，避免MV始终在100%饱和
+    max_achievable_pv = scenario['process_original']['K'] * 90.0  # 假定最大安全MV为90
+    if max_achievable_pv > 0 and sv > max_achievable_pv:
+        sv = max_achievable_pv
+    elif max_achievable_pv < 0 and sv < max_achievable_pv:
+        sv = max_achievable_pv
+        
     noise_std = scenario.get('noise_std', 0.2)
     
     # 获取原始过程参数

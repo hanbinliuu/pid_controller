@@ -110,11 +110,15 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign)
         Ki = Kp / Ti if Ti > self._epsilon else 0.0
         Kd = Kp * Td
+        pb = 100.0 / Kp if abs(Kp) > self._epsilon else 100.0
         
         return {
-            'Kp': round(float(Kp), 2),
-            'Ki': round(float(Ki), 2),
-            'Kd': round(float(Kd), 2)
+            'Kp': round(float(Kp), 4),
+            'Ki': round(float(Ki), 4),
+            'Kd': round(float(Kd), 4),
+            'Ti': round(float(Ti), 4),
+            'Td': round(float(Td), 4),
+            'pb': round(float(pb), 2)
         }
     
     def _calculate_conservative_level(self, quality_info: Optional[DataQualityInfo],

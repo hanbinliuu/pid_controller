@@ -283,23 +283,6 @@ class TuningMethodSelector(LoggerMixin):
             model_type='FOPDT', lambda_factor=actual_lambda, method='lambda'
         )
         
-        # [NEW] Level 回路 Ti/PB 保障
-        if loop_type == 'level':
-            # Ti 至少 60s（液位积分过程需要非常慢的积分作用）
-            if pid_params.get('ti', 0) < 60.0:
-                old_ti = pid_params.get('ti', 10.0)
-                pid_params['ti'] = max(60.0, old_ti * 3.0)
-                if pid_params.get('Kp', 0) != 0:
-                    pid_params['Ki'] = abs(pid_params['Kp']) / pid_params['ti']
-                self.log(f"   🧊 Level Ti 保障: {old_ti:.1f}s → {pid_params['ti']:.1f}s")
-            
-            # PB 至少 150%（液位控制需要足够大的比例带）
-            current_pb = pid_params.get('pb', 100.0 / max(abs(pid_params.get('Kp', 1.0)), 0.01))
-            if current_pb < 150.0:
-                pid_params['pb'] = 150.0
-                pid_params['Kp'] = 100.0 / 150.0  # ≈ 0.667
-                pid_params['Ki'] = abs(pid_params['Kp']) / pid_params['ti']
-                self.log(f"   🧊 Level PB 保障: {current_pb:.1f}% → 150.0%")
         
         return TuningMethodResult(
             method=TuningMethod.MODEL_BASED, confidence=chars.step_quality,

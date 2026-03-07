@@ -60,11 +60,11 @@ LOOP_TYPE_PRESETS = {
     # ========== 压力回路 ==========
     # 特点：快速响应、可能有压缩性
     'pressure': {
-        'pb_min': 60.0,           # 压力回路 pb_min 放宽 [80→60，行业典型下限 50-80%]
+        'pb_min': 80.0,           # 压力回路 pb_min 放宽 [60→80，增加阻尼防止小幅高频振荡]
         'pb_max': 300.0,          # 上限保持
-        'tau_c_factor': 1.5,      # τc适中，增加阻尼
-        'safety_factor': 1.05,    # 安全系数降低 [1.15→1.05，与 flow 对齐]
-        'ti_multiplier': 1.05,    # Ti标准 (1.1 -> 1.05)
+        'tau_c_factor': 1.8,      # τc适中，增加阻尼 [1.5 -> 1.8，平缓响应]
+        'safety_factor': 1.05,    # 安全系数保持 [1.05]
+        'ti_multiplier': 1.05,    # Ti标准 (1.05)
         'td_enable': True,        # 可用微分改善响应
         'td_ratio': 0.15,         # Td = Ti * 0.15
         'td_max': 10.0,           # Td绝对上限10s [工业压力回路标准]

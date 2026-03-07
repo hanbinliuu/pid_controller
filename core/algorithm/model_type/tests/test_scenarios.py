@@ -64,7 +64,7 @@ TEST_SCENARIOS = [
         'description': '液位回路振荡（积分特性+增益增加）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 6.0},
         'process_changed': {'K': 0.30, 'T1': 80.0, 'L': 8.0},  # 更大的增益变化
-        'original_pid': {'Kp': 1.50, 'Ki': 0.750, 'Kd': 0.0},  # 更激进的PID
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0750, 'Kd': 0.0},  # 更激进的PID
         'loop_type': 'level',
     },
     # ========== 数据质量挑战 ==========
@@ -133,7 +133,7 @@ TEST_SCENARIOS = [
         'description': '时间常数主导（L/T1 < 0.1）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 4.0},
         'process_changed': {'K': 0.36, 'T1': 80.0, 'L': 6.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.600, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0600, 'Kd': 0.0},
         'loop_type': 'level',
     },
     # ========== 新增场景：工业常见情况 ==========
@@ -182,7 +182,7 @@ TEST_SCENARIOS = [
         'description': '储罐液位晃动（液位回路振荡）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 5.0},
         'process_changed': {'K': 0.70, 'T1': 80.0, 'L': 10.0},  # 更大的变化
-        'original_pid': {'Kp': 1.50, 'Ki': 0.450, 'Kd': 0.0},  # 更激进的PID
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0450, 'Kd': 0.0},  # 更激进的PID
         'loop_type': 'level',
     },
     # ========== 新增：更多实际工业场景 ==========
@@ -191,7 +191,7 @@ TEST_SCENARIOS = [
         'description': '增益比变化（小增益变大增益）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 6.0},  # 小增益
         'process_changed': {'K': 0.70, 'T1': 80.0, 'L': 6.0},   # 增益变大约3倍
-        'original_pid': {'Kp': 1.50, 'Ki': 0.540, 'Kd': 0.0},    # 针对小增益整定的PID
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0540, 'Kd': 0.0},    # 针对小增益整定的PID
         'loop_type': 'level',
     },
     {
@@ -268,7 +268,7 @@ TEST_SCENARIOS = [
         'description': '积分过程（液位控制，增益大幅变化）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 6.0},
         'process_changed': {'K': 0.70, 'T1': 80.0, 'L': 6.0},  # 增益变化3倍+，确保振荡
-        'original_pid': {'Kp': 1.50, 'Ki': 0.450, 'Kd': 0.0},  # 更激进的PID
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0450, 'Kd': 0.0},  # 更激进的PID
         'loop_type': 'level',
     },
     {
@@ -293,7 +293,7 @@ TEST_SCENARIOS = [
         'description': '小增益系统（K < 0.5）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 8.0},  # 增大K使其更可辨识
         'process_changed': {'K': 0.30, 'T1': 80.0, 'L': 7.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.900, 'Kd': 0.0},  # 适中的高Kp
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0900, 'Kd': 0.0},  # 适中的高Kp
         'loop_type': 'level',
     },
     {
@@ -430,7 +430,7 @@ TEST_SCENARIOS = [
         'description': '积分液位回路 - 大时间常数模拟积分',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 5.0},
         'process_changed': {'K': 0.40, 'T1': 80.0, 'L': 10.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'loop_type': 'level',
     },
     {
@@ -578,7 +578,7 @@ TEST_SCENARIOS = [
         'description': '时间常数梯度 - T1=80s 液位',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 5.0},
         'process_changed': {'K': 0.50, 'T1': 80.0, 'L': 10.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.225, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0225, 'Kd': 0.0},
         'loop_type': 'level',
     },
     {
@@ -586,7 +586,7 @@ TEST_SCENARIOS = [
         'description': '时间常数梯度 - T1=120s 极慢液位',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 8.0},
         'process_changed': {'K': 0.40, 'T1': 120.0, 'L': 12.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'loop_type': 'level',
     },
     
@@ -646,7 +646,7 @@ TEST_SCENARIOS = [
         'description': '组合变化 - K=2.5 T1=70 液位',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 5.0},
         'process_changed': {'K': 0.80, 'T1': 80.0, 'L': 10.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.225, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0225, 'Kd': 0.0},
         'loop_type': 'level',
     },
     {
@@ -730,7 +730,7 @@ TEST_SCENARIOS = [
         'description': '鲁棒性测试 - 近似积分过程 (大K大T)',
         'process_original': {'K': 1.67, 'T1': 80.0, 'L': 5.0},
         'process_changed': {'K': 3.33, 'T1': 80.0, 'L': 10.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'loop_type': 'level',
     },
     {
@@ -748,7 +748,7 @@ TEST_SCENARIOS = [
         'description': '工业场景 - 锅炉虚假水位 (反向响应)',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 5.0},
         'process_changed': {'K': -1.50, 'T1': 80.0, 'L': 10.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.375, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0375, 'Kd': 0.0},
         'loop_type': 'level',
     },
     {
@@ -808,7 +808,7 @@ TEST_SCENARIOS = [
         'description': '极端场景 - 极慢T1=200s + 大滞后 + 增益x8',
         'process_original': {'K': 0.50, 'T1': 80.0, 'L': 40.0},
         'process_changed': {'K': 4.00, 'T1': 80.0, 'L': 80.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'noise_std': 0.6,
         'loop_type': 'level',
     },
@@ -817,7 +817,7 @@ TEST_SCENARIOS = [
         'description': '极端场景 - 反向响应(K变负) + 高噪声 + 增益x5',
         'process_original': {'K': 1.00, 'T1': 100.0, 'L': 8.0},
         'process_changed': {'K': -5.00, 'T1': 100.0, 'L': 15.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.750, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0750, 'Kd': 0.0},
         'noise_std': 1.5,
         'loop_type': 'level',
     },
@@ -898,7 +898,7 @@ TEST_SCENARIOS = [
         'description': '正常阶跃响应 - 液位回路基准（无振荡）',
         'process_original': {'K': 0.50, 'T1': 100.0, 'L': 5.0},
         'process_changed': {'K': 0.60, 'T1': 100.0, 'L': 7.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.225, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0225, 'Kd': 0.0},
         'loop_type': 'level',
         'expected_stable': True,
     },
@@ -918,7 +918,7 @@ TEST_SCENARIOS = [
         'description': '真实积分液位过程 - 无自稳定',
         'process_original': {'K': 0.50, 'T1': 100.0, 'L': 3.0},  # K 是积分增益
         'process_changed': {'K': 0.80, 'T1': 100.0, 'L': 5.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'loop_type': 'level',
         'process_type': 'integrating',  # 使用 IntegratingProcess
     },
@@ -936,7 +936,7 @@ TEST_SCENARIOS = [
         'description': '锅炉虚假水位 - 反向响应',
         'process_original': {'K': 1.00, 'T1': 100.0, 'L': 5.0, 'K_inv': 0.3, 'T_inv': 8.0},
         'process_changed': {'K': 1.50, 'T1': 100.0, 'L': 8.0, 'K_inv': 0.4, 'T_inv': 6.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.450, 'Kd': 0.5},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0450, 'Kd': 0.5},
         'loop_type': 'level',
         'process_type': 'inverse_response',  # 使用 InverseResponseProcess
     },
@@ -1176,7 +1176,7 @@ REALISTIC_SCENARIOS = [
         'description': '液位回路 - 储罐液面形状变化（锥形底）',
         'process_original': {'K': 1.00, 'T1': 100.0, 'L': 5.0},
         'process_changed': {'K': 1.50, 'T1': 100.0, 'L': 10.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 1.800, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.1800, 'Kd': 0.0},
         'loop_type': 'level',
         'amplitude_factors': [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
     },
@@ -1185,7 +1185,7 @@ REALISTIC_SCENARIOS = [
         'description': '液位回路 - 出口流量变化（下游负荷）',
         'process_original': {'K': 1.00, 'T1': 100.0, 'L': 4.0},
         'process_changed': {'K': 1.40, 'T1': 100.0, 'L': 9.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 1.800, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.1800, 'Kd': 0.0},
         'loop_type': 'level',
         'amplitude_factors': [0.8, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2],
     },
@@ -1255,7 +1255,7 @@ REALISTIC_SCENARIOS = [
         'description': '积分液位回路 - 大时间常数模拟积分',
         'process_original': {'K': 0.80, 'T1': 80.0, 'L': 5.0},
         'process_changed': {'K': 1.20, 'T1': 80.0, 'L': 10.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'loop_type': 'level',
         'amplitude_factors': [1.0],
     },
@@ -1347,7 +1347,7 @@ REALISTIC_SCENARIOS = [
         'description': '极端场景 - 极慢T1=200s + 大滞后 + 增益x8',
         'process_original': {'K': 0.50, 'T1': 80.0, 'L': 40.0},  # T1>100 → +2, L/T=0.2
         'process_changed': {'K': 4.00, 'T1': 80.0, 'L': 80.0},   # K变化x8 → +3, L/T=0.53 → +2
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'noise_std': 0.6,                                         # 中等噪声 → +2
         'loop_type': 'level',
     },
@@ -1358,7 +1358,7 @@ REALISTIC_SCENARIOS = [
         'description': '极端场景 - 反向响应(K变负) + 高噪声 + 增益x5',
         'process_original': {'K': 1.00, 'T1': 100.0, 'L': 8.0},
         'process_changed': {'K': -5.00, 'T1': 100.0, 'L': 15.0},   # 反向响应 → +3, K变化x5 → +3
-        'original_pid': {'Kp': 1.50, 'Ki': 0.750, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0750, 'Kd': 0.0},
         'noise_std': 1.5,                                         # 极高噪声 → +3
         'loop_type': 'level',
     },
@@ -1385,7 +1385,7 @@ REALISTIC_SCENARIOS = [
         'description': '大储罐液位（近积分，T1=2000s）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 5.0},
         'process_changed': {'K': 0.30, 'T1': 80.0, 'L': 8.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'loop_type': 'level',
     },
     {
@@ -1393,7 +1393,7 @@ REALISTIC_SCENARIOS = [
         'description': '塔底液位（近积分，T1=800s，较快）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 3.0},
         'process_changed': {'K': 0.50, 'T1': 80.0, 'L': 5.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'loop_type': 'level',
     },
     {
@@ -1401,7 +1401,7 @@ REALISTIC_SCENARIOS = [
         'description': '分液罐液位（近积分，受上游扰动大）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 4.0},
         'process_changed': {'K': 0.30, 'T1': 80.0, 'L': 6.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'noise_std': 0.8,
         'loop_type': 'level',
     },
@@ -1410,7 +1410,7 @@ REALISTIC_SCENARIOS = [
         'description': '液位溢出风险（高液位运行，变化敏感）',
         'process_original': {'K': 0.30, 'T1': 80.0, 'L': 3.0},
         'process_changed': {'K': 0.30, 'T1': 80.0, 'L': 5.0},
-        'original_pid': {'Kp': 1.50, 'Ki': 0.300, 'Kd': 0.0},
+        'original_pid': {'Kp': 1.50, 'Ki': 0.0300, 'Kd': 0.0},
         'loop_type': 'level',
     },
     
