@@ -27,8 +27,6 @@ from core.client.bff_model_client import BFFModelClient
 from core.client.select_tsdb_client import get_default_database
 from core.algorithm.tuning_segment.stability_detector import find_high_variability_periods
 from core.algorithm.model_type.model_selector import ModelSelector
-from core.algorithm.model_type.tuning_difficulty_analyzer import TuningDifficultyAnalyzer
- 
 
 # ============================================================
 # 配置区域 - 修改这里的参数进行测试
@@ -220,25 +218,7 @@ def run_model_selector(data: List[Dict], qualified_windows: List[Dict],
             for k, v in quality_report['stats'].items():
                 print(f"      {k}: {v}")
     
-    # 🆕 整定难度分析
-    if verbose:
-        print("\n🎯 整定难度分析:")
-        pv_array, sv_array, mv_array, timestamps = convert_to_arrays(data)
-        difficulty_analyzer = TuningDifficultyAnalyzer()
-        difficulty_result = difficulty_analyzer.analyze(
-            pv_array, mv_array, sv_array, timestamps, loop_type='unknown'
-        )
-        print(f"   难度评分: {difficulty_result['difficulty_score']:.1f}/10 ({difficulty_result['difficulty_level_cn']})")
-        if difficulty_result['issues']:
-            print("   检测到的问题:")
-            for issue in difficulty_result['issues']:
-                severity_icon = {'low': '🟡', 'medium': '🟠', 'high': '🔴'}.get(issue['severity'], '⚪')
-                print(f"      {severity_icon} {issue['name_cn']}: {issue['evidence']}")
-        if difficulty_result['recommendations']:
-            print("   整定建议:")
-            for rec in difficulty_result['recommendations']:
-                print(f"      • {rec}")
-    
+
     # 构造新格式输入
     # response_mode: 'fast' (快速响应，允许超调), 'balanced' (默认), 'conservative' (保守，无超调)
     input_data = {
