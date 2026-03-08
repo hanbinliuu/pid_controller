@@ -12,11 +12,11 @@ class SegmentationStage(PipelineStage):
     4. 智能降采样
     5. 分类为整定段和振荡段
     """
-    def __init__(self, segment_processor, oscillation_tuner, orchestrator_ref, logger_mixin=None):
+    def __init__(self, segment_processor, segment_manager, oscillation_tuner, logger_mixin=None):
         super().__init__(logger_mixin)
         self._segment_processor = segment_processor
+        self._segment_manager = segment_manager
         self._oscillation_tuner = oscillation_tuner
-        self._orchestrator_ref = orchestrator_ref
 
     def _check_mv_no_change(self, segments: list) -> bool:
         """检查MV是否基本无变化"""
@@ -74,7 +74,7 @@ class SegmentationStage(PipelineStage):
             
             if tuning_segs_mv:
                 self.log(f"✅ 找到 {len(tuning_segs_mv)} 个整定段")
-                valid_segments, segment_results = self._orchestrator_ref._merge_tuning_and_disturbance(
+                valid_segments, segment_results = self._segment_manager.merge_tuning_and_disturbance(
                     tuning_segs_mv, tuning_results_mv, disturbance_segs, disturbance_results, context.hist_data
                 )
             else:
@@ -101,7 +101,7 @@ class SegmentationStage(PipelineStage):
         
         # 4. 降采样
         if context.enable_downsample and valid_segments:
-            valid_segments = self._orchestrator_ref._apply_smart_downsample(valid_segments, context.downsample_target)
+            valid_segments = self._segment_manager.apply_smart_downsample(valid_segments, context.downsample_target)
             
         if not valid_segments:
             self.log("⚠️ 无有效段(降采样后被清空)")
@@ -116,7 +116,7 @@ class SegmentationStage(PipelineStage):
         self.log(f"📊 最终有效段: {len(valid_segments)} 个")
         
         # 5. 分类为整定段与振荡段
-        tuning_segs, tuning_results, osc_segs, osc_results = self._orchestrator_ref._classify_and_prioritize_segments(
+        tuning_segs, tuning_results, osc_segs, osc_results = self._segment_manager.classify_and_prioritize_segments(
             valid_segments, segment_results
         )
         
