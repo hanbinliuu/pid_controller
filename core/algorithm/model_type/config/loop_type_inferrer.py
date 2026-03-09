@@ -248,8 +248,7 @@ def _estimate_response_delay(pv: np.ndarray, mv: np.ndarray, dt: float) -> float
 
 def infer_loop_type(
     model_params: Dict[str, float],
-    model_type: str,
-    data_features: Optional[Dict[str, Any]] = None
+    model_type: str
 ) -> Tuple[str, float, str]:
     """
     根据模型参数和类型推断回路类型（精确推断）
@@ -262,10 +261,6 @@ def infer_loop_type(
             - L: 纯滞后时间
         model_type: 辨识出的模型类型
             ('FO', 'FOPDT', 'SO', 'SOPDT', 'FO_INTEGRATOR' 等)
-        data_features: 额外数据特征（可选）
-            - avg_oscillation: 平均振荡比
-            - response_time: 响应时间估计
-            - steady_state_error: 稳态误差
 
     Returns:
         (loop_type, confidence, reason) 三元组

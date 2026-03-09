@@ -53,7 +53,6 @@ class ClosedLoopIdentifier:
                  mv: np.ndarray,
                  timestamp: np.ndarray,
                  current_pid: Dict,
-                 fitted_K_cl: float,
                  fitted_T1_cl: float,
                  fitted_L_cl: float) -> ClosedLoopResult:
         """

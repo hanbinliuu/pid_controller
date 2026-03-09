@@ -149,7 +149,6 @@ class FusionStage(PipelineStage):
                     mv=seg.mv,
                     timestamp=seg.timestamp,
                     current_pid=current_pid,
-                    fitted_K_cl=fusion.K,
                     fitted_T1_cl=fusion.T1,
                     fitted_L_cl=fusion.L
                 )

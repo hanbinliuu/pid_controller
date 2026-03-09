@@ -27,7 +27,7 @@
 """
 
 import numpy as np
-from scipy.optimize import least_squares, minimize
+from scipy.optimize import least_squares
 from typing import Dict, Tuple, Optional, List, Any
 from dataclasses import dataclass
 

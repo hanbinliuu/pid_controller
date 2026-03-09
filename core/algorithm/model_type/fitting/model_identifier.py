@@ -632,7 +632,7 @@ class ModelIdentifier:
         return np.clip(T_est, 5.0, 300.0)
     
     @staticmethod
-    def estimate_initial_guess_from_operational_data(t, y, u, y0, sv=None, current_pid_params=None, use_closed_loop=False, controller_sign=None):
+    def estimate_initial_guess_from_operational_data(t, y, u, y0, controller_sign=None):
         """从正常运行数据估计 FOPDT 参数初始值"""
         n = len(t)
         if n < 20:
@@ -792,7 +792,7 @@ class ModelIdentifier:
         return ModelIdentifier._clip_params(params, model_type)
     
     @staticmethod
-    def identify_fopdt(t, y, u, sv=None, current_pid_params=None, controller_sign=None):
+    def identify_fopdt(t, y, u, controller_sign=None):
         """辨识FOPDT模型参数"""
         return ModelIdentifier._identify_model_unified(t, y, u, 'FOPDT', controller_sign=controller_sign)
     

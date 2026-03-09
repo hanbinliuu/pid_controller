@@ -95,8 +95,7 @@ class UnifiedModelSelector(LoggerMixin):
         self._init_logger(verbose)
         self._epsilon = Config.EPSILON
     
-    def select_unified_model_type(self, segment_fits: List[SegmentModelFit], 
-                                   return_need_fulldata: bool = False) -> Tuple[str, str, bool]:
+    def select_unified_model_type(self, segment_fits: List[SegmentModelFit]) -> Tuple[str, str, bool]:
         """
         统一模型类型选择
         
