@@ -172,7 +172,7 @@ class TuningMethodSelector(LoggerMixin):
         3. 选择稳定性最好的方法
         """
         if not segments:
-            return self._conservative_fallback("无有效数据段")
+            return self._conservative_fallback("无有效数据段", loop_type=loop_type)
         
         all_pv = np.concatenate([seg.pv for seg in segments])
         all_mv = np.concatenate([seg.mv for seg in segments])
@@ -199,7 +199,7 @@ class TuningMethodSelector(LoggerMixin):
                 candidates.append(relay_result)
         
         if not candidates:
-            return self._conservative_fallback("无可用整定方法")
+            return self._conservative_fallback("无可用整定方法", loop_type=loop_type)
         
         # 3. 基于稳定性裕度选择最优方法
         best = self._select_best_by_stability(candidates)
@@ -262,7 +262,7 @@ class TuningMethodSelector(LoggerMixin):
         """模型辨识法整定"""
         self.log("\n🔧 使用模型辨识法整定")
         if model_params is None or model_params.get('K', 0) == 0:
-            return self._conservative_fallback("模型参数无效")
+            return self._conservative_fallback("模型参数无效", loop_type=loop_type)
         
         K = model_params.get('K', 1.0)
         T1 = model_params.get('T1', 10.0)
@@ -299,7 +299,7 @@ class TuningMethodSelector(LoggerMixin):
         
         relay_result = RelayIdentifier.estimate_critical_params(all_pv, all_mv, dt)
         if relay_result is None:
-            return self._conservative_fallback("无法从振荡数据提取临界参数")
+            return self._conservative_fallback("无法从振荡数据提取临界参数", loop_type=self._loop_type)
         
         Ku, Pu = relay_result.Ku, relay_result.Pu
         self.log(f"   临界参数: Ku={Ku:.3f}, Pu={Pu:.1f}s")
@@ -366,10 +366,22 @@ class TuningMethodSelector(LoggerMixin):
         result.stability_margins = margins
         return result
     
-    def _conservative_fallback(self, reason: str) -> TuningMethodResult:
+    def _conservative_fallback(self, reason: str, loop_type: str = 'flow') -> TuningMethodResult:
         """保守 fallback 整定"""
         self.log(f"   ⚠️ 使用保守fallback: {reason}")
-        pid_params = {'Kp': 0.5, 'Ki': 0.02, 'Kd': 0.0, 'Ti': 25.0, 'Td': 0.0, 'pb': 200.0, 'method': 'conservative_fallback'}
+        from core.algorithm.model_type.tuning.strategies.loop_type_strategies import get_loop_strategy
+        strategy = get_loop_strategy(loop_type)
+        fallback_cfg = strategy.get_fallback_params()
+        
+        # 将获取的 fallback params 转换为最终 pid 输出格式
+        # PB 转换为 Kp, Kp = 100 / PB * sign，这里为了保守，不处理符号，后续统一处理
+        pb = fallback_cfg.get('pb_base', 200.0)
+        ti = fallback_cfg.get('fallback_ti', 25.0)
+        
+        Kp = 100.0 / max(pb, 1.0)
+        Ki = Kp / ti if ti > 0 else 0.0
+        
+        pid_params = {'Kp': Kp, 'Ki': Ki, 'Kd': 0.0, 'Ti': ti, 'Td': 0.0, 'pb': pb, 'method': 'conservative_fallback'}
         return TuningMethodResult(
             method=TuningMethod.CONSERVATIVE, confidence=0.3, pid_params=pid_params,
             reasoning=f"保守fallback: {reason}", warnings=[reason]

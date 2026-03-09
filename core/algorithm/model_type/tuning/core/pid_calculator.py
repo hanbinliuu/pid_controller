@@ -42,12 +42,16 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         self._epsilon = EPSILON
         self._pid_constraints = Config.PID_CONSTRAINTS
     
-    def _get_fallback_params(self, Ti_override: float = None) -> Tuple[float, float, float]:
+    def _get_fallback_params(self, Ti_override: float = None, loop_type: str = 'flow') -> Tuple[float, float, float]:
         """获取回退PID参数"""
-        cfg = self._pid_constraints
-        Kp = cfg.get('fallback_kp', 1.0)
-        Ti = Ti_override if Ti_override is not None else cfg.get('fallback_ti', 20.0)
-        Td = cfg.get('fallback_td', 0.0)
+        from core.algorithm.model_type.tuning.strategies.loop_type_strategies import get_loop_strategy
+        strategy = get_loop_strategy(loop_type)
+        fallback_cfg = strategy.get_fallback_params()
+        
+        pb = fallback_cfg.get('pb_base', 200.0)
+        Kp = 100.0 / max(pb, 1.0)
+        Ti = Ti_override if Ti_override is not None else fallback_cfg.get('fallback_ti', 20.0)
+        Td = 0.0
         return Kp, Ti, Td
     
     def _get_max_kp(self, pb_min: float) -> float:
@@ -103,8 +107,7 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
             Kp, Ti, Td = self._tune_nonlinear(K_abs, T1, L, lambda_factor, method,
                                                conservative_level, pb_min, model_type)
         else:
-            fallback = self._pid_constraints
-            Kp, Ti, Td = fallback['fallback_kp'], fallback['fallback_ti'], fallback['fallback_td']
+            Kp, Ti, Td = self._get_fallback_params(loop_type=loop_type)
         
         Kp = Kp * K_sign
         Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign)

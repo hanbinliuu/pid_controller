@@ -192,18 +192,23 @@ class FusionStage(PipelineStage):
         fusion.T1 = T1_corrected
         return fusion
 
-    def _auto_infer_loop_type(self, context: TuningContext, fusion_result: FusionResult, model_type: str, segment_results: List[SegmentResult] = None):
-        """Step 4.6: 回路类型精确推断（基于模型参数）"""
+    def _verify_loop_type(self, context: TuningContext, fusion_result: FusionResult, model_type: str, segment_results: List[SegmentResult] = None):
+        """Step 4.6: 回路类型精确校验（基于模型参数验证早期推断），不发生覆盖"""
         process_context = context.process_context or {}
-        if process_context:
-            loop_type_source = process_context.get('loop_type_source', '')
-            current_loop_type = process_context.get('loop_type', '')
-            if current_loop_type and loop_type_source not in ('early_data', ''):
-                self.log(f"   📊 Step 4.6: 回路类型（外部指定: {current_loop_type}）")
-                return
         
+        # 如果外部没有明确指定基础回路类型，则尝试使用早期基于数据特征的推断
+        if not process_context:
+            return
+            
+        early_loop_type = process_context.get('loop_type', '')
+        loop_type_source = process_context.get('loop_type_source', '')
+        
+        if not early_loop_type or loop_type_source == 'model_params':
+            # This shouldn't normally happen, but defensively return if we somehow don't have an early type
+            return
+
         if abs(fusion_result.K) < 1e-6 or fusion_result.T1 < 1e-6:
-            self.log(f"   ⚠️ 模型参数无效(K={fusion_result.K:.4f}, T1={fusion_result.T1:.2f})，跳过模型推断")
+            self.log(f"   ⚠️ 模型参数无效(K={fusion_result.K:.4f}, T1={fusion_result.T1:.2f})，跳过模型推断验证")
             return
         
         model_params = {
@@ -214,16 +219,14 @@ class FusionStage(PipelineStage):
         }
         
         loop_type, confidence, reason = infer_loop_type(model_params, model_type)
-        
         early_confidence = process_context.get('loop_type_confidence', 0)
-        early_loop_type = process_context.get('loop_type', '')
         
         self.log(f"\\n{'='*60}")
-        self.log("📊 Step 4.6: 回路类型精确推断（基于模型参数）")
+        self.log("📊 Step 4.6: 回路类型精确验证（基于模型参数）")
         self.log('='*60)
         self.log(f"   {format_inference_log(loop_type, confidence, reason)}")
         
-        if early_loop_type and early_loop_type != loop_type:
+        if early_loop_type != loop_type:
             is_oscillating = False
             max_osc_ratio = 0.0
             if segment_results:
@@ -232,28 +235,18 @@ class FusionStage(PipelineStage):
                     is_oscillating = True
             
             if is_oscillating:
-                self.log(f"   ⚠️ 检测到振荡(ratio={max_osc_ratio:.2f})，禁止模型推断覆盖早期推断")
+                self.log(f"   ⚠️ 检测到振荡(ratio={max_osc_ratio:.2f})，抑制模型推断告警")
                 self.log(f"   → 保持早期推断: {early_loop_type}(置信度{early_confidence:.0%})，防止模型参数失真误判")
                 return
 
             if confidence > early_confidence:
-                self.log(f"   ↑ 覆盖早期推断: {early_loop_type}(置信度{early_confidence:.0%}) → {loop_type}(置信度{confidence:.0%})")
+                self.log(f"   ⚠️ 警告：基于模型参数推断的回路类型({loop_type}, 置信度{confidence:.0%})与早期推断({early_loop_type}, 置信度{early_confidence:.0%})不符！")
+                self.log(f"   → 坚持不可变上下文原则，维持原回路类型: {early_loop_type}")
             else:
                 self.log(f"   → 保持早期推断: {early_loop_type}(置信度{early_confidence:.0%})，模型推断置信度不足")
                 return
-        elif early_loop_type == loop_type:
-            self.log(f"   ✓ 与早期推断一致: {loop_type}")
-        
-        context.process_context['loop_type'] = loop_type
-        context.process_context['loop_type_inferred'] = True
-        context.process_context['loop_type_confidence'] = confidence
-        context.process_context['loop_type_source'] = 'model_params'
-        
-        loop_name = context.process_context.get('loop_name', '')
-        # update oscillation tuner loop_type explicitly
-        self._oscillation_tuner.set_llm_client(self._oscillation_tuner._llm_client, loop_type, loop_name)
-        
-        fusion_result.loop_type = loop_type
+        else:
+            self.log(f"   ✓ 模型参数验证与早期推断一致: {loop_type}")
 
     def execute(self, context: TuningContext) -> TuningContext:
         """执行参数融合与选择"""
@@ -283,14 +276,10 @@ class FusionStage(PipelineStage):
             corrected_T1 = fusion_result.T1
             corrected_K = fusion_result.K
             
-        # 4. 回路类型精确推断
-        self._auto_infer_loop_type(
+        # 4. 回路类型精确校验
+        self._verify_loop_type(
             context, fusion_result, best_model_type, context.segment_results_fitted
         )
-        
-        # Update context
-        if fusion_result.loop_type != context.loop_type:
-            context.loop_type = fusion_result.loop_type
             
         context.fusion_result = fusion_result
         context.corrected_T1 = corrected_T1
