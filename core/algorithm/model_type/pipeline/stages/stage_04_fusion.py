@@ -1,14 +1,14 @@
 import numpy as np
 from typing import List, Dict, Any
 
-from core.algorithm.model_type.data_models import FusionResult, SegmentResult, HistoricalData
-from core.algorithm.model_type.fitting.type_selector import SegmentModelFit
-from core.algorithm.model_type.pipeline.context import TuningContext
-from core.algorithm.model_type.pipeline.stages.base_stage import PipelineStage
-from core.algorithm.model_type.config import ModelType
-from core.algorithm.model_type.utils import calculate_r2
-from core.algorithm.model_type.fitting.segment_fitter import SegmentFitter
-from core.algorithm.model_type.config.loop_type_inferrer import infer_loop_type, format_inference_log
+from ...data_models import FusionResult, SegmentResult, HistoricalData
+from ...fitting.type_selector import SegmentModelFit
+from ..context import TuningContext
+from .base_stage import PipelineStage
+from ...config import ModelType
+from ...utils import calculate_r2
+from ...fitting.segment_fitter import SegmentFitter
+from ...config.loop_type_inferrer import infer_loop_type, format_inference_log
 
 
 class FusionStage(PipelineStage):
@@ -127,7 +127,7 @@ class FusionStage(PipelineStage):
 
     def _apply_closed_loop_correction(self, fusion: FusionResult, current_pid: dict = None, sv_step_segments: list = None) -> FusionResult:
         """闭环数据修正（v4.0 CLHM+YS 升级版）"""
-        from core.algorithm.model_type.fitting.closed_loop_identifier import ClosedLoopIdentifier
+        from ...fitting.closed_loop_identifier import ClosedLoopIdentifier
         
         cfg = self._segment_processor._tuning_config
         fallback_factor = cfg.get('sv_closed_loop_t1_factor', 3.0)

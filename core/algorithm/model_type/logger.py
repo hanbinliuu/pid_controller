@@ -7,25 +7,26 @@
 主要组件
 --------
 - **get_logger**: 获取配置好的日志器实例
-- **LoggerMixin**: 日志混入类，为其他类提供统一的日志方法
+- **Logger**: 独立日志类，推荐通过组合方式使用（消除基类耦合）
+- **LoggerMixin**: 日志混入类（已弃用，保留向后兼容）
 
 使用方式
 --------
-1. 函数式使用::
+1. 推荐方式 - 组合::
 
-    logger = get_logger(__name__, verbose=True)
-    logger.info("处理中...")
+    class MyClass:
+        def __init__(self, verbose=False):
+            self._logger = Logger(verbose, name=self.__class__.__name__)
+        
+        def process(self):
+            self._logger.log("开始处理")
+            self._logger.log_debug("调试信息")
 
-2. 类混入使用::
+2. 旧方式 - 混入（向后兼容，不推荐新代码使用）::
 
     class MyClass(LoggerMixin):
         def __init__(self, verbose=False):
             self._init_logger(verbose)
-        
-        def process(self):
-            self.log("开始处理")
-            self.log_debug("调试信息")
-            self.log_warning("警告信息")
 """
 
 import logging
@@ -61,29 +62,35 @@ def get_logger(name: str, verbose: bool = False) -> logging.Logger:
     return logger
 
 
-class LoggerMixin:
+class Logger:
     """
-    日志混入类 - 为类提供统一的日志方法
+    独立日志类 - 推荐通过组合方式使用
     
     使用方式：
-        class MyClass(LoggerMixin):
+        class MyClass:
             def __init__(self, verbose=False):
-                self._init_logger(verbose)
+                self._logger = Logger(verbose, name=self.__class__.__name__)
             
             def some_method(self):
-                self.log("信息消息")
-                self.log_debug("调试消息")
-                self.log_warning("警告消息")
+                self._logger.log("信息消息")
+                self._logger.log_debug("调试消息")
+                self._logger.log_warning("警告消息")
     """
     
-    def _init_logger(self, verbose: bool = False):
-        """初始化日志器"""
-        self._verbose = verbose
-        self._logger = get_logger(self.__class__.__name__, verbose)
+    def __init__(self, verbose: bool = False, name: str = None):
+        """
+        初始化日志器
+        
+        Args:
+            verbose: 是否开启详细日志
+            name: 日志器名称（默认使用 'Logger'）
+        """
+        self.verbose = verbose
+        self._logger = get_logger(name or 'Logger', verbose)
     
     def log(self, msg: str):
         """输出信息日志（verbose模式下显示）"""
-        if self._verbose and self._logger:
+        if self.verbose and self._logger:
             self._logger.info(msg)
     
     def log_debug(self, msg: str):
@@ -100,3 +107,35 @@ class LoggerMixin:
         """输出错误日志（始终显示）"""
         if self._logger:
             self._logger.error(msg)
+
+
+class LoggerMixin:
+    """
+    日志混入类 - 向后兼容包装器
+    
+    ⚠️ 不推荐新代码使用。请改用 Logger 通过组合方式。
+    
+    内部委托给 Logger 实例，保持接口不变。
+    """
+    
+    def _init_logger(self, verbose: bool = False):
+        """初始化日志器"""
+        self._verbose = verbose
+        self.__logger_inst = Logger(verbose, name=self.__class__.__name__)
+        self._logger = self.__logger_inst._logger
+    
+    def log(self, msg: str):
+        """输出信息日志（verbose模式下显示）"""
+        self.__logger_inst.log(msg)
+    
+    def log_debug(self, msg: str):
+        """输出调试日志"""
+        self.__logger_inst.log_debug(msg)
+    
+    def log_warning(self, msg: str):
+        """输出警告日志（始终显示）"""
+        self.__logger_inst.log_warning(msg)
+    
+    def log_error(self, msg: str):
+        """输出错误日志（始终显示）"""
+        self.__logger_inst.log_error(msg)

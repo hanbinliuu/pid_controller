@@ -34,7 +34,7 @@ from api.commond.time_util import parse_time_to_milliseconds
 from .config import Config, ModelType
 from .data_models import FusionResult, HistoricalData, TuningInput, SegmentResult
 from .logger import LoggerMixin
-from .utils import calculate_r2, calculate_rmse
+from .utils import calculate_r2, calculate_rmse, build_segment_info as _build_segment_info
 
 
 class OutputBuilder(LoggerMixin):
@@ -62,43 +62,8 @@ class OutputBuilder(LoggerMixin):
     
     @staticmethod
     def build_segment_info(segments: List, segment_results: List) -> List[Dict]:
-        """
-        构建段信息用于可视化（统一方法）
-        
-        Args:
-            segments: 段数据列表 (HistoricalData)
-            segment_results: 段结果列表 (SegmentResult)
-            
-        Returns:
-            段信息列表
-        """
-        segment_info = []
-        if not segments or not segment_results:
-            return segment_info
-            
-        for i, (seg, result) in enumerate(zip(segments, segment_results)):
-            if len(seg.timestamp) > 0:
-                # 获取属性值，兼容对象和字典
-                if hasattr(result, 'step_response_score'):
-                    step_score = result.step_response_score
-                    osc_ratio = result.oscillation_ratio
-                else:
-                    step_score = result.get('step_response_score', 0.5)
-                    osc_ratio = result.get('oscillation_ratio', 0.5)
-                
-                # 判断段类型：阶跃特征好且振荡低 → 整定段
-                is_tuning = (step_score >= 0.5 and osc_ratio < 0.5)
-                
-                segment_info.append({
-                    'index': i,
-                    'start_time': int(seg.timestamp[0]),
-                    'end_time': int(seg.timestamp[-1]),
-                    'data_points': len(seg.pv),
-                    'step_response_score': round(step_score, 2),
-                    'oscillation_ratio': round(osc_ratio, 2),
-                    'type': 'tuning' if is_tuning else 'oscillation'
-                })
-        return segment_info
+        """构建段信息用于可视化（委托给 utils.build_segment_info）"""
+        return _build_segment_info(segments, segment_results)
     
     @staticmethod
     def create_empty_result(input_data: Optional[TuningInput] = None,

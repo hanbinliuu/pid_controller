@@ -2,13 +2,12 @@ import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
 from scipy.optimize import least_squares
 
-from core.algorithm.model_type.pipeline.context import TuningContext
-from core.algorithm.model_type.pipeline.stages.base_stage import PipelineStage
-from core.algorithm.model_type.data_models import FusionResult, HistoricalData, SegmentResult
-from core.algorithm.model_type.utils import calculate_r2, calculate_rmse
-from core.algorithm.model_type.config import Config, ModelType
-from core.algorithm.model_type.output_builder import OutputBuilder
-from core.algorithm.model_type.tuning import TuningMethod
+from ..context import TuningContext
+from .base_stage import PipelineStage
+from ...data_models import FusionResult, HistoricalData, SegmentResult
+from ...utils import calculate_r2, calculate_rmse, build_segment_info
+from ...config import Config, ModelType
+from ...tuning import TuningMethod
 
 
 class RefinementStage(PipelineStage):
@@ -78,7 +77,7 @@ class RefinementStage(PipelineStage):
                                initial_params: tuple) -> Optional[tuple]:
         """全量数据优化"""
         try:
-            from core.algorithm.model_type.fitting import ModelIdentifier
+            from ...fitting import ModelIdentifier
             
             oscillation_info = ModelIdentifier.detect_high_oscillation(y_full, u_full)
             
@@ -415,7 +414,7 @@ class RefinementStage(PipelineStage):
             loop_type=loop_type, verbose=self._verbose
         )
         
-        from core.algorithm.model_type.rating import ModelRating
+        from ...rating import ModelRating
         
         perf_score, perf_details = ModelRating.performance_score(cl_metrics)
         
@@ -503,7 +502,7 @@ class RefinementStage(PipelineStage):
                 'warnings': method_result.warnings,
             },
             'tuning_features': tuning_features,
-            'segment_info': OutputBuilder.build_segment_info(segments, segment_results) if segments else []
+            'segment_info': build_segment_info(segments, segment_results) if segments else []
         }
 
     def execute(self, context: TuningContext) -> TuningContext:
@@ -567,7 +566,7 @@ class RefinementStage(PipelineStage):
             if Pu_relay >= 500:
                 self.log(f"\\n   ⚠️ 继电反馈法 Pu={Pu_relay:.1f}s 触达上限，放弃使用")
             else:
-                from core.algorithm.model_type.tuning.verification.stability_analyzer import StabilityAnalyzer
+                from ...tuning.verification.stability_analyzer import StabilityAnalyzer
                 model_pid = self._pid_calculator.calculate_from_fusion(fusion_result, context.lambda_factor)
                 model_margins = StabilityAnalyzer.check_stability(model_params, model_pid)
                 model_pm = model_margins.phase_margin if model_margins else 0

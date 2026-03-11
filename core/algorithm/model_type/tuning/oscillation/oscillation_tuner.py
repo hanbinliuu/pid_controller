@@ -917,6 +917,6 @@ class OscillationTuner(LoggerMixin):
             return round(Pu, 4), round(Pu/4.0, 4), round(K_approx, 4)
     
     def _build_segment_info(self, segments: List, segment_results: List) -> List[Dict]:
-        """构建段信息用于可视化（委托给 OutputBuilder）"""
-        from ...output_builder import OutputBuilder
-        return OutputBuilder.build_segment_info(segments, segment_results)
+        """构建段信息用于可视化（委托给 utils.build_segment_info）"""
+        from ...utils import build_segment_info
+        return build_segment_info(segments, segment_results)

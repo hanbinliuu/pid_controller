@@ -1,9 +1,9 @@
 from typing import Dict, Any, Union
 
-from core.algorithm.model_type.data_models import HistoricalData, TuningInput
-from core.algorithm.model_type.config.loop_type_inferrer import infer_loop_type_from_data, format_inference_log
-from core.algorithm.model_type.pipeline.context import TuningContext
-from core.algorithm.model_type.pipeline.stages.base_stage import PipelineStage
+from ...data_models import HistoricalData, TuningInput
+from ...config.loop_type_inferrer import infer_loop_type_from_data, format_inference_log
+from ..context import TuningContext
+from .base_stage import PipelineStage
 
 
 class DataPrepStage(PipelineStage):

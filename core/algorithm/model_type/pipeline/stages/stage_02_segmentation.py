@@ -1,7 +1,7 @@
 import numpy as np
-from core.algorithm.model_type.data_models import HistoricalData, SegmentResult
-from core.algorithm.model_type.pipeline.context import TuningContext
-from core.algorithm.model_type.pipeline.stages.base_stage import PipelineStage
+from ...data_models import HistoricalData, SegmentResult
+from ..context import TuningContext
+from .base_stage import PipelineStage
 
 class SegmentationStage(PipelineStage):
     """

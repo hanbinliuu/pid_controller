@@ -349,7 +349,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     cl_status = ""
     if has_closed_loop:
         is_stable = closed_loop_info.get('is_stable', False)
-        cl_status = f" | 闭环: {'✅稳定' if is_stable else '❌不稳定'}"
+        cl_status = f" | 闭环: {'稳定' if is_stable else '不稳定'}"
     
     fig.suptitle(f'ModelSelector 拟合结果 - {model_type} (R²={r2:.4f}, RMSE={rmse:.4f}){cl_status}\n'
                  f'融合方法: {fusion_info.get("method", "N/A")}, 使用段数: {fusion_info.get("n_segments", 0)}, '
@@ -469,7 +469,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
             integral_s += error_s * dt_sim
             derivative_s = (error_s - prev_error_s) / dt_sim if dt_sim > 0 else 0.0
             prev_error_s = error_s
-            integral_s = np.clip(integral_s, -100 / (Ki_sim + 1e-10), 100 / (Ki_sim + 1e-10))
+            integral_s = np.clip(integral_s, -100 / (abs(Ki_sim) + 1e-10), 100 / (abs(Ki_sim) + 1e-10))
             mv_out = mv_init + Kp_sim * error_s + Ki_sim * integral_s + Kd_sim * derivative_s
             mv_out = np.clip(mv_out, 0.0, 100.0)
             mv_sim[i] = mv_out
@@ -554,7 +554,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         pid_params = fitting_result.get('pid_parameters', {})
         model_params = fitting_result.get('model_parameters', {})
         
-        info_text = f"🔄 振荡整定模式 ({fusion_method})\n\n"
+        info_text = f"振荡整定模式 ({fusion_method})\n\n"
         info_text += f"临界参数:\n"
         info_text += f"  Pu (临界周期) = {model_params.get('T1', 0):.2f} s\n"
         info_text += f"  K (过程增益) = {model_params.get('K', 0):.3f}\n\n"
@@ -567,7 +567,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         llm_decision = pid_params.get('llm_decision', {})
         if llm_decision:
             strategy = llm_decision.get('strategy_params', {})
-            info_text += f"\n\n🤖 LLM 策略:\n"
+            info_text += f"\n\nLLM 策略:\n"
             info_text += f"  safety_factor = {strategy.get('safety_factor', 'N/A')}\n"
             info_text += f"  ti_multiplier = {strategy.get('ti_multiplier', 'N/A')}"
         
@@ -694,7 +694,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         sse = closed_loop_info.get('steady_state_error', 0)
         
         status_color = 'green' if is_stable else 'red'
-        status_text = '✅ 稳定' if is_stable else '❌ 不稳定'
+        status_text = '稳定' if is_stable else '不稳定'
         
         # 添加性能指标文本框
         textstr = f'{status_text}\n'
@@ -798,7 +798,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
             dt_sim = 1.0
         
         # 仿真时长 - 拉长以观察稳态收敛
-        sim_duration = max(T1 * 20, 1000)  # 至少 20 倍时间常数或 1000 秒
+        sim_duration = max(T1 * 40, 1000)  # 至少 40 倍时间常数或 1000 秒
         n_sim_steps = min(int(sim_duration / dt_sim), 20000)
         
         # 初始条件
@@ -809,7 +809,17 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         # 如果初始偏差太小，引入阶跃
         initial_error = abs(sv_target - pv_init)
         if initial_error < 2.0:
-            sv_target = sv_target + max(np.ptp(sv_array) * 0.1, 5.0)
+            # 根据过程增益和MV可用范围计算最大可达阶跃
+            # 负增益系统: MV下降→PV上升, 可用下降空间 = mv_init - 0
+            # 正增益系统: MV上升→PV上升, 可用上升空间 = 100 - mv_init
+            if K < 0:
+                mv_margin = mv_init * 0.8  # 留20%余量
+            else:
+                mv_margin = (100 - mv_init) * 0.8
+            max_achievable_step = abs(K) * mv_margin
+            desired_step = max(np.ptp(sv_array) * 0.1, 1.0)
+            step = min(desired_step, max_achievable_step)
+            sv_target = sv_target + step
         
         # 状态初始化
         pv_sim = np.zeros(n_sim_steps)
@@ -827,11 +837,21 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         
         for i in range(n_sim_steps):
             error = sv_target - pv_current
-            integral = np.clip(integral + error * dt_sim, -100/(Ki+1e-10), 100/(Ki+1e-10))
+            integral += error * dt_sim
             derivative = (error - prev_error) / dt_sim if dt_sim > 0 else 0.0
             prev_error = error
             
-            mv_out = np.clip(mv_base + Kp * error + Ki * integral + Kd * derivative, 0, 100)
+            # 积分限幅
+            integral = np.clip(integral, -100/(abs(Ki)+1e-10), 100/(abs(Ki)+1e-10))
+            
+            # PID 输出（先算原始值）
+            mv_raw = mv_base + Kp * error + Ki * integral + Kd * derivative
+            mv_out = np.clip(mv_raw, 0, 100)
+            
+            # Anti-windup: 如果MV被饱和截断，回退积分以防止windup
+            if mv_raw != mv_out and abs(Ki) > 1e-10:
+                integral = (mv_out - mv_base - Kp * error - Kd * derivative) / Ki
+            
             mv_sim[i] = mv_out
             
             mv_history.append(mv_out)
@@ -856,7 +876,7 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         error_band = abs(sv_target) * 0.05
         in_band = np.abs(pv_sim[-100:] - sv_target) < error_band if len(pv_sim) >= 100 else False
         is_stable_predict = np.all(in_band) if isinstance(in_band, np.ndarray) else False
-        stable_status = '✅ 预测稳态' if is_stable_predict else '❌ 预测不稳态'
+        stable_status = '预测稳态' if is_stable_predict else '预测不稳态'
         
         ax5.set_xlabel('仿真时间 (s)')
         ax5.set_ylabel('PV')
@@ -994,7 +1014,7 @@ def visualize_new_pid_simulation(data: List[Dict], fitting_result: Dict, scenari
         prev_error = error
         
         # 积分限幅
-        integral = np.clip(integral, -100 / (Ki + 1e-10), 100 / (Ki + 1e-10))
+        integral = np.clip(integral, -100 / (abs(Ki) + 1e-10), 100 / (abs(Ki) + 1e-10))
         
         # PID 输出
         mv_out = mv_base + Kp * error + Ki * integral + Kd * derivative

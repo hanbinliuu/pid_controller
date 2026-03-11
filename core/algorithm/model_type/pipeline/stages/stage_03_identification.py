@@ -1,5 +1,5 @@
-from core.algorithm.model_type.pipeline.context import TuningContext
-from core.algorithm.model_type.pipeline.stages.base_stage import PipelineStage
+from ..context import TuningContext
+from .base_stage import PipelineStage
 
 
 class IdentificationStage(PipelineStage):

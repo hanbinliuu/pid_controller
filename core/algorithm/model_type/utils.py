@@ -109,3 +109,45 @@ def determine_turning_type(Kp: float, Ti: float, Td: float) -> str:
         return 'PI'
     else:
         return 'P'
+
+
+def build_segment_info(segments: list, segment_results: list) -> list:
+    """
+    构建段信息用于可视化（独立工具函数）
+    
+    从 OutputBuilder 中提取为独立函数，消除 output_builder ↔ oscillation_tuner 循环依赖。
+    
+    Args:
+        segments: 段数据列表 (HistoricalData)
+        segment_results: 段结果列表 (SegmentResult)
+        
+    Returns:
+        段信息列表
+    """
+    segment_info = []
+    if not segments or not segment_results:
+        return segment_info
+        
+    for i, (seg, result) in enumerate(zip(segments, segment_results)):
+        if len(seg.timestamp) > 0:
+            # 获取属性值，兼容对象和字典
+            if hasattr(result, 'step_response_score'):
+                step_score = result.step_response_score
+                osc_ratio = result.oscillation_ratio
+            else:
+                step_score = result.get('step_response_score', 0.5)
+                osc_ratio = result.get('oscillation_ratio', 0.5)
+            
+            # 判断段类型：阶跃特征好且振荡低 → 整定段
+            is_tuning = (step_score >= 0.5 and osc_ratio < 0.5)
+            
+            segment_info.append({
+                'index': i,
+                'start_time': int(seg.timestamp[0]),
+                'end_time': int(seg.timestamp[-1]),
+                'data_points': len(seg.pv),
+                'step_response_score': round(step_score, 2),
+                'oscillation_ratio': round(osc_ratio, 2),
+                'type': 'tuning' if is_tuning else 'oscillation'
+            })
+    return segment_info
