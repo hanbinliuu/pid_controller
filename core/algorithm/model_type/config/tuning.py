@@ -191,3 +191,17 @@ ROBUST_TUNING = {
     'min_pb_temp': 80.0,                 # 温度回路最低 PB 保护 [100→80，配合 loop_presets pb_min 同步]
     'sign_mismatch_penalty': 3.0,        # 符号不匹配时的保守等级乘数
 }
+
+# ============================================================
+# Rating 驱动自优化配置 (Self-Optimization)
+# ============================================================
+SELF_OPTIMIZE = {
+    'enabled': True,                         # 是否启用 Rating 驱动自优化
+    'lambda_multipliers': [0.6, 0.8, 1.0, 1.2, 1.5, 2.0],  # lambda 倍数候选
+    'min_score_improvement': 0.3,            # 最低评分提升阈值（低于此不替换原参数）
+    # Phase 2: PB/TI/TD 微调
+    'fine_tune_enabled': True,               # 是否启用 PB/TI/TD 微调
+    'fine_tune_ratios': [0.8, 0.9, 1.0, 1.1, 1.2],   # 扰动比例
+    'fine_tune_max_rounds': 2,               # 坐标轮换最大轮数
+    'fine_tune_min_improvement': 0.1,        # 微调最低提升阈值
+}

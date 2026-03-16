@@ -112,7 +112,8 @@ class OutputBuilder(LoggerMixin):
                           quality_info = None,
                           segment_results: List[SegmentResult] = None,
                           segments: List[HistoricalData] = None,
-                          loop_type: str = None) -> Dict[str, Any]:
+                          loop_type: str = None,
+                          optimized_pid: Dict[str, float] = None) -> Dict[str, Any]:
         """
         构建最终输出（完整版，包含 fallback 逻辑）
         
@@ -130,10 +131,14 @@ class OutputBuilder(LoggerMixin):
         Returns:
             完整的整定结果字典
         """
-        # 计算 PID 参数
-        pid_params = self._pid_calculator.calculate_from_fusion(
-            fusion, lambda_factor, quality_info=quality_info, loop_type=loop_type
-        )
+        # 计算 PID 参数（优先使用自优化微调结果）
+        if optimized_pid is not None:
+            pid_params = optimized_pid
+            self.log(f"   ✅ 使用自优化微调后的 PID 参数")
+        else:
+            pid_params = self._pid_calculator.calculate_from_fusion(
+                fusion, lambda_factor, quality_info=quality_info, loop_type=loop_type
+            )
         
         params = self._simulator.fusion_to_params(fusion)
         

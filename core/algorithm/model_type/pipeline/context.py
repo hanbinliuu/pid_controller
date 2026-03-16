@@ -60,6 +60,9 @@ class TuningContext:
     
     # ---------------- 5. 最终输出数据 (Final Outputs) ----------------
     final_result: Optional[Dict[str, Any]] = None
+    
+    # Rating 自优化结果（SelfOptimizeStage Phase 2 微调后的 PID 参数）
+    optimized_pid: Optional[Dict[str, float]] = None
 
     def add_log(self, message: str):
         """记录流水线执行日志（仅做占位或挂载外部 logger）"""

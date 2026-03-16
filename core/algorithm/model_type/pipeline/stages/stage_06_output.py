@@ -78,7 +78,8 @@ class OutputVerificationStage(PipelineStage):
             context.fusion_result, context.hist_data, context.time_range, context.lambda_factor, 
             context.input_data.tuning_window, quality_info,
             context.original_results, context.original_segments,
-            loop_type=context.loop_type
+            loop_type=context.loop_type,
+            optimized_pid=context.optimized_pid
         )
         
         return context

@@ -6,6 +6,7 @@ from .stages.stage_02_segmentation import SegmentationStage
 from .stages.stage_03_identification import IdentificationStage
 from .stages.stage_04_fusion import FusionStage
 from .stages.stage_05_refinement import RefinementStage
+from .stages.stage_05b_self_optimize import SelfOptimizeStage
 from .stages.stage_06_output import OutputVerificationStage
 
 from typing import List, Dict, Any, Optional, Tuple, Union
@@ -313,21 +314,33 @@ class TuningOrchestrator(LoggerMixin):
         )
         
         # 2. 注册流水线阶段
-        stages = [
+        #    前置阶段: 可能提前产出 final_result（振荡整定/fallback）
+        #    后置阶段: SelfOptimizeStage 必须对所有路径的结果做自优化
+        pre_stages = [
             DataPrepStage(logger_mixin=self),
             SegmentationStage(self._segment_processor, self._segment_manager, self._oscillation_tuner, logger_mixin=self),
             IdentificationStage(self._segment_fitter, self._oscillation_tuner, logger_mixin=self),
             FusionStage(self._unified_selector, self._param_fusion, self._simulator, self._segment_processor, self._oscillation_tuner, logger_mixin=self),
             RefinementStage(self._simulator, self._oscillation_tuner, self._method_selector, self._pid_calculator, verbose=self._verbose, logger_mixin=self),
-            OutputVerificationStage(self._preprocessor, self._output_builder, logger_mixin=self)
+        ]
+        
+        post_stages = [
+            SelfOptimizeStage(self._pid_calculator, verbose=self._verbose, logger_mixin=self),
+            OutputVerificationStage(self._preprocessor, self._output_builder, logger_mixin=self),
         ]
         
         # 3. 按序执行流水线
         self.log(f"\\n{'='*60}\\n🚀 开始 PID Agent 智能整定流水线\\n{'='*60}")
-        for stage in stages:
+        
+        # 前置阶段：遇到 final_result 可提前跳出
+        for stage in pre_stages:
             context = stage.execute(context)
             if context.final_result is not None:
-                return context.final_result
+                break
+        
+        # 后置阶段：始终执行（SelfOptimize 对所有路径的结果做优化）
+        for stage in post_stages:
+            context = stage.execute(context)
                 
         # 正常情况下最后阶段一定会生成 final_result，这只是安全兜底
         return context.final_result or OutputBuilder.create_empty_result(self._parse_input(tuning_input))
