@@ -19,7 +19,7 @@ from typing import Dict
 from core.algorithm.model_type.config import Config
 from core.algorithm.model_type.data_models import FusionResult, HistoricalData
 from core.algorithm.model_type.pipeline.context import TuningContext
-from core.algorithm.model_type.pipeline.stages.stage_05b_self_optimize import SelfOptimizeStage
+from core.algorithm.model_type.pipeline.stages.stage_05b_self_optimize import SelfOptimizeStage, _normalize_pid_keys
 from core.algorithm.model_type.tuning import PIDCalculator
 
 
@@ -47,6 +47,24 @@ def _make_context(
 
 
 # ---------------------------------------------------------------
+# Fix #1: key 格式规范化
+# ---------------------------------------------------------------
+
+def test_normalize_pid_keys():
+    """测试大小写 key 的规范化"""
+    # 小写 → 大写
+    result = _normalize_pid_keys({'kp': -0.81, 'ki': -0.06, 'kd': 0.0})
+    assert result['Kp'] == -0.81 and result['Ki'] == -0.06
+    # 大写优先
+    result = _normalize_pid_keys({'Kp': 1.5, 'kp': 999.0, 'Ki': 0.1, 'Kd': 0.0})
+    assert result['Kp'] == 1.5
+    # 字符串值
+    result = _normalize_pid_keys({'kp': '-0.81', 'ki': '-0.06', 'kd': '0.0'})
+    assert result['Kp'] == -0.81
+    print("  ✅ key 规范化正确")
+
+
+# ---------------------------------------------------------------
 # Phase 1 测试 (正常路径)
 # ---------------------------------------------------------------
 
@@ -56,6 +74,7 @@ def test_evaluate_candidate():
     score, detail = stage._evaluate_candidate(ctx.fusion_result, 0.8, 50.0, 60.0, 50.0, 'flow')
     assert isinstance(score, float) and 0 <= score <= 10
     assert 'pb' in detail and 'ti' in detail
+    assert 'Kp' in detail['pid_params']  # Fix #1: 确保大写 key
     print(f"  ✅ score={score:.2f}")
 
 
@@ -87,6 +106,7 @@ def test_evaluate_pid_directly():
     pid = PIDCalculator().calculate_from_fusion(ctx.fusion_result, 0.8, loop_type='flow')
     score, d = stage._evaluate_pid(ctx.fusion_result, pid, 50.0, 60.0, 50.0, 'flow')
     assert 0 <= score <= 10 and 'pb' in d
+    assert 'cl_metrics' in d  # Fix #3: cl_metrics 应保存
     print(f"  ✅ score={score:.2f}, PB={d['pb']:.2f}, TI={d['ti']:.2f}")
 
 
@@ -95,9 +115,12 @@ def test_fine_tune_pid():
     ctx = _make_context(K=1.5, T1=15.0, L=3.0)
     pid = PIDCalculator().calculate_from_fusion(ctx.fusion_result, 0.8, loop_type='flow')
     baseline_score, _ = stage._evaluate_pid(ctx.fusion_result, pid, 50.0, 60.0, 50.0, 'flow')
-    tuned_pid, tuned_score, log = stage._fine_tune_pid(
+    tuned_pid, tuned_score, tuned_detail, log = stage._fine_tune_pid(
         ctx.fusion_result, pid, baseline_score, 50.0, 60.0, 50.0, 'flow')
     assert tuned_score >= baseline_score
+    # Fix #3: 返回 4 个值 (含 best_detail)
+    if tuned_score > baseline_score:
+        assert tuned_detail is not None and 'cl_metrics' in tuned_detail
     print(f"  ✅ {baseline_score:.2f} → {tuned_score:.2f} ({len(log)} 候选)")
 
 
@@ -109,7 +132,6 @@ def test_optimize_existing_oscillation_result():
     """模拟振荡整定路径: final_result 已存在，应运行 Phase 2"""
     stage = SelfOptimizeStage(PIDCalculator(), verbose=True)
 
-    # 模拟振荡整定输出
     final_result = {
         'success': True,
         'model_type': 'FOPDT',
@@ -123,12 +145,25 @@ def test_optimize_existing_oscillation_result():
 
     ctx = _make_context(fusion=False, final_result=final_result)
     original_rating = final_result['model_rating']
+    original_cl = final_result['closed_loop_verification'].copy()
 
     ctx = stage.execute(ctx)
 
-    # Phase 2 应该运行（不论是否改善）
     assert ctx.final_result is not None
-    print(f"  ✅ 振荡路径 Phase 2 执行完成: {original_rating} → {ctx.final_result['model_rating']}")
+    # Fix #1: 检查更新后的 pid_parameters 同时包含大写和小写 key
+    pp = ctx.final_result['pid_parameters']
+    assert 'Kp' in pp and 'kp' in pp
+    # 符号应保持为负
+    assert pp['Kp'] < 0
+    
+    # Fix #3: 如果评分改善了, closed_loop_verification 应该被更新
+    new_rating = ctx.final_result['model_rating']
+    if new_rating > original_rating:
+        cl = ctx.final_result.get('closed_loop_verification', {})
+        # 应包含新的闭环指标字段
+        assert 'overshoot' in cl or 'settling_time' in cl
+    
+    print(f"  ✅ 振荡路径 Phase 2: {original_rating} → {new_rating}")
 
 
 def test_phase2_disabled_skips_fallback():
@@ -139,7 +174,7 @@ def test_phase2_disabled_skips_fallback():
     final_result = {
         'success': True, 'model_type': 'FOPDT', 'model_rating': 8.09,
         'model_parameters': {'K': '1.0', 'T1': '10.0', 'T2': '0.0', 'L': '1.0'},
-        'pid_parameters': {'kp': 1.0, 'ki': 0.05, 'kd': 0.0, 'pb': 100.0, 'ti': 20.0, 'td': 0.0},
+        'pid_parameters': {'Kp': 1.0, 'Ki': 0.05, 'Kd': 0.0, 'pb': 100.0, 'ti': 20.0, 'td': 0.0},
         'fitting_result': {'r_squared': 0.8}, 'closed_loop_verification': {},
         'tuning_features': {'tuning_method': 'oscillation_tuning'},
     }
@@ -150,14 +185,37 @@ def test_phase2_disabled_skips_fallback():
 
 
 # ---------------------------------------------------------------
+# Fix #2: model_parameters 类型防御
+# ---------------------------------------------------------------
+
+def test_extract_handles_string_model_params():
+    """测试 model_parameters 值为字符串的情况"""
+    stage = SelfOptimizeStage(PIDCalculator(), verbose=False)
+    final_result = {
+        'model_type': 'FOPDT',
+        'model_parameters': {'K': '0.7209', 'T1': '23.27', 'T2': '0.0', 'L': '0.0'},
+        'pid_parameters': {'kp': '1.23', 'ki': '0.04', 'kd': '0.0'},
+        'fitting_result': {'r_squared': 0.98},
+        'closed_loop_verification': {},
+        'tuning_features': {},
+    }
+    ctx = _make_context(fusion=False)
+    fusion, pid, *_ = stage._extract_from_final_result(final_result, ctx)
+    assert abs(fusion.K - 0.7209) < 0.001
+    assert abs(pid['Kp'] - 1.23) < 0.01
+    print(f"  ✅ 字符串类型 model_parameters 正确转换: K={fusion.K}, Kp={pid['Kp']}")
+
+
+# ---------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------
 if __name__ == '__main__':
     print("=" * 60)
-    print("🧪 SelfOptimizeStage 单元测试 (全路径)")
+    print("🧪 SelfOptimizeStage 单元测试 (全路径 + Code Review 修复)")
     print("=" * 60)
 
     tests = [
+        test_normalize_pid_keys,
         test_evaluate_candidate,
         test_execute_normal_path,
         test_skip_when_disabled,
@@ -165,6 +223,7 @@ if __name__ == '__main__':
         test_fine_tune_pid,
         test_optimize_existing_oscillation_result,
         test_phase2_disabled_skips_fallback,
+        test_extract_handles_string_model_params,
     ]
 
     passed = failed = 0

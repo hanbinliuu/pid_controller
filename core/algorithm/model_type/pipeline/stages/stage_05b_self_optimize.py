@@ -11,6 +11,11 @@ Phase 2 — PB/TI/TD 微调 (所有路径):
     以当前最优 PID 为基线，按坐标轴逐一扰动 PB/TI/TD →
     每次扰动后闭环仿真 → 三层评分 → 贪心选取最优组合
 
+设计说明:
+    - Phase 2 不会将 PI 控制器升级为 PID (Kd=0 时不尝试加入 D 项)。
+      这是有意设计: 控制器类型的选择应在更上层（整定方法选择阶段）完成，
+      微调阶段仅对已确定类型的参数做小范围优化。
+
 定位: 所有前置阶段之后、OutputVerificationStage 之前
 """
 
@@ -34,6 +39,18 @@ _DEFAULT_CONFIG = {
     'fine_tune_max_rounds': 2,
     'fine_tune_min_improvement': 0.1,
 }
+
+
+def _normalize_pid_keys(pid_params: Dict) -> Dict[str, float]:
+    """
+    规范化 PID 参数 key 为大写 Kp/Ki/Kd。
+    兼容输入 'kp'/'Kp' 两种格式。(Fix #1: key 格式规范化)
+    """
+    return {
+        'Kp': float(pid_params.get('Kp', pid_params.get('kp', 1.0))),
+        'Ki': float(pid_params.get('Ki', pid_params.get('ki', 0.0))),
+        'Kd': float(pid_params.get('Kd', pid_params.get('kd', 0.0))),
+    }
 
 
 class SelfOptimizeStage(PipelineStage):
@@ -60,6 +77,8 @@ class SelfOptimizeStage(PipelineStage):
         pid_params = self._pid_calculator.calculate_from_fusion(
             fusion, lambda_factor, loop_type=loop_type
         )
+        # Fix #1: 确保 key 统一为大写
+        pid_params = _normalize_pid_keys(pid_params)
         return self._evaluate_pid(fusion, pid_params, sp_initial, sp_final, pv_initial, loop_type,
                                   extra={'lambda_factor': lambda_factor})
 
@@ -67,6 +86,9 @@ class SelfOptimizeStage(PipelineStage):
     # 评估: 直接评估一组 PID 参数
     # ------------------------------------------------------------------
     def _evaluate_pid(self, fusion, pid_params, sp_initial, sp_final, pv_initial, loop_type, extra=None):
+        # Fix #1: 规范化输入 key
+        pid_params = _normalize_pid_keys(pid_params)
+
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
             fusion, pid_params,
             sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
@@ -78,9 +100,9 @@ class SelfOptimizeStage(PipelineStage):
         final_score, _ = ModelRating.final_rating(perf_score, method_conf)
 
         eps = 1e-10
-        Kp = pid_params.get('Kp', 1.0)
-        Ki = pid_params.get('Ki', 0.0)
-        Kd = pid_params.get('Kd', 0.0)
+        Kp = pid_params['Kp']
+        Ki = pid_params['Ki']
+        Kd = pid_params['Kd']
         pb = 100.0 / abs(Kp) if abs(Kp) > eps else 999.0
         ti = abs(Kp / Ki) if abs(Ki) > eps else 0.0
         td = abs(Kd / Kp) if abs(Kp) > eps else 0.0
@@ -92,6 +114,7 @@ class SelfOptimizeStage(PipelineStage):
             'overshoot': cl_metrics.overshoot,
             'settling_time': cl_metrics.settling_time,
             'steady_state_error': cl_metrics.steady_state_error,
+            'cl_metrics': cl_metrics,  # Fix #3: 保存 cl_metrics 供后续更新 closed_loop_verification
         }
         if extra:
             detail.update(extra)
@@ -107,8 +130,9 @@ class SelfOptimizeStage(PipelineStage):
         min_improv = self._config.get('fine_tune_min_improvement', _DEFAULT_CONFIG['fine_tune_min_improvement'])
         eps = 1e-10
 
-        best_pid = dict(baseline_pid)
+        best_pid = _normalize_pid_keys(baseline_pid)
         best_score = baseline_score
+        best_detail = None
         search_log: List[Dict] = []
         Kp_sign = 1 if best_pid['Kp'] >= 0 else -1
 
@@ -134,7 +158,7 @@ class SelfOptimizeStage(PipelineStage):
                         extra={'param': 'PB', 'ratio': ratio, 'round': round_idx + 1})
                     search_log.append(detail)
                     if score > best_score + min_improv:
-                        best_score, best_pid, improved = score, c, True
+                        best_score, best_pid, best_detail, improved = score, c, detail, True
                 except Exception:
                     pass
 
@@ -155,11 +179,13 @@ class SelfOptimizeStage(PipelineStage):
                             extra={'param': 'TI', 'ratio': ratio, 'round': round_idx + 1})
                         search_log.append(detail)
                         if score > best_score + min_improv:
-                            best_score, best_pid, improved = score, c, True
+                            best_score, best_pid, best_detail, improved = score, c, detail, True
                     except Exception:
                         pass
 
             # --- TD (调 Kd，保持 Kp) ---
+            # 设计说明 (Fix #5): 仅当原始参数已包含 D 项 (Kd≠0) 时才微调 TD。
+            # PI 控制器不会在微调阶段被升级为 PID，这是有意设计。
             if abs(best_pid.get('Kd', 0.0)) > eps:
                 base_td = abs(best_pid['Kd'] / best_pid['Kp']) if abs(best_pid['Kp']) > eps else 0
                 if base_td > eps:
@@ -174,14 +200,14 @@ class SelfOptimizeStage(PipelineStage):
                                 extra={'param': 'TD', 'ratio': ratio, 'round': round_idx + 1})
                             search_log.append(detail)
                             if score > best_score + min_improv:
-                                best_score, best_pid, improved = score, c, True
+                                best_score, best_pid, best_detail, improved = score, c, detail, True
                         except Exception:
                             pass
 
             if not improved:
                 break
 
-        return best_pid, best_score, search_log
+        return best_pid, best_score, best_detail, search_log
 
     # ------------------------------------------------------------------
     # 辅助: 从 final_result 提取信息用于 Phase 2
@@ -194,12 +220,17 @@ class SelfOptimizeStage(PipelineStage):
         - sim_params: (sp_initial, sp_final, pv_initial)
         - loop_type: str
         """
-        # 模型参数
+        # Fix #2: 对 model_parameters 做防御性类型转换
         mp = final_result.get('model_parameters', {})
-        K = float(mp.get('K', 1.0))
-        T1 = float(mp.get('T1', 10.0))
-        T2 = float(mp.get('T2', 0.0))
-        L = float(mp.get('L', 0.0))
+        try:
+            K = float(mp.get('K', 1.0))
+            T1 = float(mp.get('T1', 10.0))
+            T2 = float(mp.get('T2', 0.0))
+            L = float(mp.get('L', 0.0))
+        except (ValueError, TypeError) as e:
+            self.log(f"   ⚠️ model_parameters 类型异常: {e}，使用默认值")
+            K, T1, T2, L = 1.0, 10.0, 0.0, 0.0
+
         model_type = final_result.get('model_type', 'FOPDT')
 
         fusion = FusionResult(
@@ -208,13 +239,9 @@ class SelfOptimizeStage(PipelineStage):
             global_rmse=final_result.get('fitting_result', {}).get('rmse', 1.0),
         )
 
-        # PID 参数
+        # Fix #1 + #2: 规范化 PID 参数 key + 防御性类型转换
         pp = final_result.get('pid_parameters', {})
-        pid_params = {
-            'Kp': float(pp.get('kp', pp.get('Kp', 1.0))),
-            'Ki': float(pp.get('ki', pp.get('Ki', 0.0))),
-            'Kd': float(pp.get('kd', pp.get('Kd', 0.0))),
-        }
+        pid_params = _normalize_pid_keys(pp)
 
         # 仿真参数
         cl_info = final_result.get('closed_loop_verification', {})
@@ -256,6 +283,56 @@ class SelfOptimizeStage(PipelineStage):
             pv_initial = ms_cfg['default_pv_initial']
 
         return sp_initial, sp_final, pv_initial
+
+    # ------------------------------------------------------------------
+    # 辅助: 构建 closed_loop_verification dict (Fix #3)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _build_cl_verification(cl_metrics, sp_initial, sp_final, pv_initial) -> Dict:
+        """从 cl_metrics 构建 closed_loop_verification 字典, 确保与微调后参数匹配。"""
+        return {
+            'is_stable': cl_metrics.settling_time < float('inf'),
+            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
+            'overshoot': cl_metrics.overshoot,
+            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
+            'steady_state_error': cl_metrics.steady_state_error,
+            'oscillation_count': cl_metrics.oscillation_count,
+            'decay_ratio': cl_metrics.decay_ratio,
+            'sp_initial': sp_initial,
+            'sp_final': sp_final,
+            'pv_initial': pv_initial,
+        }
+
+    # ------------------------------------------------------------------
+    # 辅助: Phase 2 搜索日志 (Fix #4)
+    # ------------------------------------------------------------------
+    def _log_phase2_summary(self, search_log: List[Dict], baseline_score: float):
+        """输出 Phase 2 搜索过程的关键候选对比表。"""
+        if not search_log:
+            return
+
+        # 筛选出改善的候选 + 最差的候选，避免过长日志
+        improved = [d for d in search_log if d['final_score'] > baseline_score]
+        worst = min(search_log, key=lambda d: d['final_score'])
+
+        self.log(f"\n   📊 Phase 2 搜索摘要 ({len(search_log)} 个候选):")
+        self.log(f"   {'参数':>4s} | {'倍率':>4s} | {'评分':>6s} | {'性能分':>6s} | {'超调%':>6s} | {'调节时间':>8s} | {'稳态误差%':>8s} | {'稳定':>4s}")
+        self.log(f"   {'-'*4}-+-{'-'*4}-+-{'-'*6}-+-{'-'*6}-+-{'-'*6}-+-{'-'*8}-+-{'-'*8}-+-{'-'*4}")
+
+        shown = set()
+        for d in sorted(improved + [worst], key=lambda x: x['final_score'], reverse=True):
+            key = (d.get('param', '?'), d.get('ratio', 0))
+            if key in shown:
+                continue
+            shown.add(key)
+            st = d['settling_time']
+            st_s = f"{st:.1f}s" if st < float('inf') else "∞"
+            marker = " ✓" if d['final_score'] > baseline_score else ""
+            self.log(
+                f"   {d.get('param', '?'):>4s} | {d.get('ratio', 0):4.1f} | {d['final_score']:6.2f} | "
+                f"{d['performance_score']:6.2f} | {d['overshoot']:6.1f} | {st_s:>8s} | "
+                f"{d['steady_state_error']:8.2f} | {'✅' if d['is_stable'] else '❌'}{marker}"
+            )
 
     # ------------------------------------------------------------------
     # Stage 入口
@@ -368,9 +445,12 @@ class SelfOptimizeStage(PipelineStage):
 
         self.log(f"   基线: PB={base_pb:.2f}% TI={base_ti:.2f}s TD={base_td:.2f}s (评分={baseline_score:.2f})")
 
-        tuned_pid, tuned_score, search_log = self._fine_tune_pid(
+        tuned_pid, tuned_score, tuned_detail, search_log = self._fine_tune_pid(
             fusion, pid_params, baseline_score,
             sp_initial, sp_final, pv_initial, loop_type)
+
+        # Fix #4: 输出 Phase 2 搜索详情
+        self._log_phase2_summary(search_log, baseline_score)
 
         improvement = tuned_score - baseline_score
         min_improv = self._config.get('fine_tune_min_improvement', _DEFAULT_CONFIG['fine_tune_min_improvement'])
@@ -403,6 +483,12 @@ class SelfOptimizeStage(PipelineStage):
                 'td': round(tuned_td, 2),
             }
             context.final_result['model_rating'] = round(tuned_score, 2)
+
+            # Fix #3: 同步更新 closed_loop_verification, 使其与微调后的参数匹配
+            if tuned_detail and 'cl_metrics' in tuned_detail:
+                context.final_result['closed_loop_verification'] = self._build_cl_verification(
+                    tuned_detail['cl_metrics'], sp_initial, sp_final, pv_initial
+                )
         else:
             self.log(f"\n   ✅ Phase 2: 微调提升不足 (+{improvement:.2f})，保持原始参数")
 
@@ -418,18 +504,22 @@ class SelfOptimizeStage(PipelineStage):
         self.log(f"\n   ── Phase 2: PB/TI/TD 微调 ──")
 
         eps = 1e-10
-        Kp = baseline_pid.get('Kp', 1.0)
-        Ki = baseline_pid.get('Ki', 0.0)
-        Kd = baseline_pid.get('Kd', 0.0)
+        baseline_pid = _normalize_pid_keys(baseline_pid)
+        Kp = baseline_pid['Kp']
+        Ki = baseline_pid['Ki']
+        Kd = baseline_pid['Kd']
         base_pb = 100.0 / abs(Kp) if abs(Kp) > eps else 999.0
         base_ti = abs(Kp / Ki) if abs(Ki) > eps else 0.0
         base_td = abs(Kd / Kp) if abs(Kp) > eps else 0.0
 
         self.log(f"   基线: PB={base_pb:.2f}% TI={base_ti:.2f}s TD={base_td:.2f}s (评分={baseline_score:.2f})")
 
-        tuned_pid, tuned_score, search_log = self._fine_tune_pid(
+        tuned_pid, tuned_score, tuned_detail, search_log = self._fine_tune_pid(
             fusion, baseline_pid, baseline_score,
             sp_initial, sp_final, pv_initial, loop_type)
+
+        # Fix #4: 输出 Phase 2 搜索详情
+        self._log_phase2_summary(search_log, baseline_score)
 
         improvement = tuned_score - baseline_score
         min_improv = self._config.get('fine_tune_min_improvement', _DEFAULT_CONFIG['fine_tune_min_improvement'])
