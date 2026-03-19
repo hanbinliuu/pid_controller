@@ -48,3 +48,6 @@ config/application.properties
 !exp/**/*.md
 !exp/**/*.py
 .vscode
+
+# 合成数据导出目录
+core/algorithm/model_type/tests/exported_data/
