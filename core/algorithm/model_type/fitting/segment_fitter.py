@@ -33,9 +33,9 @@ from scipy.optimize import least_squares
 from ..config import Config, ModelType
 from ..data_models import SegmentResult, HistoricalData
 from .model_identifier import ModelIdentifier
-from .nonlinear_fitter import NonlinearFitter, NonlinearFitResult
+from .nonlinear_fitter import NonlinearFitter
 from ..logger import LoggerMixin
-from ..utils import calculate_r2, calculate_rmse, calculate_rss, calculate_aic, calculate_bic
+from ..utils import calculate_r2, calculate_rss, calculate_aic, calculate_bic
 
 
 class SegmentFitter(LoggerMixin):

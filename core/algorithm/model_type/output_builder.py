@@ -34,7 +34,7 @@ from api.commond.time_util import parse_time_to_milliseconds
 from .config import Config, ModelType
 from .data_models import FusionResult, HistoricalData, TuningInput, SegmentResult
 from .logger import LoggerMixin
-from .utils import calculate_r2, calculate_rmse, build_segment_info as _build_segment_info
+from .utils import calculate_r2, build_segment_info as _build_segment_info
 
 
 class OutputBuilder(LoggerMixin):

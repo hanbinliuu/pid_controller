@@ -22,7 +22,7 @@ from ...config.loop_presets import get_loop_preset
 from ...data_models import SegmentResult, HistoricalData, FusionResult
 from ...utils import calculate_r2, calculate_rmse
 from ...logger import LoggerMixin
-from ..strategies.loop_type_strategies import get_loop_strategy, LoopTypeStrategy
+from ..strategies.loop_type_strategies import get_loop_strategy
 from .conservative_pid import ConservativePIDCalculator
 
 

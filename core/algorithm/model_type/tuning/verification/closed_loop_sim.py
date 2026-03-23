@@ -244,9 +244,8 @@ class ClosedLoopSimMixin:
                 if marginal:
                     is_stable = True
         
-        # DEBUG: Print failure reason
-        if not is_stable and max_settling_time is not None:
-             print(f"DEBUG: Metrics Fail: Settled={is_settled}({settling_time:.1f}/{max_settling:.1f}), "
+        if not is_stable and max_settling_time is not None and hasattr(self, 'log'):
+             self.log(f"   ⚠️ Metrics Fail: Settled={is_settled}({settling_time:.1f}/{max_settling:.1f}), "
                    f"Accurate={is_accurate}({steady_state_error:.2f}/{max_steady_error:.2f}), "
                    f"Smooth={is_smooth}({overshoot:.2f}/{max_overshoot:.2f}), "
                    f"Decaying={is_decaying}({decay_ratio:.2f})")
@@ -375,8 +374,8 @@ class ClosedLoopSimMixin:
             loop_type=loop_type
         )
 
-        if not metrics.is_stable and verbose:
-            print(f"DEBUG: Failed verification with R2={r2_score:.4f}, Model=K{K:.2f}/T{T1:.2f}/L{L:.2f}")
+        if not metrics.is_stable and verbose and hasattr(self, 'log'):
+            self.log(f"   ⚠️ Failed verification with R2={r2_score:.4f}, Model=K{K:.2f}/T{T1:.2f}/L{L:.2f}")
         
         return metrics.is_stable, metrics
     

@@ -23,7 +23,6 @@ ti_mult = strategy.adjust_ti_multiplier(ti_mult, K_approx, Pu, osc_ratio, config
 from abc import ABC, abstractmethod
 from typing import Dict
 from dataclasses import dataclass
-import numpy as np
 
 
 @dataclass

@@ -1,5 +1,3 @@
-import numpy as np
-
 from .context import TuningContext
 from .stages.stage_01_data_prep import DataPrepStage
 from .stages.stage_02_segmentation import SegmentationStage
@@ -9,28 +7,22 @@ from .stages.stage_05_refinement import RefinementStage
 from .stages.stage_05b_self_optimize import SelfOptimizeStage
 from .stages.stage_06_output import OutputVerificationStage
 
-from typing import List, Dict, Any, Optional, Tuple, Union
-from scipy.optimize import least_squares
+from typing import List, Dict, Any, Optional, Union
 
 from ..config import Config, ModelType
-from ..data_models import SegmentResult, FusionResult, TuningInput, HistoricalData
-from ..utils import (
-    calculate_r2, calculate_rmse, calculate_rss, calculate_aic, calculate_bic,
-    get_recommendation, determine_turning_type
-)
+from ..data_models import TuningInput
+from ..utils import get_recommendation, determine_turning_type
 
 # 子模块导入
 from ..preprocessing import DataPreprocessor, SegmentProcessor, SegmentManager
-from ..fitting import (
-    ModelIdentifier, SegmentFitter, UnifiedModelSelector, SegmentModelFit, ParameterFusion
-)
-from ..tuning import PIDCalculator, DataQualityInfo, OscillationTuner, TuningMethodSelector
+from ..fitting import SegmentFitter, UnifiedModelSelector, ParameterFusion
+from ..tuning import PIDCalculator, OscillationTuner, TuningMethodSelector
 from ..simulation import ModelSimulator
 
 # 其他模块
 from ..output_builder import OutputBuilder
 from ..logger import LoggerMixin
-from ..config.loop_type_inferrer import infer_loop_type, infer_loop_type_from_data, format_inference_log
+
 
 
 class TuningOrchestrator(LoggerMixin):

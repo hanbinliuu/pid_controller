@@ -27,7 +27,7 @@ from enum import Enum
 from ..config import Config
 from ..data_models import HistoricalData, SegmentResult
 from ..logger import LoggerMixin
-from ..fitting.relay_identifier import RelayIdentifier, RelayResult
+from ..fitting.relay_identifier import RelayIdentifier
 from .verification.stability_analyzer import StabilityAnalyzer, StabilityMargins
 
 

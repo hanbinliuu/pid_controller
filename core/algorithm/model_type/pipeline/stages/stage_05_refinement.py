@@ -4,7 +4,7 @@ from scipy.optimize import least_squares
 
 from ..context import TuningContext
 from .base_stage import PipelineStage
-from ...data_models import FusionResult, HistoricalData, SegmentResult
+from ...data_models import FusionResult, HistoricalData
 from ...utils import calculate_r2, calculate_rmse, build_segment_info
 from ...config import Config, ModelType
 from ...tuning import TuningMethod
