@@ -317,8 +317,10 @@ class ConservativePIDCalculator(LoggerMixin):
         
         ti_min_base = osc_config.get('ti_min_base', 1.5)
         
-        # 基础 Ti 最小值
-        base_Ti = max(10.0, ti_min_base)
+        # 基础 Ti 应该严重依赖极限周期 Pu (参考 Tyreus-Luyben 为 Pu * 2.2)
+        # 为保持框架的各路乘数 (如Level的ti_multiplier=2.8) 能够达到最终合理值
+        # 取 Pu 的 0.8 倍作为基准: 这样 Level回路最终 Ti ≈ Pu * 0.8 * 2.8 ≈ 2.24 Pu (完美契合 TL 法)
+        base_Ti = max(Pu * 0.8, 10.0, ti_min_base)
         
         ti_osc_start = osc_config.get('ti_osc_start', 0.6)
         ti_osc_factor = osc_config.get('ti_osc_factor', 0.5)
@@ -386,7 +388,7 @@ class ConservativePIDCalculator(LoggerMixin):
         conservative_Kd = conservative_Kp * Td if Td > 0 else 0.0
         
         result = {
-            'Kp': round(conservative_Kp, 2), 'Ki': round(conservative_Ki, 2), 'Kd': round(conservative_Kd, 2),
+            'Kp': round(conservative_Kp, 6), 'Ki': round(conservative_Ki, 6), 'Kd': round(conservative_Kd, 6),
             'Ti': round(Ti, 4), 'Td': round(Td, 4) if Td > 0 else 0.0,
             'method': f'{reason}_llm' if llm_strategy else f'{reason}_adaptive',
             'Pu': round(Pu, 2), 'Ku': round(Ku, 2), 'pb': round(pb, 2)

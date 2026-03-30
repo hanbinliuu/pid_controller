@@ -523,17 +523,21 @@ class OscillationTuner(LoggerMixin):
             K_int = abs(K_approx) / max(T1_approx, 1.0)  # 积分增益 (%/s/%)
             
             # Lambda 法（积分过程）：Kp = 1/(K_int * (2λ + L))
-            # λ = max(3*L, 30) 保守选择
-            lambda_c = max(3.0 * L_approx, 30.0)
+            # 针对极慢过程，增加 lambda 基础值
+            lambda_c = max(5.0 * L_approx, 50.0)
             Kp_level = 1.0 / (K_int * (2.0 * lambda_c + L_approx)) if K_int > 1e-9 else 1.0
             
             # Ti = 4*(lambda_c + L)，积分过程的标准推荐
             Ti_level = 4.0 * (lambda_c + L_approx)
             
-            # PB 和 Ti 限制
+            # 从回路配置获取实际允许的 ti_max，通常对于 level 为 3600.0
+            preset = get_loop_preset(self._loop_type)
+            ti_max_limit = preset.get('ti_max', 20000.0)
+            
+            # PB 和 Ti 限制放宽以适应超大增益/滞后段
             pb_level = 100.0 / max(abs(Kp_level), 0.01)
-            pb_level = np.clip(pb_level, 80.0, 300.0)
-            Ti_level = np.clip(Ti_level, 30.0, 300.0)
+            pb_level = np.clip(pb_level, 50.0, 1000.0)
+            Ti_level = np.clip(Ti_level, 20.0, ti_max_limit)
             
             conservative_Kp = 100.0 / pb_level * sign
             conservative_Ki = abs(conservative_Kp) / Ti_level
@@ -544,8 +548,8 @@ class OscillationTuner(LoggerMixin):
             self.log(f"   ✅ {self._loop_type}fallback整定: PB={pb_level:.1f}%, Ti={Ti_level:.1f}s, Sign={sign}")
             
             pid_params = {
-                'Kp': round(float(conservative_Kp), 4),
-                'Ki': round(float(conservative_Ki), 4),
+                'Kp': round(float(conservative_Kp), 8),
+                'Ki': round(float(conservative_Ki), 8),
                 'Kd': 0.0,
                 'Ti': round(float(Ti_level), 2),
                 'Td': 0.0,
@@ -634,7 +638,8 @@ class OscillationTuner(LoggerMixin):
             ti_base_min = 5.0
         base_Ti = ti_base_min * 1.5
         
-        conservative_Ti = np.clip(base_Ti * ti_multiplier, *osc_config.get('ti_range', [1.5, 600.0]))
+        ti_max_limit = preset.get('ti_max', osc_config.get('ti_range', [1.5, 600.0])[1])
+        conservative_Ti = np.clip(base_Ti * ti_multiplier, osc_config.get('ti_range', [1.5, 600.0])[0], ti_max_limit)
         conservative_Ki = conservative_Kp / conservative_Ti
         
         # [NEW] 严格遵循 Loop Preset 的 Td 策略
@@ -754,7 +759,7 @@ class OscillationTuner(LoggerMixin):
         force_conservative = (r_squared < min_r2_confidence)
         
         # Fallback 尝试
-        max_fallback_attempts = 3
+        max_fallback_attempts = 5
         for fallback_attempt in range(1, max_fallback_attempts + 1):
             if is_stable and not force_conservative:
                 break
@@ -764,22 +769,36 @@ class OscillationTuner(LoggerMixin):
             else:
                 self.log(f"   ⚠️ 闭环不稳定，尝试更保守的参数 (第{fallback_attempt}次)...")
                 
-            K_approx = pv_range / mv_range if mv_range > 0.1 and pv_range > 0.01 else 1.0
-            fallback_confidence = osc_info.get('confidence', 0.3) * (0.5 ** fallback_attempt)
-            adjusted_osc_ratio = min(0.95, osc_info.get('oscillation_ratio', 0.5) + 0.15 * fallback_attempt)
-            
-            pid_params = self._get_conservative_pid_params(
-                Pu, osc_info['Ku'], K_approx=K_approx, reason='data_range',
-                oscillation_ratio=adjusted_osc_ratio,
-                data_quality=osc_result.get('data_quality', 0.5) * (0.8 ** fallback_attempt),
-                nonlinearity=osc_result.get('nonlinearity', 0.0),
-                valve_issues=osc_result.get('valve_issues', {}), confidence=fallback_confidence
-            )
-            
-            # [FIX] 无论如何应用符号校正 (v3.10)
-            pid_params['Kp'] *= Kp_sign
-            pid_params['Ki'] *= Kp_sign
-            pid_params['Kd'] *= Kp_sign
+            if osc_result.get('method') == 'integrating_fallback':
+                # 针对积分过程的平滑保守退降
+                preset = get_loop_preset(self._loop_type)
+                ti_max_limit = preset.get('ti_max', 20000.0)
+                new_pb = min(abs(100.0 / pid_params['Kp']) * 1.3, 1000.0 if self._loop_type == 'level' else 400.0)
+                new_ti = min(pid_params['Ti'] * 1.2, ti_max_limit)
+                pid_params['Kp'] = (100.0 / new_pb) * np.sign(pid_params['Kp'])
+                pid_params['Ki'] = pid_params['Kp'] / new_ti
+                pid_params['pb'] = new_pb
+                pid_params['Ti'] = new_ti
+            else:
+                K_approx = pv_range / mv_range if mv_range > 0.1 and pv_range > 0.01 else 1.0
+                fallback_confidence = osc_info.get('confidence', 0.3) * (0.5 ** fallback_attempt)
+                adjusted_osc_ratio = min(0.95, osc_info.get('oscillation_ratio', 0.5) + 0.15 * fallback_attempt)
+                
+                pid_params = self._get_conservative_pid_params(
+                    Pu, osc_info['Ku'], K_approx=K_approx, reason='data_range',
+                    oscillation_ratio=adjusted_osc_ratio,
+                    data_quality=osc_result.get('data_quality', 0.5) * (0.8 ** fallback_attempt),
+                    nonlinearity=osc_result.get('nonlinearity', 0.0),
+                    valve_issues=osc_result.get('valve_issues', {}), confidence=fallback_confidence
+                )
+                
+                # 无论如何应用符号校正
+                pid_params['Kp'] *= Kp_sign
+                pid_params['Ki'] *= Kp_sign
+                pid_params['Kd'] *= Kp_sign
+                pid_params['pb'] = 100.0 / abs(pid_params['Kp']) if abs(pid_params['Kp']) > 1e-6 else 100.0
+                pid_params['Ti'] = pid_params['Kp'] / pid_params['Ki'] if abs(pid_params['Ki']) > 1e-6 else 0.0
+                pid_params['td'] = pid_params['Kd'] / pid_params['Kp'] if abs(pid_params['Kp']) > 1e-6 else 0.0
             
             is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
                 temp_fusion, pid_params, sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_mean, 
@@ -873,8 +892,14 @@ class OscillationTuner(LoggerMixin):
         # 1. 如果积分特性太强 (比如 Level 回路)，使用纯积分器近似转化
         if loop_type == 'level':
             L = Pu / 4.0
-            T1 = max(100.0 * Pu, 1000.0)
-            K = (2.0 * math.pi / (Pu * Ku)) * T1
+            T1 = max(2.0 * Pu, 100.0)
+            # 通过积分增益 K_int 反推模型等效增益 K:
+            # Ku 对于积分过程的理论对应关系 K_int ≈ (pi/2) / (Ku * L)
+            ku_safe = max(Ku, 0.001)
+            k_int = (math.pi / 2.0) / (ku_safe * max(L, 0.1))
+            K = k_int * T1
+            # 恢复正确的物理过程的正反作用符号
+            K *= np.sign(K_approx) if abs(K_approx) > 1e-6 else 1.0
             return round(T1, 4), round(L, 4), round(K, 4)
             
         # 2. 正常自衡过程，使用标准的奈奎斯特反向推导

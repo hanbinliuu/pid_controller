@@ -148,17 +148,22 @@ class SegmentFitter(LoggerMixin):
                     k_expected = abs(ModelIdentifier.estimate_gain_from_oscillating_data(y, u))
                 
                 # 根据振荡程度调整K值允许范围
+                # 放宽上限：积分环节(液位)用一阶模型拟合时，K和T1会极大，不应被严格的稳态比率截断
                 if severity == 'severe' or envelope_ratio > 0.5:
-                    k_min = k_expected * 0.5
-                    k_max = k_expected * 2.0
+                    k_min = k_expected * 0.2
+                    k_max = max(k_expected * 10.0, 50.0)
                 elif severity == 'moderate':
-                    k_min = k_expected * 0.4
-                    k_max = k_expected * 2.5
+                    k_min = k_expected * 0.1
+                    k_max = max(k_expected * 15.0, 100.0)
                 else:
-                    k_min = k_expected * 0.3
-                    k_max = k_expected * 3.0
+                    k_min = k_expected * 0.1
+                    k_max = max(k_expected * 20.0, 200.0)
             else:
                 # 非振荡数据：也应用自适应滤波（如果数据噪声较大）
+                # 同样放宽默认上限
+                k_min = k_expected * 0.1
+                k_max = max(k_expected * 20.0, 200.0)
+                
                 y_fit, u_fit, filter_info = self._preprocessor.adaptive_filter(y, u)
                 if filter_info.get('adaptive') and filter_info.get('noise_level') != 'low':
                     self.log(f"   🔧 自适应滤波: {filter_info['method']}, window={filter_info['window']}")

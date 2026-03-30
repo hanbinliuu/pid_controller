@@ -324,7 +324,9 @@ class ClosedLoopSimMixin:
         very_slow_t1_threshold = osc_config.get('very_slow_system_t1_threshold', 100.0)
         very_slow_pu_threshold = osc_config.get('very_slow_system_pu_threshold', 100.0)
         very_slow_sim_factor = osc_config.get('very_slow_sim_duration_factor', 10.0)
-        very_slow_max_duration = osc_config.get('very_slow_max_sim_duration', 3000.0)
+        T_max = max(T1, T2 if T2 > 0 else T1)
+        # 动态计算极大慢系统的最大允许时长
+        very_slow_max_duration = max(30000.0, (T_max + L) * 15.0)
         
         T_max = max(T1, T2 if T2 > 0 else T1)
         Pu = pid_params.get('Pu', T_max)
@@ -353,11 +355,11 @@ class ClosedLoopSimMixin:
         n_steps = int(sim_time / dt)
         
         if is_very_slow:
-            max_steps = min(30000, int(sim_time / dt))
+            max_steps = min(500000, int(sim_time / dt + 1000))
         elif T_max > 50:
-            max_steps = min(15000, int(T_max * 150))
+            max_steps = min(100000, int(sim_time / dt + 1000))
         else:
-            max_steps = 5000
+            max_steps = 10000
         
         n_steps = min(n_steps, max_steps)
         

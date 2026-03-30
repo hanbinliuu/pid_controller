@@ -360,6 +360,10 @@ class SegmentProcessor(LoggerMixin):
                         f"响应={seg_len}点, 质量={quality_score:.2f} ✓")
                 tuning_segments.append(seg)
                 segment_results.append(result)
+            else:
+                dir_str = "↑" if step_dir > 0 else "↓"
+                self.log(f"   阶跃@{step_idx}: MV{dir_str}{abs(step_size):.1f}, "
+                        f"响应={seg_len}点, 质量={quality_score:.2f} ✗")
         
         self.log(f"   📊 检测到 {len(tuning_segments)} 个有效整定段")
         return tuning_segments, segment_results

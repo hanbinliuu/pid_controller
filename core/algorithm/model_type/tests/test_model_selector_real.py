@@ -652,13 +652,17 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         
         T_min = T_ref
         T2_val = fusion.T2 if fusion.T2 > 0 else T_ref
-        T_min = min(T_ref, T2_val)
-        dt = min(0.1, T_min / 10)
-        dt = max(0.01, dt)
+        T_min = min(T_ref, T2_val) if min(T_ref, T2_val) > 0 else T_ref
         T_max = max(T_ref, T2_val)
+        
+        # 动态步长: 极慢系统使用大步长
+        dt = T_max / 100
+        dt = min(1.0, max(0.01, dt))
+        
         sim_time = max(300, T_max * 40)  # 加长仿真时间确保看到完整稳态过程
+        sim_time = min(sim_time, 50000)  # 封顶约14小时
         n_steps = int(sim_time / dt)
-        n_steps = min(n_steps, 20000)  # 允许更多步数以展示长时间行为
+        n_steps = min(n_steps, 50000)  # 允许更多步数以展示长时间行为
         
         # 直接使用 fusion 中的模型参数（振荡整定已经估算了合理的参数）
         K_est = fusion.K

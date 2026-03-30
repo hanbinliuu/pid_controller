@@ -63,7 +63,7 @@ TUNING_SEGMENT = {
     
     # 综合判定阈值
     'quality_pass_threshold': 0.6,   # 质量评分通过阈值
-    'osc_ratio_pass': 0.5,           # 振荡比通过阈值
+    'osc_ratio_pass': 0.65,          # 振荡比通过阈值
     
     # 稳态分析阈值
     'steady_osc_ratio': 0.3,         # 稳态振荡比阈值

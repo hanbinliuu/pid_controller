@@ -26,7 +26,7 @@ from .base_stage import PipelineStage
 from ...rating import ModelRating
 from ...config import Config
 from ...data_models import FusionResult
-
+from ...config.loop_presets import get_loop_preset
 
 # 默认配置（可被 Config.SELF_OPTIMIZE 覆盖）
 _DEFAULT_CONFIG = {
@@ -34,8 +34,8 @@ _DEFAULT_CONFIG = {
     'lambda_multipliers': [0.6, 0.8, 1.0, 1.2, 1.5, 2.0],
     'min_score_improvement': 0.3,
     'fine_tune_enabled': True,
-    'fine_tune_ratios': [0.8, 0.9, 1.0, 1.1, 1.2],
-    'fine_tune_max_rounds': 2,
+    'fine_tune_ratios': [0.5, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 2.0],
+    'fine_tune_max_rounds': 3,  # 增加一轮微调机会
     'fine_tune_min_improvement': 0.1,
 }
 
@@ -164,12 +164,19 @@ class SelfOptimizeStage(PipelineStage):
             # --- TI (调 Ki，保持 Kp) ---
             if abs(best_pid['Ki']) > eps:
                 base_ti = abs(best_pid['Kp'] / best_pid['Ki'])
+                preset = get_loop_preset(loop_type) if loop_type else {}
+                ti_max_limit = preset.get('ti_max', 300.0)
+                
                 for ratio in ratios:
                     if abs(ratio - 1.0) < 1e-6:
                         continue
                     new_ti = base_ti * ratio
                     if new_ti < 0.1:
                         continue
+                        
+                    # 应用上位机/DCS的最大限制
+                    new_ti = min(new_ti, ti_max_limit)
+                    
                     c = dict(best_pid)
                     c['Ki'] = c['Kp'] / new_ti
                     try:
@@ -471,15 +478,15 @@ class SelfOptimizeStage(PipelineStage):
             # 更新 final_result 中的 PID 参数
             # 注意: _convert_output_format 读 Kp/Ki/Kd (大写)，其余消费方读 kp/ki/kd (小写)
             context.final_result['pid_parameters'] = {
-                'Kp': round(float(tuned_Kp), 4),
-                'Ki': round(float(tuned_Ki), 4),
-                'Kd': round(float(tuned_Kd), 4),
-                'kp': round(float(tuned_Kp), 4),
-                'ki': round(float(tuned_Ki), 4),
-                'kd': round(float(tuned_Kd), 4),
+                'Kp': round(float(tuned_Kp), 8),
+                'Ki': round(float(tuned_Ki), 8),
+                'Kd': round(float(tuned_Kd), 8),
+                'kp': round(float(tuned_Kp), 8),
+                'ki': round(float(tuned_Ki), 8),
+                'kd': round(float(tuned_Kd), 8),
                 'pb': round(tuned_pb, 2),
-                'ti': round(tuned_ti, 2),
-                'td': round(tuned_td, 2),
+                'Ti': round(tuned_ti, 2),
+                'Td': round(tuned_td, 2),
             }
             context.final_result['model_rating'] = round(tuned_score, 2)
 

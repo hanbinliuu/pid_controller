@@ -193,7 +193,7 @@ class TuningMethodSelector(LoggerMixin):
         
         # 2. 尝试继电反馈法（如果有振荡特征）
         if chars.has_oscillation and chars.n_cycles >= 1:
-            relay_result = self._relay_feedback_tuning(segments, chars, dt)
+            relay_result = self._relay_feedback_tuning(segments, chars, dt, loop_type=loop_type)
             if relay_result.method != TuningMethod.CONSERVATIVE and relay_result.model_params:
                 relay_result = self._verify_stability(relay_result)
                 candidates.append(relay_result)
@@ -291,7 +291,7 @@ class TuningMethodSelector(LoggerMixin):
         )
     
     def _relay_feedback_tuning(self, segments: List[HistoricalData],
-                                chars: DataCharacteristics, dt: float) -> TuningMethodResult:
+                                chars: DataCharacteristics, dt: float, loop_type: str = '') -> TuningMethodResult:
         """继电反馈法整定"""
         self.log("\n🔧 使用继电反馈法整定")
         all_pv = np.concatenate([seg.pv for seg in segments])
@@ -299,7 +299,7 @@ class TuningMethodSelector(LoggerMixin):
         
         relay_result = RelayIdentifier.estimate_critical_params(all_pv, all_mv, dt)
         if relay_result is None:
-            return self._conservative_fallback("无法从振荡数据提取临界参数", loop_type=self._loop_type)
+            return self._conservative_fallback("无法从振荡数据提取临界参数", loop_type=loop_type)
         
         Ku, Pu = relay_result.Ku, relay_result.Pu
         self.log(f"   临界参数: Ku={Ku:.3f}, Pu={Pu:.1f}s")

@@ -129,7 +129,7 @@ class StabilityDetector:
             sign_std_ratio = 0.15
         
         if setpoint > 0:
-            if pv_range > max(setpoint * range_ratio, abs_range) or pv_std > max(setpoint * std_ratio, abs_std):
+            if pv_range > min(max(setpoint * range_ratio, abs_range), 5.0) or pv_std > min(max(setpoint * std_ratio, abs_std), 2.5):
                 return True
         else:
             if pv_range > abs_range or pv_std > abs_std:
@@ -149,7 +149,7 @@ class StabilityDetector:
         pv_std = np.std(pv_window)
         
         if setpoint > 0:
-            return pv_range > max(setpoint * 0.2, 2.0) or pv_std > max(setpoint * 0.12, 1.0)
+            return pv_range > min(max(setpoint * 0.2, 2.0), 3.0) or pv_std > min(max(setpoint * 0.12, 1.0), 1.5)
         else:
             return pv_range > 2.0 or pv_std > 1.0
     
@@ -904,7 +904,7 @@ class StabilityDetector:
                 continue
             
             seg_pv = pv_data[seg_start:seg_end]
-            window = min(30, (seg_end - seg_start) // 5)
+            window = min(60, (seg_end - seg_start) // 5)
             window = max(10, window)
             
             i = seg_start
@@ -925,8 +925,23 @@ class StabilityDetector:
                 is_steady = self.is_steady_state(window_data, seg_setpoint)
                 
                 if not is_steady:
-                    # 在SV变化期间使用更高阈值，避免将正常响应误识别为扰动
-                    if not self._check_large_oscillation(window_data, seg_setpoint, during_sv_change=in_sv_change):
+                    # 在SV稳定期间使用更高阈值，避免将正常响应误识别为扰动
+                    is_large_osc = self._check_large_oscillation(window_data, seg_setpoint, during_sv_change=in_sv_change)
+                    
+                    # 补充：针对极慢系统（如大榭液位），短窗(60点)内变化极小，会一直continue
+                    # 这里引入长窗(300~400点)的慢漂移(Slow Drift)检测
+                    is_slow_drift = False
+                    if not is_large_osc and not in_sv_change:
+                        long_window_len = min(400, seg_end - i)
+                        if long_window_len >= 100:
+                            long_window_data = pv_data[i: i + long_window_len]
+                            long_range = np.max(long_window_data) - np.min(long_window_data)
+                            long_dev = abs(np.mean(long_window_data) - seg_setpoint)
+                            # 如果长窗内范围>3.0 或 均值偏离>2.0，认为是慢漂移扰动
+                            if long_range > 3.0 or long_dev > 2.0:
+                                is_slow_drift = True
+                    
+                    if not is_large_osc and not is_slow_drift:
                         i += window // 3
                         continue
                     
@@ -1072,6 +1087,7 @@ class StabilityDetector:
                     filtered_segments.append((seg_start, seg_end, seg_setpoint))
         
         if not filtered_segments:
+            print(f"[DEBUG] filtered_segments is EMPTY. Initial non_steady_segments count: {len(non_steady_segments)}")
             return []
         
         # 合并相邻段
@@ -1079,9 +1095,9 @@ class StabilityDetector:
         merged_segments = [filtered_segments[0]]
         
         # 调试：打印过滤后的段（正常运行时注释掉）
-        # print(f"[DEBUG] filtered_segments: {len(filtered_segments)} 段")
-        # for idx, (s, e, sp) in enumerate(filtered_segments):
-        #     print(f"  段{idx+1}: [{s}, {e}], setpoint={sp:.2f}")
+        print(f"[DEBUG] filtered_segments: {len(filtered_segments)} 段")
+        for idx, (s, e, sp) in enumerate(filtered_segments):
+             print(f"  段{idx+1}: [{s}, {e}], setpoint={sp:.2f}")
         
         # 合并阈值设置
         MERGE_GAP_DIRECT = 300       # 直接合并的间隔阈值（约5分钟，采样1Hz时）
@@ -1175,6 +1191,7 @@ class StabilityDetector:
             
             final_segments = filtered_final
         
+        print(f"[DEBUG] Final segments count: {len(final_segments)}, before filtering it was {len(merged_segments)}")
         return final_segments
     
     def _check_gap_steady_state(self, pv_data, sv_array, gap_start, gap_end, gap_sv, fallback_sp):
@@ -1430,10 +1447,14 @@ class StabilityDetector:
         
         # 严格的稳态标准
         if setpoint > 0:
-            # 相对阈值
-            std_ok = pv_std < max(setpoint * 0.08, 0.3)  # 标准差 < 8% 或 0.3
-            range_ok = pv_range < max(setpoint * 0.15, 0.8)  # 范围 < 15% 或 0.8
-            error_ok = mean_error < max(setpoint * 0.1, 0.5)  # 误差 < 10% 或 0.5
+            # 相对阈值（截断保护，防止大设定值下阈值过高）
+            std_max = min(max(setpoint * 0.08, 0.3), 1.5)
+            range_max = min(max(setpoint * 0.15, 0.8), 3.0)
+            error_max = min(max(setpoint * 0.1, 0.5), 2.0)
+            
+            std_ok = pv_std < std_max
+            range_ok = pv_range < range_max
+            error_ok = mean_error < error_max
         else:
             # 绝对阈值
             std_ok = pv_std < 0.3
@@ -1617,6 +1638,9 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
         }
     
     except Exception as e:
+        import traceback
+        print(f"[ERROR] find_high_variability_periods 崩溃: {e}")
+        traceback.print_exc()
         return {
             "start_time": None,
             "end_time": None,

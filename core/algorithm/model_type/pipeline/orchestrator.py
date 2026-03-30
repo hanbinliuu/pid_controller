@@ -219,9 +219,9 @@ class TuningOrchestrator(LoggerMixin):
             'pb': round(float(Pb), 2),
             'ti': round(float(Ti), 2),
             'td': round(float(Td), 2),
-            'kp': round(float(Kp), 2),
-            'ki': round(float(Ki), 2),
-            'kd': round(float(Kd), 2)
+            'kp': round(float(Kp), 8),
+            'ki': round(float(Ki), 8),
+            'kd': round(float(Kd), 8)
         }
         
         # 输出最终 PID 参数（verbose 模式）

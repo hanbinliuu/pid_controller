@@ -258,7 +258,7 @@ class TuningMethodsMixin:
     def _tune_nonlinear(self, K: float, T1: float, L: float,
                         lambda_factor: float, method: str,
                         conservative_level: float, pb_min: float,
-                        model_type: str) -> Tuple[float, float, float]:
+                        model_type: str, loop_type: str = None) -> Tuple[float, float, float]:
         """非线性模型整定（使用等效线性化参数）"""
         nl_factors = self._pid_constraints.get('nonlinear_factors', {})
         nonlinear_factor = nl_factors.get('default', 1.3)
@@ -273,7 +273,7 @@ class TuningMethodsMixin:
         adjusted_conservative = conservative_level * nonlinear_factor
         adjusted_pb_min = pb_min * nonlinear_factor
         Kp, Ti, Td = self._tune_fopdt(K, T1, L, lambda_factor, method,
-                                       adjusted_conservative, adjusted_pb_min)
+                                       adjusted_conservative, adjusted_pb_min, loop_type=loop_type)
         Td = Td * 0.5
         
         if model_type == ModelType.DEADBAND_FOPDT:
@@ -284,7 +284,7 @@ class TuningMethodsMixin:
         return Kp, Ti, Td
     
     def _apply_constraints(self, Kp: float, Ti: float, Td: float,
-                           K_sign: int) -> Tuple[float, float, float]:
+                           K_sign: int, loop_type: str = None) -> Tuple[float, float, float]:
         """应用参数合理性约束"""
         cfg = self._pid_constraints
         kp_min = cfg.get('kp_min', 0.01)
@@ -292,8 +292,23 @@ class TuningMethodsMixin:
             Kp = kp_min * K_sign
         
         ti_min = cfg.get('ti_min', 0.1)
-        # [FIX] BUG-1: ti_max 默认值应该是 300.0
-        ti_max = cfg.get('ti_max', 300.0)
+        ti_max_default = cfg.get('ti_max', 300.0)
+        
+        # 覆写 loop_type 指定的约束
+        if loop_type:
+            preset = get_loop_preset(loop_type)
+            ti_max = preset.get('ti_max', ti_max_default)
+            ti_min = preset.get('ti_min', ti_min)
+            
+            # 强化PB上限约束 (防止温度等大迟滞回路PB暴走至3000%以上)
+            pb_max = preset.get('pb_max', 300.0)
+            if pb_max > 0:
+                kp_min_from_pb = 100.0 / pb_max
+                if abs(Kp) < kp_min_from_pb:
+                    Kp = kp_min_from_pb * K_sign
+        else:
+            ti_max = ti_max_default
+            
         Ti = max(ti_min, min(Ti, ti_max))
         
         td_max_ratio = cfg.get('td_max_ratio', 0.25)

@@ -105,12 +105,12 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
                                                 conservative_level, pb_min)
         elif model_type in [ModelType.HAMMERSTEIN, ModelType.DEADBAND_FOPDT, ModelType.SATURATION_FOPDT]:
             Kp, Ti, Td = self._tune_nonlinear(K_abs, T1, L, lambda_factor, method,
-                                               conservative_level, pb_min, model_type)
+                                               conservative_level, pb_min, model_type, loop_type)
         else:
             Kp, Ti, Td = self._get_fallback_params(loop_type=loop_type)
         
         Kp = Kp * K_sign
-        Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign)
+        Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign, loop_type)
         Ki = Kp / Ti if Ti > self._epsilon else 0.0
         Kd = Kp * Td
         pb = 100.0 / Kp if abs(Kp) > self._epsilon else 100.0

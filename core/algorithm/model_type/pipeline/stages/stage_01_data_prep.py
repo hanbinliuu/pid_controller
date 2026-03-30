@@ -49,11 +49,41 @@ class DataPrepStage(PipelineStage):
         }
 
     def _early_infer_loop_type(self, context: TuningContext):
-        """早期回路类型推断（基于原始数据特征）"""
-        if context.process_context and context.process_context.get('loop_type'):
-            context.loop_type = context.process_context['loop_type']
-            return
+        """早期回路类型推断（基于原始数据特征或外部传入）"""
+        
+        loop_type_str = None
+        # 1. 尝试从 input_data.params 提取 (API层传入)
+        if isinstance(context.tuning_input_raw, dict):
+            params = context.tuning_input_raw.get('params', {})
+            loop_type_str = params.get('loop_type')
+            
+        # 2. 如果 params 没有，尝试 process_context (本地脚本传入)
+        if not loop_type_str and context.process_context:
+            loop_type_str = context.process_context.get('loop_type')
+            
+        if loop_type_str:
+            # 统一映射中文名字母到英文标准名
+            mapping = {
+                '液位': 'level', '液位控制': 'level',
+                '流量': 'flow', '流量控制': 'flow',
+                '压力': 'pressure', '压力控制': 'pressure',
+                '温度': 'temperature', '温度控制': 'temperature'
+            }
+            mapped_type = mapping.get(loop_type_str, loop_type_str)
+            if mapped_type in ['flow', 'level', 'pressure', 'temperature']:
+                context.loop_type = mapped_type
+                if context.process_context is None:
+                    context.process_context = {}
+                context.process_context['loop_type'] = mapped_type
+                context.process_context['loop_type_source'] = 'user_input'
+                
+                self.log(f"\\n{'='*60}")
+                self.log("📊 Step 0.5: 回路类型确认")
+                self.log('='*60)
+                self.log(f"   ✓ 外部已知回路类型: {mapped_type} (来源: {loop_type_str})，跳过数据特征推断")
+                return
 
+        # 3. 未知回路类型，基于数据特征推断
         if not context.hist_data or len(context.hist_data.sv) == 0:
             return
 

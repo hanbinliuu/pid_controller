@@ -23,6 +23,7 @@ LOOP_TYPE_PRESETS = {
         'tau_c_factor': 1.2,      # τc较小，快速响应
         'safety_factor': 1.05,    # 安全系数降低 [1.15→1.05，避免与tau_c叠乘过度保守]
         'ti_multiplier': 1.0,     # Ti恢复标准 (1.15 -> 1.0)
+        'ti_max': 20.0,           # 流量回路严禁超大积分时间 [新增界限防止过差数据拉垮引擎]
         'td_enable': False,       # 流量严禁微分 [行业铁律]
         'aggressive': True,       # 允许激进整定
         'description': '流量回路：快速响应，积分特性',
@@ -47,7 +48,8 @@ LOOP_TYPE_PRESETS = {
     # 特点：积分过程、需平滑控制、避免MV频繁动作
     'level': {
         'pb_min': 100.0,          # 液位积分过程，需要较大PB
-        'pb_max': 300.0,          # 允许略微激进 [400 -> 300，避免超时]
+        'pb_max': 1000.0,         # 上限放宽，适应极慢积分系统 [500 -> 1000]
+        'ti_max': 3600.0,         # 增加真实工业界最大积分时间界限，防止超大积分过载下游DCS
         'tau_c_factor': 2.0,      # τc加快 [3.0 -> 2.0，加速响应，减少超时]
         'safety_factor': 1.0,     # 安全系数降低 [1.1 -> 1.0，避免过于保守]
         'ti_multiplier': 1.5,     # Ti适度增大 [2.0 -> 1.5，加快积分作用]
@@ -65,6 +67,7 @@ LOOP_TYPE_PRESETS = {
         'tau_c_factor': 1.8,      # τc适中，增加阻尼 [1.5 -> 1.8，平缓响应]
         'safety_factor': 1.05,    # 安全系数保持 [1.05]
         'ti_multiplier': 1.05,    # Ti标准 (1.05)
+        'ti_max': 50.0,           # 压力回路响应速度界限 [新增]
         'td_enable': True,        # 可用微分改善响应
         'td_ratio': 0.15,         # Td = Ti * 0.15
         'td_max': 10.0,           # Td绝对上限10s [工业压力回路标准]

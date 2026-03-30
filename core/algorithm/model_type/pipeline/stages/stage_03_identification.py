@@ -59,6 +59,11 @@ class IdentificationStage(PipelineStage):
         # 2. 如果全都是高振荡段，直接强行走振荡整定
         if not fitting_segs:
             self.log("⚠️ 所有段均为高振荡，直接启用振荡整定")
+            force_fallback = True
+        else:
+            force_fallback = False
+
+        if force_fallback:
             oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
                 context.segments_for_fitting, context.results_for_fitting, context.current_pid, force=True
             )
