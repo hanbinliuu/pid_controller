@@ -62,7 +62,7 @@ class TuningMethodsMixin:
             tau_c = base_tau * lambda_factor * tau_c_factor * (conservative_level / baseline)
             denom = K * tau_c
             if denom < self._epsilon:
-                return self._get_fallback_params(Ti_override=T1)
+                return self._get_fallback_params(Ti_override=T1, loop_type=loop_type)
             Kp = T1 / denom
             ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
             
@@ -77,7 +77,7 @@ class TuningMethodsMixin:
             lambda_val = T1 * lambda_factor * tau_c_factor * conservative_level
             denom = K * lambda_val
             if denom < self._epsilon:
-                return self._get_fallback_params(Ti_override=T1)
+                return self._get_fallback_params(Ti_override=T1, loop_type=loop_type)
             Kp = T1 / denom
             Ti = T1
         
@@ -119,7 +119,7 @@ class TuningMethodsMixin:
             tau_c = max(L, T1 * 0.1)
             denom = K * (tau_c + L)
             if denom < self._epsilon:
-                return self._get_fallback_params(Ti_override=T1)
+                return self._get_fallback_params(Ti_override=T1, loop_type=loop_type)
             Kp = T1 / denom
             Ti = min(T1, 4 * (tau_c + L))
             Td = 0.0
@@ -137,7 +137,7 @@ class TuningMethodsMixin:
                 tau_c = max(tau_c, L * tau_c_min_factor)
                 denom = K * (tau_c + L)
                 if denom < self._epsilon:
-                    return self._get_fallback_params(Ti_override=T1)
+                    return self._get_fallback_params(Ti_override=T1, loop_type=loop_type)
                 Kp = T1 / denom
                 ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
                 
@@ -162,7 +162,7 @@ class TuningMethodsMixin:
                 lambda_val = base_tau * lambda_factor * tau_c_factor * (conservative_level / baseline)
                 denom = K * (lambda_val + L / 2)
                 if denom < self._epsilon:
-                    return self._get_fallback_params(Ti_override=T1 + L / 2)
+                    return self._get_fallback_params(Ti_override=T1 + L / 2, loop_type=loop_type)
                 Kp = (T1 + L / 2) / denom
                 
                 is_integrating = preset.get('integrating_mode', False)
@@ -214,7 +214,7 @@ class TuningMethodsMixin:
         tau_c = T_eff * lambda_factor * tau_c_factor * (conservative_level / baseline)
         denom = K * (tau_c + L_eff)
         if denom < self._epsilon:
-            return self._get_fallback_params(Ti_override=T_eff)
+            return self._get_fallback_params(Ti_override=T_eff, loop_type=loop_type)
         
         Kp = T_eff / denom
         ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
@@ -233,10 +233,10 @@ class TuningMethodsMixin:
     
     def _tune_integrator(self, K: float, T1: float, 
                          lambda_factor: float, conservative_level: float = 4.0,
-                         pb_min: float = 60.0) -> Tuple[float, float, float]:
+                         pb_min: float = 60.0, loop_type: str = None) -> Tuple[float, float, float]:
         """积分过程整定（SIMC 方法）"""
         if abs(K) < self._epsilon:
-            return self._get_fallback_params()
+            return self._get_fallback_params(loop_type=loop_type)
         
         simc_cfg = getattr(Config, 'SIMC_TUNING', {})
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)

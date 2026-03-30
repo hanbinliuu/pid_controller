@@ -102,7 +102,7 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
                                            conservative_level, pb_min, loop_type)
         elif model_type == ModelType.FOPI:
             Kp, Ti, Td = self._tune_integrator(K_abs, T1, lambda_factor,
-                                                conservative_level, pb_min)
+                                                conservative_level, pb_min, loop_type)
         elif model_type in [ModelType.HAMMERSTEIN, ModelType.DEADBAND_FOPDT, ModelType.SATURATION_FOPDT]:
             Kp, Ti, Td = self._tune_nonlinear(K_abs, T1, L, lambda_factor, method,
                                                conservative_level, pb_min, model_type, loop_type)

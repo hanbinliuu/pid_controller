@@ -369,19 +369,12 @@ class TuningMethodSelector(LoggerMixin):
     def _conservative_fallback(self, reason: str, loop_type: str = 'flow') -> TuningMethodResult:
         """保守 fallback 整定"""
         self.log(f"   ⚠️ 使用保守fallback: {reason}")
-        from core.algorithm.model_type.tuning.strategies.loop_type_strategies import get_loop_strategy
-        strategy = get_loop_strategy(loop_type)
-        fallback_cfg = strategy.get_fallback_params()
+        Kp, Ti, Td = self._pid_calculator._get_fallback_params(loop_type=loop_type)
+        Ki = Kp / Ti if Ti > 0 else 0.0
+        Kd = Kp * Td
         
-        # 将获取的 fallback params 转换为最终 pid 输出格式
-        # PB 转换为 Kp, Kp = 100 / PB * sign，这里为了保守，不处理符号，后续统一处理
-        pb = fallback_cfg.get('pb_base', 200.0)
-        ti = fallback_cfg.get('fallback_ti', 25.0)
-        
-        Kp = 100.0 / max(pb, 1.0)
-        Ki = Kp / ti if ti > 0 else 0.0
-        
-        pid_params = {'Kp': Kp, 'Ki': Ki, 'Kd': 0.0, 'Ti': ti, 'Td': 0.0, 'pb': pb, 'method': 'conservative_fallback'}
+        pb = 100.0 / Kp if Kp > 1e-6 else 200.0
+        pid_params = {'Kp': Kp, 'Ki': Ki, 'Kd': Kd, 'Ti': Ti, 'Td': Td, 'pb': pb, 'method': 'conservative_fallback'}
         return TuningMethodResult(
             method=TuningMethod.CONSERVATIVE, confidence=0.3, pid_params=pid_params,
             reasoning=f"保守fallback: {reason}", warnings=[reason]
