@@ -20,6 +20,7 @@ Phase 2 — PB/TI/TD 微调 (所有路径):
 """
 
 from typing import Dict, List, Tuple, Optional
+import numpy as np
 
 from ..context import TuningContext
 from .base_stage import PipelineStage
@@ -27,6 +28,7 @@ from ...rating import ModelRating
 from ...config import Config
 from ...data_models import FusionResult
 from ...config.loop_presets import get_loop_preset
+from ...utils import normalize_pid_keys as _normalize_pid_keys, pid_to_full_dict
 
 # 默认配置（可被 Config.SELF_OPTIMIZE 覆盖）
 _DEFAULT_CONFIG = {
@@ -40,16 +42,9 @@ _DEFAULT_CONFIG = {
 }
 
 
-def _normalize_pid_keys(pid_params: Dict) -> Dict[str, float]:
-    """
-    规范化 PID 参数 key 为大写 Kp/Ki/Kd。
-    兼容输入 'kp'/'Kp' 两种格式。(Fix #1: key 格式规范化)
-    """
-    return {
-        'Kp': float(pid_params.get('Kp', pid_params.get('kp', 1.0))),
-        'Ki': float(pid_params.get('Ki', pid_params.get('ki', 0.0))),
-        'Kd': float(pid_params.get('Kd', pid_params.get('kd', 0.0))),
-    }
+def _normalize_pid_keys_fn(pid_params: Dict) -> Dict[str, float]:
+    """兼容性包装 — 委托给 utils.normalize_pid_keys"""
+    return _normalize_pid_keys(pid_params)
 
 
 class SelfOptimizeStage(PipelineStage):
@@ -79,7 +74,7 @@ class SelfOptimizeStage(PipelineStage):
         # Fix #1: 确保 key 统一为大写
         pid_params = _normalize_pid_keys(pid_params)
         return self._evaluate_pid(fusion, pid_params, sp_initial, sp_final, pv_initial, loop_type,
-                                  extra={'lambda_factor': lambda_factor})
+                                  extra={'lambda_factor': lambda_factor, 'dt_data': getattr(self._context, 'dt_data', 1.0)})
 
     # ------------------------------------------------------------------
     # 评估: 直接评估一组 PID 参数
@@ -87,6 +82,12 @@ class SelfOptimizeStage(PipelineStage):
     def _evaluate_pid(self, fusion, pid_params, sp_initial, sp_final, pv_initial, loop_type, extra=None):
         # Fix #1: 规范化输入 key
         pid_params = _normalize_pid_keys(pid_params)
+        
+        # [NEW] 将真实数据采样周期传给内部闭环仿真器
+        if hasattr(self, '_context') and hasattr(self._context, 'dt_data'):
+            pid_params['Ts'] = self._context.dt_data
+        elif extra and 'dt_data' in extra:
+            pid_params['Ts'] = extra['dt_data']
 
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
             fusion, pid_params,
@@ -269,7 +270,7 @@ class SelfOptimizeStage(PipelineStage):
         if hist_data is None:
             return None
 
-        valid_mask = hist_data.pv != 0
+        valid_mask = hist_data.valid_mask()
         y = hist_data.pv[valid_mask]
         sv = hist_data.sv[valid_mask]
         ms_cfg = Config.MODEL_SELECTOR
@@ -294,10 +295,17 @@ class SelfOptimizeStage(PipelineStage):
     # 辅助: 构建 closed_loop_verification dict (Fix #3)
     # ------------------------------------------------------------------
     @staticmethod
-    def _build_cl_verification(cl_metrics, sp_initial, sp_final, pv_initial) -> Dict:
-        """从 cl_metrics 构建 closed_loop_verification 字典, 确保与微调后参数匹配。"""
+    def _build_cl_verification(cl_metrics, sp_initial, sp_final, pv_initial, is_stable=None) -> Dict:
+        """从 cl_metrics 构建 closed_loop_verification 字典, 确保与微调后参数匹配。
+        
+        Args:
+            is_stable: 由 verify_pid_stability 返回的稳定性判定（综合判定）。
+                       如为 None，则降级为简单的 settling_time 判定（不推荐）。
+        """
+        if is_stable is None:
+            is_stable = cl_metrics.settling_time < float('inf')
         return {
-            'is_stable': cl_metrics.settling_time < float('inf'),
+            'is_stable': is_stable,
             'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
             'overshoot': cl_metrics.overshoot,
             'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
@@ -346,6 +354,33 @@ class SelfOptimizeStage(PipelineStage):
     def execute(self, context: TuningContext) -> TuningContext:
         if not self._config.get('enabled', True):
             return context
+            
+        self._context = context
+
+        self.log(f"\n{'='*60}")
+        self.log("🔄 Step 5b: Rating 驱动自优化")
+        self.log('='*60)
+
+        # ====================================================================
+        # 路径判定: final_result 已存在? → 振荡/fallback 路径
+        # ====================================================================
+        if context.final_result is not None:
+            return self._optimize_existing_result(context)
+
+        # ====================================================================
+        # 正常路径: fusion_result 存在，走 Phase 1 + Phase 2
+        # ====================================================================
+        # [NEW] 提取真实历史数据的采样周期 dt_data
+        hist_data = context.hist_data
+        dt_data = 1.0
+        if hist_data and hasattr(hist_data, 'timestamp') and len(hist_data.timestamp) > 1:
+            ts = np.array(hist_data.timestamp, dtype=np.int64)
+            ts_diff = np.diff(ts[ts > 0]) / 1000.0
+            if len(ts_diff) > 0:
+                dt_data = float(np.median(ts_diff))
+        # 将真实采样周期放入 context 中，方便 _evaluate_pid 使用
+        if not hasattr(context, 'dt_data'):
+            context.dt_data = dt_data
 
         self.log(f"\n{'='*60}")
         self.log("🔄 Step 5b: Rating 驱动自优化")
@@ -475,25 +510,17 @@ class SelfOptimizeStage(PipelineStage):
             )
             self.log(f"   评分 {baseline_score:.2f} → {tuned_score:.2f} (提升 +{improvement:.2f})")
 
-            # 更新 final_result 中的 PID 参数
-            # 注意: _convert_output_format 读 Kp/Ki/Kd (大写)，其余消费方读 kp/ki/kd (小写)
-            context.final_result['pid_parameters'] = {
-                'Kp': round(float(tuned_Kp), 8),
-                'Ki': round(float(tuned_Ki), 8),
-                'Kd': round(float(tuned_Kd), 8),
-                'kp': round(float(tuned_Kp), 8),
-                'ki': round(float(tuned_Ki), 8),
-                'kd': round(float(tuned_Kd), 8),
-                'pb': round(tuned_pb, 2),
-                'Ti': round(tuned_ti, 2),
-                'Td': round(tuned_td, 2),
-            }
+            # 使用统一工具函数生成完整 PID 参数字典
+            context.final_result['pid_parameters'] = pid_to_full_dict(
+                tuned_Kp, tuned_Ki, tuned_Kd
+            )
             context.final_result['model_rating'] = round(tuned_score, 2)
 
             # Fix #3: 同步更新 closed_loop_verification, 使其与微调后的参数匹配
             if tuned_detail and 'cl_metrics' in tuned_detail:
                 context.final_result['closed_loop_verification'] = self._build_cl_verification(
-                    tuned_detail['cl_metrics'], sp_initial, sp_final, pv_initial
+                    tuned_detail['cl_metrics'], sp_initial, sp_final, pv_initial,
+                    is_stable=tuned_detail.get('is_stable')
                 )
         else:
             self.log(f"\n   ✅ Phase 2: 微调提升不足 (+{improvement:.2f})，保持原始参数")

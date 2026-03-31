@@ -35,17 +35,17 @@ from core.algorithm.model_type.model_selector import ModelSelector
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", 
-    'loop_uri': "/pid_zd/7d3298f025b84c46a2ed898f66dcfa3f",  #101
+    # 'loop_uri': "/pid_zd/7d3298f025b84c46a2ed898f66dcfa3f",  #101
     # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
-    # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
+    'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
     # 测试场景列表 (可添加多个场景)
     'scenarios': [
-        {'start_time': '2025-12-23 00:00:00', 'end_time': '2025-12-23 23:00:00'},
+        # {'start_time': '2025-12-23 00:00:00', 'end_time': '2025-12-23 23:00:00'},
         # {'start_time': '2026-03-11 04:09:30', 'end_time': '2026-03-11 10:09:30'},
 
-        # {'start_time': '2026-01-05 00:39:41', 'end_time': '2026-01-05 13:39:41'},
+        {'start_time': '2026-01-05 00:39:41', 'end_time': '2026-01-05 13:39:41'},
     ],
     
     # 响应模式: 'fast' | 'balanced' | 'conservative'
@@ -478,17 +478,22 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
             mv_history_sim.append(mv_out)
             mv_delayed = mv_history_sim.pop(0)
             delta_mv = mv_delayed - mv_init
-            T1_eff = max(T1_sim, dt_sim)
+            T1_eff = max(T1_sim, 0.01)
+            # 使用指数欧拉法防止刚性方程(大时间步、小时间常数)的数值发散
+            # 原本的显式欧拉: dx1 = (K_sim * delta_mv - x1_s) / T1_eff * dt_sim 
+            # 当 dt_sim > 2*T1_eff 时，原方程会数值爆炸，产生 -4^n 从而剧烈震荡。
+            alpha = 1.0 - np.exp(-dt_sim / T1_eff)
+
             if model_type in ['SOPDT', 'SO', 'SECOND_ORDER'] and T2_sim > 0:
-                T2_eff = max(T2_sim, dt_sim)
-                dx1 = (K_sim * delta_mv - x1_s) / T1_eff
-                dx2 = (x1_s - x2_s) / T2_eff
-                x1_s += dx1 * dt_sim
-                x2_s += dx2 * dt_sim
+                T2_eff = max(T2_sim, 0.01)
+                alpha2 = 1.0 - np.exp(-dt_sim / T2_eff)
+                x1_next = x1_s + alpha * (K_sim * delta_mv - x1_s)
+                x2_next = x2_s + alpha2 * (x1_s - x2_s)
+                x1_s, x2_s = x1_next, x2_next
                 delta_pv = x2_s
             else:
-                dx1 = (K_sim * delta_mv - x1_s) / T1_eff
-                x1_s += dx1 * dt_sim
+                x1_next = x1_s + alpha * (K_sim * delta_mv - x1_s)
+                x1_s = x1_next
                 delta_pv = x1_s
             pv_current_s = pv_init + delta_pv
             pv_sim[i] = pv_current_s
@@ -655,9 +660,12 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         T_min = min(T_ref, T2_val) if min(T_ref, T2_val) > 0 else T_ref
         T_max = max(T_ref, T2_val)
         
-        # 动态步长: 极慢系统使用大步长
-        dt = T_max / 100
-        dt = min(1.0, max(0.01, dt))
+        # 真实步长：利用真实数据的间隔，避免高频平滑掩盖了真实采样场景下的离散发散现象
+        if len(timestamps) > 1:
+            dt = (timestamps[1] - timestamps[0]) / 1000.0
+        else:
+            dt = T_max / 100
+        dt = max(0.5, dt)
         
         sim_time = max(300, T_max * 40)  # 加长仿真时间确保看到完整稳态过程
         sim_time = min(sim_time, 50000)  # 封顶约14小时
@@ -864,9 +872,10 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
             mv_delayed = mv_history.pop(0)
             delta_mv = mv_delayed - mv_base
             
-            T1_eff = max(T1, dt_sim)
-            dx1 = (K * delta_mv - x1) / T1_eff
-            x1 += dx1 * dt_sim
+            T1_eff = max(T1, 0.01)
+            alpha = 1.0 - np.exp(-dt_sim / T1_eff)
+            x1_next = x1 + alpha * (K * delta_mv - x1)
+            x1 = x1_next
             pv_current = pv_base + x1
             pv_sim[i] = pv_current
         

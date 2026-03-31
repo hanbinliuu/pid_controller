@@ -1,0 +1,25 @@
+{
+  "device": "2216_LIC_50104",
+  "mode_used": "auto_detect",
+  "time_information": {
+    "used_tuning_windows": [
+      {
+        "start_time": 1763568000000,
+        "end_time": 1763604745000
+      },
+      {
+        "start_time": 1763631050000,
+        "end_time": 1763654400000
+      }
+    ]
+  },
+  "model_rating": 2.74,
+  "pid_parameters": {
+    "pb": 816.84,
+    "ti": 3600.0,
+    "td": 0.0,
+    "kp": 0.12242231,
+    "ki": 3.401e-05,
+    "kd": 0.0
+  }
+}

@@ -100,7 +100,7 @@ class SegmentFitter(LoggerMixin):
             seg = segments[valid_idx]
             valid_idx += 1
             
-            valid_mask = seg.pv != 0
+            valid_mask = seg.valid_mask()
             y = seg.pv[valid_mask]
             u = seg.mv[valid_mask]
             t = np.arange(len(y), dtype=float)

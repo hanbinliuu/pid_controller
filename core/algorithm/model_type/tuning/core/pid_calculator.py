@@ -111,6 +111,13 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         
         Kp = Kp * K_sign
         Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign, loop_type)
+        
+        # [NEW] 极端积分下限保护 (防止微观假象导致真实DCS崩溃)
+        # 即使模型由于局部波动辨识出了极小的时间常数(T1=1.0s)，
+        # 真实液位/温度系统的积分也不能无限小，否则在典型 1~5s 的DCS离散控制下会因积分步长过大直接发散
+        if loop_type in ['level', 'temperature']:
+            Ti = max(Ti, 20.0) 
+            
         Ki = Kp / Ti if Ti > self._epsilon else 0.0
         Kd = Kp * Td
         pb = 100.0 / Kp if abs(Kp) > self._epsilon else 100.0
@@ -252,6 +259,21 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
                                response_mode: str = 'balanced',
                                loop_type: str = None) -> Dict[str, float]:
         """从FusionResult计算PID参数"""
+        
+        # ⭐ 核心修复：自优化网格搜索时 (stage_05b) 不会传入 quality_info，
+        # 这导致它回退到了 default_pb (如25%), 完全忽略了基于低R²和回路类型的鲁棒保护(pb_min=100)！
+        # 在这里如果未传参，则必须从 fusion 倒推伪造一个基础的 quality_info 提供保护。
+        if quality_info is None:
+            quality_info = DataQualityInfo(
+                quality_score=0.5,
+                oscillation_ratio=0.0,
+                r_squared=getattr(fusion, 'global_r2', 0.5),
+                is_noisy=False,
+                consistency_score=getattr(fusion, 'consistency_score', 0.5),
+                correlation=0.0,
+                controller_sign=1
+            )
+            
         return self.calculate(
             fusion.K, fusion.T1, fusion.T2, fusion.L,
             fusion.model_type, lambda_factor,

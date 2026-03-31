@@ -47,8 +47,8 @@ class FusionStage(PipelineStage):
 
     def _validate_model_type_with_fulldata(self, current_model: str, hist_data: HistoricalData) -> str:
         """使用全量数据验证/选择模型类型"""
-        self.log("\\n   📊 全量数据模型验证:")
-        valid_mask = hist_data.pv != 0
+        self.log("\n   📊 全量数据模型验证:")
+        valid_mask = hist_data.valid_mask()
         y = hist_data.pv[valid_mask]
         u = hist_data.mv[valid_mask]
         
@@ -107,7 +107,7 @@ class FusionStage(PipelineStage):
         
         diagnosis = self._unified_selector.handle_inconsistent_segments(segment_fits)
         if diagnosis['has_inconsistency']:
-            self.log("\\n   ⚠️ 检测到段间不一致:")
+            self.log("\n   ⚠️ 检测到段间不一致:")
             for issue in diagnosis['issues']:
                 self.log(f"      - {issue}")
             if diagnosis['recommendations']:
@@ -115,7 +115,7 @@ class FusionStage(PipelineStage):
                 for rec in diagnosis['recommendations']:
                     self.log(f"      - {rec}")
         
-        self.log(f"\\n🎯 统一模型选择: {best_model}")
+        self.log(f"\n🎯 统一模型选择: {best_model}")
         
         if need_fulldata and hist_data is not None:
             fulldata_model = self._validate_model_type_with_fulldata(best_model, hist_data)
@@ -132,7 +132,7 @@ class FusionStage(PipelineStage):
         cfg = self._segment_processor._tuning_config
         fallback_factor = cfg.get('sv_closed_loop_t1_factor', 3.0)
 
-        self.log(f"\\n{'='*60}")
+        self.log(f"\n{'='*60}")
         self.log("📊 Step 4.5: 闭环数据修正（CLHM+YS 三层辨识）")
         self.log('='*60)
 
@@ -221,7 +221,7 @@ class FusionStage(PipelineStage):
         loop_type, confidence, reason = infer_loop_type(model_params, model_type)
         early_confidence = process_context.get('loop_type_confidence', 0)
         
-        self.log(f"\\n{'='*60}")
+        self.log(f"\n{'='*60}")
         self.log("📊 Step 4.6: 回路类型精确验证（基于模型参数）")
         self.log('='*60)
         self.log(f"   {format_inference_log(loop_type, confidence, reason)}")

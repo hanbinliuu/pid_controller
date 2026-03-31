@@ -112,8 +112,8 @@ class SegmentProcessor(LoggerMixin):
                 self._mark_invalid(result, f"数据点不足({len(seg)}<{min_points})", i, segment_results)
                 continue
             
-            # 过滤PV=0的点
-            valid_mask = seg.pv != 0
+            # 过滤无效数据点（NaN/Inf），不再使用 pv != 0 以避免误删合法零值
+            valid_mask = np.isfinite(seg.pv) & np.isfinite(seg.mv)
             valid_count = np.sum(valid_mask)
             
             if valid_count < min_points:
@@ -872,7 +872,7 @@ class SegmentProcessor(LoggerMixin):
             (stability_score, oscillation_ratio, settling_quality, is_steady)
         """
         try:
-            valid_mask = seg.pv != 0
+            valid_mask = seg.valid_mask()
             y = seg.pv[valid_mask]
             u = seg.mv[valid_mask]
             

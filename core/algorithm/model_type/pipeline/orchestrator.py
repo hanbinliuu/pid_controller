@@ -178,7 +178,8 @@ class TuningOrchestrator(LoggerMixin):
             ]
         }
         
-        result = self.fit(tuning_input, history_data, lambda_factor=0.8, 
+        result = self.fit(tuning_input, history_data,
+                          lambda_factor=Config.TUNING_DEFAULTS['lambda_factor'],
                           current_pid=current_pid)
         return self._convert_output_format(result, params)
     
@@ -266,13 +267,23 @@ class TuningOrchestrator(LoggerMixin):
             'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
             'pid_parameters': {
                 'pb': 100.0, 'ti': 0.0, 'td': 0.0,
-                'kp': 1.0, 'ki': 0.0, 'kd': 0.0
+                'kp': 1.0, 'ki': 0.05, 'kd': 0.0
             },
             'fitting_result': {
                 'timestamp': [], 'sv': [], 'pv': [], 'mv': [],
                 'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0,
                 'recommendation': '不可用'
-            }
+            },
+            'fusion_info': {
+                'method': 'none', 'n_segments': 0, 'consistency_score': 0.0
+            },
+            'closed_loop_verification': {},
+            'rating_details': {
+                'r2_score': 0.0, 'consistency_score': 0.0, 'validity_score': 0.0,
+                'coverage_score': 0.0, 'n_segments': 0, 'total_data_points': 0
+            },
+            'tuning_features': {},
+            'segment_info': []
         }
     
     # ============================================================
@@ -322,13 +333,21 @@ class TuningOrchestrator(LoggerMixin):
         ]
         
         # 3. 按序执行流水线
-        self.log(f"\\n{'='*60}\\n🚀 开始 PID Agent 智能整定流水线\\n{'='*60}")
+        self.log(f"\n{'='*60}\n🚀 开始 PID Agent 智能整定流水线\n{'='*60}")
         
         # 前置阶段：遇到 final_result 可提前跳出
         for stage in pre_stages:
             context = stage.execute(context)
             if context.final_result is not None:
                 break
+        
+        # 安全兜底：如果 fallback 已触发但 final_result 未设置，
+        # 生成空结果防止后续 Stage 访问 None 导致异常
+        if context.is_fallback_triggered and context.final_result is None:
+            self.log("   ⚠️ fallback 已触发但无整定结果，生成空结果")
+            context.final_result = OutputBuilder.create_empty_result(
+                self._parse_input(tuning_input)
+            )
         
         # 后置阶段：始终执行（SelfOptimize 对所有路径的结果做优化）
         for stage in post_stages:

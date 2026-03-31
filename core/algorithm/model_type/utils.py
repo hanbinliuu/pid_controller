@@ -111,6 +111,39 @@ def determine_turning_type(Kp: float, Ti: float, Td: float) -> str:
         return 'P'
 
 
+def normalize_pid_keys(pid_params: dict) -> dict:
+    """规范化 PID 参数 key 为大写 Kp/Ki/Kd。
+    
+    兼容输入 'kp'/'Kp' 两种格式，统一返回大写 key。
+    """
+    return {
+        'Kp': float(pid_params.get('Kp', pid_params.get('kp', 1.0))),
+        'Ki': float(pid_params.get('Ki', pid_params.get('ki', 0.0))),
+        'Kd': float(pid_params.get('Kd', pid_params.get('kd', 0.0))),
+    }
+
+
+def pid_to_full_dict(Kp: float, Ki: float, Kd: float, eps: float = 1e-10) -> dict:
+    """从 Kp/Ki/Kd 生成完整 PID 参数字典（含 pb/ti/td 和双格式 key）。
+    
+    统一 PID 参数转换逻辑，避免在各模块重复计算 pb/ti/td。
+    """
+    pb = 100.0 / abs(Kp) if abs(Kp) > eps else 999.0
+    ti = abs(Kp / Ki) if abs(Ki) > eps else 0.0
+    td = abs(Kd / Kp) if abs(Kp) > eps else 0.0
+    return {
+        'Kp': round(float(Kp), 8),
+        'Ki': round(float(Ki), 8),
+        'Kd': round(float(Kd), 8),
+        'kp': round(float(Kp), 8),
+        'ki': round(float(Ki), 8),
+        'kd': round(float(Kd), 8),
+        'pb': round(pb, 2),
+        'ti': round(ti, 2),
+        'td': round(td, 2),
+    }
+
+
 def build_segment_info(segments: list, segment_results: list) -> list:
     """
     构建段信息用于可视化（独立工具函数）

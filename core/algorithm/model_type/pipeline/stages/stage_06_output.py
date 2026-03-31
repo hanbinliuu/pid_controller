@@ -75,9 +75,14 @@ class OutputVerificationStage(PipelineStage):
         
         # 2. 调用 OutputBuilder 生成最终大字典
         context.final_result = self._output_builder.build_full_output(
-            context.fusion_result, context.hist_data, context.time_range, context.lambda_factor, 
-            context.input_data.tuning_window, quality_info,
-            context.original_results, context.original_segments,
+            fusion=context.fusion_result,
+            hist_data=context.hist_data,
+            time_range=context.time_range,
+            lambda_factor=context.lambda_factor,
+            tuning_windows=context.input_data.tuning_window,
+            quality_info=quality_info,
+            segment_results=context.original_results,
+            segments=context.original_segments,
             loop_type=context.loop_type,
             optimized_pid=context.optimized_pid
         )

@@ -702,7 +702,7 @@ class OscillationTuner(LoggerMixin):
         pid_params = osc_result['pid_params']
         osc_info = osc_result['oscillation_info']
         
-        valid_mask = hist_data.pv != 0
+        valid_mask = hist_data.valid_mask()
         y = hist_data.pv[valid_mask]
         u = hist_data.mv[valid_mask]
         ts = hist_data.timestamp[valid_mask]

@@ -36,7 +36,7 @@ class RefinementStage(PipelineStage):
         points_list = []
         
         for seg in segments:
-            seg_valid = seg.pv != 0
+            seg_valid = seg.valid_mask()
             y = seg.pv[seg_valid]
             u = seg.mv[seg_valid]
             sv = seg.sv[seg_valid] if hasattr(seg, 'sv') and seg.sv is not None else None
@@ -209,7 +209,7 @@ class RefinementStage(PipelineStage):
                               segments: List[HistoricalData],
                               hist_data: HistoricalData) -> FusionResult:
         """验证融合参数，必要时进行全局优化"""
-        self.log(f"\\n{'='*60}")
+        self.log(f"\n{'='*60}")
         self.log("📊 Step 5: 验证与优化")
         self.log('='*60)
         
@@ -222,7 +222,7 @@ class RefinementStage(PipelineStage):
             fusion.global_rmse = 0.0
             return fusion
         
-        valid_mask = hist_data.pv != 0
+        valid_mask = hist_data.valid_mask()
         y_full = hist_data.pv[valid_mask]
         u_full = hist_data.mv[valid_mask]
         sv_full = hist_data.sv[valid_mask] if hist_data.sv is not None else None
@@ -349,10 +349,10 @@ class RefinementStage(PipelineStage):
         else:
             quality = "较差"
         
-        self.log(f"\\n   最终评估: 扰动段R²={eval_r2:.4f} ({quality}), 全量R²={global_r2:.4f}")
+        self.log(f"\n   最终评估: 扰动段R²={eval_r2:.4f} ({quality}), 全量R²={global_r2:.4f}")
         
         if eval_r2 < 0.5:
-            self.log(f"\\n   ⚠️ 模型拟合质量较差，可能原因：")
+            self.log(f"\n   ⚠️ 模型拟合质量较差，可能原因：")
             if min_segment_r2 < 0.1:
                 self.log(f"      - 扰动段数据不符合阶跃响应特征")
             if segment_r2_std > 0.3:
@@ -375,7 +375,7 @@ class RefinementStage(PipelineStage):
             'T2': fusion_result.T2, 'L': fusion_result.L
         }
         
-        valid_mask = hist_data.pv != 0
+        valid_mask = hist_data.valid_mask()
         y = hist_data.pv[valid_mask]
         u = hist_data.mv[valid_mask]
         ts = np.array(hist_data.timestamp[valid_mask], dtype=np.int64)
@@ -408,6 +408,19 @@ class RefinementStage(PipelineStage):
         
         process_ctx = context.process_context or {}
         loop_type = process_ctx.get('loop_type', '')
+        
+        # [NEW] 提前截获真实控制采样周期 dt_data
+        dt_data = 1.0
+        if context.hist_data and hasattr(context.hist_data, 'timestamp') and len(context.hist_data.timestamp) > 1:
+            ts = np.array(context.hist_data.timestamp, dtype=np.int64)
+            ts_diff = np.diff(ts[ts > 0]) / 1000.0
+            if len(ts_diff) > 0:
+                dt_data = float(np.median(ts_diff))
+        context.dt_data = dt_data  # Save to context for downstream stages
+        
+        if dt_data > 0.1:
+            pid_params['Ts'] = dt_data
+                
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
             temp_fusion, pid_params,
             sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_initial,
@@ -527,7 +540,7 @@ class RefinementStage(PipelineStage):
 
         # 3. 检查融合参数是否有效 (K或T1不能为0)
         if abs(fusion_result.K) < self._epsilon or fusion_result.T1 < self._epsilon:
-            self.log("\\n   ⚠️ 参数融合失败（K或T1为0），尝试振荡整定fallback...")
+            self.log("\n   ⚠️ 参数融合失败（K或T1为0），尝试振荡整定fallback...")
             fallback_result = self._oscillation_tuner.try_oscillation_tuning(
                 context.segments_for_fitting, context.segment_results_fitted, context.current_pid, force=True
             )
@@ -564,7 +577,7 @@ class RefinementStage(PipelineStage):
             Pu_relay = (method_result.critical_params or {}).get('Pu', 0)
             
             if Pu_relay >= 500:
-                self.log(f"\\n   ⚠️ 继电反馈法 Pu={Pu_relay:.1f}s 触达上限，放弃使用")
+                self.log(f"\n   ⚠️ 继电反馈法 Pu={Pu_relay:.1f}s 触达上限，放弃使用")
             else:
                 from ...tuning.verification.stability_analyzer import StabilityAnalyzer
                 model_pid = self._pid_calculator.calculate_from_fusion(fusion_result, context.lambda_factor)
@@ -577,10 +590,10 @@ class RefinementStage(PipelineStage):
                 
                 if pm_advantage >= 10 and gm_ok:
                     use_relay = True
-                    self.log(f"\\n🎯 继电反馈法显著更优 (PM={relay_pm:.1f}° vs {model_pm:.1f}°, "
+                    self.log(f"\n🎯 继电反馈法显著更优 (PM={relay_pm:.1f}° vs {model_pm:.1f}°, "
                             f"GM={relay_gm:.2f} vs {model_gm:.2f})，使用继电反馈法参数")
                 else:
-                    self.log(f"\\n   继电反馈法未显著优于模型辨识法 "
+                    self.log(f"\n   继电反馈法未显著优于模型辨识法 "
                             f"(PM差={pm_advantage:.1f}°, GM比={relay_gm:.2f}/{model_gm:.2f})，使用模型辨识法")
 
         if use_relay:

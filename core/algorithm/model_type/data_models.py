@@ -120,3 +120,11 @@ class HistoricalData:
     
     def __len__(self) -> int:
         return len(self.pv)
+    
+    def valid_mask(self) -> np.ndarray:
+        """基于 NaN/Inf 判断数据有效性。
+        
+        替代之前的 `pv != 0` 模式。`pv != 0` 会错误过滤掉合法的零值
+        （如液位回路零液位、压力回路零点），而 np.isfinite 只过滤 NaN 和 Inf。
+        """
+        return np.isfinite(self.pv) & np.isfinite(self.mv)

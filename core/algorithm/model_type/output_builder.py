@@ -60,10 +60,8 @@ class OutputBuilder(LoggerMixin):
         """设置振荡整定器（用于闭环不稳定时的 fallback）"""
         self._oscillation_tuner = oscillation_tuner
     
-    @staticmethod
-    def build_segment_info(segments: List, segment_results: List) -> List[Dict]:
-        """构建段信息用于可视化（委托给 utils.build_segment_info）"""
-        return _build_segment_info(segments, segment_results)
+    # NOTE: build_segment_info 已移至 utils.py，不再需要此处的委托包装。
+    # 所有调用方应直接 from ...utils import build_segment_info
     
     @staticmethod
     def create_empty_result(input_data: Optional[TuningInput] = None,
@@ -142,7 +140,7 @@ class OutputBuilder(LoggerMixin):
         
         params = self._simulator.fusion_to_params(fusion)
         
-        valid_mask = hist_data.pv != 0
+        valid_mask = hist_data.valid_mask()
         y = hist_data.pv[valid_mask]
         u = hist_data.mv[valid_mask]
         ts = np.array(hist_data.timestamp[valid_mask], dtype=np.int64)
@@ -230,6 +228,18 @@ class OutputBuilder(LoggerMixin):
             sp_initial = ms_cfg['default_sp_initial']
             sp_final = ms_cfg['default_sp_final']
             pv_initial = ms_cfg['default_pv_initial']
+        
+        # [NEW] 拦截历史数据并分析其实际刷新周期，强制传入 verify 以防止失真放大假稳态
+        dt_data = 1.0
+        if hist_data and hasattr(hist_data, 'timestamp') and len(hist_data.timestamp) > 1:
+            ts = np.array(hist_data.timestamp, dtype=np.int64)
+            ts_diff = np.diff(ts[ts > 0]) / 1000.0
+            if len(ts_diff) > 0:
+                dt_data = float(np.median(ts_diff))
+        
+        # 将参数打包进 pid_params, 以便于底层的 ZOH 积分器提取
+        if dt_data > 0.1:
+            pid_params['Ts'] = dt_data
         
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
             fusion, pid_params, 
@@ -358,7 +368,7 @@ class OutputBuilder(LoggerMixin):
             'closed_loop_verification': closed_loop_info,
             'rating_details': score_details,
             'tuning_features': tuning_features,
-            'segment_info': OutputBuilder.build_segment_info(segments, segment_results) if segments else []
+            'segment_info': _build_segment_info(segments, segment_results) if segments else []
         }
     
 

@@ -23,30 +23,9 @@ class DataPrepStage(PipelineStage):
         return input_data
 
     def _empty_result(self, input_data: TuningInput) -> Dict[str, Any]:
-        """构建兼容旧格式的空结果（借用原来 output_builder 或者直接从 orchestrator 拿）
-        在流水线里我们只需给 final_result 赋值即可。
-        """
-        return {
-            'success': False,
-            'model_type': 'FOPDT',
-            'model_rating': 0.0,
-            'start_time': input_data.start_time if input_data else None,
-            'end_time': input_data.end_time if input_data else None,
-            'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
-            'pid_parameters': {'Kp': 1.0, 'Ki': 0.05, 'Kd': 0.0},
-            'fitting_result': {
-                'timestamp': [], 'sv': [], 'pv': [], 'mv': [],
-                'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0
-            },
-            'fusion_info': {
-                'method': 'none', 'n_segments': 0, 'consistency_score': 0.0
-            },
-            'rating_details': {
-                'r2_score': 0.0, 'consistency_score': 0.0, 'validity_score': 0.0,
-                'coverage_score': 0.0, 'n_segments': 0, 'total_data_points': 0
-            },
-            'segment_info': []
-        }
+        """构建兼容旧格式的空结果（委托给 OutputBuilder 统一生成）"""
+        from ...output_builder import OutputBuilder
+        return OutputBuilder.create_empty_result(input_data)
 
     def _early_infer_loop_type(self, context: TuningContext):
         """早期回路类型推断（基于原始数据特征或外部传入）"""
@@ -77,7 +56,7 @@ class DataPrepStage(PipelineStage):
                 context.process_context['loop_type'] = mapped_type
                 context.process_context['loop_type_source'] = 'user_input'
                 
-                self.log(f"\\n{'='*60}")
+                self.log(f"\n{'='*60}")
                 self.log("📊 Step 0.5: 回路类型确认")
                 self.log('='*60)
                 self.log(f"   ✓ 外部已知回路类型: {mapped_type} (来源: {loop_type_str})，跳过数据特征推断")
@@ -91,7 +70,7 @@ class DataPrepStage(PipelineStage):
             context.hist_data.pv, context.hist_data.mv, context.hist_data.timestamp
         )
         
-        self.log(f"\\n{'='*60}")
+        self.log(f"\n{'='*60}")
         self.log("📊 Step 0.5: 早期回路类型推断（基于数据特征）")
         self.log('='*60)
         self.log(f"   {format_inference_log(loop_type, confidence, reason)}")

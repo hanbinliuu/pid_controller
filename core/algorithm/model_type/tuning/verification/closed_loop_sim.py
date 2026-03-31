@@ -102,18 +102,19 @@ class ClosedLoopSimMixin:
     def _model_step_incremental(self, K: float, T1: float, T2: float, model_type: str,
                                  delta_x1: float, delta_x2: float, 
                                  delta_mv: float, dt: float) -> Tuple[float, float]:
-        """增量模型单步更新"""
+        """增量模型单步更新 (采用指数积分 ZOH 避免刚性数值爆炸)"""
         T1 = max(T1, self._epsilon)
         
         if model_type in [ModelType.FOPDT, ModelType.FO]:
-            alpha = dt / T1
+            # 指数欧拉避免大步长(dt>2*T1)下的数值发散
+            alpha = 1.0 - np.exp(-dt / T1)
             delta_x1_new = delta_x1 + alpha * (K * delta_mv - delta_x1)
             return delta_x1_new, 0.0
         
         elif model_type in [ModelType.SO, ModelType.SOPDT]:
             T2_eff = max(T2, T1 * 0.1)
-            alpha1 = dt / T1
-            alpha2 = dt / T2_eff
+            alpha1 = 1.0 - np.exp(-dt / T1)
+            alpha2 = 1.0 - np.exp(-dt / T2_eff)
             delta_x1_new = delta_x1 + alpha1 * (K * delta_mv - delta_x1)
             delta_x2_new = delta_x2 + alpha2 * (delta_x1_new - delta_x2)
             return delta_x2_new, delta_x1_new
@@ -273,35 +274,15 @@ class ClosedLoopSimMixin:
         if pv_initial is None:
             pv_initial = sp_initial
         
-        # [NEW] 置信度感知验证
-        # 如果模型辨识质量极差（通常是振荡数据），闭环仿真结果不可信
-        # 此时应跳过严格验证，避免"假阳性失败"
-        r2_score = getattr(fusion, 'global_r2', 1.0)
-        # 从配置读取R2阈值，默认0.4
-        min_r2_confidence = Config.CLOSED_LOOP.get('min_r2_confidence', 0.4)
-        
-        if r2_score < min_r2_confidence and r2_score > -10.0:  # 排除未计算的情况(-inf)
-            if verbose and hasattr(self, 'log'):
-                self.log(f"   ⚠️ 模型置信度低 (R²={r2_score:.2f} < {min_r2_confidence})，跳过严格闭环验证 -> 默认为稳定")
-            
-            # 返回默认稳定结果，但标记为低置信度
-            return True, ClosedLoopMetrics(
-                is_stable=True,
-                settling_time=0.0,
-                overshoot=0.0,
-                rise_time=0.0,
-                steady_state_error=0.0,
-                oscillation_count=0,
-                decay_ratio=0.0,
-                pv_history=np.array([]),
-                mv_history=np.array([])
-            )
 
-        # 确定仿真时间步长
-        dt = pid_params.get('Ts', 0.1)
-        if dt is None or dt <= 0:
-            dt = 0.1 # 默认值
-        
+        # 确定实际仿真时间步长 (模拟DCS真实控制周期)
+        dt_val = pid_params.get('Ts', 0.0)
+        if dt_val is None or dt_val <= 0:
+            # 强制引入真实DCS常见下限 (1.0s) 作为保底基准。防止未指定周期时无限微观化。
+            dt_base = 1.0
+        else:
+            dt_base = dt_val
+
         if fusion is None:
             Kp = abs(pid_params.get('Kp', 1.0))
             K = 1.0 / Kp if Kp > self._epsilon else 1.0
@@ -315,10 +296,11 @@ class ClosedLoopSimMixin:
             T2 = fusion.T2
             L = fusion.L
             model_type = fusion.model_type
-        
-        T_min = min(T1, T2 if T2 > 0 else T1)
-        dt = min(0.1, T_min / 10)
-        dt = max(0.01, dt)
+
+        # 核心修复：由于底层物理模型已升级为无条件稳定的纯指数 ZOH 积分(1-exp(-dt/T))，
+        # 常微分方程本身已不再受大步长发散威胁。因此我们必须**直接采用真实的 DCS 采样控制周期**。
+        # 不再使用 T_min / 5 刻意缩小 dt，否则高频响应的数学错觉会掩盖极速参数在真实慢频系统中的振荡发散性！
+        dt = max(0.5, dt_base)
         
         osc_config = Config.OSCILLATION_TUNING
         very_slow_t1_threshold = osc_config.get('very_slow_system_t1_threshold', 100.0)
