@@ -120,7 +120,7 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
             
         Ki = Kp / Ti if Ti > self._epsilon else 0.0
         Kd = Kp * Td
-        pb = 100.0 / Kp if abs(Kp) > self._epsilon else 100.0
+        pb = 100.0 / abs(Kp) if abs(Kp) > self._epsilon else 100.0
         
         return {
             'Kp': round(float(Kp), 4),

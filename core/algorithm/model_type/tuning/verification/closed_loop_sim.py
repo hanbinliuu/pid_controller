@@ -359,7 +359,8 @@ class ClosedLoopSimMixin:
         )
 
         if not metrics.is_stable and verbose and hasattr(self, 'log'):
-            self.log(f"   ⚠️ Failed verification with R2={r2_score:.4f}, Model=K{K:.2f}/T{T1:.2f}/L{L:.2f}")
+            r2_val = getattr(fusion, 'global_r2', 0.0) if fusion else 0.0
+            self.log(f"   ⚠️ Failed verification with R2={r2_val:.4f}, Model=K{K:.2f}/T{T1:.2f}/L{L:.2f}")
         
         return metrics.is_stable, metrics
     
@@ -407,9 +408,14 @@ class ClosedLoopSimMixin:
             sv_target = sv_target + sv_range * 0.1
         
         # 仿真参数
-        T_min = min(T1, T2 if T2 > 0 else T1)
-        dt = min(0.1, T_min / 10)
-        dt = max(0.01, dt)
+        # 统一使用真实的 DCS 采样周期 dt，与验证引擎保持绝对一致，避免产生高频数学错觉
+        dt_base = pid_params.get('Ts', 1.0)
+        dt = float(dt_base)
+        if dt < 0.1:
+            dt = 1.0  # 若没有合法 Ts 预设，默认使用 1s（典型 DCS 控制周期）
+            
+        # 限制单循环频率极高导致长系统崩溃的问题
+        dt = max(0.5, dt)
         
         sim_time = max(200, T1 * sim_duration_factor)
         sim_time = min(sim_time, 5000)

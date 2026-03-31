@@ -35,9 +35,9 @@ from core.algorithm.model_type.model_selector import ModelSelector
 CONFIG = {
     # 回路 URI
     # 'loop_uri': "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", 
-    # 'loop_uri': "/pid_zd/7d3298f025b84c46a2ed898f66dcfa3f",  #101
+    'loop_uri': "/pid_zd/7d3298f025b84c46a2ed898f66dcfa3f",  #101
     # 'loop_uri': "/pid_zd/b352328ec0cd4a9c958b32815e67a96a", #029a
-    'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
+    # 'loop_uri': "/pid_zd/806e69336a3e49c7b4fb1ba0a3a66582" , # FIC005A1
     # "loop_uri": "/pid_zd/effb57ab51cf4f6cad3f40d38f8c0951", # FIC002A
     
     # 测试场景列表 (可添加多个场景)

@@ -1,17 +1,42 @@
 """合成数据整定验证测试
+==========================================
 
-支持两种场景：
-1. 振荡场景：稳态 → 系统变化 → 振荡 → 重新整定 → 稳态
-   - 支持 LLM vs 规则引擎对比（通过 Config.OSCILLATION_TUNING['enable_llm'] 控制）
-2. 正常扰动场景：稳态 → SV阶跃 → 正常响应（非振荡）→ 整定
+针对 PID 整定管线的全自动化验证框架，覆盖四大验证目标，
+使用合成工业过程数据（FOPDT / SOPDT / 积分 / 反向响应）+ 阀门非线性模型。
 
-使用方法:
-    python -m core.algorithm.model_type.tests.test_synthetic_tuning
-    python -m core.algorithm.model_type.tests.test_synthetic_tuning batch
-    
-    修改 SCENARIO 变量选择场景:
-    - 'oscillation': 振荡场景（会对比 LLM vs 规则引擎）
-    - 'normal_disturbance': 正常扰动场景
+测试模式 (TEST_MODE)
+---------------------
+  stability   振荡场景稳态验证（默认）
+              验证算法在不同工业振荡场景下能否让控制器回到稳态。
+              可通过 skip_llm_test 选择是否同时测试 LLM 优化效果。
+
+  amplitude   振荡幅度阈值扫描
+              固定场景、扫描不同振荡幅度，找出能/不能回稳态的边界。
+
+  lambda      Lambda 整定验证
+              正常阶跃扰动场景，验证模型辨识 + Lambda 整定的收敛性。
+
+  all         依次执行以上三项并生成汇总报告。
+
+使用方法
+--------
+  # ① 命令行直接指定模式（推荐）
+  python -m core.algorithm.model_type.tests.test_synthetic_tuning stability
+  python -m core.algorithm.model_type.tests.test_synthetic_tuning amplitude
+  python -m core.algorithm.model_type.tests.test_synthetic_tuning lambda
+  python -m core.algorithm.model_type.tests.test_synthetic_tuning all
+
+  # ② 不带参数时使用文件内 TEST_MODE 变量（默认 stability）
+  python -m core.algorithm.model_type.tests.test_synthetic_tuning
+
+  # ③ 旧模式（向后兼容，不推荐）——走 main() 函数
+  python -m core.algorithm.model_type.tests.test_synthetic_tuning default
+
+配置项
+------
+  skip_llm_test   设为 True 跳过 LLM 对比测试，仅运行规则引擎（默认 True）
+  ollama_model    LLM 模型名（默认 qwen:7b）
+  output_dir      结果输出目录
 """
 import sys
 import os
@@ -154,31 +179,11 @@ class OllamaClient:
 
 
 # ============================================================
-# 测试模式选择（直接修改此变量即可切换测试模式）
+# 测试模式选择（命令行参数可覆盖，详见文件头 docstring）
 # ============================================================
-# 
-# TEST_MODE 可选值 (对应4个验证目标):
-#
-#   'stability'   : 目标1 - 振荡场景稳态验证
-#                   验证现有算法和LLM+算法能否在不同生产振荡场景中让控制器达到稳态
-#
-#   'llm_compare' : 目标2 - LLM 优化效果对比
-#                   对比振荡场景下 LLM 参数 vs 纯规则引擎参数，验证LLM是否能优化参数
-#
-#   'amplitude'   : 目标3 - 振荡幅度阈值估计
-#                   固定振荡场景，测试不同幅度，找出能回稳态/不能回稳态的边界
-#
-#   'lambda'      : 目标4 - Lambda 整定验证
-#                   常规扰动下用模型辨识+Lambda整定在不同生产场景下验证能否回稳态
-#
-#   'all'         : 运行所有测试并生成汇总报告
-#
-# 向后兼容的旧模式（不推荐使用）:
-#   'default', 'batch', 'model_id'
-#
-TEST_MODE = 'stability'
+TEST_MODE = 'stability'   # stability | amplitude | lambda | all | default
 
-# SCENARIO 用于 default 模式时选择场景类型（向后兼容）
+# SCENARIO 仅在 TEST_MODE='default' 时生效（向后兼容）
 SCENARIO = 'oscillation'  # 'oscillation' 或 'normal_disturbance'
 
 
@@ -3626,22 +3631,29 @@ def run_all_tests():
 
 if __name__ == "__main__":
     import sys
-    
-    # 优先使用文件内的 TEST_MODE 变量
-    # 如果命令行有参数，则命令行参数优先
-    mode = 'stability'
-    if len(sys.argv) > 1:
-        mode = sys.argv[1]
-    
-    # 新的三个验证目标 (llm_compare 已合并到 stability)
-    if mode == 'stability':
-        run_stability_test()
-    elif mode == 'amplitude':
-        run_amplitude_threshold_test()
-    elif mode == 'lambda':
-        run_lambda_tuning_test()
-    elif mode == 'all':
-        run_all_tests()
-    else:
-        # default 模式
-        main()
+
+    VALID_MODES = {
+        'stability': ('振荡场景稳态验证', run_stability_test),
+        'amplitude': ('振荡幅度阈值扫描', run_amplitude_threshold_test),
+        'lambda':    ('Lambda 整定验证',  run_lambda_tuning_test),
+        'all':       ('运行全部测试',     run_all_tests),
+        'default':   ('旧单场景模式',     main),
+    }
+
+    # 命令行参数 > 文件内 TEST_MODE 变量
+    mode = sys.argv[1] if len(sys.argv) > 1 else TEST_MODE
+
+    if mode in ('--help', '-h'):
+        print(__doc__)
+        sys.exit(0)
+
+    if mode not in VALID_MODES:
+        print(f"❌ 未知模式: '{mode}'")
+        print(f"   可用模式: {', '.join(VALID_MODES.keys())}")
+        print(f"   用法: python -m core.algorithm.model_type.tests.test_synthetic_tuning [mode]")
+        sys.exit(1)
+
+    desc, func = VALID_MODES[mode]
+    print(f"\n🚀 运行模式: {mode} — {desc}\n")
+    func()
+

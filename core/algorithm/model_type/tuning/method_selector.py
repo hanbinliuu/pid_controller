@@ -311,7 +311,7 @@ class TuningMethodSelector(LoggerMixin):
         formatted_params = {
             'Kp': round(Kp, 4), 'Ki': round(Ki, 4), 'Kd': round(Kp * Td, 4),
             'Ti': round(Ti, 2), 'Td': round(Td, 2),
-            'pb': round(100.0 / Kp, 2) if Kp > self._epsilon else 100.0,
+            'pb': round(100.0 / abs(Kp), 2) if abs(Kp) > self._epsilon else 100.0,
             'method': 'relay_feedback_ZN'
         }
         model_from_relay = RelayIdentifier.identify_from_oscillation(all_pv, all_mv, dt)
@@ -360,7 +360,7 @@ class TuningMethodSelector(LoggerMixin):
             result.pid_params['Kp'] = round(adjusted_Kp, 4)
             result.pid_params['Ki'] = round(adjusted_Kp / Ti, 4) if Ti > self._epsilon else 0.0
             result.pid_params['Kd'] = round(adjusted_Kp * Td, 4)
-            result.pid_params['pb'] = round(100.0 / adjusted_Kp, 2) if adjusted_Kp > self._epsilon else 100.0
+            result.pid_params['pb'] = round(100.0 / abs(adjusted_Kp), 2) if abs(adjusted_Kp) > self._epsilon else 100.0
             result.warnings.append(f"Kp已调整: {Kp:.4f} → {adjusted_Kp:.4f}")
         
         result.stability_margins = margins

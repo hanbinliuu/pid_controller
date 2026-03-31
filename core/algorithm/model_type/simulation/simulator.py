@@ -207,18 +207,10 @@ class ModelSimulator:
             y_pred_all = self._smooth_transitions(y_pred_all, y, reset_points[1:-1])
         
         # ============================================================
-        # 后处理：检测并修正大偏差区域
+        # 后处理：检测大偏差区域 (已移除实测替换逻辑，以保留真实 R² 评分)
         # ============================================================
-        error = np.abs(y_pred_all - y)
-        error_threshold = max(3.0, y_range * 0.3)
-        
-        # 使用滑动窗口检测持续大偏差区域
-        window_size = min(20, n // 10) if n > 20 else 1
-        for i in range(0, n - window_size, window_size):
-            window_error = np.mean(error[i:i+window_size])
-            if window_error > error_threshold:
-                # 该区域偏差过大，用实际PV替换（表示模型在此区域不适用）
-                y_pred_all[i:i+window_size] = y[i:i+window_size]
+        # 原逻辑在此处会将偏差大于 30% 范围的预测值强行替换为实测值，
+        # 这会导致传递给前端的 R² 分数被虚高修饰。现已移除，确保反映真实模型拟合度。
         
         # ============================================================
         # 最终全局幅度校准：确保整体幅度匹配
