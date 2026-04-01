@@ -99,13 +99,10 @@ class SelfOptimizeStage(PipelineStage):
         method_conf, _ = ModelRating.model_id_confidence(fusion)
         final_score, _ = ModelRating.final_rating(perf_score, method_conf)
 
-        eps = 1e-10
-        Kp = pid_params['Kp']
-        Ki = pid_params['Ki']
-        Kd = pid_params['Kd']
-        pb = 100.0 / abs(Kp) if abs(Kp) > eps else 999.0
-        ti = abs(Kp / Ki) if abs(Ki) > eps else 0.0
-        td = abs(Kd / Kp) if abs(Kp) > eps else 0.0
+        full_pid = pid_to_full_dict(pid_params['Kp'], pid_params['Ki'], pid_params['Kd'])
+        pb = full_pid['pb']
+        ti = full_pid['ti']
+        td = full_pid['td']
 
         detail = {
             'pid_params': pid_params, 'pb': pb, 'ti': ti, 'td': td,
@@ -479,10 +476,8 @@ class SelfOptimizeStage(PipelineStage):
 
         self.log(f"\n   ── Phase 2: PB/TI/TD 微调 (fallback 路径) ──")
 
-        eps = 1e-10
-        base_pb = 100.0 / abs(pid_params['Kp']) if abs(pid_params['Kp']) > eps else 999.0
-        base_ti = abs(pid_params['Kp'] / pid_params['Ki']) if abs(pid_params['Ki']) > eps else 0.0
-        base_td = abs(pid_params.get('Kd', 0) / pid_params['Kp']) if abs(pid_params['Kp']) > eps else 0.0
+        base_full = pid_to_full_dict(pid_params['Kp'], pid_params['Ki'], pid_params.get('Kd', 0.0))
+        base_pb, base_ti, base_td = base_full['pb'], base_full['ti'], base_full['td']
 
         self.log(f"   基线: PB={base_pb:.2f}% TI={base_ti:.2f}s TD={base_td:.2f}s (评分={baseline_score:.2f})")
 
@@ -500,9 +495,9 @@ class SelfOptimizeStage(PipelineStage):
             tuned_Kp = tuned_pid['Kp']
             tuned_Ki = tuned_pid['Ki']
             tuned_Kd = tuned_pid.get('Kd', 0.0)
-            tuned_pb = 100.0 / abs(tuned_Kp) if abs(tuned_Kp) > eps else 999.0
-            tuned_ti = abs(tuned_Kp / tuned_Ki) if abs(tuned_Ki) > eps else 0.0
-            tuned_td = abs(tuned_Kd / tuned_Kp) if abs(tuned_Kp) > eps else 0.0
+            
+            tuned_full = pid_to_full_dict(tuned_Kp, tuned_Ki, tuned_Kd)
+            tuned_pb, tuned_ti, tuned_td = tuned_full['pb'], tuned_full['ti'], tuned_full['td']
 
             self.log(
                 f"\n   🎯 微调优化: PB={base_pb:.2f}→{tuned_pb:.2f}% "
@@ -536,14 +531,13 @@ class SelfOptimizeStage(PipelineStage):
                     context, original_score):
         self.log(f"\n   ── Phase 2: PB/TI/TD 微调 ──")
 
-        eps = 1e-10
         baseline_pid = _normalize_pid_keys(baseline_pid)
         Kp = baseline_pid['Kp']
         Ki = baseline_pid['Ki']
         Kd = baseline_pid['Kd']
-        base_pb = 100.0 / abs(Kp) if abs(Kp) > eps else 999.0
-        base_ti = abs(Kp / Ki) if abs(Ki) > eps else 0.0
-        base_td = abs(Kd / Kp) if abs(Kp) > eps else 0.0
+        
+        base_full = pid_to_full_dict(Kp, Ki, Kd)
+        base_pb, base_ti, base_td = base_full['pb'], base_full['ti'], base_full['td']
 
         self.log(f"   基线: PB={base_pb:.2f}% TI={base_ti:.2f}s TD={base_td:.2f}s (评分={baseline_score:.2f})")
 
@@ -561,9 +555,9 @@ class SelfOptimizeStage(PipelineStage):
             t_Kp = tuned_pid['Kp']
             t_Ki = tuned_pid['Ki']
             t_Kd = tuned_pid.get('Kd', 0.0)
-            t_pb = 100.0 / abs(t_Kp) if abs(t_Kp) > eps else 999.0
-            t_ti = abs(t_Kp / t_Ki) if abs(t_Ki) > eps else 0.0
-            t_td = abs(t_Kd / t_Kp) if abs(t_Kp) > eps else 0.0
+            
+            tuned_full = pid_to_full_dict(t_Kp, t_Ki, t_Kd)
+            t_pb, t_ti, t_td = tuned_full['pb'], tuned_full['ti'], tuned_full['td']
 
             self.log(f"\n   🎯 微调优化: PB={base_pb:.2f}→{t_pb:.2f}% TI={base_ti:.2f}→{t_ti:.2f}s TD={base_td:.2f}→{t_td:.2f}s")
             self.log(f"   评分 {baseline_score:.2f} → {tuned_score:.2f} (提升 +{improvement:.2f})")

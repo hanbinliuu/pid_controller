@@ -161,13 +161,16 @@ class TuningOrchestrator(LoggerMixin):
         qualified_windows = input_data.get('qualified_windows', [])
         current_pid = input_data.get('current_pid', None)  # 当前 PID 参数
         
+        turning_type = params.get('turning_type')
+        model_type = params.get('model_type')
+
         if not history_data:
-            return self._empty_result_new(params)
+            return OutputBuilder.create_empty_result(model_type=model_type, turning_type=turning_type)
         
         if not qualified_windows:
             # 没有扰动窗口（tuning_segment未检测到振荡）→ 不需要整定
             self.log("⚠️ 无扰动窗口（tuning_segment未检测到振荡），跳过整定")
-            return self._empty_result_new(params)
+            return OutputBuilder.create_empty_result(model_type=model_type, turning_type=turning_type)
         
         tuning_input = {
             'start_time': history_data[0].get('timestamp') if history_data else None,
@@ -181,110 +184,15 @@ class TuningOrchestrator(LoggerMixin):
         result = self.fit(tuning_input, history_data,
                           lambda_factor=Config.TUNING_DEFAULTS['lambda_factor'],
                           current_pid=current_pid)
-        return self._convert_output_format(result, params)
+                          
+        # 补全可能丢失的前端强行指定的参数
+        if not result.get('success'):
+            if model_type: result['model_type'] = model_type
+            if turning_type: result['turning_type'] = turning_type
+            
+        return result
     
-    def _convert_output_format(self, result: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
-        """转换为新输出格式"""
-        model_rating = result.get('model_rating', 0)
-        recommendation = get_recommendation(model_rating)
-        
-        pid_params = result.get('pid_parameters', {})
-        Kp = pid_params.get('Kp', 1.0)
-        Ki = pid_params.get('Ki', 0.0)
-        Kd = pid_params.get('Kd', 0.0)
-        
-        # 优先使用pid_params中已计算的Ti/Td（避免四舍五入误差）
-        if 'Ti' in pid_params and pid_params['Ti'] > 0:
-            Ti = pid_params['Ti']
-        else:
-            Ti = Kp / Ki if abs(Ki) > self._epsilon else 0.0
-        
-        if 'Td' in pid_params:
-            Td = pid_params['Td']
-        else:
-            Td = Kd / Kp if abs(Kp) > self._epsilon else 0.0
-        
-        # 优先使用pid_params中已计算的pb（避免四舍五入误差）
-        if 'pb' in pid_params and pid_params['pb'] > 0:
-            Pb = pid_params['pb']
-        else:
-            Pb = 100.0 / abs(Kp) if abs(Kp) > self._epsilon else 100.0
-        
-        turning_type = params.get('turning_type') or determine_turning_type(Kp, Ti, Td)
-        
-        fitting_result = result.get('fitting_result', {})
-        fitting_result['recommendation'] = recommendation
-        
-        # 构建新的 pid_parameters
-        new_pid_params = {
-            'pb': round(float(Pb), 2),
-            'ti': round(float(Ti), 2),
-            'td': round(float(Td), 2),
-            'kp': round(float(Kp), 8),
-            'ki': round(float(Ki), 8),
-            'kd': round(float(Kd), 8)
-        }
-        
-        # 输出最终 PID 参数（verbose 模式）
-        self.log(f"\n{'='*60}")
-        self.log(f"📋 最终整定参数输出:")
-        self.log(f"   PB = {Pb:.2f}%")
-        self.log(f"   TI = {Ti:.2f}s")
-        self.log(f"   TD = {Td:.2f}s")
-        self.log(f"   (Kp={Kp:.4f}, Ki={Ki:.4f}, Kd={Kd:.4f})")
-        self.log(f"{'='*60}")
-        
-        return {
-            'success': result.get('success', False),
-            'model_type': result.get('model_type', 'FOPDT'),
-            'turning_type': turning_type,
-            'model_rating': model_rating,
-            'method_confidence': result.get('method_confidence', 0.0),
-            'method_confidence_details': result.get('method_confidence_details', {}),
-            'start_time': result.get('start_time'),
-            'end_time': result.get('end_time'),
-            'model_parameters': result.get('model_parameters', {}),
-            'pid_parameters': new_pid_params,
-            'fitting_result': fitting_result,
-            'fusion_info': result.get('fusion_info', {}),
-            'closed_loop_verification': result.get('closed_loop_verification', {}),
-            'rating_details': result.get('rating_details', {}),
-            'tuning_features': result.get('tuning_features', {}),
-            'segment_info': result.get('segment_info', [])
-        }
-    
-    def _empty_result_new(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """新格式空结果"""
-        return {
-            'success': False,
-            'model_type': params.get('model_type') or 'FOPDT',
-            'turning_type': params.get('turning_type') or 'PID',
-            'model_rating': 0.0,
-            'method_confidence': 0.0,
-            'method_confidence_details': {},
-            'start_time': None,
-            'end_time': None,
-            'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
-            'pid_parameters': {
-                'pb': 100.0, 'ti': 0.0, 'td': 0.0,
-                'kp': 1.0, 'ki': 0.05, 'kd': 0.0
-            },
-            'fitting_result': {
-                'timestamp': [], 'sv': [], 'pv': [], 'mv': [],
-                'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0,
-                'recommendation': '不可用'
-            },
-            'fusion_info': {
-                'method': 'none', 'n_segments': 0, 'consistency_score': 0.0
-            },
-            'closed_loop_verification': {},
-            'rating_details': {
-                'r2_score': 0.0, 'consistency_score': 0.0, 'validity_score': 0.0,
-                'coverage_score': 0.0, 'n_segments': 0, 'total_data_points': 0
-            },
-            'tuning_features': {},
-            'segment_info': []
-        }
+
     
     # ============================================================
     # 原有入口（保持兼容）

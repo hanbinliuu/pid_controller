@@ -34,7 +34,7 @@ from api.commond.time_util import parse_time_to_milliseconds
 from .config import Config, ModelType
 from .data_models import FusionResult, HistoricalData, TuningInput, SegmentResult
 from .logger import LoggerMixin
-from .utils import calculate_r2, build_segment_info as _build_segment_info
+from .utils import calculate_r2, build_segment_info as _build_segment_info, determine_turning_type, get_recommendation, pid_to_full_dict
 
 
 class OutputBuilder(LoggerMixin):
@@ -65,13 +65,15 @@ class OutputBuilder(LoggerMixin):
     
     @staticmethod
     def create_empty_result(input_data: Optional[TuningInput] = None,
-                            model_type: str = None) -> Dict[str, Any]:
+                            model_type: str = None,
+                            turning_type: str = None) -> Dict[str, Any]:
         """
         创建空结果（统一方法）
         
         Args:
             input_data: 整定输入（可选）
             model_type: 模型类型（可选）
+            turning_type: 期望的整定类型（可选）
             
         Returns:
             空结果字典
@@ -79,28 +81,28 @@ class OutputBuilder(LoggerMixin):
         return {
             'success': False,
             'model_type': model_type or ModelType.FOPDT,
+            'turning_type': turning_type or 'PID',
             'model_rating': 0.0,
+            'method_confidence': 0.0,
+            'method_confidence_details': {},
             'start_time': getattr(input_data, 'start_time', None) if input_data else None,
             'end_time': getattr(input_data, 'end_time', None) if input_data else None,
             'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
-            'pid_parameters': {'Kp': 1.0, 'Ki': 0.05, 'Kd': 0.0},
+            'pid_parameters': pid_to_full_dict(1.0, 0.05, 0.0),
             'fitting_result': {
                 'timestamp': [], 'sv': [], 'pv': [], 'mv': [],
-                'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0
+                'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0,
+                'recommendation': '不可用'
             },
             'fusion_info': {
-                'method': 'none',
-                'n_segments': 0,
-                'consistency_score': 0.0
+                'method': 'none', 'n_segments': 0, 'consistency_score': 0.0
             },
+            'closed_loop_verification': {},
             'rating_details': {
-                'r2_score': 0.0,
-                'consistency_score': 0.0,
-                'validity_score': 0.0,
-                'coverage_score': 0.0,
-                'n_segments': 0,
-                'total_data_points': 0
+                'r2_score': 0.0, 'consistency_score': 0.0, 'validity_score': 0.0,
+                'coverage_score': 0.0, 'n_segments': 0, 'total_data_points': 0
             },
+            'tuning_features': {},
             'segment_info': []
         }
     
@@ -137,6 +139,16 @@ class OutputBuilder(LoggerMixin):
             pid_params = self._pid_calculator.calculate_from_fusion(
                 fusion, lambda_factor, quality_info=quality_info, loop_type=loop_type
             )
+        
+        # Ensure all PID formats exist (kp, ki, kd, pb, ti, td)
+        pid_params = pid_to_full_dict(
+            Kp=pid_params.get('Kp', pid_params.get('kp', 1.0)),
+            Ki=pid_params.get('Ki', pid_params.get('ki', 0.0)),
+            Kd=pid_params.get('Kd', pid_params.get('kd', 0.0)),
+        )
+        
+        # Calculate context-aware tuning characteristics
+        turning_type = determine_turning_type(pid_params['Kp'], pid_params.get('Ti', pid_params['ti']), pid_params.get('Td', pid_params['td']))
         
         params = self._simulator.fusion_to_params(fusion)
         
@@ -349,6 +361,7 @@ class OutputBuilder(LoggerMixin):
                 'L': round(fusion.L, 4)
             },
             'pid_parameters': pid_params,
+            'turning_type': turning_type,
             'fitting_result': {
                 'timestamp': ts.tolist(),
                 'sv': sv.tolist(),
@@ -356,7 +369,8 @@ class OutputBuilder(LoggerMixin):
                 'mv': u.tolist(),
                 'pv_model': pv_model.tolist(),
                 'r_squared': round(fusion.global_r2, 4),
-                'rmse': round(fusion.global_rmse, 4)
+                'rmse': round(fusion.global_rmse, 4),
+                'recommendation': get_recommendation(model_rating)
             },
             'fusion_info': {
                 'method': fusion.fusion_method,

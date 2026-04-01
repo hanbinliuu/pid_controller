@@ -111,15 +111,30 @@ def determine_turning_type(Kp: float, Ti: float, Td: float) -> str:
         return 'P'
 
 
-def normalize_pid_keys(pid_params: dict) -> dict:
+def normalize_pid_keys(pid_params: dict, eps: float = 1e-10) -> dict:
     """规范化 PID 参数 key 为大写 Kp/Ki/Kd。
     
-    兼容输入 'kp'/'Kp' 两种格式，统一返回大写 key。
+    兼容输入 'kp'/'Kp' 或 'pb'/'ti'/'td' 两种格式，统一返回大写 key。
     """
+    if 'Kp' in pid_params or 'kp' in pid_params:
+        Kp = float(pid_params.get('Kp', pid_params.get('kp', 1.0)))
+        Ki = float(pid_params.get('Ki', pid_params.get('ki', 0.0)))
+        Kd = float(pid_params.get('Kd', pid_params.get('kd', 0.0)))
+    elif 'pb' in pid_params or 'PB' in pid_params:
+        pb = float(pid_params.get('pb', pid_params.get('PB', 100.0)))
+        ti = float(pid_params.get('ti', pid_params.get('TI', 10.0)))
+        td = float(pid_params.get('td', pid_params.get('TD', 0.0)))
+        
+        Kp = 100.0 / pb if abs(pb) > eps else 1.0
+        Ki = Kp / ti if abs(ti) > eps else 0.0
+        Kd = Kp * td
+    else:
+        Kp, Ki, Kd = 1.0, 0.0, 0.0
+        
     return {
-        'Kp': float(pid_params.get('Kp', pid_params.get('kp', 1.0))),
-        'Ki': float(pid_params.get('Ki', pid_params.get('ki', 0.0))),
-        'Kd': float(pid_params.get('Kd', pid_params.get('kd', 0.0))),
+        'Kp': Kp,
+        'Ki': Ki,
+        'Kd': Kd,
     }
 
 

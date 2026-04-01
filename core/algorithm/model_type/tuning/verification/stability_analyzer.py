@@ -355,19 +355,22 @@ class StabilityAnalyzer:
             model_params: {K, T1, T2, L}
             pid_params: {Kp, Ti, Td} 或 {pb, ti, td}
         """
+        # [MODIFIED] Use shared key normalizer
+        from ...utils import normalize_pid_keys
+        
         K = model_params.get('K', 1.0)
         T1 = model_params.get('T1', 10.0)
         T2 = model_params.get('T2', 0.0)
         L = model_params.get('L', 1.0)
         
-        # 支持 pb/ti/td 格式
-        if 'pb' in pid_params:
-            Kp = 100.0 / pid_params['pb'] if pid_params['pb'] > 0 else 1.0
-        else:
-            Kp = pid_params.get('Kp', 1.0)
+        norm_pid = normalize_pid_keys(pid_params)
+        Kp = norm_pid['Kp']
+        Ki = norm_pid['Ki']
+        Kd = norm_pid['Kd']
         
-        Ti = pid_params.get('Ti', pid_params.get('ti', 10.0))
-        Td = pid_params.get('Td', pid_params.get('td', 0.0))
+        # Recover Ti, Td
+        Ti = Kp / Ki if abs(Ki) > cls.EPSILON else 10.0
+        Td = Kd / Kp if abs(Kp) > cls.EPSILON else 0.0
         
         if T2 > 0.1:
             return cls._calculate_margins_numerical(K, T1, T2, L, Kp, Ti, Td)
