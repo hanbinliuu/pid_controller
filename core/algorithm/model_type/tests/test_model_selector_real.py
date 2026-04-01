@@ -611,12 +611,20 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         from core.algorithm.model_type.tuning.core.pid_calculator import PIDCalculator
         from core.algorithm.model_type.data_models import FusionResult
         
-        model_params = fitting_result.get('model_parameters', {})
+        model_params = fitting_result.get('model_parameters', {}).copy()
         pid_params = fitting_result.get('pid_parameters', {})
+        
+        sim_model_type = model_type
+        if pid_params.get('method') == 'integrating_fallback':
+            sim_model_type = 'FOPI'
+            orig_K = model_params.get('K', 1.0)
+            orig_T1 = max(model_params.get('T1', 10.0), 1.0)
+            model_params['K'] = orig_K / orig_T1
+            print(f"   🔄 可视化引擎已重定向至物理积分模型 FOPI (K_int={model_params['K']:.6f})")
         
         # 创建 FusionResult
         fusion = FusionResult(
-            model_type=model_type,
+            model_type=sim_model_type,
             K=model_params.get('K', 0),
             T1=model_params.get('T1', 0),
             T2=model_params.get('T2', 0),
@@ -936,12 +944,16 @@ def visualize_new_pid_simulation(data: List[Dict], fitting_result: Dict, scenari
     time_array = [datetime.fromtimestamp(ts / 1000) for ts in timestamps]
     
     # 获取模型和PID参数
-    model_params = fitting_result.get('model_parameters', {})
+    model_params = fitting_result.get('model_parameters', {}).copy()
     pid_params = fitting_result.get('pid_parameters', {})
     model_type = fitting_result.get('model_type', 'FOPDT')
     
     K = model_params.get('K', 1.0)
     T1 = model_params.get('T1', 10.0)
+    
+    if pid_params.get('method') == 'integrating_fallback':
+        model_type = 'FOPI'
+        K = K / max(T1, 1.0)
     T2 = model_params.get('T2', 0.0)
     L = model_params.get('L', 0.0)
     
@@ -1057,6 +1069,10 @@ def visualize_new_pid_simulation(data: List[Dict], fitting_result: Dict, scenari
             x1 += dx1 * dt
             x2 += dx2 * dt
             delta_pv = x2
+        elif model_type in ['FOPI', 'FO_INTEGRATOR', 'INTEGRATOR']:
+            dx1 = K * delta_mv
+            x1 += dx1 * dt
+            delta_pv = x1
         else:
             T1_eff = max(T1, dt)
             dx1 = (K * delta_mv - x1) / T1_eff
