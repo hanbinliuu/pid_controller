@@ -652,10 +652,13 @@ class OscillationTuner(LoggerMixin):
         conservative_Kp = 100.0 / pb_safe
         
         # Ti 基准（level 回路取决于 T1 大小）
+        # Ti 基准（level 和 temperature 回路需要特殊下限保护）
         if self._loop_type == 'level' and T1_approx > 100:
             ti_base_min = max(20.0, T1_approx * 0.05)  # T1的5%，至少20s
         elif self._loop_type == 'level':
             ti_base_min = 15.0
+        elif self._loop_type == 'temperature':
+            ti_base_min = 30.0  # 温度回路热容积大，强制设定安全积分底线
         else:
             ti_base_min = 5.0
         base_Ti = ti_base_min * 1.5
