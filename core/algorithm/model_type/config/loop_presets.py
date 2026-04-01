@@ -18,60 +18,60 @@ LOOP_TYPE_PRESETS = {
     # ========== 流量回路 ==========
     # 特点：快速响应、积分特性强、允许较激进整定
     'flow': {
-        'pb_min': 40.0,           # 流量回路放宽下限 [60→40，行业快速响应场景最低可到50%]
-        'pb_max': 300.0,          # 上限保持 [应对大滞后流量回路]
-        'tau_c_factor': 1.2,      # τc较小，快速响应
-        'safety_factor': 1.05,    # 安全系数降低 [1.15→1.05，避免与tau_c叠乘过度保守]
-        'ti_multiplier': 1.0,     # Ti恢复标准 (1.15 -> 1.0)
-        'ti_max': 20.0,           # 流量回路严禁超大积分时间 [新增界限防止过差数据拉垮引擎]
-        'td_enable': False,       # 流量严禁微分 [行业铁律]
-        'aggressive': True,       # 允许激进整定
+        'pb_min': 40.0,           
+        'pb_max': 300.0,          
+        'tau_c_factor': 1.0,      # [优化] 1.2 -> 1.0：流量需要极快响应，加速比例作用
+        'safety_factor': 1.0,     # [优化] 1.05 -> 1.0：解除过度保守限制
+        'ti_multiplier': 1.0,     
+        'ti_max': 20.0,           
+        'td_enable': False,       
+        'aggressive': True,       
         'description': '流量回路：快速响应，积分特性',
     },
     
     # ========== 温度回路 ==========
     # 特点：慢速系统、大滞后、热容量大
     'temperature': {
-        'pb_min': 60.0,           # 温度系统 pb_min 放宽 [80→60，tau_c_factor=2.0已足够保守]
-        'pb_max': 300.0,          # 允许较大PB应对大滞后 [从450降低到300，增加增益]
-        'tau_c_factor': 2.0,      # τc较大，避免振荡 [保持保守]
-        'safety_factor': 1.1,     # 保守整定 [降低：1.2→1.1，避免PB叠加过大]
-        'ti_multiplier': 1.5,     # Ti适度增大 [降低：2.2→1.5，避免响应过慢]
-        'td_enable': True,        # 温度回路可用微分改善响应
-        'td_ratio': 0.25,         # Td = Ti * 0.25 [增强微分作用]
-        'td_max': 15.0,           # Td绝对上限15s [工业温度回路标准]
-        'aggressive': False,      # 保守整定
+        'pb_min': 60.0,           
+        'pb_max': 300.0,          
+        'tau_c_factor': 1.5,      # [优化] 2.0 -> 1.5：加速温度回稳，2.0 会导致超长拖尾使得评分跳水
+        'safety_factor': 1.1,     
+        'ti_multiplier': 1.2,     # [优化] 1.5 -> 1.2：缩小积分时间，加速消除余差
+        'td_enable': True,        
+        'td_ratio': 0.25,         
+        'td_max': 15.0,           
+        'aggressive': False,      
         'description': '温度回路：慢速系统，大热容量',
     },
     
     # ========== 液位回路 ==========
     # 特点：积分过程、需平滑控制、避免MV频繁动作
     'level': {
-        'pb_min': 100.0,          # 液位积分过程，需要较大PB
-        'pb_max': 1000.0,         # 上限放宽，适应极慢积分系统 [500 -> 1000]
-        'ti_max': 3600.0,         # 增加真实工业界最大积分时间界限，防止超大积分过载下游DCS
-        'tau_c_factor': 2.0,      # τc加快 [3.0 -> 2.0，加速响应，减少超时]
-        'safety_factor': 1.0,     # 安全系数降低 [1.1 -> 1.0，避免过于保守]
-        'ti_multiplier': 1.5,     # Ti适度增大 [2.0 -> 1.5，加快积分作用]
-        'td_enable': False,       # 液位一般不用微分
-        'aggressive': False,      # 保守整定 [True -> False, 激进整定导致不稳定]
-        'integrating_mode': True, # 标记为积分过程
+        'pb_min': 100.0,          
+        'pb_max': 1000.0,         
+        'ti_max': 3600.0,         
+        'tau_c_factor': 1.5,      # [优化] 2.0 -> 1.5：稍微收紧液位响应周期，提升稳态恢复得分
+        'safety_factor': 1.0,     
+        'ti_multiplier': 1.2,     # [优化] 1.5 -> 1.2：适度减少积分时间，防止过长回稳
+        'td_enable': False,       
+        'aggressive': False,      
+        'integrating_mode': True, 
         'description': '液位回路：积分过程，平滑控制',
     },
     
     # ========== 压力回路 ==========
     # 特点：快速响应、可能有压缩性
     'pressure': {
-        'pb_min': 80.0,           # 压力回路 pb_min 放宽 [60→80，增加阻尼防止小幅高频振荡]
-        'pb_max': 300.0,          # 上限保持
-        'tau_c_factor': 1.8,      # τc适中，增加阻尼 [1.5 -> 1.8，平缓响应]
-        'safety_factor': 1.05,    # 安全系数保持 [1.05]
-        'ti_multiplier': 1.05,    # Ti标准 (1.05)
-        'ti_max': 50.0,           # 压力回路响应速度界限 [新增]
-        'td_enable': True,        # 可用微分改善响应
-        'td_ratio': 0.15,         # Td = Ti * 0.15
-        'td_max': 10.0,           # Td绝对上限10s [工业压力回路标准]
-        'aggressive': False,      # 不过于激进 [从true改为false]
+        'pb_min': 80.0,           
+        'pb_max': 300.0,          
+        'tau_c_factor': 1.2,      # [优化] 1.8 -> 1.2：压力回路通常较快，大幅增加系统带宽
+        'safety_factor': 1.0,     # [优化] 1.05 -> 1.0
+        'ti_multiplier': 1.0,     # [优化] 1.05 -> 1.0
+        'ti_max': 50.0,           
+        'td_enable': True,        
+        'td_ratio': 0.15,         
+        'td_max': 10.0,           
+        'aggressive': False,      
         'description': '压力回路：快速响应，需及时调节',
     },
     
