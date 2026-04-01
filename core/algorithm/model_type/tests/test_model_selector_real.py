@@ -616,11 +616,11 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         
         sim_model_type = model_type
         if pid_params.get('method') == 'integrating_fallback':
-            sim_model_type = 'FOPI'
+            sim_model_type = 'FO_INTEGRATOR'
             orig_K = model_params.get('K', 1.0)
             orig_T1 = max(model_params.get('T1', 10.0), 1.0)
             model_params['K'] = orig_K / orig_T1
-            print(f"   🔄 可视化引擎已重定向至物理积分模型 FOPI (K_int={model_params['K']:.6f})")
+            print(f"   🔄 可视化引擎已重定向至物理积分模型 FO_INTEGRATOR (K_int={model_params['K']:.6f})")
         
         # 创建 FusionResult
         fusion = FusionResult(
@@ -952,7 +952,7 @@ def visualize_new_pid_simulation(data: List[Dict], fitting_result: Dict, scenari
     T1 = model_params.get('T1', 10.0)
     
     if pid_params.get('method') == 'integrating_fallback':
-        model_type = 'FOPI'
+        model_type = 'FO_INTEGRATOR'
         K = K / max(T1, 1.0)
     T2 = model_params.get('T2', 0.0)
     L = model_params.get('L', 0.0)

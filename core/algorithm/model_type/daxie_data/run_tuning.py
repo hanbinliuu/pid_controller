@@ -232,14 +232,14 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
         "pid_parameters": result.get("pid_parameters", {})
     }
     
-    # [NEW] 输出修正：如果命中了兜底免死金牌，在数据记录上正式修正为纯积分物理模型(FOPI)
+    # [NEW] 输出修正：如果命中了兜底免死金牌，在数据记录上正式修正为纯积分物理模型(FO_INTEGRATOR)
     if final_pid.get('method') == 'integrating_fallback':
-        compact_result['model_type'] = 'FOPI'
+        compact_result['model_type'] = 'FO_INTEGRATOR'
         m_params = compact_result['model_parameters']
         if 'K' in m_params and 'T1' in m_params:
             m_params['K'] = m_params['K'] / max(m_params['T1'], 1.0)
             m_params['T1'] = 0.0
-            print(f"   🔄 JSON输出修正：当前模型已固化为纯物理积分器(FOPI), K_int={m_params['K']:.6f}")
+            print(f"   🔄 JSON输出修正：当前模型已固化为纯物理积分器(FO_INTEGRATOR), K_int={m_params['K']:.6f}")
     
     out_file = OUTPUT_DIR / f"tuning_result_{device}_compact.json"
     with open(out_file, "w") as f:
