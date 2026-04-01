@@ -206,6 +206,18 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
     
     print(f"\n⏱️ 最终模式执行耗时: {t1 - t0:.2f} 秒")
     
+    final_score = result.get('model_rating', 0.0)
+    final_pid = result.get('pid_parameters', {})
+    
+    print("\n" + "="*60)
+    print("🎉 最终整定参数与总分榜单发布！")
+    print("=" * 60)
+    print(f"   🏆 综合性能评分 : {final_score:.2f} 分")
+    print(f"   ⚙️  最终采取方法 : {final_pid.get('method', 'Unknown')}")
+    print(f"   📊 最终理论参数 : Kp={final_pid.get('Kp', 0.0):.4f}, Ti={final_pid.get('Ti', 0.0):.1f}s, Td={final_pid.get('Td', 0.0):.1f}s")
+    print(f"   (对应工控机配置) : Pb={final_pid.get('pb', 0.0):.1f}%, Ti={final_pid.get('Ti', 0.0):.1f}s")
+    print("=" * 60)
+    
     # 💡 瘦身版结果存储：剔除大量 history_data，仅保留 PID、时间、评分
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     compact_result = {
@@ -246,8 +258,8 @@ if __name__ == "__main__":
     ENABLE_GRID_SEARCH = (args.mode == "grid_search")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-11-05 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-11-06 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-12-01 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-12-02 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")

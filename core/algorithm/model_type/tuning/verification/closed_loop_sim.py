@@ -314,8 +314,13 @@ class ClosedLoopSimMixin:
         Pu = pid_params.get('Pu', T_max)
         is_very_slow = T_max > very_slow_t1_threshold or Pu > very_slow_pu_threshold
         
+        # [FIX] 无论过程本质快慢，最终闭环系统的恢复速度严重受限于控制器的积分时间 Ti！
+        # 积分作用至少需要 4~6 倍的 Ti 才能完全消除偏差，所以仿真和稳态判定时间必须与 Ti 挂钩
+        Ti_param = pid_params.get('Ti', 0.0)
+        min_settling_by_ti = Ti_param * 6.0
+        
         # 确保仿真时长足够覆盖允许的最大调节时间
-        ensure_duration = Config.CLOSED_LOOP.get('max_settling_time', 600.0) * 1.5
+        ensure_duration = max(Config.CLOSED_LOOP.get('max_settling_time', 600.0) * 1.5, min_settling_by_ti * 1.5)
         
         if is_very_slow:
             sim_time = min((T_max + L) * very_slow_sim_factor, very_slow_max_duration)
@@ -332,7 +337,8 @@ class ClosedLoopSimMixin:
         settling_time_factor = loop_config.get('max_settling_time_factor', 10.0)
         
         default_max_settling = Config.CLOSED_LOOP.get('max_settling_time', 600.0)
-        dynamic_max_settling = max(default_max_settling, settling_time_factor * (T_max + L))
+        # 用过程常数与控制器积分时间的极大项，作为最终稳态判定标准的“最大宽容期限”
+        dynamic_max_settling = max(default_max_settling, settling_time_factor * (T_max + L), min_settling_by_ti)
         
         n_steps = int(sim_time / dt)
         
