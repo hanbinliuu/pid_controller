@@ -227,8 +227,19 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
             "used_tuning_windows": final_run_windows
         },
         "model_rating": result.get("model_rating", 0.0),
+        "model_type": result.get("model_type", "FOPDT"),
+        "model_parameters": result.get("model_parameters", {}).copy(),
         "pid_parameters": result.get("pid_parameters", {})
     }
+    
+    # [NEW] 输出修正：如果命中了兜底免死金牌，在数据记录上正式修正为纯积分物理模型(FOPI)
+    if final_pid.get('method') == 'integrating_fallback':
+        compact_result['model_type'] = 'FOPI'
+        m_params = compact_result['model_parameters']
+        if 'K' in m_params and 'T1' in m_params:
+            m_params['K'] = m_params['K'] / max(m_params['T1'], 1.0)
+            m_params['T1'] = 0.0
+            print(f"   🔄 JSON输出修正：当前模型已固化为纯物理积分器(FOPI), K_int={m_params['K']:.6f}")
     
     out_file = OUTPUT_DIR / f"tuning_result_{device}_compact.json"
     with open(out_file, "w") as f:
@@ -258,8 +269,8 @@ if __name__ == "__main__":
     ENABLE_GRID_SEARCH = (args.mode == "grid_search")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-12-01 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-12-02 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-11-20 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-11-21 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")
