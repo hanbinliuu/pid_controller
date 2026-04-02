@@ -141,11 +141,12 @@ class OutputBuilder(LoggerMixin):
             )
         
         # Ensure all PID formats exist (kp, ki, kd, pb, ti, td)
-        pid_params = pid_to_full_dict(
+        full_p = pid_to_full_dict(
             Kp=pid_params.get('Kp', pid_params.get('kp', 1.0)),
             Ki=pid_params.get('Ki', pid_params.get('ki', 0.0)),
             Kd=pid_params.get('Kd', pid_params.get('kd', 0.0)),
         )
+        pid_params.update(full_p)
         
         # Calculate context-aware tuning characteristics
         turning_type = determine_turning_type(pid_params['Kp'], pid_params.get('Ti', pid_params['ti']), pid_params.get('Td', pid_params['td']))

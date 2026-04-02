@@ -1,25 +1,33 @@
 {
   "device": "2216_LIC_50104",
-  "mode_used": "auto_detect",
+  "mode_used": "grid_search",
   "time_information": {
     "used_tuning_windows": [
       {
-        "start_time": 1763568000000,
-        "end_time": 1763604745000
-      },
-      {
-        "start_time": 1763631050000,
-        "end_time": 1763654400000
+        "start_time": 1770667200000,
+        "end_time": 1770688800000
       }
     ]
   },
-  "model_rating": 2.74,
+  "model_rating": 8.18,
+  "model_type": "FO_INTEGRATOR",
+  "model_parameters": {
+    "K": 0.006,
+    "T1": 0.0,
+    "T2": 0.0,
+    "L": 15.0,
+    "K_int": 0.006
+  },
   "pid_parameters": {
-    "pb": 816.84,
-    "ti": 3600.0,
-    "td": 0.0,
-    "kp": 0.12242231,
-    "ki": 3.401e-05,
-    "kd": 0.0
+    "Kp": 1.63398693,
+    "Ki": 0.00785571,
+    "Kd": 0.0,
+    "Ti": 208.0,
+    "Td": 0.0,
+    "pb": 61.2,
+    "method": "integrating_fallback",
+    "Pu": 1666.67,
+    "Ku": 0.1,
+    "K_int": 0.006
   }
 }

@@ -131,11 +131,13 @@ def normalize_pid_keys(pid_params: dict, eps: float = 1e-10) -> dict:
     else:
         Kp, Ki, Kd = 1.0, 0.0, 0.0
         
-    return {
+    result = dict(pid_params)
+    result.update({
         'Kp': Kp,
         'Ki': Ki,
         'Kd': Kd,
-    }
+    })
+    return result
 
 
 def pid_to_full_dict(Kp: float, Ki: float, Kd: float, eps: float = 1e-10) -> dict:
@@ -146,7 +148,7 @@ def pid_to_full_dict(Kp: float, Ki: float, Kd: float, eps: float = 1e-10) -> dic
     pb = 100.0 / abs(Kp) if abs(Kp) > eps else 999.0
     ti = abs(Kp / Ki) if abs(Ki) > eps else 0.0
     td = abs(Kd / Kp) if abs(Kp) > eps else 0.0
-    return {
+    result = {
         'Kp': round(float(Kp), 8),
         'Ki': round(float(Ki), 8),
         'Kd': round(float(Kd), 8),
@@ -157,6 +159,7 @@ def pid_to_full_dict(Kp: float, Ki: float, Kd: float, eps: float = 1e-10) -> dic
         'ti': round(ti, 2),
         'td': round(td, 2),
     }
+    return result
 
 
 def build_segment_info(segments: list, segment_results: list) -> list:

@@ -96,18 +96,23 @@ class FusionStage(PipelineStage):
             self.log(f"      → 保持原选择: {current_model}")
             return current_model
 
-    def _select_best_model_type(self, segment_results: List[SegmentResult], hist_data: HistoricalData = None) -> str:
+    def _select_best_model_type(self, segment_results: List[SegmentResult], hist_data: HistoricalData = None, loop_type: str = '') -> str:
         """选择最优模型结构"""
         segment_fits = self._convert_to_segment_fits(segment_results)
         if not segment_fits:
             self.log("   无有效段结果，默认使用 FOPDT")
             return ModelType.FOPDT
         
-        best_model, reasoning, need_fulldata = self._unified_selector.select_unified_model_type(segment_fits)
-        
-        diagnosis = self._unified_selector.handle_inconsistent_segments(segment_fits)
-        if diagnosis['has_inconsistency']:
-            self.log("\n   ⚠️ 检测到段间不一致:")
+        if loop_type == 'level':
+            self.log("   🧊 识别为液位过程，基于物理本质强制选择积分器模型(FO_INTEGRATOR)")
+            best_model = ModelType.FOPI
+            need_fulldata = False
+        else:
+            best_model, reasoning, need_fulldata = self._unified_selector.select_unified_model_type(segment_fits)
+            
+            diagnosis = self._unified_selector.handle_inconsistent_segments(segment_fits)
+            if diagnosis['has_inconsistency']:
+                self.log("\n   ⚠️ 检测到段间不一致:")
             for issue in diagnosis['issues']:
                 self.log(f"      - {issue}")
             if diagnosis['recommendations']:
@@ -253,8 +258,8 @@ class FusionStage(PipelineStage):
         if context.is_fallback_triggered or context.final_result is not None:
             return context
             
-        # 1. 基于AIC/RSS/形状特征选择最优模型结构
-        best_model_type = self._select_best_model_type(context.segment_results_fitted, context.hist_data)
+        # 1. 物理先验/特性分类/AIC/RSS 综合选择最优模型结构
+        best_model_type = self._select_best_model_type(context.segment_results_fitted, context.hist_data, loop_type=context.loop_type)
         self.log(f"🎯 选择模型类型: {best_model_type}")
         context.best_model_type = best_model_type
 

@@ -212,10 +212,21 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
     print("\n" + "="*60)
     print("🎉 最终整定参数与总分榜单发布！")
     print("=" * 60)
+    # 统一读取（兼容大小写 key）
+    final_Kp = final_pid.get('Kp', final_pid.get('kp', 0.0))
+    final_Ti = final_pid.get('Ti', final_pid.get('ti', 0.0))
+    final_Td = final_pid.get('Td', final_pid.get('td', 0.0))
+    final_pb = final_pid.get('pb', final_pid.get('Pb', 0.0))
+    final_method = final_pid.get('method') or result.get('tuning_features', {}).get('tuning_method') or result.get('tuning_features', {}).get('method') or 'model_based'
+    # 如果 Ti 仍为 0 但 Ki > 0，从 Kp/Ki 反推
+    final_Ki = final_pid.get('Ki', final_pid.get('ki', 0.0))
+    if final_Ti == 0.0 and abs(final_Ki) > 1e-9 and abs(final_Kp) > 1e-9:
+        final_Ti = abs(final_Kp) / abs(final_Ki)
+    
     print(f"   🏆 综合性能评分 : {final_score:.2f} 分")
-    print(f"   ⚙️  最终采取方法 : {final_pid.get('method', 'Unknown')}")
-    print(f"   📊 最终理论参数 : Kp={final_pid.get('Kp', 0.0):.4f}, Ti={final_pid.get('Ti', 0.0):.1f}s, Td={final_pid.get('Td', 0.0):.1f}s")
-    print(f"   (对应工控机配置) : Pb={final_pid.get('pb', 0.0):.1f}%, Ti={final_pid.get('Ti', 0.0):.1f}s")
+    print(f"   ⚙️  最终采取方法 : {final_method}")
+    print(f"   📊 最终理论参数 : Kp={final_Kp:.4f}, Ti={final_Ti:.1f}s, Td={final_Td:.1f}s")
+    print(f"   (对应工控机配置) : Pb={final_pb:.1f}%, Ti={final_Ti:.1f}s")
     print("=" * 60)
     
     # 💡 瘦身版结果存储：剔除大量 history_data，仅保留 PID、时间、评分
@@ -248,9 +259,18 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
 
     # 生成预测可视化图
     try:
-        from core.algorithm.model_type.tests.test_model_selector_real import visualize_fitting_result, CONFIG
-        CONFIG['log_dir'] = str(OUTPUT_DIR)
-        visualize_fitting_result(sliced_data, {'tuning_window': final_run_windows}, result, device)
+        from core.algorithm.model_type.tests.visualization_utils import (
+            visualize_fitting_result, normalize_pid_params
+        )
+        
+        # 使用统一的 PID 参数标准化（自动处理大小写、Ki/Kd 推算）
+        if 'pid_parameters' in result:
+            result['pid_parameters'] = normalize_pid_params(result['pid_parameters'])
+
+        visualize_fitting_result(
+            sliced_data, {'tuning_window': final_run_windows}, result, device,
+            output_dir=str(OUTPUT_DIR)
+        )
         print(f"📊 闭环预测图表已成功保存至 {OUTPUT_DIR.relative_to(SCRIPT_DIR)}")
     except ImportError:
         print("⚠️ 可视化模块未找到，跳过图表生成")
@@ -269,8 +289,8 @@ if __name__ == "__main__":
     ENABLE_GRID_SEARCH = (args.mode == "grid_search")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-11-20 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-11-21 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2026-02-10 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2026-02-11 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")

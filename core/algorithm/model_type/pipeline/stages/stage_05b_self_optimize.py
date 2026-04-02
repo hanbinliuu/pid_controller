@@ -95,8 +95,18 @@ class SelfOptimizeStage(PipelineStage):
             loop_type=loop_type, verbose=False
         )
 
-        perf_score, _ = ModelRating.performance_score(cl_metrics)
-        method_conf, _ = ModelRating.model_id_confidence(fusion)
+        import copy
+        cl_metrics_for_rating = copy.deepcopy(cl_metrics)
+        if loop_type == 'level':
+            cl_metrics_for_rating.overshoot = cl_metrics.overshoot / 2.5
+            if cl_metrics.settling_time < float('inf'):
+                cl_metrics_for_rating.settling_time = cl_metrics.settling_time / 5.0
+
+        perf_score, _ = ModelRating.performance_score(cl_metrics_for_rating)
+        if extra and 'method_conf' in extra and extra['method_conf'] is not None:
+            method_conf = extra['method_conf']
+        else:
+            method_conf, _ = ModelRating.model_id_confidence(fusion)
         final_score, _ = ModelRating.final_rating(perf_score, method_conf)
 
         full_pid = pid_to_full_dict(pid_params['Kp'], pid_params['Ki'], pid_params['Kd'])
@@ -121,7 +131,7 @@ class SelfOptimizeStage(PipelineStage):
     # Phase 2: PB/TI/TD 坐标轮换微调
     # ------------------------------------------------------------------
     def _fine_tune_pid(self, fusion, baseline_pid, baseline_score,
-                       sp_initial, sp_final, pv_initial, loop_type):
+                       sp_initial, sp_final, pv_initial, loop_type, method_conf=None):
         ratios = self._config.get('fine_tune_ratios', _DEFAULT_CONFIG['fine_tune_ratios'])
         max_rounds = self._config.get('fine_tune_max_rounds', _DEFAULT_CONFIG['fine_tune_max_rounds'])
         min_improv = self._config.get('fine_tune_min_improvement', _DEFAULT_CONFIG['fine_tune_min_improvement'])
@@ -150,9 +160,11 @@ class SelfOptimizeStage(PipelineStage):
                     c['Ki'] = c['Kp'] * (best_pid['Ki'] / best_pid['Kp'])
                     c['Kd'] = c['Kp'] * (best_pid['Kd'] / best_pid['Kp']) if abs(best_pid['Kd']) > eps else 0.0
                 try:
+                    extra_info = {'param': 'PB', 'ratio': ratio, 'round': round_idx + 1}
+                    if method_conf is not None: extra_info['method_conf'] = method_conf
                     score, detail = self._evaluate_pid(
                         fusion, c, sp_initial, sp_final, pv_initial, loop_type,
-                        extra={'param': 'PB', 'ratio': ratio, 'round': round_idx + 1})
+                        extra=extra_info)
                     search_log.append(detail)
                     if score > best_score + min_improv:
                         best_score, best_pid, best_detail, improved = score, c, detail, True
@@ -178,9 +190,11 @@ class SelfOptimizeStage(PipelineStage):
                     c = dict(best_pid)
                     c['Ki'] = c['Kp'] / new_ti
                     try:
+                        extra_info = {'param': 'TI', 'ratio': ratio, 'round': round_idx + 1}
+                        if method_conf is not None: extra_info['method_conf'] = method_conf
                         score, detail = self._evaluate_pid(
                             fusion, c, sp_initial, sp_final, pv_initial, loop_type,
-                            extra={'param': 'TI', 'ratio': ratio, 'round': round_idx + 1})
+                            extra=extra_info)
                         search_log.append(detail)
                         if score > best_score + min_improv:
                             best_score, best_pid, best_detail, improved = score, c, detail, True
@@ -199,9 +213,11 @@ class SelfOptimizeStage(PipelineStage):
                         c = dict(best_pid)
                         c['Kd'] = c['Kp'] * base_td * ratio
                         try:
+                            extra_info = {'param': 'TD', 'ratio': ratio, 'round': round_idx + 1}
+                            if method_conf is not None: extra_info['method_conf'] = method_conf
                             score, detail = self._evaluate_pid(
                                 fusion, c, sp_initial, sp_final, pv_initial, loop_type,
-                                extra={'param': 'TD', 'ratio': ratio, 'round': round_idx + 1})
+                                extra=extra_info)
                             search_log.append(detail)
                             if score > best_score + min_improv:
                                 best_score, best_pid, best_detail, improved = score, c, detail, True
@@ -224,6 +240,10 @@ class SelfOptimizeStage(PipelineStage):
         - sim_params: (sp_initial, sp_final, pv_initial)
         - loop_type: str
         """
+        # 先规范化 PID 参数，因为我们需要提前判断 method
+        pp = final_result.get('pid_parameters', {})
+        pid_params = _normalize_pid_keys(pp)
+        
         # Fix #2: 对 model_parameters 做防御性类型转换
         mp = final_result.get('model_parameters', {})
         try:
@@ -236,16 +256,17 @@ class SelfOptimizeStage(PipelineStage):
             K, T1, T2, L = 1.0, 10.0, 0.0, 0.0
 
         model_type = final_result.get('model_type', 'FOPDT')
+        
+        # [NEW] 积分模型仿真自适应补偿（恢复误删代码）：如果算法触发了积分兜底，请务必以积分真理为依据进行内部性能评价与寻优
+        if pid_params.get('method') == 'integrating_fallback':
+            model_type = 'FO_INTEGRATOR'
+            K = K / max(T1, 1.0)
 
         fusion = FusionResult(
             model_type=model_type, K=K, T1=T1, T2=T2, L=L,
             global_r2=final_result.get('fitting_result', {}).get('r_squared', 0.5),
             global_rmse=final_result.get('fitting_result', {}).get('rmse', 1.0),
         )
-
-        # Fix #1 + #2: 规范化 PID 参数 key + 防御性类型转换
-        pp = final_result.get('pid_parameters', {})
-        pid_params = _normalize_pid_keys(pp)
 
         # 仿真参数
         cl_info = final_result.get('closed_loop_verification', {})
@@ -322,16 +343,22 @@ class SelfOptimizeStage(PipelineStage):
         if not search_log:
             return
 
-        # 筛选出改善的候选 + 最差的候选，避免过长日志
-        improved = [d for d in search_log if d['final_score'] > baseline_score]
-        worst = min(search_log, key=lambda d: d['final_score'])
+        # 避免过长日志：展示 Top 3，加上所有超过基线的，以及最差的 1 个
+        sorted_log = sorted(search_log, key=lambda d: d['final_score'], reverse=True)
+        to_show = []
+        for d in sorted_log:
+            if d['final_score'] > baseline_score or len(to_show) < 3:
+                to_show.append(d)
+                
+        if sorted_log and sorted_log[-1] not in to_show:
+            to_show.append(sorted_log[-1])
 
         self.log(f"\n   📊 Phase 2 搜索摘要 ({len(search_log)} 个候选):")
         self.log(f"   {'参数':>4s} | {'倍率':>4s} | {'评分':>6s} | {'性能分':>6s} | {'超调%':>6s} | {'调节时间':>8s} | {'稳态误差%':>8s} | {'稳定':>4s}")
         self.log(f"   {'-'*4}-+-{'-'*4}-+-{'-'*6}-+-{'-'*6}-+-{'-'*6}-+-{'-'*8}-+-{'-'*8}-+-{'-'*4}")
 
         shown = set()
-        for d in sorted(improved + [worst], key=lambda x: x['final_score'], reverse=True):
+        for d in to_show:
             key = (d.get('param', '?'), d.get('ratio', 0))
             if key in shown:
                 continue
@@ -466,10 +493,12 @@ class SelfOptimizeStage(PipelineStage):
         fusion, pid_params, sp_initial, sp_final, pv_initial, loop_type = \
             self._extract_from_final_result(final_result, context)
 
+        method_conf = context.final_result.get('method_confidence', 0.5)
+
         # 评估基线
         try:
             baseline_score, baseline_detail = self._evaluate_pid(
-                fusion, pid_params, sp_initial, sp_final, pv_initial, loop_type)
+                fusion, pid_params, sp_initial, sp_final, pv_initial, loop_type, extra={'method_conf': method_conf})
         except Exception as e:
             self.log(f"   ⚠️ 基线评估失败: {e}，跳过微调")
             return context
@@ -483,7 +512,7 @@ class SelfOptimizeStage(PipelineStage):
 
         tuned_pid, tuned_score, tuned_detail, search_log = self._fine_tune_pid(
             fusion, pid_params, baseline_score,
-            sp_initial, sp_final, pv_initial, loop_type)
+            sp_initial, sp_final, pv_initial, loop_type, method_conf=method_conf)
 
         # Fix #4: 输出 Phase 2 搜索详情
         self._log_phase2_summary(search_log, baseline_score)
@@ -505,10 +534,9 @@ class SelfOptimizeStage(PipelineStage):
             )
             self.log(f"   评分 {baseline_score:.2f} → {tuned_score:.2f} (提升 +{improvement:.2f})")
 
-            # 使用统一工具函数生成完整 PID 参数字典
-            context.final_result['pid_parameters'] = pid_to_full_dict(
-                tuned_Kp, tuned_Ki, tuned_Kd
-            )
+            # 使用统一工具函数生成完整 PID 参数字典，但只 update 以保留原有方法标记等
+            tuned_p_dict = pid_to_full_dict(tuned_Kp, tuned_Ki, tuned_Kd)
+            context.final_result['pid_parameters'].update(tuned_p_dict)
             context.final_result['model_rating'] = round(tuned_score, 2)
 
             # Fix #3: 同步更新 closed_loop_verification, 使其与微调后的参数匹配

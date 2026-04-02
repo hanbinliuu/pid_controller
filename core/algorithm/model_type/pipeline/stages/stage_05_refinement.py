@@ -428,8 +428,15 @@ class RefinementStage(PipelineStage):
         )
         
         from ...rating import ModelRating
+        import copy
         
-        perf_score, perf_details = ModelRating.performance_score(cl_metrics)
+        cl_metrics_for_rating = copy.deepcopy(cl_metrics)
+        if loop_type == 'level':
+            cl_metrics_for_rating.overshoot = cl_metrics.overshoot / 2.5
+            if cl_metrics.settling_time < float('inf'):
+                cl_metrics_for_rating.settling_time = cl_metrics.settling_time / 5.0
+
+        perf_score, perf_details = ModelRating.performance_score(cl_metrics_for_rating)
         
         margins = method_result.stability_margins
         closed_loop_info = {

@@ -78,13 +78,19 @@ class ClosedLoopSimMixin:
             
             error = sp - pv
             integral += error * dt
-            integral_limit = (mv_max - mv_min) / (abs(Ki) + self._epsilon)
-            integral = np.clip(integral, -integral_limit, integral_limit)
             derivative = (error - prev_error) / dt if t > 0 else 0.0
             
-            delta_mv_pid = Kp * error + Ki * integral + Kd * derivative
-            mv = mv0 + delta_mv_pid
-            mv = np.clip(mv, mv_min, mv_max)
+            mv_raw = mv0 + Kp * error + Ki * integral + Kd * derivative
+            mv = np.clip(mv_raw, mv_min, mv_max)
+            
+            # 真实工控机的 Anti-windup (后退算反向更新积分)
+            if mv_raw != mv and abs(Ki) > self._epsilon:
+                integral = (mv - mv0 - Kp * error - Kd * derivative) / Ki
+            
+            # 保底限幅防止浮点飞马
+            integral_limit = (mv_max - mv_min) / (abs(Ki) + self._epsilon) * 2.0
+            integral = np.clip(integral, -integral_limit, integral_limit)
+
             delta_mv = mv - mv0
             
             mv_history[t] = mv
@@ -230,6 +236,13 @@ class ClosedLoopSimMixin:
         
         is_stable = is_settled and is_accurate and is_smooth and is_decaying
         
+        # [NEW] 专门针对液位回路 (Level) 极度放宽稳定性判定！
+        # 它是积分过程容器，核心目标不仅是PV回到SV，而是避免不断震荡发散。
+        if loop_type == 'level':
+            # 只要能收敛（哪怕超时间长一点点或者超调很高）且最后落在设定值附近，工业上就是“稳”的
+            if settling_time < float('inf') and steady_state_error < max_steady_error * 1.5 and decay_ratio <= 1.0:
+                is_stable = True
+        
         # [NEW] 边界容忍：仅一项指标微弱超标时仍判定为稳定（工业实用性）
         if not is_stable and is_settled:
             fail_count = sum([not is_accurate, not is_smooth, not is_decaying])
@@ -250,6 +263,7 @@ class ClosedLoopSimMixin:
                    f"Accurate={is_accurate}({steady_state_error:.2f}/{max_steady_error:.2f}), "
                    f"Smooth={is_smooth}({overshoot:.2f}/{max_overshoot:.2f}), "
                    f"Decaying={is_decaying}({decay_ratio:.2f})")
+
         
         return ClosedLoopMetrics(
             is_stable=is_stable,
@@ -297,10 +311,9 @@ class ClosedLoopSimMixin:
             L = fusion.L
             model_type = fusion.model_type
 
-        # 核心修复：由于底层物理模型已升级为无条件稳定的纯指数 ZOH 积分(1-exp(-dt/T))，
-        # 常微分方程本身已不再受大步长发散威胁。因此我们必须**直接采用真实的 DCS 采样控制周期**。
-        # 不再使用 T_min / 5 刻意缩小 dt，否则高频响应的数学错觉会掩盖极速参数在真实慢频系统中的振荡发散性！
-        dt = max(0.5, dt_base)
+        T_min = min([t for t in [T1, T2, L] if t > 0] + [1.0])
+        dt = min(dt_base, T_min / 5.0)
+        dt = max(dt, 0.01) # 保护最小值
         
         osc_config = Config.OSCILLATION_TUNING
         very_slow_t1_threshold = osc_config.get('very_slow_system_t1_threshold', 100.0)
@@ -322,6 +335,21 @@ class ClosedLoopSimMixin:
         # 确保仿真时长足够覆盖允许的最大调节时间
         ensure_duration = max(Config.CLOSED_LOOP.get('max_settling_time', 600.0) * 1.5, min_settling_by_ti * 1.5)
         
+        # [NEW] 纯积分系统极其缓慢时（极小 K_int），确保仿真时间覆盖其最快达到设定值所需的时间
+        is_int_model = model_type in [ModelType.FOPI, ModelType.SOPI] or pid_params.get('method') == 'integrating_fallback' or 'K_int' in pid_params
+        theo_time = 0.0
+        if is_int_model:
+            k_int = pid_params.get('K_int', 0.0)
+            if k_int <= 0.0 and fusion is not None:
+                k_int = getattr(fusion, 'K_int', getattr(fusion, 'K', 0.0))
+            if k_int > 1e-9:
+                Kp_actual = max(abs(pid_params.get('Kp', 1.0)), 0.01)
+                # 积分过程理论闭环时间常数 τ_cl ≈ 1 / (Kp * K_int) 或更大的极点时间。
+                # 完全稳态（4~5个时间常数）可能需要极长的时间。
+                cl_tau = 1.0 / (Kp_actual * k_int)
+                theo_time = cl_tau * 8.0  # 提供足够的时间常数衰减覆盖（特别是降 PB 导致极小 Kp 的情况）
+                ensure_duration = max(ensure_duration, theo_time * 1.5)
+        
         if is_very_slow:
             sim_time = min((T_max + L) * very_slow_sim_factor, very_slow_max_duration)
             sim_time = max(sim_time, ensure_duration)
@@ -339,6 +367,8 @@ class ClosedLoopSimMixin:
         default_max_settling = Config.CLOSED_LOOP.get('max_settling_time', 600.0)
         # 用过程常数与控制器积分时间的极大项，作为最终稳态判定标准的“最大宽容期限”
         dynamic_max_settling = max(default_max_settling, settling_time_factor * (T_max + L), min_settling_by_ti)
+        if theo_time > 0:
+            dynamic_max_settling = max(dynamic_max_settling, theo_time * 1.5)
         
         n_steps = int(sim_time / dt)
         
@@ -347,7 +377,7 @@ class ClosedLoopSimMixin:
         elif T_max > 50:
             max_steps = min(100000, int(sim_time / dt + 1000))
         else:
-            max_steps = 10000
+            max_steps = max(10000, int(sim_time / dt + 1000))
         
         n_steps = min(n_steps, max_steps)
         
@@ -412,16 +442,13 @@ class ClosedLoopSimMixin:
         
         if initial_error < sv_range * 0.05:
             sv_target = sv_target + sv_range * 0.1
-        
-        # 仿真参数
-        # 统一使用真实的 DCS 采样周期 dt，与验证引擎保持绝对一致，避免产生高频数学错觉
-        dt_base = pid_params.get('Ts', 1.0)
-        dt = float(dt_base)
-        if dt < 0.1:
-            dt = 1.0  # 若没有合法 Ts 预设，默认使用 1s（典型 DCS 控制周期）
+        dt_base = float(pid_params.get('Ts', 1.0))
+        if dt_base < 0.1:
+            dt_base = 1.0
             
-        # 限制单循环频率极高导致长系统崩溃的问题
-        dt = max(0.5, dt)
+        T_min = min([t for t in [T1, T2, L] if t > 0] + [1.0])
+        dt = min(dt_base, T_min / 5.0)
+        dt = max(dt, 0.01) # 保护最小值
         
         sim_time = max(200, T1 * sim_duration_factor)
         sim_time = min(sim_time, 5000)

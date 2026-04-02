@@ -79,7 +79,8 @@ class SegmentFitter(LoggerMixin):
     
     def fit_all_segments(self, segments: List[HistoricalData],
                          segment_results: List[SegmentResult],
-                         controller_sign: int = 1) -> List[SegmentResult]:
+                         controller_sign: int = 1,
+                         loop_type: str = '') -> List[SegmentResult]:
         """
         对每个有效段拟合所有候选模型
         
@@ -171,17 +172,22 @@ class SegmentFitter(LoggerMixin):
             quality = self._preprocessor.analyze_quality(y, u)
             use_multi_start = quality.is_noisy or not quality.is_correlated or is_oscillating
             
+            is_level = (loop_type == 'level')
             best_r2_so_far = 0.0
+            
             for model_type in self.MODEL_PRIORITY:
-                # 早停优化：简单模型效果已经很好，跳过复杂模型
+                # 早停优化：简单模型效果已经很好，跳过复杂模型。(如果是液位，不要早停跳过积分模型)
                 if best_r2_so_far >= self.EARLY_STOP_R2 and model_type in {ModelType.SOPDT, ModelType.FOPI}:
-                    self.log(f"   {model_type}: 跳过(早停, R²={best_r2_so_far:.2f})")
-                    continue
+                    if not (is_level and model_type == ModelType.FOPI):
+                        self.log(f"   {model_type}: 跳过(早停, R²={best_r2_so_far:.2f})")
+                        continue
                 
                 # 振荡数据跳过不适合的模型
                 if is_oscillating and model_type in self.SKIP_ON_OSCILLATION:
-                    self.log(f"   {model_type}: 跳过(振荡数据)")
-                    continue
+                    # 对于液位回路，积分器(FO_INTEGRATOR)是其物理本质，无论多振荡都绝不能跳过
+                    if not (is_level and model_type == ModelType.FOPI):
+                        self.log(f"   {model_type}: 跳过(振荡数据)")
+                        continue
                 
                 try:
                     if use_multi_start:

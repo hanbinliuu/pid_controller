@@ -78,7 +78,7 @@ class IdentificationStage(PipelineStage):
 
         # 3. 对正常段尝试模型拟合
         segment_results_fitted = self._segment_fitter.fit_all_segments(
-            fitting_segs, fitting_results, controller_sign=context.current_kp_sign
+            fitting_segs, fitting_results, controller_sign=context.current_kp_sign, loop_type=context.loop_type
         )
         
         # 4. 如果正常段拟合效果差，尝试振荡整定 (柔性fallback)

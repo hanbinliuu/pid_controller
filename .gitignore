@@ -53,5 +53,5 @@ config/application.properties
 core/algorithm/model_type/tests/exported_data/
 
 # 大榭现场原始数据文件（超过GitHub 100MB限制）
-core/algorithm/model_type/daxie_data/data/*.json
-core/algorithm/model_type/daxie_data/data/*.csv
+core/algorithm/model_type/daxie_data/data/
+core/algorithm/model_type/daxie_data/output/

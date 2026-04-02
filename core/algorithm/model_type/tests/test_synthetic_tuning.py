@@ -55,6 +55,13 @@ from core.algorithm.model_type.config import Config
 # 导入测试场景
 from core.algorithm.model_type.tests.test_scenarios import TEST_SCENARIOS, REALISTIC_SCENARIOS
 
+# 导入共享工具函数
+from core.algorithm.model_type.tests.visualization_utils import (
+    resolve_process_model_type,
+    normalize_pid_params,
+    convert_to_arrays,
+)
+
 
 # ============================================================
 # 场景难度计算

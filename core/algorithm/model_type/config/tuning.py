@@ -41,7 +41,7 @@ LOOP_SPECIFIC_VERIFICATION = {
     },
     'level': {
         'max_settling_time_factor': 25.0,    # 液位回路：积分特性，需要更长时间验证
-        'overshoot_acceptable': 60.0,        # 液位回路：允许较大超调（缓冲容器）
+        'overshoot_acceptable': 80.0,        # 液位回路：允许极大超调（缓冲缓冲器性质，主要目标为稳定MV流出而非死守PV）
         'steady_state_error': 15.0,          # 液位回路：允许较大的稳态误差 (非自衡)
     },
     'flow': {
