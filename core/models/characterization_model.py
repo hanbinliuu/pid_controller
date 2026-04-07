@@ -50,6 +50,9 @@ class CharacterizationModel:
     valve: ValveCharacteristics = field(default_factory=ValveCharacteristics)
     performance: ControlPerformance = field(default_factory=ControlPerformance)
     
+    # [新增] 大模型专属拓展字段插槽
+    llm_extra_features: Dict[str, Any] = field(default_factory=dict)
+    
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'CharacterizationModel':
         """从字典构建表征模型"""
@@ -59,6 +62,7 @@ class CharacterizationModel:
             signal=SignalCharacteristics(**data.get('signal', {})),
             valve=ValveCharacteristics(**data.get('valve', {})),
             performance=ControlPerformance(**data.get('performance', {})),
+            llm_extra_features=data.get('llm_extra_features', {}),
         )
         
     def to_dict(self) -> Dict[str, Any]:
