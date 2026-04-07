@@ -1,0 +1,112 @@
+{
+  "_meta": {
+    "version": "1.0.0",
+    "description": "HolliCube OS 语义层 -> PID 整定上下文 (TuningContext) 标准数据契约",
+    "usage": "A公司大模型整定接口必须接受此结构作为输入，并返回标准 PID 结果 JSON",
+    "generated_for_device": "2216_LIC_50104"
+  },
+  "tuning_context": {
+    "loop_name": "2216_LIC_50104",
+    "loop_type": "level",
+    "ontology_model": {
+      "device_id": "2216_LIC_50104",
+      "device_type": "undefined",
+      "loop_type": "level",
+      "tank_volume_m3": 50.0,
+      "tank_cross_section_m2": null,
+      "valve_cv_max": 100.0,
+      "valve_type": "unknown",
+      "extra_attributes": {}
+    },
+    "mechanism_model": {
+      "process_nature": "integrating",
+      "dead_time_dominant": false,
+      "natural_frequency_s": 0.0,
+      "process_gain_sign": 1,
+      "preferred_simulation_model": "FO_INTEGRATOR"
+    },
+    "knowledge_model": {
+      "td_enable": false,
+      "max_overshoot_percent": 40.0,
+      "gain_range": [
+        0.1,
+        10.0
+      ],
+      "pb_range": [
+        10.0,
+        1000.0
+      ],
+      "tuning_strategy": "balanced",
+      "historical_best_kp": 0.0,
+      "expert_notes": ""
+    },
+    "characterization_model": {
+      "device_id": "2216_LIC_50104",
+      "timestamp": "2026-04-07T21:05:58.634006",
+      "signal": {
+        "oscillation_ratio": 0.0,
+        "dominant_period_s": 0.0,
+        "noise_level": 0.0,
+        "linearity_index": 1.0
+      },
+      "valve": {
+        "stiction_index_estimated": 0.0,
+        "deadband_estimated": 0.0,
+        "reversal_error": 0.0
+      },
+      "performance": {
+        "performance_score_avg": 10.0,
+        "auto_mode_time_ratio": 1.0,
+        "intervention_count_daily": 0,
+        "recent_step_events": 0
+      },
+      "llm_extra_features": {}
+    },
+    "data_model": {
+      "device_id": "2216_LIC_50104",
+      "pv_tag": "2216_LIC_50104.PV",
+      "sv_tag": "2216_LIC_50104.SV",
+      "out_tag": "",
+      "historical_table_ref": "",
+      "db_source": "os_historian"
+    },
+    "metrics_model": {
+      "device_id": "2216_LIC_50104",
+      "auto_control_rate": 0.98,
+      "steady_state_rate": 0.85,
+      "mse_score": 0.0
+    },
+    "constraints": {
+      "pb_range": [
+        10.0,
+        1000.0
+      ],
+      "gain_range": [
+        0.1,
+        10.0
+      ],
+      "max_overshoot_percent": 40.0,
+      "td_enable": false,
+      "control_strategy": "balanced"
+    },
+    "physical": {
+      "tank_volume_m3": 50.0,
+      "valve_cv_max": 100.0
+    }
+  },
+  "_expected_response_format": {
+    "success": true,
+    "pid_parameters": {
+      "Kp": 2.5,
+      "Ti": 208.0,
+      "Td": 0.0,
+      "pb": 40.0
+    },
+    "tuning_features": {
+      "tuning_method": "llm_xxx",
+      "reasoning_summary": "大模型推理过程摘要文本"
+    },
+    "model_rating": 8.5,
+    "confidence_score": 0.85
+  }
+}

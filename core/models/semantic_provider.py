@@ -9,90 +9,205 @@ from .characterization_model import CharacterizationModel
 from .data_model import DataModel
 from .metrics_model import MetricsModel
 
+
+# JSON 数据目录
+_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+_INSTANCE_DIR = os.path.join(_DATA_DIR, 'instance_models')
+_STANDARD_DIR = os.path.join(_DATA_DIR, 'standard_models')
+
+
 class SemanticProvider:
     """
     语义模型供应网关 (Semantic Provider)
     ----------------------------------
-    取代原有的 ModelProvider，严格按照 OS 数据抽象层组装业务实体。
-    它负责将五大基础引擎（本体、表征、机理、指标、数据）和顶层引擎（知识图谱）缝合。
+    严格按照 OS 数据抽象层组装业务实体。
+    
+    当前阶段（OS 中台尚未就绪）：从本地 JSON 文件读取真实数据。
+    未来阶段（OS 中台上线后）：将 _load_instance_json / _load_standard_json
+                              替换为 requests.get(...) 即可，上层零改动。
     """
+
     def __init__(self):
-        # 预留给未来 OS API 客户端的插槽
-        self._os_database_client = None
-        
-        # 本地模拟使用（仅架构前期联调用，后期抹除）
-        # 这里为了快速验证，我们直接给死假数据或从老的 json 中勉强映射。
-        # 实际开发中，这里直接调底座 API。
-        pass
-        
+        self._instance_cache: Dict[str, dict] = {}
+        self._standard_cache: Dict[str, dict] = {}
+
+    # ================================================================
+    # 底层 JSON 加载（未来替换为 OS API 调用）
+    # ================================================================
+
+    def _load_instance_json(self, device_id: str) -> dict:
+        """加载设备实例 JSON（未来替换为: OS台账API.get(device_id)）"""
+        if device_id in self._instance_cache:
+            return self._instance_cache[device_id]
+
+        # 尝试多种命名格式匹配
+        candidates = [
+            f"{device_id}.json",
+            f"2216_LIC_{device_id}.json",
+        ]
+        for name in candidates:
+            path = os.path.join(_INSTANCE_DIR, name)
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self._instance_cache[device_id] = data
+                return data
+
+        print(f"⚠️ [SemanticProvider] 未找到设备 {device_id} 的实例模型 JSON，使用空壳默认值")
+        return {}
+
+    def _load_standard_json(self, loop_type: str) -> dict:
+        """加载标准模型 JSON（未来替换为: OS知识图谱API.get(loop_type)）"""
+        if loop_type in self._standard_cache:
+            return self._standard_cache[loop_type]
+
+        path = os.path.join(_STANDARD_DIR, f"{loop_type}.json")
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self._standard_cache[loop_type] = data
+            return data
+
+        print(f"⚠️ [SemanticProvider] 未找到类型 {loop_type} 的标准模型 JSON，使用空壳默认值")
+        return {}
+
+    # ================================================================
+    # 从 JSON 拆解映射到 6 大原子模型
+    # ================================================================
 
     def _get_ontology(self, device_id: str) -> OntologyModel:
-        # TODO: 从 OS 台账库 GET 获取
-        if "50108" in device_id:
-            return OntologyModel(device_id=device_id, loop_type="level", tank_volume_m3=80.0, valve_cv_max=150.0)
-        return OntologyModel(device_id=device_id, loop_type="level", tank_volume_m3=50.0, valve_cv_max=100.0)
+        """本体模型：从实例 JSON 中提取硬件/物理实体信息"""
+        inst = self._load_instance_json(device_id)
+        if not inst:
+            return OntologyModel(device_id=device_id)
+
+        phys = inst.get('physical_params', {})
+        valve = inst.get('valve_params', {})
+        return OntologyModel(
+            device_id=inst.get('device_id', device_id),
+            device_type='tank',
+            loop_type=inst.get('standard_model_ref', 'default'),
+            tank_volume_m3=phys.get('tank_volume_m3'),
+            tank_cross_section_m2=phys.get('tank_cross_section_m2'),
+            valve_cv_max=valve.get('cv_max'),
+            valve_type=valve.get('characteristic', 'unknown'),
+            extra_attributes={
+                'plant': inst.get('plant', ''),
+                'unit': inst.get('unit', ''),
+                'tag_name': inst.get('tag_name', ''),
+                'pv_range': [phys.get('pv_range_min', 0), phys.get('pv_range_max', 100)],
+                'valve_action': valve.get('action_type', ''),
+                'valve_deadband': valve.get('deadband_percent', 0),
+                'valve_time_constant_s': valve.get('time_constant_s', 0),
+            }
+        )
 
     def _get_mechanism(self, loop_type: str) -> MechanismModel:
-        # TODO: 从 OS 机理库 GET 获取
-        if loop_type == "level":
-            return MechanismModel(process_nature="integrating", preferred_simulation_model="FO_INTEGRATOR")
-        return MechanismModel(process_nature="self_regulating", preferred_simulation_model="FOPDT")
+        """机理模型：从标准 JSON 中提取物理机理定性"""
+        std = self._load_standard_json(loop_type)
+        if not std:
+            return MechanismModel()
 
-    def _get_knowledge(self, loop_type: str) -> KnowledgeModel:
-        # TODO: 从 OS 知识图谱 获取
-        if loop_type == "level":
-            return KnowledgeModel(td_enable=False, max_overshoot_percent=40.0, pb_range=[10.0, 1000.0])
-        return KnowledgeModel(td_enable=True, max_overshoot_percent=10.0)
+        model_struct = std.get('model_structure', {})
+        return MechanismModel(
+            process_nature=std.get('process_nature', 'self_regulating'),
+            dead_time_dominant=False,
+            preferred_simulation_model=model_struct.get('preferred', 'FOPDT'),
+            process_gain_sign=1,
+        )
+
+    def _get_knowledge(self, loop_type: str, inst: dict = None) -> KnowledgeModel:
+        """知识图谱：从标准 JSON 的专家约束 + 实例 JSON 的现场限制合并"""
+        std = self._load_standard_json(loop_type)
+        pid_c = std.get('pid_constraints', {})
+        quality = std.get('quality_thresholds', {})
+
+        # 实例级别的 DCS 限制可以覆盖标准值
+        dcs = (inst or {}).get('dcs_config', {})
+        op_constraints = (inst or {}).get('operating_constraints', {})
+
+        pb_min = dcs.get('pb_min_limit', pid_c.get('pb_min', 10.0))
+        pb_max = dcs.get('pb_max_limit', pid_c.get('pb_max', 500.0))
+        max_overshoot = op_constraints.get('max_overshoot_percent',
+                                           quality.get('max_overshoot', 10.0))
+
+        return KnowledgeModel(
+            td_enable=pid_c.get('td_enable', True),
+            max_overshoot_percent=max_overshoot,
+            gain_range=[std.get('gain_range', {}).get('K_min', 0.1),
+                        std.get('gain_range', {}).get('K_max', 10.0)],
+            pb_range=[pb_min, pb_max],
+            tuning_strategy='conservative' if not pid_c.get('aggressive', False) else 'aggressive',
+            historical_best_kp=(inst or {}).get('history', {}).get('best_kp') or 0.0,
+            expert_notes=std.get('description', ''),
+        )
 
     def _get_characterization(self, device_id: str) -> CharacterizationModel:
-        # TODO: 从 OS 时序特征库 获取
+        """表征模型：当前 OS 尚未提供批处理，返回空壳等待运行时回填"""
+        # [架构债 TODO] 未来由 OS 时序分析引擎提供，届时替换为 API 调用
         import datetime
+        print(f"ℹ️ [SemanticProvider] 表征模型: OS 尚未提供 {device_id} 的动态特征，使用默认空值（将由算法运行时回填）")
         return CharacterizationModel(
-            device_id=device_id, 
+            device_id=device_id,
             timestamp=datetime.datetime.now().isoformat()
         )
 
     def _get_data(self, device_id: str) -> DataModel:
-        # TODO: 从 OS 点位映射库 获取
-        return DataModel(device_id=device_id, pv_tag=f"{device_id}.PV", sv_tag=f"{device_id}.SV")
+        """数据模型：从实例 JSON 中提取 DCS 点位映射"""
+        inst = self._load_instance_json(device_id)
+        tag = inst.get('tag_name', device_id)
+        return DataModel(
+            device_id=device_id,
+            pv_tag=f"{tag}.PV",
+            sv_tag=f"{tag}.SV",
+            out_tag=f"{tag}.OUT",
+            db_source='os_historian'
+        )
 
     def _get_metrics(self, device_id: str) -> MetricsModel:
-        # TODO: 从 OS 指标库 获取
-        return MetricsModel(device_id=device_id, auto_control_rate=0.98, steady_state_rate=0.85)
+        """指标模型：当前 OS 尚未提供 KPI 服务，返回空壳"""
+        # [架构债 TODO] 未来由 OS 指标计算引擎提供
+        return MetricsModel(device_id=device_id)
 
+    # ================================================================
+    # 对外唯一入口：组装集装箱
+    # ================================================================
 
     def get_tuning_context(self, device_id: str) -> Dict[str, Any]:
         """
         组合出供大模型和传统算法消费的全息 Context 集装箱。
+        
+        从本地 JSON（模拟 OS）中读取真实的设备参数和标准约束，
+        拆解映射到 6 大原子模型后，拼装成统一的上下文字典。
         """
-        # 1. 抓取本尊设备的本体，进而得知类型
+        # 1. 加载原始 JSON
+        inst_raw = self._load_instance_json(device_id)
+
+        # 2. 本体模型 → 确定回路类型
         ontology = self._get_ontology(device_id)
         loop_type = ontology.loop_type
 
-        # 2. 从五大仓库平行并发抓取领域数据
+        # 3. 从各库抓取领域数据
         mechanism = self._get_mechanism(loop_type)
+        knowledge = self._get_knowledge(loop_type, inst_raw)
+        characterization = self._get_characterization(device_id)
         data_model = self._get_data(device_id)
         metrics = self._get_metrics(device_id)
-        characterization = self._get_characterization(device_id)
 
-        # 3. 从顶层专家系统获取图谱偏好
-        knowledge = self._get_knowledge(loop_type)
-        
         # 4. 组装集装箱
         ctx = {
             'loop_name': device_id,
             'loop_type': loop_type,
-            
-            # 直接铺平注入 6 大原生 Atomic 模型对象
+
+            # 6 大原生 Atomic 模型对象
             'ontology_model': ontology,
             'mechanism_model': mechanism,
             'knowledge_model': knowledge,
             'characterization_model': characterization,
             'data_model': data_model,
             'metrics_model': metrics,
-            
-            # 【重要】为了照顾传统老代码（不改动原来 stage 里面的 json 读取点位）
-            # 我们做一层向下兼容映射
+
+            # 向下兼容映射（供尚未迁移的老 Stage 代码读取）
             'constraints': {
                 'pb_range': knowledge.pb_range,
                 'gain_range': knowledge.gain_range,
@@ -102,8 +217,16 @@ class SemanticProvider:
             },
             'physical': {
                 'tank_volume_m3': ontology.tank_volume_m3,
-                'valve_cv_max': ontology.valve_cv_max
-            }
+                'tank_cross_section_m2': ontology.tank_cross_section_m2,
+                'valve_cv_max': ontology.valve_cv_max,
+            },
+            # DCS 当前参数（供算法做初始化参考）
+            'current_pid': {
+                'kp': inst_raw.get('dcs_config', {}).get('current_kp', 0),
+                'ti': inst_raw.get('dcs_config', {}).get('current_ti', 0),
+                'td': inst_raw.get('dcs_config', {}).get('current_td', 0),
+                'pb': inst_raw.get('dcs_config', {}).get('current_pb', 0),
+            } if inst_raw.get('dcs_config') else None,
         }
-        
+
         return ctx
