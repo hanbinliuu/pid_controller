@@ -1,0 +1,67 @@
+"""
+表征模型 (Characterization Model)
+=====================================
+
+OS 层面对于设备运行状况的动态评估数据。
+通常由底层的流计算引擎或批处理分析任务（如健康诊断APP、监控APP）每日跑批后产生，
+存储在 OS 的 TSDB 或 Redis 中。
+它表征了回路的健康状态、非线性特征、干扰频次等具备时效性的客观数据。
+"""
+
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Any
+
+
+@dataclass
+class SignalCharacteristics:
+    """过程信号特征"""
+    oscillation_ratio: float = 0.0          # 近期振荡时间占比 (0-1)
+    dominant_period_s: float = 0.0          # 主振荡周期 (秒)
+    noise_level: float = 0.0                # 高频噪声强度占比 (0-1)
+    linearity_index: float = 1.0            # 线性度指标，越接近1越线性
+
+
+@dataclass
+class ValveCharacteristics:
+    """阀门执行机构表征 (预测/评估值)"""
+    stiction_index_estimated: float = 0.0   # 预测阀门卡涩/粘滞指数 (0-1)
+    deadband_estimated: float = 0.0         # 预测阀门死区 (%)
+    reversal_error: float = 0.0             # 回程误差
+
+
+@dataclass
+class ControlPerformance:
+    """近期控制绩效"""
+    performance_score_avg: float = 10.0     # 综合控制评分平均值 (例如 0-10)
+    auto_mode_time_ratio: float = 1.0       # 自动模式占比 (0-1)
+    intervention_count_daily: int = 0       # 日均人工干预/动作切手动次数
+    recent_step_events: int = 0             # 过去 X 小时内的有效台阶状阶跃次数
+
+
+@dataclass
+class CharacterizationModel:
+    """
+    表征模型 — OS 提供的动态时序特征快照
+    """
+    device_id: str                          # 设备追踪标识
+    timestamp: str                          # 此表征切片的评估生成时间，ISO8601格式
+    
+    signal: SignalCharacteristics = field(default_factory=SignalCharacteristics)
+    valve: ValveCharacteristics = field(default_factory=ValveCharacteristics)
+    performance: ControlPerformance = field(default_factory=ControlPerformance)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'CharacterizationModel':
+        """从字典构建表征模型"""
+        return cls(
+            device_id=data['device_id'],
+            timestamp=data['timestamp'],
+            signal=SignalCharacteristics(**data.get('signal', {})),
+            valve=ValveCharacteristics(**data.get('valve', {})),
+            performance=ControlPerformance(**data.get('performance', {})),
+        )
+        
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化为字典"""
+        from dataclasses import asdict
+        return asdict(self)

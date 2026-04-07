@@ -1,0 +1,53 @@
+{
+  "device_id": "2216_LIC_50104",
+  "tag_name": "LIC-50104",
+  "standard_model_ref": "level",
+  "plant": "大榭",
+  "unit": "2216装置",
+  "physical_params": {
+    "tank_volume_m3": 50.0,
+    "tank_cross_section_m2": 10.0,
+    "pv_range_min": 0.0,
+    "pv_range_max": 100.0,
+    "engineering_unit": "%",
+    "nominal_flow_rate": null
+  },
+  "valve_params": {
+    "cv_max": 100.0,
+    "characteristic": "linear",
+    "action_type": "air_to_close",
+    "deadband_percent": 1.0,
+    "time_constant_s": 2.0
+  },
+  "dcs_config": {
+    "control_mode": "PID",
+    "scan_interval_ms": 1000,
+    "action": "reverse",
+    "current_kp": 2.0,
+    "current_ti": 260.0,
+    "current_td": 0.0,
+    "current_pb": 50.0,
+    "pb_min_limit": 10.0,
+    "pb_max_limit": 1000.0,
+    "ti_min_limit": 0.1,
+    "ti_max_limit": 9999.0
+  },
+  "operating_constraints": {
+    "max_overshoot_percent": 30.0,
+    "max_settling_time_s": 1800.0,
+    "alarm_high": 80.0,
+    "alarm_high_high": 90.0,
+    "alarm_low": 20.0,
+    "alarm_low_low": 10.0
+  },
+  "history": {
+    "tuning_count": 0,
+    "last_tuning_time": null,
+    "best_model_type": null,
+    "best_score": 0.0,
+    "best_kp": null,
+    "best_ti": null,
+    "best_td": null,
+    "best_pb": null
+  }
+}

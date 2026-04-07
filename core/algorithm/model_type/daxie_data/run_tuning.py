@@ -139,7 +139,13 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
                 'qualified_windows': [window],
                 'response_mode': 'balanced'
             }
-            orc_seg = TuningOrchestrator(verbose=False, process_context={'loop_type': cfg['loop_type'], 'loop_name': device})
+            # [NEW] 使用统一的 tuning_context
+            from core.models import ModelProvider
+            provider = ModelProvider()
+            tuning_context = provider.get_tuning_context(device)
+            tuning_context['exact_window'] = enable_grid_search
+            
+            orc_seg = TuningOrchestrator(verbose=False, process_context=tuning_context)
             res_seg = orc_seg.run(input_data_seg)
             
             score = res_seg.get('model_rating', 0.0)
@@ -202,13 +208,16 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
     }
     
     t0 = time.time()
+    
+    # [NEW] 使用 ModelProvider 获取完整的模型语义上下文
+    from core.models import ModelProvider
+    provider = ModelProvider()
+    tuning_context = provider.get_tuning_context(device)
+    tuning_context['exact_window'] = enable_grid_search  # 补充运行时的控制标志
+    
     orchestrator_final = TuningOrchestrator(
         verbose=True, 
-        process_context={
-            'loop_type': cfg['loop_type'], 
-            'loop_name': device,
-            'exact_window': enable_grid_search  # 滑窗模式下严格使用传入窗口，禁止内部二次裁剪
-        }
+        process_context=tuning_context
     )
     result = orchestrator_final.run(input_data_final)
     t1 = time.time()

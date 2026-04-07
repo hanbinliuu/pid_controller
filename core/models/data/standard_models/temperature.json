@@ -1,0 +1,50 @@
+{
+  "loop_type": "temperature",
+  "process_nature": "self_regulating",
+  "description": "温度回路：慢速系统，大热容量，大滞后，需要保守整定",
+  "model_structure": {
+    "preferred": "SOPDT",
+    "fallback": ["FOPDT", "SO"],
+    "tuning_method_priority": ["lambda", "simc", "ziegler_nichols"],
+    "force_model": false
+  },
+  "gain_range": {
+    "K_min": 0.01,
+    "K_max": 200.0,
+    "K_int_min": 0.0,
+    "K_int_max": 0.0
+  },
+  "time_constants": {
+    "T1_range": [30.0, 1500.0],
+    "L_range": [5.0, 300.0],
+    "response_speed": "slow"
+  },
+  "pid_constraints": {
+    "pb_min": 60.0,
+    "pb_max": 300.0,
+    "ti_max": 1800.0,
+    "td_enable": true,
+    "td_ratio": 0.25,
+    "td_max": 15.0,
+    "aggressive": false
+  },
+  "tuning_strategy": {
+    "tau_c_factor": 1.5,
+    "safety_factor": 1.1,
+    "ti_multiplier": 1.2,
+    "integrating_mode": false,
+    "lambda_default": 30.0
+  },
+  "quality_thresholds": {
+    "max_overshoot": 15.0,
+    "settling_time_factor": 2.0,
+    "overshoot_discount": 1.0,
+    "oscillation_tolerance": 0.2,
+    "min_data_quality": 0.5
+  },
+  "simulation": {
+    "sim_duration_factor": 8.0,
+    "max_sim_duration": 3600.0,
+    "sp_step": 10.0
+  }
+}

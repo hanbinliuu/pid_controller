@@ -1,0 +1,50 @@
+{
+  "loop_type": "flow",
+  "process_nature": "self_regulating",
+  "description": "流量回路：快速响应，可能带有弱积分特性，允许激进整定",
+  "model_structure": {
+    "preferred": "FOPDT",
+    "fallback": ["FO", "SO"],
+    "tuning_method_priority": ["simc", "imc", "lambda"],
+    "force_model": false
+  },
+  "gain_range": {
+    "K_min": 0.05,
+    "K_max": 200.0,
+    "K_int_min": 0.0,
+    "K_int_max": 0.0
+  },
+  "time_constants": {
+    "T1_range": [0.5, 30.0],
+    "L_range": [0.0, 5.0],
+    "response_speed": "fast"
+  },
+  "pid_constraints": {
+    "pb_min": 40.0,
+    "pb_max": 300.0,
+    "ti_max": 20.0,
+    "td_enable": false,
+    "td_ratio": 0.0,
+    "td_max": 0.0,
+    "aggressive": true
+  },
+  "tuning_strategy": {
+    "tau_c_factor": 1.0,
+    "safety_factor": 1.0,
+    "ti_multiplier": 1.0,
+    "integrating_mode": false,
+    "lambda_default": 2.0
+  },
+  "quality_thresholds": {
+    "max_overshoot": 20.0,
+    "settling_time_factor": 1.0,
+    "overshoot_discount": 1.0,
+    "oscillation_tolerance": 0.1,
+    "min_data_quality": 0.4
+  },
+  "simulation": {
+    "sim_duration_factor": 6.0,
+    "max_sim_duration": 600.0,
+    "sp_step": 10.0
+  }
+}

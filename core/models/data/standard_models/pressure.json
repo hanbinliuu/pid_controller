@@ -1,0 +1,50 @@
+{
+  "loop_type": "pressure",
+  "process_nature": "self_regulating",
+  "description": "压力回路：介质具有压缩性，通常响应较快",
+  "model_structure": {
+    "preferred": "FOPDT",
+    "fallback": ["FO", "SOPDT"],
+    "tuning_method_priority": ["simc", "lambda", "imc"],
+    "force_model": false
+  },
+  "gain_range": {
+    "K_min": 0.01,
+    "K_max": 200.0,
+    "K_int_min": 0.0,
+    "K_int_max": 0.0
+  },
+  "time_constants": {
+    "T1_range": [1.0, 100.0],
+    "L_range": [0.0, 20.0],
+    "response_speed": "medium"
+  },
+  "pid_constraints": {
+    "pb_min": 80.0,
+    "pb_max": 300.0,
+    "ti_max": 50.0,
+    "td_enable": true,
+    "td_ratio": 0.15,
+    "td_max": 10.0,
+    "aggressive": false
+  },
+  "tuning_strategy": {
+    "tau_c_factor": 1.2,
+    "safety_factor": 1.0,
+    "ti_multiplier": 1.0,
+    "integrating_mode": false,
+    "lambda_default": 5.0
+  },
+  "quality_thresholds": {
+    "max_overshoot": 25.0,
+    "settling_time_factor": 1.0,
+    "overshoot_discount": 1.0,
+    "oscillation_tolerance": 0.2,
+    "min_data_quality": 0.4
+  },
+  "simulation": {
+    "sim_duration_factor": 6.0,
+    "max_sim_duration": 1200.0,
+    "sp_step": 10.0
+  }
+}
