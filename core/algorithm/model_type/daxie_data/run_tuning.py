@@ -140,8 +140,8 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
                 'response_mode': 'balanced'
             }
             # [NEW] 使用统一的 tuning_context
-            from core.models import ModelProvider
-            provider = ModelProvider()
+            from core.models import SemanticProvider
+            provider = SemanticProvider()
             tuning_context = provider.get_tuning_context(device)
             tuning_context['exact_window'] = enable_grid_search
             
@@ -209,9 +209,9 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
     
     t0 = time.time()
     
-    # [NEW] 使用 ModelProvider 获取完整的模型语义上下文
-    from core.models import ModelProvider
-    provider = ModelProvider()
+    # [NEW] 使用 SemanticProvider 获取完整的 OS 领域原子模型
+    from core.models import SemanticProvider
+    provider = SemanticProvider()
     tuning_context = provider.get_tuning_context(device)
     tuning_context['exact_window'] = enable_grid_search  # 补充运行时的控制标志
     

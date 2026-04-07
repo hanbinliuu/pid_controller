@@ -220,9 +220,12 @@ class TuningOrchestrator(LoggerMixin):
             lambda_factor=lambda_factor,
             current_pid=current_pid,
             process_context=self._process_context or {},
-            standard_model=(self._process_context or {}).get('standard_model'),
-            instance_model=(self._process_context or {}).get('instance_model'),
+            ontology_model=(self._process_context or {}).get('ontology_model'),
+            mechanism_model=(self._process_context or {}).get('mechanism_model'),
+            knowledge_model=(self._process_context or {}).get('knowledge_model'),
             characterization_model=(self._process_context or {}).get('characterization_model'),
+            data_model=(self._process_context or {}).get('data_model'),
+            metrics_model=(self._process_context or {}).get('metrics_model'),
             enable_downsample=enable_downsample,
             downsample_target=downsample_target
         )

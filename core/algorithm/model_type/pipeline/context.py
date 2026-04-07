@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 from core.algorithm.model_type.data_models import HistoricalData, SegmentResult, FusionResult, TuningInput
-from core.models import StandardProcessModel, InstanceProcessModel, CharacterizationModel
+from core.models import OntologyModel, MechanismModel, KnowledgeModel, CharacterizationModel, DataModel, MetricsModel
 
 @dataclass
 class TuningContext:
@@ -22,10 +22,13 @@ class TuningContext:
     current_pid: Optional[Dict[str, float]] = None
     process_context: Dict[str, Any] = field(default_factory=dict)
     
-    # 语义模型 (New OS semantic models)
-    standard_model: Optional[StandardProcessModel] = None
-    instance_model: Optional[InstanceProcessModel] = None
+    # 语义原子模型 (Atomic Domain Primitive Models)
+    ontology_model: Optional[OntologyModel] = None
+    mechanism_model: Optional[MechanismModel] = None
+    knowledge_model: Optional[KnowledgeModel] = None
     characterization_model: Optional[CharacterizationModel] = None
+    data_model: Optional[DataModel] = None
+    metrics_model: Optional[MetricsModel] = None
     
     enable_downsample: bool = True
     downsample_target: int = 1000
