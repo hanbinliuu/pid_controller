@@ -65,11 +65,17 @@ class SegmentationStage(PipelineStage):
         # 2. 尝试寻找 SV阶跃 和 MV阶跃段
         sv_step_segs, sv_step_results = self._segment_processor.detect_sv_step_segments(context.hist_data)
         
-        if sv_step_segs:
+        exact_window = context.process_context.get('exact_window', False) if context.process_context else False
+
+        if sv_step_segs and not exact_window:
             self.log(f"✅ 找到 {len(sv_step_segs)} 个 SV 阶跃响应段（优先使用）")
             valid_segments = sv_step_segs
             segment_results = sv_step_results
             context.from_sv_step = True
+        elif exact_window:
+            self.log(f"📊 严格窗口模式 (exact_window=True)，跳过内部阶跃裁剪，直接使用 {len(disturbance_segs)} 个指定窗口段")
+            valid_segments = disturbance_segs
+            segment_results = disturbance_results
         else:
             self.log(f"📊 无SV阶跃段，使用 {len(disturbance_segs)} 个扰动段")
             tuning_segs_mv, tuning_results_mv = self._segment_processor.detect_tuning_segments(context.hist_data)

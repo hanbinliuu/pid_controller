@@ -302,28 +302,26 @@ class SegmentManager(LoggerMixin):
             
             if not merged_with_disturbance:
                 # 整定段独立存在
-                merged_segments.append(tuning_seg)
-                tuning_result.segment_idx = len(merged_segments) - 1
-                merged_results.append(tuning_result)
-                self.log(f"   + 整定段{i+1}: {len(tuning_seg.pv)}点, "
-                        f"阶跃={tuning_result.step_response_score:.2f}, "
-                        f"振荡={tuning_result.oscillation_ratio:.2f}")
+                if len(disturbance_segs) > 0:
+                    self.log(f"   - 舍弃 整定段{i+1}: 位于给定扰动窗口之外（严格遵循外部窗口输入）")
+                else:
+                    merged_segments.append(tuning_seg)
+                    tuning_result.segment_idx = len(merged_segments) - 1
+                    merged_results.append(tuning_result)
+                    self.log(f"   + 整定段{i+1}: {len(tuning_seg.pv)}点, "
+                            f"阶跃={tuning_result.step_response_score:.2f}, "
+                            f"振荡={tuning_result.oscillation_ratio:.2f}")
         
         # 处理未合并的扰动段
-        if len(tuning_segs) == 0:
-            # 没有整定段，添加所有扰动段
-            for j, (dist_seg, dist_result) in enumerate(zip(disturbance_segs, disturbance_results)):
-                merged_segments.append(dist_seg)
-                dist_result.segment_idx = len(merged_segments) - 1
-                merged_results.append(dist_result)
-                self.log(f"   + 扰动段{j+1}: {len(dist_seg.pv)}点, "
-                        f"阶跃={dist_result.step_response_score:.2f}, "
-                        f"振荡={dist_result.oscillation_ratio:.2f}")
-        else:
-            # 有整定段时，忽略未合并的扰动段
-            unused_count = len(disturbance_segs) - len(used_disturbance_indices)
-            if unused_count > 0:
-                self.log(f"   ⚠️ 忽略 {unused_count} 个未合并的扰动段（优先使用整定段）")
+        unused_indices = set(range(len(disturbance_segs))) - used_disturbance_indices
+        for j in unused_indices:
+            dist_seg = disturbance_segs[j]
+            dist_result = disturbance_results[j]
+            merged_segments.append(dist_seg)
+            dist_result.segment_idx = len(merged_segments) - 1
+            merged_results.append(dist_result)
+            self.log(f"   + 保留 扰动段{j+1}: 未匹配到MV阶跃，原样保留({len(dist_seg.pv)}点, "
+                    f"阶跃={dist_result.step_response_score:.2f})")
         
         self.log(f"   📊 合并后共 {len(merged_segments)} 个有效段")
         return merged_segments, merged_results

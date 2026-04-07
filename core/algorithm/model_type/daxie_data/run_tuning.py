@@ -191,7 +191,12 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
     # ==========================================
     input_data_final = {
         'history_data': sliced_data,
-        'params': {'model_type': 'FOPDT', 'turning_type': 'PID', 'analyst_column': 'pv'},
+        'params': {
+            'model_type': 'FOPDT', 
+            'turning_type': 'PID', 
+            'analyst_column': 'pv',
+            'exact_window': enable_grid_search  # 如果是网格搜索模式，严格使用传入的整定段，不再进行内部的阶跃二次裁剪
+        },
         'qualified_windows': final_run_windows,
         'response_mode': 'balanced'
     }
@@ -199,7 +204,11 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
     t0 = time.time()
     orchestrator_final = TuningOrchestrator(
         verbose=True, 
-        process_context={'loop_type': cfg['loop_type'], 'loop_name': device}
+        process_context={
+            'loop_type': cfg['loop_type'], 
+            'loop_name': device,
+            'exact_window': enable_grid_search  # 滑窗模式下严格使用传入窗口，禁止内部二次裁剪
+        }
     )
     result = orchestrator_final.run(input_data_final)
     t1 = time.time()
@@ -291,11 +300,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     TARGET_LOOP = args.loop_id
-    ENABLE_GRID_SEARCH = (args.mode == "grid_search")
+    ENABLE_GRID_SEARCH = (args.mode == "auto_detect")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-12-01 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-12-02 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2026-01-01 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2026-01-03 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")
