@@ -28,6 +28,7 @@ class TuningContext:
     current_kp_sign: int = 1
     loop_type: str = 'default'
     is_fallback_triggered: bool = False
+    dt_data: float = 1.0  # 数据采样周期(秒)，在 DataPrepStage 中计算
     
     # ---------------- 3. 中间辨识结果 (Intermediate Results) ----------------
     hist_data: Optional[HistoricalData] = None

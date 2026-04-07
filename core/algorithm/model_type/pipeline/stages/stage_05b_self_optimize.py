@@ -19,7 +19,9 @@ Phase 2 — PB/TI/TD 微调 (所有路径):
 定位: 所有前置阶段之后、OutputVerificationStage 之前
 """
 
+import copy
 from typing import Dict, List, Tuple, Optional
+
 import numpy as np
 
 from ..context import TuningContext
@@ -28,7 +30,12 @@ from ...rating import ModelRating
 from ...config import Config
 from ...data_models import FusionResult
 from ...config.loop_presets import get_loop_preset
-from ...utils import normalize_pid_keys as _normalize_pid_keys, pid_to_full_dict
+from ...utils import (
+    normalize_pid_keys as _normalize_pid_keys,
+    pid_to_full_dict,
+    build_cl_verification,
+    compute_sim_params,
+)
 
 # 默认配置（可被 Config.SELF_OPTIMIZE 覆盖）
 _DEFAULT_CONFIG = {
@@ -40,11 +47,6 @@ _DEFAULT_CONFIG = {
     'fine_tune_max_rounds': 3,  # 增加一轮微调机会
     'fine_tune_min_improvement': 0.1,
 }
-
-
-def _normalize_pid_keys_fn(pid_params: Dict) -> Dict[str, float]:
-    """兼容性包装 — 委托给 utils.normalize_pid_keys"""
-    return _normalize_pid_keys(pid_params)
 
 
 class SelfOptimizeStage(PipelineStage):
@@ -83,8 +85,8 @@ class SelfOptimizeStage(PipelineStage):
         # Fix #1: 规范化输入 key
         pid_params = _normalize_pid_keys(pid_params)
         
-        # [NEW] 将真实数据采样周期传给内部闭环仿真器
-        if hasattr(self, '_context') and hasattr(self._context, 'dt_data'):
+        # 将真实数据采样周期传给内部闭环仿真器
+        if hasattr(self, '_context'):
             pid_params['Ts'] = self._context.dt_data
         elif extra and 'dt_data' in extra:
             pid_params['Ts'] = extra['dt_data']
@@ -95,7 +97,6 @@ class SelfOptimizeStage(PipelineStage):
             loop_type=loop_type, verbose=False
         )
 
-        import copy
         cl_metrics_for_rating = copy.deepcopy(cl_metrics)
         if loop_type == 'level':
             cl_metrics_for_rating.overshoot = cl_metrics.overshoot / 2.5
@@ -284,56 +285,16 @@ class SelfOptimizeStage(PipelineStage):
     # 辅助: 准备仿真参数 (正常路径)
     # ------------------------------------------------------------------
     def _prepare_sim_params(self, context: TuningContext):
-        hist_data = context.hist_data
-        if hist_data is None:
-            return None
-
-        valid_mask = hist_data.valid_mask()
-        y = hist_data.pv[valid_mask]
-        sv = hist_data.sv[valid_mask]
-        ms_cfg = Config.MODEL_SELECTOR
-
-        if len(y) == 0 or len(sv) == 0:
-            return None
-
-        sp_initial = float(sv[0])
-        sp_final = float(sv[-1])
-        pv_initial = float(y[0])
-
-        sp_change = abs(sp_final - sp_initial)
-        pv_sp_diff = abs(pv_initial - sp_initial)
-        if sp_change < ms_cfg['min_sp_change'] or pv_sp_diff > sp_change * 2:
-            sp_initial = ms_cfg['default_sp_initial']
-            sp_final = ms_cfg['default_sp_final']
-            pv_initial = ms_cfg['default_pv_initial']
-
-        return sp_initial, sp_final, pv_initial
+        """准备仿真参数 — 委托给 utils.compute_sim_params"""
+        return compute_sim_params(context.hist_data)
 
     # ------------------------------------------------------------------
     # 辅助: 构建 closed_loop_verification dict (Fix #3)
     # ------------------------------------------------------------------
     @staticmethod
     def _build_cl_verification(cl_metrics, sp_initial, sp_final, pv_initial, is_stable=None) -> Dict:
-        """从 cl_metrics 构建 closed_loop_verification 字典, 确保与微调后参数匹配。
-        
-        Args:
-            is_stable: 由 verify_pid_stability 返回的稳定性判定（综合判定）。
-                       如为 None，则降级为简单的 settling_time 判定（不推荐）。
-        """
-        if is_stable is None:
-            is_stable = cl_metrics.settling_time < float('inf')
-        return {
-            'is_stable': is_stable,
-            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
-            'overshoot': cl_metrics.overshoot,
-            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
-            'steady_state_error': cl_metrics.steady_state_error,
-            'oscillation_count': cl_metrics.oscillation_count,
-            'decay_ratio': cl_metrics.decay_ratio,
-            'sp_initial': sp_initial,
-            'sp_final': sp_final,
-            'pv_initial': pv_initial,
-        }
+        """从 cl_metrics 构建 closed_loop_verification 字典 — 委托给 utils.build_cl_verification"""
+        return build_cl_verification(cl_metrics, sp_initial, sp_final, pv_initial, is_stable=is_stable)
 
     # ------------------------------------------------------------------
     # 辅助: Phase 2 搜索日志 (Fix #4)
@@ -380,31 +341,6 @@ class SelfOptimizeStage(PipelineStage):
             return context
             
         self._context = context
-
-        self.log(f"\n{'='*60}")
-        self.log("🔄 Step 5b: Rating 驱动自优化")
-        self.log('='*60)
-
-        # ====================================================================
-        # 路径判定: final_result 已存在? → 振荡/fallback 路径
-        # ====================================================================
-        if context.final_result is not None:
-            return self._optimize_existing_result(context)
-
-        # ====================================================================
-        # 正常路径: fusion_result 存在，走 Phase 1 + Phase 2
-        # ====================================================================
-        # [NEW] 提取真实历史数据的采样周期 dt_data
-        hist_data = context.hist_data
-        dt_data = 1.0
-        if hist_data and hasattr(hist_data, 'timestamp') and len(hist_data.timestamp) > 1:
-            ts = np.array(hist_data.timestamp, dtype=np.int64)
-            ts_diff = np.diff(ts[ts > 0]) / 1000.0
-            if len(ts_diff) > 0:
-                dt_data = float(np.median(ts_diff))
-        # 将真实采样周期放入 context 中，方便 _evaluate_pid 使用
-        if not hasattr(context, 'dt_data'):
-            context.dt_data = dt_data
 
         self.log(f"\n{'='*60}")
         self.log("🔄 Step 5b: Rating 驱动自优化")

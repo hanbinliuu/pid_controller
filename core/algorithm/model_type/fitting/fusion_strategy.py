@@ -385,7 +385,8 @@ class PIDFusionStrategy(LoggerMixin):
                     continue
                 k_max = max(abs(w_i.K), abs(w_j.K), self.EPSILON)
                 k_sim = 1 - min(abs(w_i.K - w_j.K) / k_max, 1)
-                t1_max = max(w_i.T1, w_j.T1, self.EPSILON)
+                t1_max_val = max(w_i.T1, w_j.T1)
+                t1_max = max(t1_max_val, 1.0) if t1_max_val < 0.1 else t1_max_val
                 t1_sim = 1 - min(abs(w_i.T1 - w_j.T1) / t1_max, 1)
                 sim = (k_sim * 0.6 + t1_sim * 0.4) * w_j.r2
                 similarities.append(sim)
@@ -428,7 +429,7 @@ class PIDFusionStrategy(LoggerMixin):
         K_median = np.median([w.K for w in windows])
         K_median_abs = max(abs(K_median), self.EPSILON)
         T1_median = np.median([w.T1 for w in windows])
-        T1_median_safe = max(T1_median, self.EPSILON)
+        T1_median_safe = max(T1_median, 1.0) if T1_median < 0.1 else T1_median
         
         robust_weights = []
         for w in windows:

@@ -34,7 +34,17 @@ from api.commond.time_util import parse_time_to_milliseconds
 from .config import Config, ModelType
 from .data_models import FusionResult, HistoricalData, TuningInput, SegmentResult
 from .logger import LoggerMixin
-from .utils import calculate_r2, build_segment_info as _build_segment_info, determine_turning_type, get_recommendation, pid_to_full_dict
+from .rating import ModelRating
+from .utils import (
+    calculate_r2,
+    build_segment_info as _build_segment_info,
+    determine_turning_type,
+    get_recommendation,
+    pid_to_full_dict,
+    compute_sampling_period,
+    compute_sim_params,
+    build_cl_verification,
+)
 
 
 class OutputBuilder(LoggerMixin):
@@ -230,25 +240,17 @@ class OutputBuilder(LoggerMixin):
         total_data_points = int(np.sum(valid_mask))
         
         # 闭环稳定性验证
-        sp_initial = float(sv[0]) if len(sv) > 0 else ms_cfg['default_sp_initial']
-        sp_final = float(sv[-1]) if len(sv) > 0 else ms_cfg['default_sp_final']
-        pv_initial = float(y[0]) if len(y) > 0 else sp_initial
-        
-        sp_change = abs(sp_final - sp_initial)
-        pv_sp_diff = abs(pv_initial - sp_initial)
-        
-        if sp_change < ms_cfg['min_sp_change'] or pv_sp_diff > sp_change * 2:
+        sim = compute_sim_params(hist_data)
+        if sim is not None:
+            sp_initial, sp_final, pv_initial = sim
+        else:
+            ms_cfg = Config.MODEL_SELECTOR
             sp_initial = ms_cfg['default_sp_initial']
             sp_final = ms_cfg['default_sp_final']
             pv_initial = ms_cfg['default_pv_initial']
         
-        # [NEW] 拦截历史数据并分析其实际刷新周期，强制传入 verify 以防止失真放大假稳态
-        dt_data = 1.0
-        if hist_data and hasattr(hist_data, 'timestamp') and len(hist_data.timestamp) > 1:
-            ts = np.array(hist_data.timestamp, dtype=np.int64)
-            ts_diff = np.diff(ts[ts > 0]) / 1000.0
-            if len(ts_diff) > 0:
-                dt_data = float(np.median(ts_diff))
+        # 使用统一计算的采样周期
+        dt_data = compute_sampling_period(hist_data)
         
         # 将参数打包进 pid_params, 以便于底层的 ZOH 积分器提取
         if dt_data > 0.1:
@@ -280,7 +282,6 @@ class OutputBuilder(LoggerMixin):
                 self.log(f"   ⚠️ 振荡整定也失败，保持原参数")
         
         # ====== 三层评分 ======
-        from .rating import ModelRating
         
         # Layer 1: 闭环性能评分
         perf_score, perf_details = ModelRating.performance_score(cl_metrics)
@@ -306,18 +307,9 @@ class OutputBuilder(LoggerMixin):
             self.log(f"      Layer 2 - 方法置信度: {method_confidence:.2f}")
             self.log(f"      Layer 3 - 最终评分: {model_rating}/10")
         
-        closed_loop_info = {
-            'is_stable': is_stable,
-            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
-            'overshoot': cl_metrics.overshoot,
-            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
-            'steady_state_error': cl_metrics.steady_state_error,
-            'oscillation_count': cl_metrics.oscillation_count,
-            'decay_ratio': cl_metrics.decay_ratio,
-            'sp_initial': sp_initial,
-            'sp_final': sp_final,
-            'pv_initial': pv_initial
-        }
+        closed_loop_info = build_cl_verification(
+            cl_metrics, sp_initial, sp_final, pv_initial, is_stable=is_stable
+        )
         
         # success 仅取决于是否产生有效参数，不再要求内部闭环验证通过
         # 内部闭环验证使用估算模型（振荡数据下R²<0.4），不能代表真实过程稳定性

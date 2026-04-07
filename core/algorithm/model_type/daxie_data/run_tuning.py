@@ -208,6 +208,9 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
     
     final_score = result.get('model_rating', 0.0)
     final_pid = result.get('pid_parameters', {})
+    rating_details = result.get('rating_details', {})
+    perf_score = rating_details.get('performance_score', 0.0)
+    conf_score = rating_details.get('method_confidence', 0.0)
     
     print("\n" + "="*60)
     print("🎉 最终整定参数与总分榜单发布！")
@@ -224,6 +227,8 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
         final_Ti = abs(final_Kp) / abs(final_Ki)
     
     print(f"   🏆 综合性能评分 : {final_score:.2f} 分")
+    print(f"      ├─ 闭环性能评分 : {perf_score:.2f} / 10")
+    print(f"      └─ 方法置信度   : {conf_score:.2f} (权重)")
     print(f"   ⚙️  最终采取方法 : {final_method}")
     print(f"   📊 最终理论参数 : Kp={final_Kp:.4f}, Ti={final_Ti:.1f}s, Td={final_Td:.1f}s")
     print(f"   (对应工控机配置) : Pb={final_pb:.1f}%, Ti={final_Ti:.1f}s")
@@ -289,8 +294,8 @@ if __name__ == "__main__":
     ENABLE_GRID_SEARCH = (args.mode == "grid_search")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2026-02-10 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2026-02-11 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-12-01 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-12-02 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")

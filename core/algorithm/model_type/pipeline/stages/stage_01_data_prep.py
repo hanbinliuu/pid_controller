@@ -2,6 +2,7 @@ from typing import Dict, Any, Union
 
 from ...data_models import HistoricalData, TuningInput
 from ...config.loop_type_inferrer import infer_loop_type_from_data, format_inference_log
+from ...utils import compute_sampling_period
 from ..context import TuningContext
 from .base_stage import PipelineStage
 
@@ -101,6 +102,9 @@ class DataPrepStage(PipelineStage):
         
         context.time_range = {'start_time': tuning_input.start_time, 'end_time': tuning_input.end_time}
         context.hist_data = HistoricalData.from_json(context.raw_data)
+        
+        # 统一计算采样周期，供所有下游 Stage 使用
+        context.dt_data = compute_sampling_period(context.hist_data)
         
         self.log(f"📥 输入: {len(tuning_input.tuning_window)} 个扰动窗口, {len(context.raw_data)} 条数据")
         

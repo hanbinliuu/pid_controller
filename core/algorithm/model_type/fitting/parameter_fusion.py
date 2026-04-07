@@ -17,7 +17,7 @@
 import numpy as np
 from typing import List, Optional
 
-from ..config import Config
+from ..config import Config, ModelType
 from ..data_models import SegmentResult, FusionResult, HistoricalData
 from ..logger import LoggerMixin
 from .fusion_strategy import PIDFusionStrategy, WindowResult as FusionWindowResult
@@ -129,7 +129,8 @@ class ParameterFusion(LoggerMixin):
                     continue
                 
                 K, T1 = fit_result.get('K', 0), fit_result.get('T1', 0)
-                if K == 0 and T1 == 0:
+                is_integrator = model_type in (ModelType.FOPI, ModelType.SOPI)
+                if K == 0 and (not is_integrator and T1 == 0):
                     valid_segment_idx += 1
                     continue
                 

@@ -202,3 +202,107 @@ def build_segment_info(segments: list, segment_results: list) -> list:
                 'type': 'tuning' if is_tuning else 'oscillation'
             })
     return segment_info
+
+
+# ============================================================
+# 共享工具函数 — 消除多处重复代码 (v4.2)
+# ============================================================
+
+def compute_sampling_period(hist_data) -> float:
+    """从历史数据计算采样周期(秒)。
+
+    统一替代在 stage_05_refinement / stage_05b_self_optimize / output_builder 中
+    各自重复实现的 dt_data 计算逻辑。
+
+    Args:
+        hist_data: HistoricalData 对象（可以为 None）
+
+    Returns:
+        采样周期，单位秒，默认 1.0
+    """
+    if hist_data is None:
+        return 1.0
+    if not hasattr(hist_data, 'timestamp') or len(hist_data.timestamp) < 2:
+        return 1.0
+    ts = np.array(hist_data.timestamp, dtype=np.int64)
+    ts_diff = np.diff(ts[ts > 0]) / 1000.0
+    if len(ts_diff) > 0:
+        return float(np.median(ts_diff))
+    return 1.0
+
+
+def build_cl_verification(cl_metrics, sp_initial: float, sp_final: float,
+                          pv_initial: float, is_stable: bool = None,
+                          **extra_fields) -> dict:
+    """构建 closed_loop_verification 字典。
+
+    统一替代在 output_builder / stage_05_refinement / oscillation_tuner /
+    stage_05b_self_optimize 中各自重复构建的 closed_loop_info 字典。
+
+    Args:
+        cl_metrics: ClosedLoopMetrics 对象
+        sp_initial: 设定值初值
+        sp_final: 设定值终值
+        pv_initial: PV 初值
+        is_stable: 由 verify_pid_stability 返回的稳定性判定。
+                   如为 None，则降级为 settling_time < inf 判定（不推荐）。
+        **extra_fields: 额外字段（如 gain_margin, phase_margin 等），直接合并到输出字典。
+
+    Returns:
+        closed_loop_verification 字典
+    """
+    if is_stable is None:
+        is_stable = cl_metrics.settling_time < float('inf')
+    result = {
+        'is_stable': is_stable,
+        'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
+        'overshoot': cl_metrics.overshoot,
+        'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
+        'steady_state_error': cl_metrics.steady_state_error,
+        'oscillation_count': cl_metrics.oscillation_count,
+        'decay_ratio': cl_metrics.decay_ratio,
+        'sp_initial': sp_initial,
+        'sp_final': sp_final,
+        'pv_initial': pv_initial,
+    }
+    result.update(extra_fields)
+    return result
+
+
+def compute_sim_params(hist_data, config: dict = None) -> tuple:
+    """从历史数据推导闭环仿真初始参数 (sp_initial, sp_final, pv_initial)。
+
+    统一替代在 output_builder / stage_05_refinement / stage_05b_self_optimize 中
+    各自重复实现的仿真参数推导逻辑。
+
+    Args:
+        hist_data: HistoricalData 对象
+        config: MODEL_SELECTOR 配置字典，默认使用 Config.MODEL_SELECTOR
+
+    Returns:
+        (sp_initial, sp_final, pv_initial) 元组，如果数据无效则返回 None
+    """
+    if hist_data is None:
+        return None
+    if config is None:
+        config = Config.MODEL_SELECTOR
+
+    valid_mask = hist_data.valid_mask()
+    y = hist_data.pv[valid_mask]
+    sv = hist_data.sv[valid_mask]
+
+    if len(y) == 0 or len(sv) == 0:
+        return None
+
+    sp_initial = float(sv[0])
+    sp_final = float(sv[-1])
+    pv_initial = float(y[0])
+
+    sp_change = abs(sp_final - sp_initial)
+    pv_sp_diff = abs(pv_initial - sp_initial)
+    if sp_change < config['min_sp_change'] or pv_sp_diff > sp_change * 2:
+        sp_initial = config['default_sp_initial']
+        sp_final = config['default_sp_final']
+        pv_initial = config['default_pv_initial']
+
+    return sp_initial, sp_final, pv_initial

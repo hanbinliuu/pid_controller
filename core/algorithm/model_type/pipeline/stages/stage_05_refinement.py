@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
 from scipy.optimize import least_squares
@@ -5,9 +7,10 @@ from scipy.optimize import least_squares
 from ..context import TuningContext
 from .base_stage import PipelineStage
 from ...data_models import FusionResult, HistoricalData
-from ...utils import calculate_r2, calculate_rmse, build_segment_info
+from ...utils import calculate_r2, calculate_rmse, build_segment_info, build_cl_verification
 from ...config import Config, ModelType
 from ...tuning import TuningMethod
+from ...rating import ModelRating
 
 
 class RefinementStage(PipelineStage):
@@ -216,7 +219,8 @@ class RefinementStage(PipelineStage):
         model_type = fusion.model_type
         params = self._simulator.fusion_to_params(fusion)
         
-        if abs(fusion.K) < self._epsilon or fusion.T1 < self._epsilon:
+        is_integrator = model_type in (ModelType.FOPI, ModelType.SOPI)
+        if abs(fusion.K) < self._epsilon or (not is_integrator and fusion.T1 < self._epsilon):
             self.log("   ⚠️ 参数无效(K或T1为0)")
             fusion.global_r2 = 0.0
             fusion.global_rmse = 0.0
@@ -409,14 +413,8 @@ class RefinementStage(PipelineStage):
         process_ctx = context.process_context or {}
         loop_type = process_ctx.get('loop_type', '')
         
-        # [NEW] 提前截获真实控制采样周期 dt_data
-        dt_data = 1.0
-        if context.hist_data and hasattr(context.hist_data, 'timestamp') and len(context.hist_data.timestamp) > 1:
-            ts = np.array(context.hist_data.timestamp, dtype=np.int64)
-            ts_diff = np.diff(ts[ts > 0]) / 1000.0
-            if len(ts_diff) > 0:
-                dt_data = float(np.median(ts_diff))
-        context.dt_data = dt_data  # Save to context for downstream stages
+        # 使用统一计算的采样周期
+        dt_data = context.dt_data
         
         if dt_data > 0.1:
             pid_params['Ts'] = dt_data
@@ -427,9 +425,6 @@ class RefinementStage(PipelineStage):
             loop_type=loop_type, verbose=self._verbose
         )
         
-        from ...rating import ModelRating
-        import copy
-        
         cl_metrics_for_rating = copy.deepcopy(cl_metrics)
         if loop_type == 'level':
             cl_metrics_for_rating.overshoot = cl_metrics.overshoot / 2.5
@@ -439,21 +434,12 @@ class RefinementStage(PipelineStage):
         perf_score, perf_details = ModelRating.performance_score(cl_metrics_for_rating)
         
         margins = method_result.stability_margins
-        closed_loop_info = {
-            'is_stable': is_stable,
-            'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
-            'overshoot': cl_metrics.overshoot,
-            'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
-            'steady_state_error': cl_metrics.steady_state_error,
-            'oscillation_count': cl_metrics.oscillation_count,
-            'decay_ratio': cl_metrics.decay_ratio,
-            'sp_initial': sp_initial,
-            'sp_final': sp_final,
-            'pv_initial': pv_initial,
-            'gain_margin': margins.gain_margin if margins else 0,
-            'gain_margin_db': margins.gain_margin_db if margins else 0,
-            'phase_margin': margins.phase_margin if margins else 0,
-        }
+        closed_loop_info = build_cl_verification(
+            cl_metrics, sp_initial, sp_final, pv_initial, is_stable=is_stable,
+            gain_margin=margins.gain_margin if margins else 0,
+            gain_margin_db=margins.gain_margin_db if margins else 0,
+            phase_margin=margins.phase_margin if margins else 0,
+        )
         
         gm = margins.gain_margin if margins else 1.0
         pm = margins.phase_margin if margins else 0.0

@@ -20,7 +20,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from ...config import Config, ModelType
 from ...config.loop_presets import get_loop_preset
 from ...data_models import SegmentResult, HistoricalData, FusionResult
-from ...utils import calculate_r2, calculate_rmse
+from ...utils import calculate_r2, calculate_rmse, build_cl_verification
 from ...logger import LoggerMixin
 from ..strategies.loop_type_strategies import get_loop_strategy
 from .conservative_pid import ConservativePIDCalculator
@@ -909,12 +909,9 @@ class OscillationTuner(LoggerMixin):
             'warnings': warnings,
         }
         
-        closed_loop_info = {
-            'is_stable': is_stable, 'settling_time': cl_metrics.settling_time if cl_metrics.settling_time < float('inf') else -1,
-            'overshoot': cl_metrics.overshoot, 'rise_time': cl_metrics.rise_time if cl_metrics.rise_time < float('inf') else -1,
-            'steady_state_error': cl_metrics.steady_state_error, 'oscillation_count': cl_metrics.oscillation_count,
-            'decay_ratio': cl_metrics.decay_ratio, 'sp_initial': sp_initial, 'sp_final': sp_final, 'pv_initial': pv_mean
-        }
+        closed_loop_info = build_cl_verification(
+            cl_metrics, sp_initial, sp_final, pv_mean, is_stable=is_stable
+        )
         
         tuning_success = True
         
