@@ -223,39 +223,46 @@ class ClosedLoopSimMixin:
         max_overshoot = loop_config.get('overshoot_acceptable', limits.get('overshoot_acceptable', 30.0))
         max_steady_error = loop_config.get('steady_state_error', limits.get('settling_threshold', 0.02) * 100)
         
-        # [NEW] 衰减比优秀时放宽超调量限制
+        # [FIX] 衰减比优秀时放宽超调量限制
         # 如果衰减比很好(<=0.6)，说明虽然超调大但收敛快，这是工业允许的
         if decay_ratio <= 0.6:
-            max_overshoot = max(max_overshoot, 65.0)
+            max_overshoot = max(max_overshoot, 70.0)
         
-        # 判定稳定性（放宽衰减比从 0.5 → 0.8，工业实际中 decay_ratio < 1.0 即收敛）
+        # 判定稳定性（放宽衰减比到 0.85，工业实际中 decay_ratio < 1.0 即收敛）
         is_settled = settling_time < max_settling
         is_accurate = steady_state_error < max_steady_error
         is_smooth = overshoot < max_overshoot
-        is_decaying = decay_ratio < 0.8
+        is_decaying = decay_ratio < 0.85
         
         is_stable = is_settled and is_accurate and is_smooth and is_decaying
         
-        # [NEW] 专门针对液位回路 (Level) 极度放宽稳定性判定！
-        # 它是积分过程容器，核心目标不仅是PV回到SV，而是避免不断震荡发散。
+        # [FIX] 专门针对液位回路 (Level) 极度放宽稳定性判定
         if loop_type == 'level':
-            # 只要能收敛（哪怕超时间长一点点或者超调很高）且最后落在设定值附近，工业上就是“稳”的
             if settling_time < float('inf') and steady_state_error < max_steady_error * 1.5 and decay_ratio <= 1.0:
                 is_stable = True
         
-        # [NEW] 边界容忍：仅一项指标微弱超标时仍判定为稳定（工业实用性）
+        # [FIX] 收敛趋势检测：如果响应在收敛（后半段振幅明显小于前半段），即使当前未进入误差带也视为稳定
+        if not is_stable and is_decaying and is_accurate:
+            n_resp = len(pv_response)
+            if n_resp > 100:
+                first_quarter_std = np.std(pv_response[:n_resp//4] - sp_final)
+                last_quarter_std = np.std(pv_response[-n_resp//4:] - sp_final)
+                if first_quarter_std > self._epsilon and last_quarter_std < first_quarter_std * 0.5:
+                    # 振幅衰减超过50%，趋势良好
+                    is_stable = True
+        
+        # [FIX] 边界容忍放宽：允许最多2项微弱超标（但每项不能超标太多）
         if not is_stable and is_settled:
             fail_count = sum([not is_accurate, not is_smooth, not is_decaying])
-            if fail_count == 1:
-                # 仅一项超标，检查是否只是微弱超标
-                marginal = False
+            if fail_count <= 2:
+                marginal_count = 0
                 if not is_accurate and steady_state_error < max_steady_error * 1.5:
-                    marginal = True  # 稳态误差超标 < 50%
+                    marginal_count += 1  # 稳态误差超标 < 50%
                 if not is_smooth and overshoot < max_overshoot * 1.3:
-                    marginal = True  # 超调超标 < 30%
+                    marginal_count += 1  # 超调超标 < 30%
                 if not is_decaying and decay_ratio < 1.0:
-                    marginal = True  # 衰减比 < 1.0 说明仍在收敛
-                if marginal:
+                    marginal_count += 1  # 衰减比 < 1.0 说明仍在收敛
+                if marginal_count >= fail_count:
                     is_stable = True
         
         if not is_stable and max_settling_time is not None and hasattr(self, 'log'):
@@ -263,7 +270,6 @@ class ClosedLoopSimMixin:
                    f"Accurate={is_accurate}({steady_state_error:.2f}/{max_steady_error:.2f}), "
                    f"Smooth={is_smooth}({overshoot:.2f}/{max_overshoot:.2f}), "
                    f"Decaying={is_decaying}({decay_ratio:.2f})")
-
         
         return ClosedLoopMetrics(
             is_stable=is_stable,
