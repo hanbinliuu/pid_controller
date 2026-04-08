@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from core.algorithm.model_type.data_models import HistoricalData, SegmentResult, FusionResult, TuningInput
 from core.models import OntologyModel, MechanismModel, KnowledgeModel, CharacterizationModel, DataModel, MetricsModel
@@ -11,6 +11,15 @@ class TuningContext:
     
     用于在各个整定阶段 (Stage) 之间传递状态、数据和中间结果，
     消除原本在 `model_selector` 中的超级庞大的局部变量表。
+    
+    桥接层说明
+    ----------
+    底部的 ``get_*`` 方法是**语义模型 → 算法配置**的桥接层：
+    - 优先从语义模型读取（OS 中台提供的结构化数据）
+    - 如果语义模型为 None，fallback 到 ``loop_presets`` / ``Config`` 硬编码
+    
+    后续迁移时，各 Stage 只需将 ``Config.XXX`` / ``loop_presets.get_loop_preset()``
+    替换为 ``context.get_xxx()``，语义层自动生效，无需其他改动。
     """
     # ---------------- 1. 外部输入 (Inputs) ----------------
     raw_data: List[Dict] = field(default_factory=list)
@@ -77,3 +86,184 @@ class TuningContext:
     def add_log(self, message: str):
         """记录流水线执行日志（仅做占位或挂载外部 logger）"""
         pass
+
+    # ================================================================
+    # 桥接层 (Bridge Accessors)
+    # ================================================================
+    # 规则：语义模型有值 → 用语义模型；语义模型为 None → fallback 到老配置
+    # 后续迁移：Stage 把 Config.XXX / loop_presets 替换为 context.get_xxx() 即可
+    # ================================================================
+
+    def _get_preset(self) -> dict:
+        """获取当前回路类型的 loop_presets 配置（fallback 用）"""
+        from ..config.loop_presets import get_loop_preset
+        return get_loop_preset(self.loop_type)
+
+    # ---- 回路基础信息 ----
+
+    def get_loop_type(self) -> str:
+        """回路类型：优先 ontology_model，fallback process_context/loop_type"""
+        if self.ontology_model and self.ontology_model.loop_type:
+            return self.ontology_model.loop_type
+        if self.process_context and self.process_context.get('loop_type'):
+            return self.process_context['loop_type']
+        return self.loop_type
+
+    def get_process_nature(self) -> str:
+        """过程性质（self_regulating / integrating）：优先 mechanism_model"""
+        if self.mechanism_model:
+            return self.mechanism_model.process_nature
+        preset = self._get_preset()
+        if preset.get('integrating_mode'):
+            return 'integrating'
+        return 'self_regulating'
+
+    # ---- PID 约束参数 ----
+
+    def get_pb_range(self) -> Tuple[float, float]:
+        """PB 范围 [min, max]：优先 knowledge_model"""
+        if self.knowledge_model and self.knowledge_model.pb_range:
+            return tuple(self.knowledge_model.pb_range)
+        preset = self._get_preset()
+        return (preset.get('pb_min', 40.0), preset.get('pb_max', 300.0))
+
+    def get_gain_range(self) -> Tuple[float, float]:
+        """过程增益合理范围 [min, max]：优先 knowledge_model"""
+        if self.knowledge_model and self.knowledge_model.gain_range:
+            return tuple(self.knowledge_model.gain_range)
+        return (0.1, 10.0)  # Config 默认值
+
+    def get_td_enable(self) -> bool:
+        """是否启用微分项：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.td_enable
+        return self._get_preset().get('td_enable', False)
+
+    def get_max_overshoot(self) -> float:
+        """最大允许超调量（%）：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.max_overshoot_percent
+        return 10.0  # 默认 10%
+
+    def get_tuning_strategy(self) -> str:
+        """整定策略（conservative / aggressive）：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.tuning_strategy
+        preset = self._get_preset()
+        return 'aggressive' if preset.get('aggressive', False) else 'conservative'
+
+    # ---- 仿真模型参数 ----
+
+    def get_preferred_model(self) -> str:
+        """首选仿真模型结构：优先 mechanism_model"""
+        if self.mechanism_model:
+            return self.mechanism_model.preferred_simulation_model
+        return 'FOPDT'
+
+    def get_allowed_models(self) -> List[str]:
+        """允许使用的仿真模型备选列表：优先 mechanism_model"""
+        if self.mechanism_model and self.mechanism_model.allowed_simulation_models:
+            return self.mechanism_model.allowed_simulation_models
+        return ['FOPDT']
+
+    def get_time_constant_range(self) -> Tuple[float, float]:
+        """典型时间常数范围 [min, max]（秒）：优先 mechanism_model"""
+        if self.mechanism_model:
+            r = self.mechanism_model.typical_time_constant_range_s
+            if r and len(r) == 2:
+                return tuple(r)
+        return (0.0, 9999.0)
+
+    def get_dead_time_range(self) -> Tuple[float, float]:
+        """典型纯滞后范围 [min, max]（秒）：优先 mechanism_model"""
+        if self.mechanism_model:
+            r = self.mechanism_model.typical_dead_time_range_s
+            if r and len(r) == 2:
+                return tuple(r)
+        return (0.0, 9999.0)
+
+    # ---- 安全/物理约束 ----
+
+    def get_output_bounds(self) -> Tuple[float, float]:
+        """PV 物理边界 [min, max]：优先 mechanism_model"""
+        if self.mechanism_model:
+            b = self.mechanism_model.output_physical_bounds
+            if b and len(b) == 2:
+                return tuple(b)
+        return (0.0, 100.0)
+
+    def get_coupling_risk(self) -> str:
+        """耦合风险等级：优先 mechanism_model"""
+        if self.mechanism_model:
+            return self.mechanism_model.coupling_risk
+        return 'none'
+
+    def is_dead_time_dominant(self) -> bool:
+        """是否为大纯滞后系统：优先 mechanism_model"""
+        if self.mechanism_model:
+            return self.mechanism_model.dead_time_dominant
+        return False
+
+    # ---- 整定策略参数（优先 knowledge_model → fallback loop_presets）----
+
+    def get_tau_c_factor(self) -> float:
+        """λ 调节系数（tau_c_factor）：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.tau_c_factor
+        return self._get_preset().get('tau_c_factor', 1.5)
+
+    def get_safety_factor(self) -> float:
+        """安全余量系数：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.safety_factor
+        return self._get_preset().get('safety_factor', 1.05)
+
+    def get_ti_multiplier(self) -> float:
+        """积分时间乘数：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.ti_multiplier
+        return self._get_preset().get('ti_multiplier', 1.0)
+
+    def get_ti_max(self) -> float:
+        """积分时间上限（秒）：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.ti_max
+        return self._get_preset().get('ti_max', 60.0)
+
+    def get_overshoot_discount(self) -> float:
+        """超调折扣系数（评分用）：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.overshoot_discount
+        return 1.0
+
+    def get_settling_time_factor(self) -> float:
+        """整定时间因子（评分用）：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.settling_time_factor
+        return 3.0
+
+    def get_oscillation_tolerance(self) -> float:
+        """振荡容忍度：优先 knowledge_model"""
+        if self.knowledge_model:
+            return self.knowledge_model.oscillation_tolerance
+        return 0.2
+
+    # ---- 表征特征（运行时回填）----
+
+    def get_oscillation_ratio(self) -> float:
+        """近期振荡比例：优先 characterization_model"""
+        if self.characterization_model:
+            return self.characterization_model.signal.oscillation_ratio
+        return 0.0
+
+    def get_noise_level(self) -> float:
+        """噪声水平：优先 characterization_model"""
+        if self.characterization_model:
+            return self.characterization_model.signal.noise_level
+        return 0.0
+
+    def get_stiction_index(self) -> float:
+        """阀门卡涩指数：优先 characterization_model"""
+        if self.characterization_model:
+            return self.characterization_model.valve.stiction_index_estimated
+        return 0.0

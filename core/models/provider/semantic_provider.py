@@ -2,16 +2,16 @@ import json
 import os
 from typing import Dict, Any, Optional
 
-from .ontology_model import OntologyModel
-from .mechanism_model import MechanismModel
-from .knowledge_model import KnowledgeModel
-from .characterization_model import CharacterizationModel
-from .data_model import DataModel
-from .metrics_model import MetricsModel
+from ..schemas.ontology_model import OntologyModel
+from ..schemas.mechanism_model import MechanismModel
+from ..schemas.knowledge_model import KnowledgeModel
+from ..schemas.characterization_model import CharacterizationModel
+from ..schemas.data_model import DataModel
+from ..schemas.metrics_model import MetricsModel
 
 
 # JSON 数据目录
-_DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+_DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 _INSTANCE_DIR = os.path.join(_DATA_DIR, 'instance_models')
 _STANDARD_DIR = os.path.join(_DATA_DIR, 'standard_models')
 
@@ -103,23 +103,44 @@ class SemanticProvider:
         )
 
     def _get_mechanism(self, loop_type: str) -> MechanismModel:
-        """机理模型：从标准 JSON 中提取物理机理定性"""
-        std = self._load_standard_json(loop_type)
-        if not std:
-            return MechanismModel()
+        """
+        机理模型：根据回路类型使用标准工厂方法获取完整机理定义。
 
-        model_struct = std.get('model_structure', {})
-        return MechanismModel(
-            process_nature=std.get('process_nature', 'self_regulating'),
-            dead_time_dominant=False,
-            preferred_simulation_model=model_struct.get('preferred', 'FOPDT'),
-            process_gain_sign=1,
-        )
+        工厂方法已内置四大回路的物理规则、仿真模型偏好、守恒约束等完整定义。
+        如实例 JSON 有覆盖配置（如密闭容器压力改为积分过程），可在此处叠加修正。
+        """
+        try:
+            mechanism = MechanismModel.for_loop_type(loop_type)
+        except ValueError:
+            # 未知回路类型，返回通用默认值
+            mechanism = MechanismModel()
+
+        # 从标准 JSON 读取覆盖项（如有特殊配置）
+        std = self._load_standard_json(loop_type)
+        if std:
+            model_struct = std.get('model_structure', {})
+            preferred = model_struct.get('preferred')
+            if preferred:
+                mechanism.preferred_simulation_model = preferred
+            process_nature = std.get('process_nature')
+            if process_nature:
+                mechanism.process_nature = process_nature
+
+        return mechanism
 
     def _get_knowledge(self, loop_type: str, inst: dict = None) -> KnowledgeModel:
-        """知识图谱：从标准 JSON 的专家约束 + 实例 JSON 的现场限制合并"""
+        """
+        知识图谱：从标准 JSON 的三大块完整灌入 KnowledgeModel
+        
+        数据来源映射：
+          - pid_constraints    → td_enable, pb_range, ti_max, td_ratio, td_max, aggressive
+          - tuning_strategy    → tau_c_factor, safety_factor, ti_multiplier, integrating_mode
+          - quality_thresholds → max_overshoot, settling_time_factor, overshoot_discount, oscillation_tolerance
+          - 实例 JSON          → pb_min/max 覆盖（DCS 现场限制优先）
+        """
         std = self._load_standard_json(loop_type)
         pid_c = std.get('pid_constraints', {})
+        strategy = std.get('tuning_strategy', {})
         quality = std.get('quality_thresholds', {})
 
         # 实例级别的 DCS 限制可以覆盖标准值
@@ -132,12 +153,26 @@ class SemanticProvider:
                                            quality.get('max_overshoot', 10.0))
 
         return KnowledgeModel(
+            # --- pid_constraints ---
             td_enable=pid_c.get('td_enable', True),
-            max_overshoot_percent=max_overshoot,
+            td_ratio=pid_c.get('td_ratio', 0.0),
+            td_max=pid_c.get('td_max', 0.0),
+            ti_max=pid_c.get('ti_max', 60.0),
+            pb_range=[pb_min, pb_max],
             gain_range=[std.get('gain_range', {}).get('K_min', 0.1),
                         std.get('gain_range', {}).get('K_max', 10.0)],
-            pb_range=[pb_min, pb_max],
-            tuning_strategy='conservative' if not pid_c.get('aggressive', False) else 'aggressive',
+            tuning_strategy='aggressive' if pid_c.get('aggressive', False) else 'conservative',
+            # --- tuning_strategy ---
+            tau_c_factor=strategy.get('tau_c_factor', 1.5),
+            safety_factor=strategy.get('safety_factor', 1.05),
+            ti_multiplier=strategy.get('ti_multiplier', 1.0),
+            integrating_mode=strategy.get('integrating_mode', False),
+            # --- quality_thresholds ---
+            max_overshoot_percent=max_overshoot,
+            settling_time_factor=quality.get('settling_time_factor', 3.0),
+            overshoot_discount=quality.get('overshoot_discount', 1.0),
+            oscillation_tolerance=quality.get('oscillation_tolerance', 0.2),
+            # --- 历史 ---
             historical_best_kp=(inst or {}).get('history', {}).get('best_kp') or 0.0,
             expert_notes=std.get('description', ''),
         )
