@@ -258,10 +258,12 @@ class SelfOptimizeStage(PipelineStage):
 
         model_type = final_result.get('model_type', 'FOPDT')
         
-        # [NEW] 积分模型仿真自适应补偿（恢复误删代码）：如果算法触发了积分兜底，请务必以积分真理为依据进行内部性能评价与寻优
+        # [FIX] 积分模型仿真自适应补偿：如果算法触发了积分兜底，以积分模型为依据进行评价与寻优
+        # 但如果 model_type 已经是 FO_INTEGRATOR，说明 K 已经是积分增益，不再重复转换
         if pid_params.get('method') == 'integrating_fallback':
+            if model_type != 'FO_INTEGRATOR':
+                K = K / max(T1, 1.0)
             model_type = 'FO_INTEGRATOR'
-            K = K / max(T1, 1.0)
 
         fusion = FusionResult(
             model_type=model_type, K=K, T1=T1, T2=T2, L=L,

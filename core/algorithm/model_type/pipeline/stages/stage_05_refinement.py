@@ -516,17 +516,24 @@ class RefinementStage(PipelineStage):
             return context
 
         # 1. 验证一致性与仿真匹配度
+        context._pre_optimization_r2 = context.fusion_result.global_r2
         fusion_result = self._validate_and_refine(
             context.fusion_result, context.segments_for_fitting, context.hist_data
         )
 
-        # 2. 恢复闭环修正值
+        # 2. 恢复闭环修正值（仅当全局优化没有显著改善 R² 时）
         if context.corrected_T1 is not None:
             if abs(fusion_result.T1 - context.corrected_T1) > 0.01:
-                self.log(f"   ⚠️ Step 5优化改变了闭环修正值 (T1: {context.corrected_T1:.2f} → {fusion_result.T1:.2f})")
-                self.log(f"   → 恢复闭环修正 T1={context.corrected_T1:.2f}s, K={context.corrected_K:.4f}")
-                fusion_result.T1 = context.corrected_T1
-                fusion_result.K = context.corrected_K
+                # 如果全局优化显著提高了 R²（>0.05），说明优化找到了更合理的参数，保留优化结果
+                r2_before_opt = getattr(context, '_pre_optimization_r2', None)
+                r2_after_opt = fusion_result.global_r2
+                if r2_before_opt is not None and (r2_after_opt - r2_before_opt) > 0.05:
+                    self.log(f"   ℹ️ 全局优化 R² 显著提升 ({r2_before_opt:.4f}→{r2_after_opt:.4f})，保留优化参数而非闭环修正值")
+                else:
+                    self.log(f"   ⚠️ Step 5优化改变了闭环修正值 (T1: {context.corrected_T1:.2f} → {fusion_result.T1:.2f})")
+                    self.log(f"   → 恢复闭环修正 T1={context.corrected_T1:.2f}s, K={context.corrected_K:.4f}")
+                    fusion_result.T1 = context.corrected_T1
+                    fusion_result.K = context.corrected_K
 
         # 把改动放回 context
         context.fusion_result = fusion_result

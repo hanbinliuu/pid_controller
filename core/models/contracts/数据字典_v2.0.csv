@@ -1,0 +1,96 @@
+﻿表名 (Table Name),表说明,小节 (Module),字段名,类型,必填/范围,说明,计算方法/示例值
+os_ontology,本体模型 — 设备台账,基础全表,device_id,string,是,设备唯一标识（对应 DCS Tag 前缀）,"""2216_LIC_50104"""
+os_ontology,本体模型 — 设备台账,基础全表,device_type,string,是,设备类型,"""tank"""
+os_ontology,本体模型 — 设备台账,基础全表,loop_type,string,是,回路类型：level / flow / pressure / temperature,"""level"""
+os_ontology,本体模型 — 设备台账,基础全表,tank_volume_m3,float,,储罐体积（m³），液位回路专属,50.0
+os_ontology,本体模型 — 设备台账,基础全表,tank_cross_section_m2,float,,储罐截面积（m²）,12.5
+os_ontology,本体模型 — 设备台账,基础全表,valve_cv_max,float,,阀门最大流量系数 Cv,60.0
+os_ontology,本体模型 — 设备台账,基础全表,valve_type,string,,阀门特性：linear / equal_percentage,"""equal_percentage"""
+os_ontology,本体模型 — 设备台账,基础全表,plant,string,,所属装置,"""2216"""
+os_ontology,本体模型 — 设备台账,基础全表,unit,string,,所属单元,"""蒸馏塔回流罐"""
+os_ontology,本体模型 — 设备台账,基础全表,tag_name,string,,DCS 标签名,"""LIC_50104"""
+os_ontology,本体模型 — 设备台账,基础全表,pv_range_min,float,,PV 量程下限,0.0
+os_ontology,本体模型 — 设备台账,基础全表,pv_range_max,float,,PV 量程上限,100.0
+os_ontology,本体模型 — 设备台账,基础全表,valve_action,string,,阀门动作方向：air_open / air_close,"""air_open"""
+os_ontology,本体模型 — 设备台账,基础全表,valve_deadband,float,,阀门死区（%）,2.0
+os_ontology,本体模型 — 设备台账,基础全表,valve_time_constant_s,float,,阀门时间常数（秒）,5.0
+os_mechanism,机理模型 — 过程物理特性,物理规则,process_nature,string,是,过程性质：self_regulating（自衡）/ integrating（积分）,"""integrating"""
+os_mechanism,机理模型 — 过程物理特性,物理规则,process_gain_sign,int,是,固有增益符号：+1 正作用 / -1 反作用,1
+os_mechanism,机理模型 — 过程物理特性,物理规则,dead_time_dominant,bool,是,是否为大纯滞后系统,false
+os_mechanism,机理模型 — 过程物理特性,物理规则,coupling_risk,string,,耦合风险：none / low / medium / high,"""medium"""
+os_mechanism,机理模型 — 过程物理特性,物理规则,nonlinearity_type,string,,非线性类型：none / valve_saturation / valve_nonlinear / process_nonlinear,"""valve_saturation"""
+os_mechanism,机理模型 — 过程物理特性,仿真模拟,preferred_simulation_model,string,是,首选仿真结构：FOPDT / SOPDT / FO_INTEGRATOR,"""FO_INTEGRATOR"""
+os_mechanism,机理模型 — 过程物理特性,仿真模拟,allowed_simulation_models,string[],,允许的备选模型列表,"[""FO_INTEGRATOR"", ""INTEGRATOR"", ""FOPDT""]"
+os_mechanism,机理模型 — 过程物理特性,仿真模拟,max_model_order,int,,最大允许建模阶数,1
+os_mechanism,机理模型 — 过程物理特性,仿真模拟,typical_time_constant_range_s,float[2],,"典型时间常数范围（秒）[min, max]","[10.0, 3600.0]"
+os_mechanism,机理模型 — 过程物理特性,仿真模拟,typical_dead_time_range_s,float[2],,"典型纯滞后范围（秒）[min, max]","[0.0, 120.0]"
+os_mechanism,机理模型 — 过程物理特性,仿真模拟,natural_frequency_s,float,,自然振荡周期预估（秒）,0.0
+os_mechanism,机理模型 — 过程物理特性,对象/约束建模,state_variables,string[],,过程状态变量名称,"[""liquid_level""]"
+os_mechanism,机理模型 — 过程物理特性,对象/约束建模,mass_balance_constrained,bool,,是否受质量守恒约束,true
+os_mechanism,机理模型 — 过程物理特性,对象/约束建模,energy_balance_constrained,bool,,是否受能量守恒约束,false
+os_mechanism,机理模型 — 过程物理特性,对象/约束建模,output_physical_bounds,float[2],,"PV 物理边界 [下限, 上限]","[0.0, 100.0]"
+os_mechanism,机理模型 — 过程物理特性,对象/约束建模,integrator_gain_range,float[2],,积分增益范围（仅积分过程）,"[0.001, 0.5]"
+os_knowledge,知识模型 — 专家整定约束,PID 参数约束,pb_range,float[2],是,"比例带安全范围 [PB_min, PB_max]","[100.0, 1000.0]"
+os_knowledge,知识模型 — 专家整定约束,PID 参数约束,gain_range,float[2],是,"过程增益合理范围 [K_min, K_max]","[0.01, 200.0]"
+os_knowledge,知识模型 — 专家整定约束,PID 参数约束,td_enable,bool,是,是否允许开启微分项,false
+os_knowledge,知识模型 — 专家整定约束,PID 参数约束,td_ratio,float,,微分/积分时间比例,0.0
+os_knowledge,知识模型 — 专家整定约束,PID 参数约束,td_max,float,,微分时间上限（秒）,0.0
+os_knowledge,知识模型 — 专家整定约束,PID 参数约束,ti_max,float,是,积分时间上限（秒）,3600.0
+os_knowledge,知识模型 — 专家整定约束,整定策略,tuning_strategy,string,是,aggressive（激进）/ conservative（保守）,"""conservative"""
+os_knowledge,知识模型 — 专家整定约束,整定策略,tau_c_factor,float,是,λ 调节系数（越大越保守）,1.5
+os_knowledge,知识模型 — 专家整定约束,整定策略,safety_factor,float,是,安全余量系数,1.0
+os_knowledge,知识模型 — 专家整定约束,整定策略,ti_multiplier,float,,积分时间附加乘数,1.2
+os_knowledge,知识模型 — 专家整定约束,整定策略,integrating_mode,bool,,是否启用积分过程整定模式,true
+os_knowledge,知识模型 — 专家整定约束,质量阈值,max_overshoot_percent,float,是,最大允许超调量（%）,40.0
+os_knowledge,知识模型 — 专家整定约束,质量阈值,settling_time_factor,float,,评分时对调节时间的加权因子,5.0
+os_knowledge,知识模型 — 专家整定约束,质量阈值,overshoot_discount,float,,超调折扣系数（评分用）,2.5
+os_knowledge,知识模型 — 专家整定约束,质量阈值,oscillation_tolerance,float,,振荡容忍度阈值,0.4
+os_knowledge,知识模型 — 专家整定约束,知识图谱（规则 / 案例 / 专家经验）,rules,string[],是,安全规则列表（硬性约束，算法+大模型都必须遵守）,"[""液位回路严禁使用微分项（Td=0）"", ""OP 必须保持在 15%~85%""]"
+os_knowledge,知识模型 — 专家整定约束,知识图谱（规则 / 案例 / 专家经验）,cases,object[],,历史整定案例（条件→参数→效果）,见下方示例
+os_knowledge,知识模型 — 专家整定约束,知识图谱（规则 / 案例 / 专家经验）,expert_experience,string[],,工程师经验条目（非硬性，大模型推理参考）,"[""液位控制的核心目标是平稳，不是快速""]"
+os_knowledge,知识模型 — 专家整定约束,知识图谱（规则 / 案例 / 专家经验）,historical_best_kp,float,,历史最佳 Kp,0.35
+os_knowledge,知识模型 — 专家整定约束,知识图谱（规则 / 案例 / 专家经验）,expert_notes,string,,简短经验备注（向后兼容）,"""液位回路：积分过程，平滑控制"""
+os_characterization,表征模型 — 动态运行特征,基础字段,device_id,string,是,设备 ID,"""2216_LIC_50104"""
+os_characterization,表征模型 — 动态运行特征,基础字段,timestamp,string,是,计算时间（ISO 8601）,"""2026-04-08T10:00:00Z"""
+os_characterization,表征模型 — 动态运行特征,signal（信号表征）,oscillation_ratio,float,0-1,PV 振荡比例，越大越振荡,PV 导数符号反转次数占比
+os_characterization,表征模型 — 动态运行特征,signal（信号表征）,dominant_period_s,float,≥0,主振荡周期（秒），0=无振荡,自相关法估算
+os_characterization,表征模型 — 动态运行特征,signal（信号表征）,noise_level,float,0-1,高频噪声强度,移动平均残差/量程
+os_characterization,表征模型 — 动态运行特征,signal（信号表征）,linearity_index,float,0-1,线性度，1=完全线性,分段增益一致性
+os_characterization,表征模型 — 动态运行特征,valve（阀门表征）,stiction_index_estimated,float,0-1,阀门卡涩指数,MV动PV不动的窗口占比
+os_characterization,表征模型 — 动态运行特征,valve（阀门表征）,deadband_estimated,float,0-100,死区估计（%MV量程）,MV反向切换响应距离
+os_characterization,表征模型 — 动态运行特征,valve（阀门表征）,reversal_error,float,0-1,回程误差,正/反向增益差异比
+os_characterization,表征模型 — 动态运行特征,performance（控制绩效）,performance_score_avg,float,0-10,综合控制评分,**算法计算**（见参考代码）
+os_characterization,表征模型 — 动态运行特征,performance（控制绩效）,auto_mode_time_ratio,float,0-1,自动模式时间占比,**OS 从 DCS 历史统计**
+os_characterization,表征模型 — 动态运行特征,performance（控制绩效）,intervention_count_daily,int,≥0,日均人工干预次数,**OS 从操作日志统计**
+os_characterization,表征模型 — 动态运行特征,performance（控制绩效）,recent_step_events,int,≥0,近期有效 MV 阶跃次数,**算法计算**（见参考代码）
+os_characterization,表征模型 — 动态运行特征,llm_extra_features（扩展特征）,llm_extra_features,object,预留的 Key-Value 扩展字段，后续大模型若需新特征在此追加,,
+os_data_mapping,数据映射 — DCS 点位,基础全表,device_id,string,是,设备 ID,"""2216_LIC_50104"""
+os_data_mapping,数据映射 — DCS 点位,基础全表,pv_tag,string,是,PV 点位名称,"""LIC_50104.PV"""
+os_data_mapping,数据映射 — DCS 点位,基础全表,sv_tag,string,是,SV 设定值点位名称,"""LIC_50104.SV"""
+os_data_mapping,数据映射 — DCS 点位,基础全表,out_tag,string,是,MV 输出点位名称,"""LIC_50104.OUT"""
+os_data_mapping,数据映射 — DCS 点位,基础全表,db_source,string,是,数据来源：os_historian / dcs_direct,"""os_historian"""
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,device_id,string,是,设备 ID,"""2216_LIC_50104"""
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,auto_control_rate,float,,自控率（%）,92.5
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,steady_state_rate,float,,稳态率（%）,85.0
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,mse_score,float,,均方误差评分,3.2
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,字段,液位 (level),流量 (flow),压力 (pressure),温度 (temperature)
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,process_nature,integrating,self_regulating,self_regulating,self_regulating
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,dead_time_dominant,❌,❌,❌,✅
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,coupling_risk,medium,low,medium,low
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,nonlinearity_type,valve_saturation,valve_nonlinear,none,process_nonlinear
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,preferred_model,FO_INTEGRATOR,FOPDT,FOPDT,FOPDT
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,allowed_models,"FO_INT, INT, FOPDT",FOPDT,"FOPDT, FO_INT","FOPDT, SOPDT"
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,max_model_order,1,1,1,2
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,T1 范围 (s),10~3600,0.5~30,2~300,60~7200
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,Td 范围 (s),0~120,0~10,0~30,10~600
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,mass_balance,✅,是,✅,❌
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,energy_balance,❌,❌,❌,✅
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,字段,液位 (level),流量 (flow),压力 (pressure),温度 (temperature)
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,pb_range,"[100, 1000]","[40, 300]","[80, 300]","[60, 300]"
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,td_enable,❌,❌,✅,✅
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,ti_max (s),3600,20,50,—
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,tuning_strategy,conservative,aggressive,conservative,conservative
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,tau_c_factor,1.5,1.0,1.2,1.5
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,safety_factor,1.0,1.0,1.0,1.1
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,max_overshoot %,40,20,—,—
+os_metrics,指标模型 — 控制绩效 KPI,基础全表,integrating_mode,✅,❌,❌,❌

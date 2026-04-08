@@ -112,11 +112,12 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         Kp = Kp * K_sign
         Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign, loop_type)
         
-        # [NEW] 极端积分下限保护 (防止微观假象导致真实DCS崩溃)
-        # 即使模型由于局部波动辨识出了极小的时间常数(T1=1.0s)，
-        # 真实液位/温度系统的积分也不能无限小，否则在典型 1~5s 的DCS离散控制下会因积分步长过大直接发散
-        if loop_type in ['level', 'temperature']:
-            Ti = max(Ti, 20.0) 
+        # [FIX] 极端积分下限保护（防止微观假象导致真实DCS崩溃）
+        # level 回路积分特性强，Ti 下限设高；temperature 回路可能有快速场景，下限适中
+        if loop_type == 'level':
+            Ti = max(Ti, 20.0)
+        elif loop_type == 'temperature':
+            Ti = max(Ti, 5.0)
             
         Ki = Kp / Ti if Ti > self._epsilon else 0.0
         Kd = Kp * Td

@@ -66,11 +66,8 @@ class TuningMethodsMixin:
             Kp = T1 / denom
             ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
             
-            # Ti 限幅逻辑优化：对于积分过程或慢速回路（multiplier > 1），允许 Ti > T1
-            if preset_ti_multiplier > 1.0:
-                Ti = min(T1 * preset_ti_multiplier, ti_limit_factor * tau_c)
-            else:
-                Ti = min(T1, ti_limit_factor * tau_c)
+            # Ti 限幅：取 T1 和 tau_c 上限中的较小值（preset_ti_multiplier 在函数末尾统一应用）
+            Ti = min(T1, ti_limit_factor * tau_c)
         else:
             # Lambda 整定法: 也需要应用回路预设的 tau_c_factor
             tau_c_factor = preset_tau_c_factor if preset_tau_c_factor else 1.0
@@ -141,14 +138,12 @@ class TuningMethodsMixin:
                 Kp = T1 / denom
                 ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
                 
-                # Ti 限幅逻辑优化
+                # Ti 限幅（preset_ti_multiplier 在函数末尾统一应用）
                 is_integrating = preset.get('integrating_mode', False)
                 if is_integrating and T1 > 50.0:
                     # 对于自带积分特性的系统（如Level），不能被极大T1拖慢积分响应
                     # 直接使用 SIMC 针对近似积分过程的 Ti 推荐公式
                     Ti = ti_limit_factor * (tau_c + L)
-                elif preset_ti_multiplier > 1.0:
-                    Ti = min(T1 * preset_ti_multiplier, ti_limit_factor * (tau_c + L))
                 else:
                     Ti = min(T1, ti_limit_factor * (tau_c + L))
                 Td = 0.0
@@ -249,6 +244,15 @@ class TuningMethodsMixin:
         ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
         Ti = ti_limit_factor * (tau_c + T1) if T1 > 0 else ti_limit_factor * tau_c
         Td = 0.0
+        
+        # [FIX] 与 _tune_fopdt 保持一致：应用回路预设的 Ti 乘数和 Td 开关
+        preset = get_loop_preset(loop_type)
+        Ti *= preset.get('ti_multiplier', 1.0)
+        
+        if preset.get('td_enable', False):
+            td_ratio = preset.get('td_ratio', 0.15)
+            td_max = preset.get('td_max', 999.0)
+            Td = min(Ti * td_ratio, td_max)
         
         max_Kp = self._get_max_kp(pb_min)
         if Kp > max_Kp:
