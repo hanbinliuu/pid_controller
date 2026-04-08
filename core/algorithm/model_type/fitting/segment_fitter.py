@@ -264,11 +264,20 @@ class SegmentFitter(LoggerMixin):
                                             f"负K={fitted_k_raw:.4f}校正为K={params_dict['K']:.4f} (R²: {r2:.4f})")
                     
                     fitted_k = abs(params_dict['K'])
-                    k_reasonable = k_min <= fitted_k <= k_max
+                    
+                    # [FIX] For FO_INTEGRATOR, K is K_int (rate of change), which is much smaller than steady-state K
+                    if model_type in {ModelType.FOPI, ModelType.SOPI}:
+                        # K_int is expected to be roughly k_expected / time_duration, so we relax the limit
+                        k_reasonable = (k_min * 1e-5) <= fitted_k <= (k_max * 1.0)
+                    else:
+                        k_reasonable = k_min <= fitted_k <= k_max
                     
                     if not k_reasonable and r2 > 0:
                         r2_adjusted = r2 * 0.3
-                        self.log(f"   {model_type}: K={params_dict['K']:.4f} 超出合理范围[{k_min:.4f}, {k_max:.4f}], R²降权")
+                        if model_type in {ModelType.FOPI}:
+                            self.log(f"   {model_type}: K_int={params_dict['K']:.6f} 超出合理范围, R²降权")
+                        else:
+                            self.log(f"   {model_type}: K={params_dict['K']:.4f} 超出合理范围[{k_min:.4f}, {k_max:.4f}], R²降权")
                     else:
                         r2_adjusted = r2
                     

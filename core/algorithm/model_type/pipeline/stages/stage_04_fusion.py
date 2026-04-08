@@ -212,7 +212,8 @@ class FusionStage(PipelineStage):
             # This shouldn't normally happen, but defensively return if we somehow don't have an early type
             return
 
-        if abs(fusion_result.K) < 1e-6 or fusion_result.T1 < 1e-6:
+        is_integrator = model_type in (ModelType.FOPI, ModelType.SOPI)
+        if abs(fusion_result.K) < 1e-6 or (not is_integrator and fusion_result.T1 < 1e-6):
             self.log(f"   ⚠️ 模型参数无效(K={fusion_result.K:.4f}, T1={fusion_result.T1:.2f})，跳过模型推断验证")
             return
         

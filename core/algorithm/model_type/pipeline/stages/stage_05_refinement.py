@@ -538,9 +538,10 @@ class RefinementStage(PipelineStage):
         # 把改动放回 context
         context.fusion_result = fusion_result
 
-        # 3. 检查融合参数是否有效 (K或T1不能为0)
-        if abs(fusion_result.K) < self._epsilon or fusion_result.T1 < self._epsilon:
-            self.log("\n   ⚠️ 参数融合失败（K或T1为0），尝试振荡整定fallback...")
+        # 3. 检查融合参数是否有效 (K或T1不能为0，积分器特例)
+        is_integrator = fusion_result.model_type in (ModelType.FOPI, ModelType.SOPI)
+        if abs(fusion_result.K) < self._epsilon or (not is_integrator and fusion_result.T1 < self._epsilon):
+            self.log("\n   ⚠️ 参数融合失败（K或T1无效），尝试振荡整定fallback...")
             fallback_result = self._oscillation_tuner.try_oscillation_tuning(
                 context.segments_for_fitting, context.segment_results_fitted, context.current_pid, force=True
             )
