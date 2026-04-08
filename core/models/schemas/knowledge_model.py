@@ -95,14 +95,55 @@ class KnowledgeModel:
     """振荡容忍度：评估是否"稳定"的振荡阈值"""
     
     # ================================================================
-    # 历史知识与案例参考
+    # 安全规则（给算法 + 大模型共用）
+    # ================================================================
+    
+    rules: List[str] = field(default_factory=list)
+    """
+    安全规则列表 — 硬性约束，算法和大模型都必须遵守。
+    示例：
+      - "关键回路超调量 ≤ 3%"
+      - "震荡工况优先降低 Kp"
+      - "大滞后回路可增加少量微分 Td"
+      - "OP 必须保持在 15%~85%"
+    """
+    
+    # ================================================================
+    # 历史案例库（主要给大模型参考）
+    # ================================================================
+    
+    cases: List[Dict[str, Any]] = field(default_factory=list)
+    """
+    历史整定案例 — 大模型参数推荐时的"参照系"。
+    每个 case 结构：
+      {
+        "condition": "大滞后温度回路 + 震荡工况",
+        "suggested_params": {"Kp": "0.7~0.9", "Ti": "150~200s", "Td": "25~35s"},
+        "effect": "稳态率 ≥ 95%, 超调 ≤ 3%"
+      }
+    """
+    
+    # ================================================================
+    # 专家经验（主要给大模型 Prompt 用）
+    # ================================================================
+    
+    expert_experience: List[str] = field(default_factory=list)
+    """
+    工程师经验条目 — 非硬性约束，作为大模型推理时的参考建议。
+    示例：
+      - "大滞后回路避免参数过激进，优先保证平稳"
+      - "液位回路 Ti 可放大，避免 MV 频繁动作"
+    """
+    
+    # ================================================================
+    # 历史知识
     # ================================================================
     
     historical_best_kp: float = 0.0
     """历史最佳 Kp（供算法初始化参考）"""
     
     expert_notes: str = ""
-    """专家经验提示录（可供大模型 Prompt 使用）"""
+    """简短经验备注（向后兼容）"""
     
     # ================================================================
     # 序列化
@@ -126,6 +167,9 @@ class KnowledgeModel:
             settling_time_factor=data.get('settling_time_factor', 3.0),
             overshoot_discount=data.get('overshoot_discount', 1.0),
             oscillation_tolerance=data.get('oscillation_tolerance', 0.2),
+            rules=data.get('rules', []),
+            cases=data.get('cases', []),
+            expert_experience=data.get('expert_experience', []),
             historical_best_kp=data.get('historical_best_kp', 0.0),
             expert_notes=data.get('expert_notes', ''),
         )

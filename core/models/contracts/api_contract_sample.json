@@ -1,112 +1,147 @@
 {
   "_meta": {
-    "version": "1.0.0",
+    "version": "2.0.0",
     "description": "HolliCube OS 语义层 -> PID 整定上下文 (TuningContext) 标准数据契约",
-    "usage": "A公司大模型整定接口必须接受此结构作为输入，并返回标准 PID 结果 JSON",
-    "generated_for_device": "2216_LIC_50104"
+    "usage": "后端组装此 JSON 作为整定算法输入，或转发给大模型厂家接口",
+    "generated_for_device": "2216_LIC_50104",
+    "updated": "2026-04-08"
   },
+
   "tuning_context": {
     "loop_name": "2216_LIC_50104",
     "loop_type": "level",
+
     "ontology_model": {
       "device_id": "2216_LIC_50104",
-      "device_type": "undefined",
+      "device_type": "tank",
       "loop_type": "level",
       "tank_volume_m3": 50.0,
-      "tank_cross_section_m2": null,
-      "valve_cv_max": 100.0,
-      "valve_type": "unknown",
-      "extra_attributes": {}
+      "tank_cross_section_m2": 12.5,
+      "valve_cv_max": 60.0,
+      "valve_type": "equal_percentage",
+      "plant": "2216",
+      "unit": "蒸馏塔回流罐",
+      "tag_name": "LIC_50104",
+      "pv_range_min": 0.0,
+      "pv_range_max": 100.0,
+      "valve_action": "air_open"
     },
+
     "mechanism_model": {
       "process_nature": "integrating",
-      "dead_time_dominant": false,
-      "natural_frequency_s": 0.0,
       "process_gain_sign": 1,
-      "preferred_simulation_model": "FO_INTEGRATOR"
+      "dead_time_dominant": false,
+      "coupling_risk": "medium",
+      "nonlinearity_type": "valve_saturation",
+      "preferred_simulation_model": "FO_INTEGRATOR",
+      "allowed_simulation_models": ["FO_INTEGRATOR", "INTEGRATOR", "FOPDT"],
+      "max_model_order": 1,
+      "typical_time_constant_range_s": [10.0, 3600.0],
+      "typical_dead_time_range_s": [0.0, 120.0],
+      "state_variables": ["liquid_level"],
+      "mass_balance_constrained": true,
+      "energy_balance_constrained": false,
+      "output_physical_bounds": [0.0, 100.0],
+      "integrator_gain_range": [0.001, 0.5]
     },
+
     "knowledge_model": {
+      "pb_range": [100.0, 1000.0],
+      "gain_range": [0.01, 200.0],
       "td_enable": false,
+      "td_ratio": 0.0,
+      "td_max": 0.0,
+      "ti_max": 3600.0,
+      "tuning_strategy": "conservative",
+      "tau_c_factor": 1.5,
+      "safety_factor": 1.0,
+      "ti_multiplier": 1.2,
+      "integrating_mode": true,
       "max_overshoot_percent": 40.0,
-      "gain_range": [
-        0.1,
-        10.0
+      "settling_time_factor": 5.0,
+      "overshoot_discount": 2.5,
+      "oscillation_tolerance": 0.4,
+      "rules": [
+        "液位回路严禁使用微分项（Td=0）",
+        "积分过程 Kp 不可过大，否则持续振荡无法收敛",
+        "OP 必须保持在 15%~85%，避免阀门饱和",
+        "液位超调量允许放宽至 30~40%，优先保证不振荡",
+        "Ti 通常远大于常规回路（数百秒至数千秒），避免 MV 频繁动作"
       ],
-      "pb_range": [
-        10.0,
-        1000.0
+      "cases": [
+        {
+          "condition": "常压储罐液位 + 等百分比阀 + 稳态操作",
+          "suggested_params": {"Kp": "0.2~0.5", "Ti": "300~600s", "Td": "0"},
+          "effect": "超调 ≤ 30%, MV 动作平稳, 30min 内回稳"
+        },
+        {
+          "condition": "塔釜液位 + 进料波动大 + 液位振荡",
+          "suggested_params": {"Kp": "0.1~0.3", "Ti": "600~1200s", "Td": "0"},
+          "effect": "牺牲响应速度换取稳定性，振荡消除"
+        }
       ],
-      "tuning_strategy": "balanced",
-      "historical_best_kp": 0.0,
-      "expert_notes": ""
+      "expert_experience": [
+        "液位回路本质是积分过程，Kp 越大振荡周期越短但幅值不衰减",
+        "液位控制的核心目标是平稳，不是快速——允许慢慢回到设定值",
+        "Ti 放大可以减少 MV 动作频率，对延长阀门寿命有好处"
+      ],
+      "historical_best_kp": 0.35,
+      "expert_notes": "液位回路：积分过程，平滑控制，极度排斥衍生项"
     },
+
     "characterization_model": {
       "device_id": "2216_LIC_50104",
-      "timestamp": "2026-04-07T21:05:58.634006",
+      "timestamp": "2026-04-08T10:00:00Z",
       "signal": {
-        "oscillation_ratio": 0.0,
-        "dominant_period_s": 0.0,
-        "noise_level": 0.0,
-        "linearity_index": 1.0
+        "oscillation_ratio": 0.49,
+        "dominant_period_s": 120.5,
+        "noise_level": 0.02,
+        "linearity_index": 0.85
       },
       "valve": {
-        "stiction_index_estimated": 0.0,
-        "deadband_estimated": 0.0,
-        "reversal_error": 0.0
+        "stiction_index_estimated": 0.15,
+        "deadband_estimated": 2.3,
+        "reversal_error": 0.08
       },
       "performance": {
-        "performance_score_avg": 10.0,
-        "auto_mode_time_ratio": 1.0,
-        "intervention_count_daily": 0,
-        "recent_step_events": 0
+        "performance_score_avg": 6.03,
+        "auto_mode_time_ratio": 0.92,
+        "intervention_count_daily": 3,
+        "recent_step_events": 2
       },
       "llm_extra_features": {}
     },
+
     "data_model": {
       "device_id": "2216_LIC_50104",
-      "pv_tag": "2216_LIC_50104.PV",
-      "sv_tag": "2216_LIC_50104.SV",
-      "out_tag": "",
-      "historical_table_ref": "",
+      "pv_tag": "LIC_50104.PV",
+      "sv_tag": "LIC_50104.SV",
+      "out_tag": "LIC_50104.OUT",
+      "historical_table_ref": "historian_db.dbo.tag_history",
       "db_source": "os_historian"
     },
+
     "metrics_model": {
       "device_id": "2216_LIC_50104",
-      "auto_control_rate": 0.98,
-      "steady_state_rate": 0.85,
-      "mse_score": 0.0
-    },
-    "constraints": {
-      "pb_range": [
-        10.0,
-        1000.0
-      ],
-      "gain_range": [
-        0.1,
-        10.0
-      ],
-      "max_overshoot_percent": 40.0,
-      "td_enable": false,
-      "control_strategy": "balanced"
-    },
-    "physical": {
-      "tank_volume_m3": 50.0,
-      "valve_cv_max": 100.0
+      "auto_control_rate": 92.5,
+      "steady_state_rate": 85.0,
+      "mse_score": 3.2
     }
   },
+
   "_expected_response_format": {
     "success": true,
     "pid_parameters": {
-      "Kp": 2.5,
-      "Ti": 208.0,
+      "Kp": 0.35,
+      "Ti": 450.0,
       "Td": 0.0,
-      "pb": 40.0
+      "pb": 285.7
     },
     "tuning_features": {
-      "tuning_method": "llm_xxx",
-      "reasoning_summary": "大模型推理过程摘要文本"
+      "tuning_method": "model_based",
+      "reasoning_summary": "液位积分过程，基于FO_INTEGRATOR模型辨识，Lambda整定法"
     },
-    "model_rating": 8.5,
-    "confidence_score": 0.85
+    "model_rating": 7.8,
+    "confidence_score": 0.88
   }
 }

@@ -1,28 +1,28 @@
 {
   "loop_type": "temperature",
   "process_nature": "self_regulating",
-  "description": "温度回路：慢速系统，大热容量，大滞后，需要保守整定",
+  "description": "温度回路：慢速大滞后系统，热容量大，需要保守整定配合微分超前补偿",
   "model_structure": {
-    "preferred": "SOPDT",
-    "fallback": ["FOPDT", "SO"],
-    "tuning_method_priority": ["lambda", "simc", "ziegler_nichols"],
+    "preferred": "FOPDT",
+    "fallback": ["SOPDT", "SO"],
+    "tuning_method_priority": ["simc", "lambda", "imc"],
     "force_model": false
   },
   "gain_range": {
     "K_min": 0.01,
-    "K_max": 200.0,
+    "K_max": 50.0,
     "K_int_min": 0.0,
     "K_int_max": 0.0
   },
   "time_constants": {
-    "T1_range": [30.0, 1500.0],
-    "L_range": [5.0, 300.0],
+    "T1_range": [60.0, 7200.0],
+    "L_range": [10.0, 600.0],
     "response_speed": "slow"
   },
   "pid_constraints": {
     "pb_min": 60.0,
     "pb_max": 300.0,
-    "ti_max": 1800.0,
+    "ti_max": 600.0,
     "td_enable": true,
     "td_ratio": 0.25,
     "td_max": 15.0,
@@ -33,18 +33,51 @@
     "safety_factor": 1.1,
     "ti_multiplier": 1.2,
     "integrating_mode": false,
-    "lambda_default": 30.0
+    "lambda_default": 20.0
   },
   "quality_thresholds": {
-    "max_overshoot": 15.0,
-    "settling_time_factor": 2.0,
+    "max_overshoot": 10.0,
+    "settling_time_factor": 3.0,
     "overshoot_discount": 1.0,
-    "oscillation_tolerance": 0.2,
-    "min_data_quality": 0.5
+    "oscillation_tolerance": 0.1,
+    "min_data_quality": 0.4
   },
   "simulation": {
     "sim_duration_factor": 8.0,
     "max_sim_duration": 3600.0,
-    "sp_step": 10.0
+    "sp_step": 5.0
+  },
+  "knowledge_graph": {
+    "rules": [
+      "温度回路超调量 ≤ 10%，温度超调可能导致产品质量问题",
+      "大滞后回路必须使用微分（Td_ratio ≈ 0.25）做超前补偿",
+      "震荡工况优先降低 Kp，不要先动 Ti",
+      "OP 必须保持在 15%~85%",
+      "温度变化缓慢，整定后需观察至少 3~5 个时间常数周期才能判断效果"
+    ],
+    "cases": [
+      {
+        "condition": "大滞后温度回路 + 震荡工况",
+        "suggested_params": {"Kp": "0.7~0.9", "Ti": "150~200s", "Td": "25~35s"},
+        "effect": "稳态率 ≥ 95%, 超调 ≤ 3%"
+      },
+      {
+        "condition": "反应釜温度 + 放热反应 + 精密控温",
+        "suggested_params": {"Kp": "0.3~0.6", "Ti": "100~180s", "Td": "15~30s"},
+        "effect": "温度偏差 ≤ ±0.5°C，杜绝超调"
+      },
+      {
+        "condition": "换热器出口温度 + 蒸汽加热 + 负荷波动",
+        "suggested_params": {"Kp": "1.0~1.8", "Ti": "60~120s", "Td": "10~20s"},
+        "effect": "快速跟踪负荷变化，超调 ≤ 5%"
+      }
+    ],
+    "expert_experience": [
+      "大滞后回路避免参数过激进，优先保证平稳",
+      "温度回路整定周期长（可能需要数小时），不要频繁改参数",
+      "如果温度持续振荡，80% 的原因是 Kp 太大，先砍半试试",
+      "微分项对温度回路有明显改善，但 Td 不要超过 Ti 的 1/4",
+      "蒸汽阀门有明显非线性（开度小时增益大），注意分段验证"
+    ]
   }
 }

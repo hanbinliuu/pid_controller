@@ -142,6 +142,7 @@ class SemanticProvider:
         pid_c = std.get('pid_constraints', {})
         strategy = std.get('tuning_strategy', {})
         quality = std.get('quality_thresholds', {})
+        kg = std.get('knowledge_graph', {})
 
         # 实例级别的 DCS 限制可以覆盖标准值
         dcs = (inst or {}).get('dcs_config', {})
@@ -172,6 +173,10 @@ class SemanticProvider:
             settling_time_factor=quality.get('settling_time_factor', 3.0),
             overshoot_discount=quality.get('overshoot_discount', 1.0),
             oscillation_tolerance=quality.get('oscillation_tolerance', 0.2),
+            # --- 知识图谱（rules / cases / expert_experience）---
+            rules=kg.get('rules', []),
+            cases=kg.get('cases', []),
+            expert_experience=kg.get('expert_experience', []),
             # --- 历史 ---
             historical_best_kp=(inst or {}).get('history', {}).get('best_kp') or 0.0,
             expert_notes=std.get('description', ''),

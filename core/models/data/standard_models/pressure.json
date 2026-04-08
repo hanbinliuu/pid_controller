@@ -1,22 +1,22 @@
 {
   "loop_type": "pressure",
   "process_nature": "self_regulating",
-  "description": "压力回路：介质具有压缩性，通常响应较快",
+  "description": "压力回路：快速响应要求，气体可压缩性导致非线性，需要适度微分",
   "model_structure": {
     "preferred": "FOPDT",
-    "fallback": ["FO", "SOPDT"],
+    "fallback": ["FO_INTEGRATOR", "SO"],
     "tuning_method_priority": ["simc", "lambda", "imc"],
     "force_model": false
   },
   "gain_range": {
-    "K_min": 0.01,
-    "K_max": 200.0,
-    "K_int_min": 0.0,
-    "K_int_max": 0.0
+    "K_min": 0.05,
+    "K_max": 100.0,
+    "K_int_min": 0.0001,
+    "K_int_max": 0.5
   },
   "time_constants": {
-    "T1_range": [1.0, 100.0],
-    "L_range": [0.0, 20.0],
+    "T1_range": [2.0, 300.0],
+    "L_range": [0.0, 30.0],
     "response_speed": "medium"
   },
   "pid_constraints": {
@@ -36,15 +36,41 @@
     "lambda_default": 5.0
   },
   "quality_thresholds": {
-    "max_overshoot": 25.0,
-    "settling_time_factor": 1.0,
+    "max_overshoot": 15.0,
+    "settling_time_factor": 2.0,
     "overshoot_discount": 1.0,
-    "oscillation_tolerance": 0.2,
+    "oscillation_tolerance": 0.15,
     "min_data_quality": 0.4
   },
   "simulation": {
-    "sim_duration_factor": 6.0,
+    "sim_duration_factor": 8.0,
     "max_sim_duration": 1200.0,
-    "sp_step": 10.0
+    "sp_step": 5.0
+  },
+  "knowledge_graph": {
+    "rules": [
+      "压力超调量控制在 15% 以内，防止安全阀起跳",
+      "密闭容器压力可能呈积分特性，需确认 process_nature",
+      "OP 必须保持在 15%~85%",
+      "可适量使用微分（Td_ratio ≈ 0.15），帮助抑制压力突变"
+    ],
+    "cases": [
+      {
+        "condition": "塔顶压力 + 冷凝器调节 + 稳态操作",
+        "suggested_params": {"Kp": "0.8~1.5", "Ti": "20~50s", "Td": "3~8s"},
+        "effect": "压力偏差 ≤ 5kPa，1min 内回稳"
+      },
+      {
+        "condition": "密闭容器压力 + 积分特性 + 频繁加卸载",
+        "suggested_params": {"Kp": "0.3~0.8", "Ti": "60~120s", "Td": "0"},
+        "effect": "积分过程需保守整定，避免持续振荡"
+      }
+    ],
+    "expert_experience": [
+      "压力回路的关键是防超调——超调意味着可能触发安全阀",
+      "气相系统的增益随操作压力变化（非线性），低压段增益大",
+      "如果压力和温度强耦合（如精馏塔），优先稳压力再调温度",
+      "密闭容器压力本质接近积分过程，不要当自衡过程整定"
+    ]
   }
 }
