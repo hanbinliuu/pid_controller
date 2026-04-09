@@ -28,6 +28,7 @@ import json
 import time
 import argparse
 import numpy as np
+import concurrent.futures
 from datetime import datetime
 from pathlib import Path
 
@@ -128,10 +129,11 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
         print(f"\n🚀 [Grid Search] 正在逐段高速跑测评分并记录参数...")
 
         csv_records = []
-        for i, window in enumerate(search_windows):
+        
+        # 提取成独立函数以支持多进程
+        def evaluate_window(i, window):
             st_str = datetime.fromtimestamp(window['start_time']/1000).strftime('%m-%d %H:%M')
             et_str = datetime.fromtimestamp(window['end_time']/1000).strftime('%m-%d %H:%M')
-            print(f"🎬 评估片段 {i+1}/{len(search_windows)}: {st_str} ~ {et_str}", end=" ... ")
             
             input_data_seg = {
                 'history_data': sliced_data,
@@ -139,7 +141,7 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
                 'qualified_windows': [window],
                 'response_mode': 'balanced'
             }
-            # [NEW] 使用统一的 tuning_context
+            # 使用统一的 tuning_context
             from core.models import SemanticProvider
             provider = SemanticProvider()
             tuning_context = provider.get_tuning_context(device)
@@ -151,13 +153,28 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
             score = res_seg.get('model_rating', 0.0)
             pid = res_seg.get('pid_parameters', {})
             kp, pb = pid.get('kp', 0.0), pid.get('pb', 0.0)
-            print(f"评分: {score:5.2f} | Kp={kp:.4f}, Pb={pb:.1f}%")
             
-            csv_records.append({
+            return {
                 "segment_idx": i+1, "start_time": st_str, "end_time": et_str, "score": score,
                 "kp": kp, "ki": pid.get('ki', 0.0), "kd": pid.get('kd', 0.0),
                 "pb": pb, "ti": pid.get('ti', 0.0), "td": pid.get('td', 0.0)
-            })
+            }
+
+        print(f"\n🚀 [Grid Search] 正在并行高速跑测 ({os.cpu_count() or 4} 线程预热中)...")
+        # 多线程并行跑测 (使用Thread避免ProcessPool的Pickle报错)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+            futures = {executor.submit(evaluate_window, i, w): i for i, w in enumerate(search_windows)}
+            for future in concurrent.futures.as_completed(futures):
+                idx = futures[future]
+                try:
+                    record = future.result()
+                    csv_records.append(record)
+                    print(f"✅ 片段 {record['segment_idx']:2d}/{len(search_windows)}: {record['start_time']} ~ {record['end_time']} | 评分: {record['score']:5.2f} | Kp={record['kp']:.4f}, Pb={record['pb']:.1f}%")
+                except Exception as e:
+                    print(f"❌ 片段 {idx+1} 抛出异常: {e}")
+
+        # 将结果按段序号重新排序
+        csv_records.sort(key=lambda x: x["segment_idx"])
             
         if csv_records:
             import csv
