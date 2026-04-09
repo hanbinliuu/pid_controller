@@ -47,6 +47,7 @@ from .tuning import (
     MODEL_SELECTOR,
     ROBUST_TUNING,
     SELF_OPTIMIZE,
+    SLIDING_WINDOW,
 )
 from .preprocessing import (
     SEGMENT_PROCESSING,
@@ -85,6 +86,7 @@ class Config:
     LOOP_TYPE_PRESETS = LOOP_TYPE_PRESETS
     ROBUST_TUNING = ROBUST_TUNING
     SELF_OPTIMIZE = SELF_OPTIMIZE
+    SLIDING_WINDOW = SLIDING_WINDOW
 
 
 # 导出

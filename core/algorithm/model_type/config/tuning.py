@@ -205,3 +205,15 @@ SELF_OPTIMIZE = {
     'fine_tune_max_rounds': 2,               # 坐标轮换最大轮数
     'fine_tune_min_improvement': 0.1,        # 微调最低提升阈值
 }
+
+# ============================================================
+# 滑动窗口寻优配置 (Sliding Window Optimization)
+# ============================================================
+SLIDING_WINDOW = {
+    'enabled': False,                        # 是否启用滑动窗口寻优（默认关闭，保持向后兼容）
+    'window_hours': 6.0,                     # 窗口时长（小时）
+    'step_hours': 2.0,                       # 步长（小时）
+    'min_windows': 2,                        # 最少需要的窗口数（少于此数直接跳过滑窗）
+    'max_windows': 20,                       # 最大窗口数限制（防止数据过长导致过多计算）
+    'fast_screen_verbose': False,            # 快筛阶段是否输出详细日志
+}

@@ -326,7 +326,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     TARGET_LOOP = args.loop_id
-    ENABLE_GRID_SEARCH = (args.mode == "grid_search")
+    ENABLE_GRID_SEARCH = (args.mode == "auto_detect")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
     LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-12-25 00:00:00"

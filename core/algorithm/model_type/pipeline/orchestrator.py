@@ -152,14 +152,18 @@ class TuningOrchestrator(LoggerMixin):
             input_data: 输入数据字典
                 - history_data: 历史数据列表
                 - params: 参数配置
+                    - sliding_window: 是否启用滑动窗口寻优（可选，覆盖全局配置）
+                    - window_hours: 窗口时长小时（可选）
+                    - step_hours: 步长小时（可选）
                 - qualified_windows: 扰动窗口列表
                 - current_pid: 当前 PID 参数（可选）
                 - process_context: 工艺上下文（可选，会覆盖构造函数中的设置）
+                - response_mode: 响应模式（可选）
         """
         history_data = input_data.get('history_data', [])
         params = input_data.get('params', {})
         qualified_windows = input_data.get('qualified_windows', [])
-        current_pid = input_data.get('current_pid', None)  # 当前 PID 参数
+        current_pid = input_data.get('current_pid', None)
         
         turning_type = params.get('turning_type')
         model_type = params.get('model_type')
@@ -167,8 +171,21 @@ class TuningOrchestrator(LoggerMixin):
         if not history_data:
             return OutputBuilder.create_empty_result(model_type=model_type, turning_type=turning_type)
         
+        # ============================================================
+        # 滑动窗口寻优：当启用时，自动生成重叠窗口并选出最优
+        # ============================================================
+        sw_config = Config.SLIDING_WINDOW
+        enable_sw = params.get('sliding_window', sw_config.get('enabled', False))
+        
+        if enable_sw and history_data:
+            best_window = self._sliding_window_search(
+                history_data, params, current_pid, sw_config
+            )
+            if best_window is not None:
+                # 用最优窗口覆盖 qualified_windows，走后续正常流程
+                qualified_windows = [best_window]
+        
         if not qualified_windows:
-            # 没有扰动窗口（tuning_segment未检测到振荡）→ 不需要整定
             self.log("⚠️ 无扰动窗口（tuning_segment未检测到振荡），跳过整定")
             return OutputBuilder.create_empty_result(model_type=model_type, turning_type=turning_type)
         
@@ -191,6 +208,113 @@ class TuningOrchestrator(LoggerMixin):
             if turning_type: result['turning_type'] = turning_type
             
         return result
+    
+    # ============================================================
+    # 滑动窗口寻优引擎
+    # ============================================================
+    
+    def _sliding_window_search(self, history_data: List[Dict],
+                                params: Dict, current_pid: Dict,
+                                sw_config: Dict) -> Optional[Dict]:
+        """
+        在历史数据上进行滑动窗口快速筛选，返回评分最高的窗口。
+        
+        流程:
+        1. 将连续数据切成 N 个重叠窗口
+        2. 对每个窗口运行快速整定（verbose=False）
+        3. 按评分排序，返回最优窗口
+        
+        Args:
+            history_data: 完整历史数据
+            params: 参数配置
+            current_pid: 当前PID参数
+            sw_config: 滑动窗口配置
+            
+        Returns:
+            最优窗口 dict {'start_time': ms, 'end_time': ms} 或 None
+        """
+        window_h = params.get('window_hours', sw_config.get('window_hours', 6.0))
+        step_h = params.get('step_hours', sw_config.get('step_hours', 2.0))
+        max_windows = sw_config.get('max_windows', 20)
+        min_windows = sw_config.get('min_windows', 2)
+        fast_verbose = sw_config.get('fast_screen_verbose', False)
+        
+        w_ms = window_h * 3600 * 1000
+        step_ms = step_h * 3600 * 1000
+        
+        data_start = history_data[0].get('timestamp', 0)
+        data_end = history_data[-1].get('timestamp', 0)
+        
+        # 生成候选窗口
+        search_windows = []
+        curr_start = data_start
+        while curr_start + w_ms <= data_end and len(search_windows) < max_windows:
+            search_windows.append({
+                'start_time': int(curr_start),
+                'end_time': int(curr_start + w_ms)
+            })
+            curr_start += step_ms
+        
+        if len(search_windows) < min_windows:
+            self.log(f"   ℹ️ 滑窗: 数据时长不足，仅能切出 {len(search_windows)} 个窗口（需≥{min_windows}），跳过滑窗寻优")
+            return None
+        
+        self.log(f"\n{'='*60}")
+        self.log(f"🔍 滑动窗口寻优: {len(search_windows)} 个候选窗口 (窗口={window_h}h, 步长={step_h}h)")
+        self.log('='*60)
+        
+        # 快速筛选：对每个窗口跑一次完整管线（verbose=False）
+        candidates = []
+        for i, window in enumerate(search_windows):
+            try:
+                fast_input = {
+                    'history_data': history_data,
+                    'params': {**params, 'sliding_window': False},  # 防止递归
+                    'qualified_windows': [window],
+                    'current_pid': current_pid,
+                }
+                # 构建轻量级 orchestrator（复用已有子模块实例，只关日志）
+                fast_orc = TuningOrchestrator(
+                    verbose=fast_verbose, 
+                    process_context=self._process_context
+                )
+                result = fast_orc.run(fast_input)
+                
+                score = result.get('model_rating', 0.0)
+                pid = result.get('pid_parameters', {})
+                kp = pid.get('kp', pid.get('Kp', 0.0))
+                pb = pid.get('pb', pid.get('Pb', 0.0))
+                
+                candidates.append({
+                    'window': window,
+                    'score': score,
+                    'kp': kp,
+                    'pb': pb,
+                    'idx': i,
+                })
+                
+                from datetime import datetime
+                st_str = datetime.fromtimestamp(window['start_time']/1000).strftime('%m-%d %H:%M')
+                et_str = datetime.fromtimestamp(window['end_time']/1000).strftime('%m-%d %H:%M')
+                self.log(f"   窗口 {i+1:2d}/{len(search_windows)}: {st_str} ~ {et_str} | 评分={score:5.2f} | Pb={pb:.1f}%")
+                
+            except Exception as e:
+                self.log(f"   窗口 {i+1}: 评估异常 ({e})")
+        
+        if not candidates:
+            self.log("   ⚠️ 所有窗口评估失败，跳过滑窗寻优")
+            return None
+        
+        # 按评分降序排列
+        candidates.sort(key=lambda c: c['score'], reverse=True)
+        best = candidates[0]
+        
+        from datetime import datetime
+        best_st = datetime.fromtimestamp(best['window']['start_time']/1000).strftime('%m-%d %H:%M')
+        best_et = datetime.fromtimestamp(best['window']['end_time']/1000).strftime('%m-%d %H:%M')
+        self.log(f"\n   🏆 最优窗口: {best_st} ~ {best_et} (评分={best['score']:.2f})")
+        
+        return best['window']
     
 
     
