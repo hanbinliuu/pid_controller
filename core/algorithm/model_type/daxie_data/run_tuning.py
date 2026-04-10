@@ -321,16 +321,16 @@ if __name__ == "__main__":
     parser.add_argument("loop_id", nargs="?", default="50104", help="指定回路ID进行测试，如: 50104")
     parser.add_argument("--mode", choices=["grid_search", "auto_detect"], default="grid_search",
                         help="运行模式: 'grid_search' 为自动滑窗提分模式，'auto_detect' 为算法自检测整定段旧模式。")
-    parser.add_argument("--window", type=float, default=6.0, help="滑窗寻优模式下的满窗长度(小时), 默认 4.0")
+    parser.add_argument("--window", type=float, default=8.0, help="滑窗寻优模式下的满窗长度(小时), 默认 4.0")
     parser.add_argument("--step", type=float, default=2.0, help="滑窗寻优模式下每次移动的步长(小时), 改大可提速, 默认 2.0")
     args = parser.parse_args()
 
     TARGET_LOOP = args.loop_id
-    ENABLE_GRID_SEARCH = (args.mode == "auto_detect")
+    ENABLE_GRID_SEARCH = (args.mode == "grid_search")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-12-25 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-12-26 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2026-01-11 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2026-01-12 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")

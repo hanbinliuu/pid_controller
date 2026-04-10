@@ -399,50 +399,30 @@ if __name__ == "__main__":
         tuning_input = {}
         
         if search_mode == 'grid_search':
-            print("\n🔍 启动滑窗暴力搜索模式 (Grid Search)")
+            # 滑动窗口寻优：直接由 Orchestrator 内置引擎完成
+            print("\n🔍 启动滑窗寻优模式 (由 Orchestrator 内置引擎执行)")
             step2_start = time.time()
-            
-            # 使用 6 小时窗，2小时步长进行滑窗
-            window_size_ms = 6 * 3600 * 1000
-            step_ms = 2 * 3600 * 1000
-            
-            best_score = -1.0
-            best_result = None
-            best_window = None
-            
-            current_start = start_ts
-            total_windows = int((end_ts - start_ts) / step_ms)
-            window_idx = 1
-            
-            while current_start + window_size_ms <= end_ts:
-                current_end = current_start + window_size_ms
-                window_data = [d for d in data if current_start <= d.get('timestamp', d.get('ts', 0)) <= current_end]
-                
-                if len(window_data) > 100:
-                    print(f"   🎬 评估滑窗 {window_idx}/{total_windows}: {datetime.fromtimestamp(current_start/1000).strftime('%m-%d %H:%M')} ~ {datetime.fromtimestamp(current_end/1000).strftime('%m-%d %H:%M')}")
-                    
-                    window_config = [{'start_time': current_start, 'end_time': current_end}]
-                    temp_result = run_model_selector(window_data, window_config, verbose=False, response_mode=response_mode)
-                    
-                    if temp_result.get('success'):
-                        score = temp_result.get('model_rating', 0.0)
-                        if score > best_score:
-                            best_score = score
-                            best_result = temp_result
-                            best_window = window_config
-                
-                current_start += step_ms
-                window_idx += 1
-                
             step2_elapsed = time.time() - step2_start
             
-            if best_result:
-                print(f"✅ 滑窗搜索完毕！最优评分: {best_score:.2f}")
-                result = best_result
-                tuning_input = {'qualified_windows': best_window}
-            else:
-                print("⚠️ 所有滑窗均未能产出有效结果")
-                continue
+            # 不需要预先检测扰动段，Orchestrator 会自动切窗并对每个窗口独立整定
+            step3_start = time.time()
+            input_data = {
+                'history_data': data,
+                'params': {
+                    'model_type': None,
+                    'turning_type': None,
+                    'analyst_column': 'pv',
+                    'sliding_window': True,      # 启用内置滑动窗口
+                    'window_hours': 6.0,
+                    'step_hours': 2.0,
+                },
+                'qualified_windows': [],  # 留空，由滑窗引擎自动生成
+                'response_mode': response_mode,
+            }
+            selector = ModelSelector(verbose=verbose)
+            result = selector.run(input_data)
+            tuning_elapsed = time.time() - step3_start
+            tuning_input = {}
                 
         else:
             print("\n🔍 启动自动探测模式 (Auto Detect)")

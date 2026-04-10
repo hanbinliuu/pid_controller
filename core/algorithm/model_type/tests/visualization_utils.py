@@ -177,9 +177,12 @@ def simulate_pid_prediction(
 
     # 采样间隔
     if len(timestamps) > 1:
-        dt_sim = (timestamps[1] - timestamps[0]) / 1000.0
+        dt_est = (timestamps[1] - timestamps[0]) / 1000.0
     else:
-        dt_sim = 1.0
+        dt_est = 1.0
+        
+    # [FIX] 强制控制欧拉积分步长，防止大步长导致预测振荡
+    dt_sim = min(1.0, max(0.1, dt_est))
 
     # 仿真时长
     Ti_param = pid_params.get('ti', 0.0)
@@ -630,11 +633,9 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
         T_max = max(T_ref, T2_val, 10.0)
         Ti_param = pid_params.get('Ti', pid_params.get('ti', 0.0))
 
-        if len(timestamps) > 1:
-            dt = (timestamps[1] - timestamps[0]) / 1000.0
-        else:
-            dt = max(1.0, T_max / 100)
-        dt = max(0.5, dt)
+        # [FIX] 无论原始数据多粗糙，理论闭环验证使用小步长，避免积分发散
+        dt = max(0.1, min(T_max, Ti_param) / 100.0)
+        dt = min(1.0, max(0.1, dt))
 
         sim_time = max(300, T_max * 40, Ti_param * 6)
 
@@ -771,9 +772,12 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
 
         # 采样间隔
         if len(timestamps) > 1:
-            dt_sim5 = (timestamps[1] - timestamps[0]) / 1000.0
+            dt_est5 = (timestamps[1] - timestamps[0]) / 1000.0
         else:
-            dt_sim5 = 1.0
+            dt_est5 = 1.0
+            
+        # [FIX] 强制欧拉积分步长，防止大步长引发预测曲线的剧烈振荡错觉
+        dt_sim5 = min(1.0, max(0.1, dt_est5))
 
         Ti_param5 = pid_params.get('ti', 0.0)
         sim_duration5 = max(T1_raw * 40, 1000, Ti_param5 * 6)
