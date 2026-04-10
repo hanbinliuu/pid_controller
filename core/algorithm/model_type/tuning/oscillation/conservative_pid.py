@@ -17,7 +17,6 @@ import numpy as np
 from typing import Dict, Any, Optional, Tuple
 
 from ...config import Config
-from ...config.loop_presets import get_loop_preset
 from ...logger import LoggerMixin
 from ..strategies.loop_type_strategies import get_loop_strategy
 
@@ -58,8 +57,9 @@ class ConservativePIDCalculator(LoggerMixin):
                   K_approx: float = 1.0, reason: str = 'generic',
                   oscillation_ratio: float = 0.0, data_quality: float = 0.5,
                   nonlinearity: float = 0.0, valve_issues: Dict = None,
-                  confidence: float = 0.5) -> Dict[str, Any]:
+                  confidence: float = 0.5, tuning_constraints: dict = None) -> Dict[str, Any]:
         """计算保守PID参数"""
+        tuning_constraints = tuning_constraints or {}
         if valve_issues is None:
             valve_issues = {}
         
@@ -71,9 +71,9 @@ class ConservativePIDCalculator(LoggerMixin):
         pb_base, pb_from_K, pb_from_Ku, slow_factor = self._calculate_base_pb(Ku, K_approx, Pu)
         pb_base = self._apply_quality_factors(pb_base, reason, data_quality, nonlinearity, valve_issues)
         pb_base, delay_ratio = self._apply_extreme_factors(pb_base, K_approx, Pu, oscillation_ratio)
-        pb_base, safety_factor = self._apply_oscillation_adjustment(pb_base, oscillation_ratio, llm_strategy)
-        pb_safe = self._apply_pb_bounds(pb_base, K_approx, confidence, reason, pb_from_K, pb_from_Ku, Pu, Ku, slow_factor, delay_ratio)
-        Ti, Td, ti_multiplier, td_multiplier = self._calculate_ti_td(Pu, oscillation_ratio, K_approx, llm_strategy)
+        pb_base, safety_factor = self._apply_oscillation_adjustment(pb_base, oscillation_ratio, llm_strategy, tuning_constraints)
+        pb_safe = self._apply_pb_bounds(pb_base, K_approx, confidence, reason, pb_from_K, pb_from_Ku, Pu, Ku, slow_factor, delay_ratio, tuning_constraints)
+        Ti, Td, ti_multiplier, td_multiplier = self._calculate_ti_td(Pu, oscillation_ratio, K_approx, llm_strategy, tuning_constraints)
         
         return self._build_result(pb_safe, Ti, Td, Pu, Ku, reason, llm_strategy, llm_decision_info)
     
@@ -221,7 +221,7 @@ class ConservativePIDCalculator(LoggerMixin):
         return pb_base, delay_ratio
     
     def _apply_oscillation_adjustment(self, pb_base: float, oscillation_ratio: float,
-                                      llm_strategy: Any) -> Tuple[float, float]:
+                                      llm_strategy: Any, tuning_constraints: dict) -> Tuple[float, float]:
         """应用振荡比自适应调整"""
         osc_config = Config.OSCILLATION_TUNING
         pb_gradient = osc_config.get('pb_gradient', 2.0)
@@ -246,7 +246,7 @@ class ConservativePIDCalculator(LoggerMixin):
                 safety_factor = prev_value + (oscillation_ratio - safety_thresholds[2]) * safety_slopes[2]
  
             # [NEW] 叠加 Loop Preset 的 safety_factor (例如 Flow=1.1, Pressure=1.1)
-            preset = get_loop_preset(self._loop_type)
+            preset = tuning_constraints
             loop_safety_factor = preset.get('safety_factor', 1.05)
             safety_factor *= loop_safety_factor
         
@@ -272,8 +272,9 @@ class ConservativePIDCalculator(LoggerMixin):
 
     def _apply_pb_bounds(self, pb_base: float, K_approx: float, confidence: float, reason: str,
                         pb_from_K: float, pb_from_Ku: float, Pu: float, Ku: float, 
-                        slow_factor: float, delay_ratio: float = 0.0) -> float:
+                        slow_factor: float, delay_ratio: float = 0.0, tuning_constraints: dict = None) -> float:
         """应用 pb 边界限制"""
+        tuning_constraints = tuning_constraints or {}
         osc_config = Config.OSCILLATION_TUNING
         pb_min_base = osc_config.get('pb_min', 80.0)
         pb_max_config = osc_config.get('pb_max', 400.0)  # 恢复到400
@@ -287,8 +288,8 @@ class ConservativePIDCalculator(LoggerMixin):
             pb_max = min(pb_max_config * 1.2, 550.0)
         
         # 按回路类型动态调整pb范围 (使用回路预设)
-        preset = get_loop_preset(self._loop_type)
-        pb_min_preset, pb_max_preset = preset['pb_min'], preset['pb_max']
+        preset = tuning_constraints
+        pb_min_preset, pb_max_preset = preset.get('pb_min', 60.0), preset.get('pb_max', 350.0)
         pb_max = min(pb_max, pb_max_preset)
         
         # 注意：loop safety_factor 不再乘入 PB
@@ -310,10 +311,10 @@ class ConservativePIDCalculator(LoggerMixin):
         return pb_safe
     
     def _calculate_ti_td(self, Pu: float, oscillation_ratio: float, K_approx: float, 
-                         llm_strategy: Any) -> Tuple[float, float, float, float]:
+                         llm_strategy: Any, tuning_constraints: dict) -> Tuple[float, float, float, float]:
         """计算保守的 Ti 和 Td 值"""
         osc_config = Config.OSCILLATION_TUNING
-        preset = get_loop_preset(self._loop_type)
+        preset = tuning_constraints
         
         ti_min_base = osc_config.get('ti_min_base', 1.5)
         

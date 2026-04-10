@@ -581,7 +581,10 @@ class RefinementStage(PipelineStage):
                 self.log(f"\n   ⚠️ 继电反馈法 Pu={Pu_relay:.1f}s 触达上限，放弃使用")
             else:
                 from ...tuning.verification.stability_analyzer import StabilityAnalyzer
-                model_pid = self._pid_calculator.calculate_from_fusion(fusion_result, context.lambda_factor)
+                model_pid = self._pid_calculator.calculate_from_fusion(
+                    fusion_result, context.lambda_factor, 
+                    tuning_constraints=context.export_tuning_constraints()
+                )
                 model_margins = StabilityAnalyzer.check_stability(model_params, model_pid)
                 model_pm = model_margins.phase_margin if model_margins else 0
                 model_gm = model_margins.gain_margin if model_margins else 0

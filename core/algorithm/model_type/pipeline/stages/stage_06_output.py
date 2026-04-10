@@ -84,7 +84,8 @@ class OutputVerificationStage(PipelineStage):
             segment_results=context.original_results,
             segments=context.original_segments,
             loop_type=context.loop_type,
-            optimized_pid=context.optimized_pid
+            optimized_pid=context.optimized_pid,
+            tuning_constraints=context.export_tuning_constraints()
         )
         
         return context

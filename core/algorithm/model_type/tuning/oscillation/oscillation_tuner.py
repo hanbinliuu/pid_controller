@@ -18,7 +18,6 @@ from typing import List, Dict, Any, Optional, Tuple
 
 
 from ...config import Config, ModelType
-from ...config.loop_presets import get_loop_preset
 from ...data_models import SegmentResult, HistoricalData, FusionResult
 from ...utils import calculate_r2, calculate_rmse, build_cl_verification
 from ...logger import LoggerMixin
@@ -180,8 +179,10 @@ class OscillationTuner(LoggerMixin):
     def try_oscillation_tuning(self, segments: List[HistoricalData], 
                                segment_results: List[SegmentResult],
                                current_pid: Dict = None,
-                               force: bool = False) -> Optional[Dict]:
+                               force: bool = False,
+                               tuning_constraints: dict = None) -> Optional[Dict]:
         """尝试使用振荡分析进行临界法整定"""
+        tuning_constraints = tuning_constraints or {}
         osc_config = Config.OSCILLATION_TUNING
         osc_ratio_threshold = osc_config['oscillation_ratio_threshold']
         r2_failure_threshold = osc_config['r2_failure_threshold']
@@ -268,7 +269,7 @@ class OscillationTuner(LoggerMixin):
         if not oscillation_analyses:
             self.log("   ⚠️ 无法从振荡数据中提取有效特征")
             if oscillating_segments:
-                return self._generic_fallback(oscillating_segments, segments, segment_results, current_pid)
+                return self._generic_fallback(oscillating_segments, segments, segment_results, current_pid, tuning_constraints)
             return None
         
         # 选择最佳分析结果
@@ -340,7 +341,8 @@ class OscillationTuner(LoggerMixin):
         pid_params = self._get_conservative_pid_params(
             Pu, Ku, K_approx=apparent_gain, reason=reason,
             oscillation_ratio=oscillation_ratio, data_quality=data_quality,
-            nonlinearity=nonlinearity, valve_issues=valve_issues, confidence=confidence
+            nonlinearity=nonlinearity, valve_issues=valve_issues, confidence=confidence,
+            tuning_constraints=tuning_constraints
         )
         
         if pid_params is None:
@@ -379,24 +381,29 @@ class OscillationTuner(LoggerMixin):
     def _get_conservative_pid_params(self, Pu: float, Ku: float, K_approx: float = 1.0,
                                       reason: str = 'generic', oscillation_ratio: float = 0.0,
                                       data_quality: float = 0.5, nonlinearity: float = 0.0,
-                                      valve_issues: Dict = None, confidence: float = 0.5) -> Dict[str, Any]:
+                                      valve_issues: Dict = None, confidence: float = 0.5,
+                                      tuning_constraints: dict = None) -> Dict[str, Any]:
         """获取保守PID参数（委托给 ConservativePIDCalculator）"""
         return self._conservative_pid_calculator.calculate(
             Pu=Pu, Ku=Ku, K_approx=K_approx, reason=reason,
             oscillation_ratio=oscillation_ratio, data_quality=data_quality,
-            nonlinearity=nonlinearity, valve_issues=valve_issues, confidence=confidence
+            nonlinearity=nonlinearity, valve_issues=valve_issues, confidence=confidence,
+            tuning_constraints=tuning_constraints
         )
     
 
     
     def _generic_fallback(self, oscillating_segments: List, segments: List[HistoricalData],
-                          segment_results: List[SegmentResult], current_pid: Dict = None) -> Optional[Dict]:
+                          segment_results: List[SegmentResult], current_pid: Dict = None,
+                          tuning_constraints: dict = None) -> Optional[Dict]:
         """通用 fallback 整定机制"""
-        return self._fallback_tuning(oscillating_segments, segments, segment_results, current_pid)
+        return self._fallback_tuning(oscillating_segments, segments, segment_results, current_pid, tuning_constraints)
 
     def _fallback_tuning(self, oscillating_segments: List, segments: List[HistoricalData],
-                          segment_results: List[SegmentResult], current_pid: Dict = None) -> Optional[Dict]:
+                          segment_results: List[SegmentResult], current_pid: Dict = None,
+                          tuning_constraints: dict = None) -> Optional[Dict]:
         """统一的 fallback 整定机制"""
+        tuning_constraints = tuning_constraints or {}
         osc_config = Config.OSCILLATION_TUNING
         fallback_params = self._strategy.get_fallback_params()
         pb_base = fallback_params['pb_base']
@@ -551,7 +558,7 @@ class OscillationTuner(LoggerMixin):
             Ti_level = 4.0 * (lambda_c + L_approx)
             
             # 从回路配置获取实际允许的 ti_max，通常对于 level 为 3600.0
-            preset = get_loop_preset(self._loop_type)
+            preset = tuning_constraints
             ti_max_limit = preset.get('ti_max', 20000.0)
             
             # PB 和 Ti 限制放宽以适应超大增益/滞后段
@@ -638,7 +645,7 @@ class OscillationTuner(LoggerMixin):
             pb_base *= 1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 300.0)
         
         # 应用 Loop Preset 的安全系数和范围限制
-        preset = get_loop_preset(self._loop_type)
+        preset = tuning_constraints
         safety_factor = preset.get('safety_factor', 1.05)
         pb_base *= safety_factor
         
@@ -724,8 +731,10 @@ class OscillationTuner(LoggerMixin):
 
     def build_oscillation_output(self, osc_result: Dict, hist_data: HistoricalData,
                                  time_range: Dict, tuning_windows: List,
-                                 segments: List = None, segment_results: List = None) -> Dict[str, Any]:
+                                 segments: List = None, segment_results: List = None,
+                                 tuning_constraints: dict = None) -> Dict[str, Any]:
         """构建振荡分析整定的输出结果"""
+        tuning_constraints = tuning_constraints or {}
         pid_params = osc_result['pid_params']
         osc_info = osc_result['oscillation_info']
         
@@ -819,7 +828,7 @@ class OscillationTuner(LoggerMixin):
                 
             if osc_result.get('method') == 'integrating_fallback':
                 # 针对积分过程的平滑保守退降
-                preset = get_loop_preset(self._loop_type)
+                preset = tuning_constraints
                 ti_max_limit = preset.get('ti_max', 20000.0)
                 new_pb = min(abs(100.0 / pid_params['Kp']) * 1.3, 1000.0 if self._loop_type == 'level' else 400.0)
                 new_ti = min(pid_params['Ti'] * 1.2, ti_max_limit)
@@ -837,7 +846,8 @@ class OscillationTuner(LoggerMixin):
                     oscillation_ratio=adjusted_osc_ratio,
                     data_quality=osc_result.get('data_quality', 0.5) * (0.8 ** fallback_attempt),
                     nonlinearity=osc_result.get('nonlinearity', 0.0),
-                    valve_issues=osc_result.get('valve_issues', {}), confidence=fallback_confidence
+                    valve_issues=osc_result.get('valve_issues', {}), confidence=fallback_confidence,
+                    tuning_constraints=tuning_constraints
                 )
                 
                 # 无论如何应用符号校正

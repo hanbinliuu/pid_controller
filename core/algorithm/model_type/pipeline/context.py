@@ -248,6 +248,29 @@ class TuningContext:
             return self.knowledge_model.oscillation_tolerance
         return 0.2
 
+    def export_tuning_constraints(self) -> dict:
+        """
+        导出完整的整定约束字典（供底层无状态算子使用）。
+        语义层有值的用语义层，没有值的回退到 loop_presets 兜底。
+        """
+        preset = self._get_preset()
+        pb_range = self.get_pb_range()
+        return {
+            'pb_min': pb_range[0],
+            'pb_max': pb_range[1],
+            'tau_c_factor': self.get_tau_c_factor(),
+            'safety_factor': self.get_safety_factor(),
+            'ti_multiplier': self.get_ti_multiplier(),
+            'ti_max': self.get_ti_max(),
+            'td_enable': self.get_td_enable(),
+            'aggressive': self.get_tuning_strategy() == 'aggressive',
+            'integrating_mode': self.get_process_nature() == 'integrating',
+            
+            # 以下是没有语义桥接，暂时仅能从 preset 获取的兜底字段
+            'td_ratio': preset.get('td_ratio', 0.15),
+            'td_max': preset.get('td_max', 999.0),
+        }
+
     # ---- 表征特征（运行时回填）----
 
     def get_oscillation_ratio(self) -> float:

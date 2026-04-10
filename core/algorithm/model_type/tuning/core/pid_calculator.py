@@ -21,8 +21,6 @@ from .data_classes import DataQualityInfo
 from .tuning_methods import TuningMethodsMixin
 from ..oscillation.oscillation_analysis import OscillationAnalysisMixin
 from ..verification.closed_loop_sim import ClosedLoopSimMixin
-from ...config.loop_presets import get_loop_preset
-
 
 EPSILON = Config.EPSILON
 
@@ -42,8 +40,9 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         self._epsilon = EPSILON
         self._pid_constraints = Config.PID_CONSTRAINTS
     
-    def _get_fallback_params(self, Ti_override: float = None, loop_type: str = 'flow') -> Tuple[float, float, float]:
+    def _get_fallback_params(self, Ti_override: float = None, loop_type: str = 'flow', tuning_constraints: dict = None) -> Tuple[float, float, float]:
         """获取回退PID参数"""
+        tuning_constraints = tuning_constraints or {}
         from core.algorithm.model_type.tuning.strategies.loop_type_strategies import get_loop_strategy
         strategy = get_loop_strategy(loop_type)
         fallback_cfg = strategy.get_fallback_params()
@@ -64,19 +63,21 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
                   method: str = 'lambda',
                   quality_info: Optional[DataQualityInfo] = None,
                   response_mode: str = 'balanced',
-                  loop_type: str = None) -> Dict[str, float]:
+                  loop_type: str = None,
+                  tuning_constraints: dict = None) -> Dict[str, float]:
         """根据模型类型和整定方法计算PID参数"""
+        tuning_constraints = tuning_constraints or {}
         K_sign = 1 if K >= 0 else -1
         K_abs = max(abs(K), self._epsilon)
         T1 = max(T1, self._epsilon)
         L = max(L, 0.0)
         T2 = max(T2, 0.0)
         
-        conservative_level, pb_min = self._calculate_conservative_level(quality_info, response_mode, loop_type)
+        conservative_level, pb_min = self._calculate_conservative_level(quality_info, response_mode, loop_type, tuning_constraints)
         
         # [NEW] 回路类型预设同步 (v3.11)
         if loop_type:
-            preset = get_loop_preset(loop_type)
+            preset = tuning_constraints
             safety = preset.get('safety_factor', 1.0)
             if safety != 1.0:
                 conservative_level *= safety
@@ -93,24 +94,24 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
 
         if model_type == ModelType.FO:
             Kp, Ti, Td = self._tune_fo(K_abs, T1, lambda_factor, method,
-                                        conservative_level, pb_min, loop_type)
+                                        conservative_level, pb_min, loop_type, tuning_constraints)
         elif model_type == ModelType.FOPDT:
             Kp, Ti, Td = self._tune_fopdt(K_abs, T1, L, lambda_factor, method,
-                                           conservative_level, pb_min, loop_type)
+                                           conservative_level, pb_min, loop_type, tuning_constraints)
         elif model_type in [ModelType.SO, ModelType.SOPDT]:
             Kp, Ti, Td = self._tune_sopdt(K_abs, T1, T2, L, lambda_factor,
-                                           conservative_level, pb_min, loop_type)
+                                           conservative_level, pb_min, loop_type, tuning_constraints)
         elif model_type == ModelType.FOPI:
             Kp, Ti, Td = self._tune_integrator(K_abs, T1, lambda_factor,
-                                                conservative_level, pb_min, loop_type)
+                                                conservative_level, pb_min, loop_type, tuning_constraints)
         elif model_type in [ModelType.HAMMERSTEIN, ModelType.DEADBAND_FOPDT, ModelType.SATURATION_FOPDT]:
             Kp, Ti, Td = self._tune_nonlinear(K_abs, T1, L, lambda_factor, method,
-                                               conservative_level, pb_min, model_type, loop_type)
+                                               conservative_level, pb_min, model_type, loop_type, tuning_constraints)
         else:
-            Kp, Ti, Td = self._get_fallback_params(loop_type=loop_type)
+            Kp, Ti, Td = self._get_fallback_params(loop_type=loop_type, tuning_constraints=tuning_constraints)
         
         Kp = Kp * K_sign
-        Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign, loop_type)
+        Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign, loop_type, tuning_constraints)
         
         # [FIX] 极端积分下限保护（防止微观假象导致真实DCS崩溃）
         # level 回路积分特性强，Ti 下限设高；temperature 回路可能有快速场景，下限适中
@@ -134,8 +135,10 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
     
     def _calculate_conservative_level(self, quality_info: Optional[DataQualityInfo],
                                        response_mode: str = 'balanced',
-                                       loop_type: str = None) -> Tuple[float, float]:
+                                       loop_type: str = None,
+                                       tuning_constraints: dict = None) -> Tuple[float, float]:
         """根据数据质量和响应模式计算自适应保守等级"""
+        tuning_constraints = tuning_constraints or {}
         MODE_PARAMS = {
             'fast': {
                 'level_range': (0.8, 1.5), 'pb_range': (8, 25),
@@ -258,7 +261,8 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
                                lambda_factor: float,
                                quality_info: Optional[DataQualityInfo] = None,
                                response_mode: str = 'balanced',
-                               loop_type: str = None) -> Dict[str, float]:
+                               loop_type: str = None,
+                               tuning_constraints: dict = None) -> Dict[str, float]:
         """从FusionResult计算PID参数"""
         
         # ⭐ 核心修复：自优化网格搜索时 (stage_05b) 不会传入 quality_info，
@@ -280,5 +284,6 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
             fusion.model_type, lambda_factor,
             quality_info=quality_info,
             response_mode=response_mode,
-            loop_type=loop_type
+            loop_type=loop_type,
+            tuning_constraints=tuning_constraints
         )

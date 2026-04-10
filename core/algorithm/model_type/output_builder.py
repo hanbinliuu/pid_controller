@@ -123,7 +123,8 @@ class OutputBuilder(LoggerMixin):
                           segment_results: List[SegmentResult] = None,
                           segments: List[HistoricalData] = None,
                           loop_type: str = None,
-                          optimized_pid: Dict[str, float] = None) -> Dict[str, Any]:
+                          optimized_pid: Dict[str, float] = None,
+                          tuning_constraints: dict = None) -> Dict[str, Any]:
         """
         构建最终输出（完整版，包含 fallback 逻辑）
         
@@ -147,7 +148,8 @@ class OutputBuilder(LoggerMixin):
             self.log(f"   ✅ 使用自优化微调后的 PID 参数")
         else:
             pid_params = self._pid_calculator.calculate_from_fusion(
-                fusion, lambda_factor, quality_info=quality_info, loop_type=loop_type
+                fusion, lambda_factor, quality_info=quality_info, loop_type=loop_type,
+                tuning_constraints=tuning_constraints
             )
         
         # Ensure all PID formats exist (kp, ki, kd, pb, ti, td)
@@ -268,14 +270,14 @@ class OutputBuilder(LoggerMixin):
             self.log(f"\n   ⚠️ 常规整定闭环不稳定，尝试切换到振荡整定法...")
             
             osc_result = self._oscillation_tuner.try_oscillation_tuning(
-                segments, segment_results, pid_params, force=True
+                segments, segment_results, pid_params, force=True, tuning_constraints=tuning_constraints
             )
             
             if osc_result is not None and osc_result.get('success', False):
                 self.log(f"   ✅ 振荡整定成功，使用振荡整定参数")
                 osc_output = self._oscillation_tuner.build_oscillation_output(
                     osc_result, hist_data, time_range, tuning_windows,
-                    segments, segment_results
+                    segments, segment_results, tuning_constraints=tuning_constraints
                 )
                 return osc_output
             else:

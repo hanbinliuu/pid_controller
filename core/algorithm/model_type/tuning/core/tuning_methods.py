@@ -11,7 +11,6 @@ PID整定方法模块 (Tuning Methods Module)
 
 from typing import Tuple
 from ...config import Config, ModelType
-from ...config.loop_presets import get_loop_preset
 
 
 class TuningMethodsMixin:
@@ -41,14 +40,16 @@ class TuningMethodsMixin:
     
     def _tune_fo(self, K: float, T1: float, lambda_factor: float, 
                  method: str, conservative_level: float = 4.0,
-                 pb_min: float = 60.0, loop_type: str = None) -> Tuple[float, float, float]:
+                 pb_min: float = 60.0, loop_type: str = None,
+                 tuning_constraints: dict = None) -> Tuple[float, float, float]:
         """一阶无滞后系统整定（根据回路类型选择 SIMC 或 Lambda）"""
+        tuning_constraints = tuning_constraints or {}
         simc_cfg = getattr(Config, 'SIMC_TUNING', {})
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
         use_simc = self._should_use_simc(loop_type)
         
         # 获取回路预设参数
-        preset = get_loop_preset(loop_type)
+        preset = tuning_constraints
         preset_tau_c_factor = preset.get('tau_c_factor', None)
         preset_ti_multiplier = preset.get('ti_multiplier', 1.0)
         
@@ -97,13 +98,15 @@ class TuningMethodsMixin:
     def _tune_fopdt(self, K: float, T1: float, L: float, 
                     lambda_factor: float, method: str,
                     conservative_level: float = 4.0,
-                    pb_min: float = 60.0, loop_type: str = None) -> Tuple[float, float, float]:
+                    pb_min: float = 60.0, loop_type: str = None,
+                    tuning_constraints: dict = None) -> Tuple[float, float, float]:
         """一阶加纯滞后系统整定（根据回路类型选择 SIMC 或 Lambda）"""
+        tuning_constraints = tuning_constraints or {}
         simc_cfg = getattr(Config, 'SIMC_TUNING', {})
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
         
         # 获取回路预设参数
-        preset = get_loop_preset(loop_type)
+        preset = tuning_constraints
         preset_tau_c_factor = preset.get('tau_c_factor', None)
         preset_ti_multiplier = preset.get('ti_multiplier', 1.0)
         
@@ -116,7 +119,7 @@ class TuningMethodsMixin:
             tau_c = max(L, T1 * 0.1)
             denom = K * (tau_c + L)
             if denom < self._epsilon:
-                return self._get_fallback_params(Ti_override=T1, loop_type=loop_type)
+                return self._get_fallback_params(Ti_override=T1, loop_type=loop_type, tuning_constraints=tuning_constraints)
             Kp = T1 / denom
             Ti = min(T1, 4 * (tau_c + L))
             Td = 0.0
@@ -134,7 +137,7 @@ class TuningMethodsMixin:
                 tau_c = max(tau_c, L * tau_c_min_factor)
                 denom = K * (tau_c + L)
                 if denom < self._epsilon:
-                    return self._get_fallback_params(Ti_override=T1, loop_type=loop_type)
+                    return self._get_fallback_params(Ti_override=T1, loop_type=loop_type, tuning_constraints=tuning_constraints)
                 Kp = T1 / denom
                 ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
                 
@@ -157,7 +160,7 @@ class TuningMethodsMixin:
                 lambda_val = base_tau * lambda_factor * tau_c_factor * (conservative_level / baseline)
                 denom = K * (lambda_val + L / 2)
                 if denom < self._epsilon:
-                    return self._get_fallback_params(Ti_override=T1 + L / 2, loop_type=loop_type)
+                    return self._get_fallback_params(Ti_override=T1 + L / 2, loop_type=loop_type, tuning_constraints=tuning_constraints)
                 Kp = (T1 + L / 2) / denom
                 
                 is_integrating = preset.get('integrating_mode', False)
@@ -187,14 +190,16 @@ class TuningMethodsMixin:
     
     def _tune_sopdt(self, K: float, T1: float, T2: float, L: float,
                     lambda_factor: float, conservative_level: float = 4.0,
-                    pb_min: float = 60.0, loop_type: str = None) -> Tuple[float, float, float]:
+                    pb_min: float = 60.0, loop_type: str = None,
+                    tuning_constraints: dict = None) -> Tuple[float, float, float]:
         """二阶系统整定（SIMC 半规则）"""
+        tuning_constraints = tuning_constraints or {}
         simc_cfg = getattr(Config, 'SIMC_TUNING', {})
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
         use_half_rule = simc_cfg.get('use_half_rule', True)
 
         # [FIX] BUG-6: SOPDT 支持 loop_type
-        preset = get_loop_preset(loop_type)
+        preset = tuning_constraints
         preset_tau_c_factor = preset.get('tau_c_factor', None)
         preset_ti_multiplier = preset.get('ti_multiplier', 1.0)
         
@@ -209,7 +214,7 @@ class TuningMethodsMixin:
         tau_c = T_eff * lambda_factor * tau_c_factor * (conservative_level / baseline)
         denom = K * (tau_c + L_eff)
         if denom < self._epsilon:
-            return self._get_fallback_params(Ti_override=T_eff, loop_type=loop_type)
+            return self._get_fallback_params(Ti_override=T_eff, loop_type=loop_type, tuning_constraints=tuning_constraints)
         
         Kp = T_eff / denom
         ti_limit_factor = simc_cfg.get('ti_limit_factor', 4.0)
@@ -228,10 +233,12 @@ class TuningMethodsMixin:
     
     def _tune_integrator(self, K: float, T1: float, 
                          lambda_factor: float, conservative_level: float = 4.0,
-                         pb_min: float = 60.0, loop_type: str = None) -> Tuple[float, float, float]:
+                         pb_min: float = 60.0, loop_type: str = None,
+                         tuning_constraints: dict = None) -> Tuple[float, float, float]:
         """积分过程整定（SIMC 方法）"""
+        tuning_constraints = tuning_constraints or {}
         if abs(K) < self._epsilon:
-            return self._get_fallback_params(loop_type=loop_type)
+            return self._get_fallback_params(loop_type=loop_type, tuning_constraints=tuning_constraints)
         
         simc_cfg = getattr(Config, 'SIMC_TUNING', {})
         baseline = self._pid_constraints.get('conservative_level_baseline', 4.0)
@@ -246,7 +253,7 @@ class TuningMethodsMixin:
         Td = 0.0
         
         # [FIX] 与 _tune_fopdt 保持一致：应用回路预设的 Ti 乘数和 Td 开关
-        preset = get_loop_preset(loop_type)
+        preset = tuning_constraints
         Ti *= preset.get('ti_multiplier', 1.0)
         
         if preset.get('td_enable', False):
@@ -262,8 +269,10 @@ class TuningMethodsMixin:
     def _tune_nonlinear(self, K: float, T1: float, L: float,
                         lambda_factor: float, method: str,
                         conservative_level: float, pb_min: float,
-                        model_type: str, loop_type: str = None) -> Tuple[float, float, float]:
+                        model_type: str, loop_type: str = None,
+                        tuning_constraints: dict = None) -> Tuple[float, float, float]:
         """非线性模型整定（使用等效线性化参数）"""
+        tuning_constraints = tuning_constraints or {}
         nl_factors = self._pid_constraints.get('nonlinear_factors', {})
         nonlinear_factor = nl_factors.get('default', 1.3)
         
@@ -277,7 +286,7 @@ class TuningMethodsMixin:
         adjusted_conservative = conservative_level * nonlinear_factor
         adjusted_pb_min = pb_min * nonlinear_factor
         Kp, Ti, Td = self._tune_fopdt(K, T1, L, lambda_factor, method,
-                                       adjusted_conservative, adjusted_pb_min, loop_type=loop_type)
+                                       adjusted_conservative, adjusted_pb_min, loop_type=loop_type, tuning_constraints=tuning_constraints)
         Td = Td * 0.5
         
         if model_type == ModelType.DEADBAND_FOPDT:
@@ -288,8 +297,10 @@ class TuningMethodsMixin:
         return Kp, Ti, Td
     
     def _apply_constraints(self, Kp: float, Ti: float, Td: float,
-                           K_sign: int, loop_type: str = None) -> Tuple[float, float, float]:
+                           K_sign: int, loop_type: str = None,
+                           tuning_constraints: dict = None) -> Tuple[float, float, float]:
         """应用参数合理性约束"""
+        tuning_constraints = tuning_constraints or {}
         cfg = self._pid_constraints
         kp_min = cfg.get('kp_min', 0.01)
         if abs(Kp) < kp_min:
@@ -300,7 +311,7 @@ class TuningMethodsMixin:
         
         # 覆写 loop_type 指定的约束
         if loop_type:
-            preset = get_loop_preset(loop_type)
+            preset = tuning_constraints
             ti_max = preset.get('ti_max', ti_max_default)
             ti_min = preset.get('ti_min', ti_min)
             

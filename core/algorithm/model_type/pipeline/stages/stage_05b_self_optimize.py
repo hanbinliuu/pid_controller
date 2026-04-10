@@ -29,7 +29,6 @@ from .base_stage import PipelineStage
 from ...rating import ModelRating
 from ...config import Config
 from ...data_models import FusionResult
-from ...config.loop_presets import get_loop_preset
 from ...utils import (
     normalize_pid_keys as _normalize_pid_keys,
     pid_to_full_dict,
@@ -132,7 +131,8 @@ class SelfOptimizeStage(PipelineStage):
     # Phase 2: PB/TI/TD 坐标轮换微调
     # ------------------------------------------------------------------
     def _fine_tune_pid(self, fusion, baseline_pid, baseline_score,
-                       sp_initial, sp_final, pv_initial, loop_type, method_conf=None):
+                       sp_initial, sp_final, pv_initial, loop_type, method_conf=None, tuning_constraints=None):
+        tuning_constraints = tuning_constraints or {}
         ratios = self._config.get('fine_tune_ratios', _DEFAULT_CONFIG['fine_tune_ratios'])
         max_rounds = self._config.get('fine_tune_max_rounds', _DEFAULT_CONFIG['fine_tune_max_rounds'])
         min_improv = self._config.get('fine_tune_min_improvement', _DEFAULT_CONFIG['fine_tune_min_improvement'])
@@ -175,7 +175,7 @@ class SelfOptimizeStage(PipelineStage):
             # --- TI (调 Ki，保持 Kp) ---
             if abs(best_pid['Ki']) > eps:
                 base_ti = abs(best_pid['Kp'] / best_pid['Ki'])
-                preset = get_loop_preset(loop_type) if loop_type else {}
+                preset = tuning_constraints
                 ti_max_limit = preset.get('ti_max', 300.0)
                 
                 for ratio in ratios:
@@ -413,7 +413,7 @@ class SelfOptimizeStage(PipelineStage):
         if self._config.get('fine_tune_enabled', True):
             self._run_phase2(fusion, best_detail['pid_params'], best_score,
                             sp_initial, sp_final, pv_initial, loop_type,
-                            context, original_score)
+                            context, original_score, tuning_constraints=context.export_tuning_constraints())
 
         return context
 
@@ -450,7 +450,7 @@ class SelfOptimizeStage(PipelineStage):
 
         tuned_pid, tuned_score, tuned_detail, search_log = self._fine_tune_pid(
             fusion, pid_params, baseline_score,
-            sp_initial, sp_final, pv_initial, loop_type, method_conf=method_conf)
+            sp_initial, sp_final, pv_initial, loop_type, method_conf=method_conf, tuning_constraints=context.export_tuning_constraints())
 
         # Fix #4: 输出 Phase 2 搜索详情
         self._log_phase2_summary(search_log, baseline_score)
@@ -494,7 +494,7 @@ class SelfOptimizeStage(PipelineStage):
     # ------------------------------------------------------------------
     def _run_phase2(self, fusion, baseline_pid, baseline_score,
                     sp_initial, sp_final, pv_initial, loop_type,
-                    context, original_score):
+                    context, original_score, tuning_constraints=None):
         self.log(f"\n   ── Phase 2: PB/TI/TD 微调 ──")
 
         baseline_pid = _normalize_pid_keys(baseline_pid)
@@ -509,7 +509,8 @@ class SelfOptimizeStage(PipelineStage):
 
         tuned_pid, tuned_score, tuned_detail, search_log = self._fine_tune_pid(
             fusion, baseline_pid, baseline_score,
-            sp_initial, sp_final, pv_initial, loop_type)
+            sp_initial, sp_final, pv_initial, loop_type,
+            tuning_constraints=tuning_constraints)
 
         # Fix #4: 输出 Phase 2 搜索详情
         self._log_phase2_summary(search_log, baseline_score)
