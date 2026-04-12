@@ -164,6 +164,9 @@ class TuningOrchestrator(LoggerMixin):
         params = input_data.get('params', {})
         qualified_windows = input_data.get('qualified_windows', [])
         current_pid = input_data.get('current_pid', None)
+        # 动态提取外部(后端)传入的最新的工艺/语义上下文
+        ext_process_context = input_data.get('process_context', None)
+        
         
         turning_type = params.get('turning_type')
         model_type = params.get('model_type')
@@ -200,7 +203,8 @@ class TuningOrchestrator(LoggerMixin):
         
         result = self.fit(tuning_input, history_data,
                           lambda_factor=Config.TUNING_DEFAULTS['lambda_factor'],
-                          current_pid=current_pid)
+                          current_pid=current_pid,
+                          process_context=ext_process_context)
                           
         # 补全可能丢失的前端强行指定的参数
         if not result.get('success'):
@@ -327,7 +331,8 @@ class TuningOrchestrator(LoggerMixin):
             lambda_factor: float = None,
             current_pid: Dict = None,
             enable_downsample: bool = None,
-            downsample_target: int = None) -> Dict[str, Any]:
+            downsample_target: int = None,
+            process_context: Dict = None) -> Dict[str, Any]:
         """模型整定主入口（流水线架构重构版）"""
         tuning_defaults = Config.TUNING_DEFAULTS
         if lambda_factor is None:
@@ -337,19 +342,22 @@ class TuningOrchestrator(LoggerMixin):
         if downsample_target is None:
             downsample_target = tuning_defaults['downsample_target']
             
+        # 使用显式传入的 process_context，若无则使用由构造函数传入的默认 self._process_context
+        active_context = process_context if process_context is not None else (self._process_context or {})
+        
         # 1. 组装上下文
         context = TuningContext(
             raw_data=raw_data,
             tuning_input_raw=tuning_input,
             lambda_factor=lambda_factor,
             current_pid=current_pid,
-            process_context=self._process_context or {},
-            ontology_model=(self._process_context or {}).get('ontology_model'),
-            mechanism_model=(self._process_context or {}).get('mechanism_model'),
-            knowledge_model=(self._process_context or {}).get('knowledge_model'),
-            characterization_model=(self._process_context or {}).get('characterization_model'),
-            data_model=(self._process_context or {}).get('data_model'),
-            metrics_model=(self._process_context or {}).get('metrics_model'),
+            process_context=active_context,
+            ontology_model=active_context.get('ontology_model'),
+            mechanism_model=active_context.get('mechanism_model'),
+            knowledge_model=active_context.get('knowledge_model'),
+            characterization_model=active_context.get('characterization_model'),
+            data_model=active_context.get('data_model'),
+            metrics_model=active_context.get('metrics_model'),
             enable_downsample=enable_downsample,
             downsample_target=downsample_target
         )

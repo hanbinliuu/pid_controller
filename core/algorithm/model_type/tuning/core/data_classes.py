@@ -6,8 +6,8 @@ PID计算器数据类模块
 """
 
 import numpy as np
-from dataclasses import dataclass
-
+from dataclasses import dataclass, field
+from typing import List
 
 @dataclass
 class ClosedLoopMetrics:
@@ -33,3 +33,5 @@ class DataQualityInfo:
     consistency_score: float = 0.5  # 参数一致性 (0~1)
     correlation: float = 0.0        # PV-MV相关性 (-1~1)
     controller_sign: int = 1        # 当前控制器的Kp符号 (1或-1)
+    mechanism_verified: bool = True # 是否通过强制机理校验
+    violation_reasons: List[str] = field(default_factory=list) # 校验失败的原因
