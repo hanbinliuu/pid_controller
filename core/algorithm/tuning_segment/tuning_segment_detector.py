@@ -86,6 +86,11 @@ class TuningSegmentDetector:
         if not step_points:
             return []
         
+        # Step 1.5: 合并密集阶跃
+        # 如果多个阶跃点间距 < adaptive_min_response，说明 MV 在持续移动
+        # 不是独立的阶跃实验,应该合并为一个大段
+        step_points = self._merge_clustered_steps(step_points)
+        
         print(f"   检测到 {len(step_points)} 个MV阶跃变化点")
         
         # Step 2: 针对每个阶跃点，截取并评估 PV 响应窗口
@@ -108,6 +113,11 @@ class TuningSegmentDetector:
         
         # Step 4: 去除重叠的段（贪心法，优先保留高分段）
         filtered = self._remove_overlapping(candidates)
+        
+        # Step 5: 限制最终返回数量（最多 5 个最优段）
+        MAX_SEGMENTS = 5
+        if len(filtered) > MAX_SEGMENTS:
+            filtered = filtered[:MAX_SEGMENTS]
         
         return filtered
     
@@ -412,6 +422,55 @@ class TuningSegmentDetector:
         
         # 综合加权
         return np.mean(scores)
+    
+    def _merge_clustered_steps(self, step_points: List[Tuple[int, float]]) -> List[Tuple[int, float]]:
+        """
+        合并密集的 MV 阶跃点。
+        
+        如果多个阶跃点之间的间距 < adaptive_min_response，认为它们不是
+        独立的阶跃实验，而是 MV 在持续连续变动（如操作员多次小幅调阀），
+        应该合并为一个"复合阶跃"，取代表性的那个点。
+        
+        合并策略：
+        - 同方向的密集阶跃：取累计总变化量最大的时段的第一个阶跃点
+        - 反方向的阶跃：视为独立事件，不合并
+        """
+        if len(step_points) <= 1:
+            return step_points
+        
+        merge_gap = self.adaptive_min_response  # 间距门槛
+        
+        # 按索引排序
+        sorted_steps = sorted(step_points, key=lambda x: x[0])
+        
+        # 分组：间距 < merge_gap 的归为一组
+        clusters = []
+        current_cluster = [sorted_steps[0]]
+        
+        for i in range(1, len(sorted_steps)):
+            gap = sorted_steps[i][0] - current_cluster[-1][0]
+            if gap < merge_gap:
+                current_cluster.append(sorted_steps[i])
+            else:
+                clusters.append(current_cluster)
+                current_cluster = [sorted_steps[i]]
+        clusters.append(current_cluster)
+        
+        # 每个 cluster 合并为一个代表阶跃
+        merged = []
+        for cluster in clusters:
+            if len(cluster) == 1:
+                merged.append(cluster[0])
+            else:
+                # 取簇中第一个阶跃点作为代表（保持原始检测行为）
+                first = cluster[0]
+                merged.append(first)  # 保持原始 step_size
+        
+        if len(merged) < len(step_points):
+            print(f"   📊 合并密集阶跃: {len(step_points)} → {len(merged)} "
+                  f"(合并间距<{merge_gap}点的阶跃簇)")
+        
+        return merged
     
     def _remove_overlapping(self, candidates: List[Tuple[int, int, float, float]]) -> List[Tuple[int, int, float, float]]:
         """

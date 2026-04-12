@@ -275,67 +275,59 @@ class SegmentProcessor(LoggerMixin):
         """
         # 从配置读取默认值
         cfg = self._tuning_config
-        if min_step_size is None:
-            min_step_size = cfg['min_step_size']
-        if min_response_time is None:
-            min_response_time = cfg['min_response_time']
-        if max_response_time is None:
-            max_response_time = cfg['max_response_time']
         
         self.log(f"\n{'='*60}")
         self.log("📊 整定段检测（基于MV阶跃变化）")
         self.log('='*60)
         
-        mv = hist_data.mv
-        pv = hist_data.pv
-        sv = hist_data.sv
+        mv = np.array(hist_data.mv, dtype=float)
+        pv = np.array(hist_data.pv, dtype=float)
+        sv = np.array(hist_data.sv, dtype=float)
         timestamp = hist_data.timestamp
         n = len(mv)
         
-        if n < min_response_time * 2:
-            self.log("   数据长度不足")
+        # 引入最新的 Level 1 检测器
+        try:
+            # 使用绝对路径导入，避免相对路径的混乱
+            from core.algorithm.tuning_segment.tuning_segment_detector import TuningSegmentDetector
+        except ImportError:
+            try:
+                from ....tuning_segment.tuning_segment_detector import TuningSegmentDetector
+            except ImportError:
+                self.log("   ⚠️ 无法导入 TuningSegmentDetector")
+                return [], []
+            
+        detector = TuningSegmentDetector()
+        
+        # 借用其内部方法打印自适应信息
+        detector._adapt_to_process_timescale(pv)
+        
+        # 获取底层检测结果
+        raw_segments = detector.detect(pv, sv, mv)
+        
+        if not raw_segments:
+            self.log("   📊 检测到 0 个有效整定段")
             return [], []
-        
-        # Step 1: 检测MV阶跃变化点
-        stable_window = cfg['stable_window']
-        mv_steps = self._detect_mv_steps(mv, min_step_size, stable_window)
-        self.log(f"   检测到 {len(mv_steps)} 个MV阶跃变化点")
-        
-        if not mv_steps:
-            self.log("   ⚠️ 未检测到MV阶跃变化")
-            return [], []
-        
-        # Step 2: 从每个阶跃点提取整定段
+            
+        # 转换为 Orchestrator 需要的数据结构
         tuning_segments = []
         segment_results = []
         
-        for i, (step_idx, step_size, step_dir) in enumerate(mv_steps):
-            # 确定响应区间：从阶跃点开始，到下一个阶跃点或最大响应时间
-            start_idx = step_idx
-            
-            # 找下一个阶跃点
-            if i + 1 < len(mv_steps):
-                next_step_idx = mv_steps[i + 1][0]
-                end_idx = min(next_step_idx, start_idx + max_response_time)
-            else:
-                end_idx = min(start_idx + max_response_time, n)
-            
-            # 检查区间长度
-            seg_len = end_idx - start_idx
-            if seg_len < min_response_time:
+        for idx, (start_idx, end_idx, setpoint, quality) in enumerate(raw_segments):
+            # 添加质量过滤（防止低质量毛刺被当做整定段保留）
+            if quality < 0.4:
+                dir_str = "↑" if mv[min(n-1, start_idx+5)] >= mv[max(0, start_idx-5)] else "↓"
+                self.log(f"   阶跃@{start_idx}: MV{dir_str}, 响应={end_idx-start_idx}点, 质量={quality:.2f} ✗ (分数过低已过滤)")
                 continue
+                
+            seg_len = end_idx - start_idx
             
             # 提取段数据
             seg = HistoricalData(
                 timestamp=timestamp[start_idx:end_idx],
-                pv=pv[start_idx:end_idx],
-                sv=sv[start_idx:end_idx],
-                mv=mv[start_idx:end_idx]
-            )
-            
-            # 评估PV响应质量
-            quality_score, is_good_response = self._evaluate_step_response(
-                seg.pv, seg.mv, step_size, step_dir
+                pv=hist_data.pv[start_idx:end_idx],
+                sv=hist_data.sv[start_idx:end_idx],
+                mv=hist_data.mv[start_idx:end_idx]
             )
             
             result = SegmentResult(
@@ -343,28 +335,28 @@ class SegmentProcessor(LoggerMixin):
                 start_idx=start_idx,
                 end_idx=end_idx,
                 data_points=seg_len,
-                is_valid=is_good_response
+                is_valid=True
             )
             
-            # 分析数据质量
-            quality = self._preprocessor.analyze_quality(seg.pv, seg.mv)
-            result.quality_score = quality.quality_score
-            result.nonlinearity_score = quality.nonlinearity_score
-            result.step_response_score = quality_score
-            result.oscillation_ratio = quality.oscillation_ratio
-            result.is_nonlinear = quality.is_nonlinear
+            # 分析数据质量，使用原有的 analyze_quality 处理一些 Orchestrator 必要的属性
+            quality_info = self._preprocessor.analyze_quality(seg.pv, seg.mv)
+            result.quality_score = quality_info.quality_score
+            result.nonlinearity_score = quality_info.nonlinearity_score
+            # step_response_score 使用我们精细计算的 quality，Orchestrator 就靠这个筛选
+            result.step_response_score = quality
+            result.oscillation_ratio = quality_info.oscillation_ratio
+            result.is_nonlinear = quality_info.is_nonlinear
             
-            if is_good_response:
-                dir_str = "↑" if step_dir > 0 else "↓"
-                self.log(f"   阶跃@{step_idx}: MV{dir_str}{abs(step_size):.1f}, "
-                        f"响应={seg_len}点, 质量={quality_score:.2f} ✓")
-                tuning_segments.append(seg)
-                segment_results.append(result)
-            else:
-                dir_str = "↑" if step_dir > 0 else "↓"
-                self.log(f"   阶跃@{step_idx}: MV{dir_str}{abs(step_size):.1f}, "
-                        f"响应={seg_len}点, 质量={quality_score:.2f} ✗")
-        
+            # 由于底层已经做过了评估，这里直接认为是 good_response
+            step_size = mv[start_idx + min(5, seg_len - 1)] - np.mean(mv[max(0, start_idx-10):start_idx]) if start_idx > 0 else 0
+            dir_str = "↑" if step_size >= 0 else "↓"
+            
+            self.log(f"   阶跃@{start_idx}: MV{dir_str}{abs(step_size):.1f}, "
+                     f"响应={seg_len}点, 质量={quality:.2f} ✓")
+                     
+            tuning_segments.append(seg)
+            segment_results.append(result)
+            
         self.log(f"   📊 检测到 {len(tuning_segments)} 个有效整定段")
         return tuning_segments, segment_results
     

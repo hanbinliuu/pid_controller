@@ -177,7 +177,9 @@ class OscillationSegmentDetector:
         
         if pv_noise_baseline > 0.01:
             snr = amplitude / pv_noise_baseline
-            significance_score = min(1.0, snr / 3.0)
+            if snr < 1.5:
+                return 0.0  # 纯噪声引起的过零，非宏观振荡
+            significance_score = min(1.0, snr / 4.0)
         else:
             significance_score = 1.0 if amplitude > 0.5 else 0.3
         

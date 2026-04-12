@@ -1629,8 +1629,13 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
         end_time = int(timestamps[-1])
         
         # =============================================
-        # 三级优选调度
+        # 三级优选调度（瀑布式 + 质量门槛）
+        # Level 1 质量达标 → 直接返回
+        # Level 1 质量不达标或无结果 → 尝试 Level 2
+        # Level 2 无结果 → 兜底 Level 3
         # =============================================
+        
+        QUALITY_GATE = 0.55  # Level 1/2 需要最高质量 >= 此值才算有效命中
 
         # Level 1: 整定段检测（MV阶跃 → PV响应）
         if mv_data is not None:
@@ -1640,19 +1645,24 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
                 tuning_segments = tuning_detector.detect(pv_data, sv_data, mv_data)
                 
                 if tuning_segments:
-                    print(f"[SegmentSelector] 🥇 Level 1 命中: 检测到 {len(tuning_segments)} 个高质量整定段 (MV阶跃响应)")
-                    qualified_windows = _segments_to_windows(tuning_segments, timestamps)
-                    return {
-                        "start_time": start_time,
-                        "end_time": end_time,
-                        "qualified_windows": qualified_windows
-                    }
+                    max_q = max(s[3] for s in tuning_segments)
+                    if max_q >= QUALITY_GATE:
+                        print(f"[SegmentSelector] 🥇 Level 1 命中: {len(tuning_segments)} 个整定段 "
+                              f"(最高质量={max_q:.2f})")
+                        qualified_windows = _segments_to_windows(tuning_segments, timestamps)
+                        return {
+                            "start_time": start_time,
+                            "end_time": end_time,
+                            "qualified_windows": qualified_windows
+                        }
+                    else:
+                        print(f"[SegmentSelector] Level 1 质量不达标 (maxQ={max_q:.2f}<{QUALITY_GATE})，降级...")
                 else:
-                    print("[SegmentSelector] Level 1 未命中整定段，降级到 Level 2...")
+                    print("[SegmentSelector] Level 1 未命中，降级到 Level 2...")
             except Exception as e:
-                print(f"[SegmentSelector] Level 1 异常({e})，降级到 Level 2...")
+                print(f"[SegmentSelector] Level 1 异常({e})，降级...")
         else:
-            print("[SegmentSelector] 无 MV 数据，跳过 Level 1...")
+            print("[SegmentSelector] 无 MV 数据，跳过 Level 1")
         
         # Level 2: 振荡段检测（PV围绕SV持续振荡）
         try:
@@ -1661,27 +1671,30 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
             osc_segments = osc_detector.detect(pv_data, sv_data)
             
             if osc_segments:
-                print(f"[SegmentSelector] 🥈 Level 2 命中: 检测到 {len(osc_segments)} 个振荡段")
-                qualified_windows = _segments_to_windows(osc_segments, timestamps)
-                return {
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "qualified_windows": qualified_windows
-                }
+                max_q = max(s[3] for s in osc_segments)
+                if max_q >= QUALITY_GATE:
+                    print(f"[SegmentSelector] 🥈 Level 2 命中: {len(osc_segments)} 个振荡段 "
+                          f"(最高质量={max_q:.2f})")
+                    qualified_windows = _segments_to_windows(osc_segments, timestamps)
+                    return {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "qualified_windows": qualified_windows
+                    }
+                else:
+                    print(f"[SegmentSelector] Level 2 质量不达标 (maxQ={max_q:.2f}<{QUALITY_GATE})，降级...")
             else:
-                print("[SegmentSelector] Level 2 未命中振荡段，降级到 Level 3...")
+                print("[SegmentSelector] Level 2 未命中，降级到 Level 3...")
         except Exception as e:
-            print(f"[SegmentSelector] Level 2 异常({e})，降级到 Level 3...")
+            print(f"[SegmentSelector] Level 2 异常({e})，降级...")
         
-        # Level 3: 扰动段检测（现有的 StabilityDetector，兜底）
-        print("[SegmentSelector] 🥉 Level 3: 执行扰动段检测（兜底）...")
+        # Level 3: 扰动段检测（兜底）
+        print("[SegmentSelector] 🥉 Level 3: 扰动段检测（兜底）...")
         detector = StabilityDetector()
         non_steady_segments = detector.detect_non_steady_segments(pv_data, sv_data)
         
-        # 构建 qualified_windows：每个扰动段的开始和结束时间
         qualified_windows = []
         for seg_start, seg_end, seg_setpoint in non_steady_segments:
-            # 边界检查
             if seg_start < len(timestamps) and seg_end > 0:
                 seg_start_time = int(timestamps[seg_start])
                 seg_end_idx = min(seg_end - 1, len(timestamps) - 1)
