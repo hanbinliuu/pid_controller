@@ -1547,11 +1547,16 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
     这是一个便捷函数，封装了StabilityDetector的主要功能，
     接受标准格式的历史数据并返回检测到的扰动窗口。
     
+    内部采用三级优选机制：
+        Level 1: 整定段 (MV阶跃 → PV响应) → 最高精度
+        Level 2: 振荡段 (PV持续振荡)       → 次优精度
+        Level 3: 扰动段 (泛泛的非稳态)      → 兜底
+    
     Args:
         history_data: 历史数据字典，格式为:
             {
                 "history_data": [
-                    {"timestamp": ..., "pv": ..., "sv": ...},
+                    {"timestamp": ..., "pv": ..., "sv": ..., "mv": ...},
                     ...
                 ]
             }
@@ -1576,20 +1581,26 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
                 "qualified_windows": []
             }
         
-        # 提取timestamp, pv, sv数据
+        # 提取timestamp, pv, sv, mv数据
         timestamps = []
         pv_values = []
         sv_values = []
+        mv_values = []
+        has_mv = False
         
         for item in data_list:
             ts = item.get("timestamp")
             pv = item.get("pv")
             sv = item.get("sv")
+            mv = item.get("mv")
             
             if ts is not None and pv is not None:
                 timestamps.append(ts)
                 pv_values.append(float(pv))
                 sv_values.append(float(sv) if sv is not None else None)
+                mv_values.append(float(mv) if mv is not None else None)
+                if mv is not None:
+                    has_mv = True
         
         if len(timestamps) < 10:
             return {
@@ -1605,17 +1616,66 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
         if all(sv is not None for sv in sv_values):
             sv_data = np.array(sv_values, dtype=float)
         else:
-            # 如果sv有缺失，使用pv的均值作为设定值
             sv_data = np.full(len(pv_data), np.mean(pv_data))
+        
+        # 处理mv数据
+        if has_mv and all(mv is not None for mv in mv_values):
+            mv_data = np.array(mv_values, dtype=float)
+        else:
+            mv_data = None
         
         # 获取起止时间（毫秒时间戳）
         start_time = int(timestamps[0])
         end_time = int(timestamps[-1])
         
-        # 创建检测器并执行检测
-        detector = StabilityDetector()
+        # =============================================
+        # 三级优选调度
+        # =============================================
+
+        # Level 1: 整定段检测（MV阶跃 → PV响应）
+        if mv_data is not None:
+            try:
+                from .tuning_segment_detector import TuningSegmentDetector
+                tuning_detector = TuningSegmentDetector()
+                tuning_segments = tuning_detector.detect(pv_data, sv_data, mv_data)
+                
+                if tuning_segments:
+                    print(f"[SegmentSelector] 🥇 Level 1 命中: 检测到 {len(tuning_segments)} 个高质量整定段 (MV阶跃响应)")
+                    qualified_windows = _segments_to_windows(tuning_segments, timestamps)
+                    return {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "qualified_windows": qualified_windows
+                    }
+                else:
+                    print("[SegmentSelector] Level 1 未命中整定段，降级到 Level 2...")
+            except Exception as e:
+                print(f"[SegmentSelector] Level 1 异常({e})，降级到 Level 2...")
+        else:
+            print("[SegmentSelector] 无 MV 数据，跳过 Level 1...")
         
-        # 检测非稳态段
+        # Level 2: 振荡段检测（PV围绕SV持续振荡）
+        try:
+            from .oscillation_segment_detector import OscillationSegmentDetector
+            osc_detector = OscillationSegmentDetector()
+            osc_segments = osc_detector.detect(pv_data, sv_data)
+            
+            if osc_segments:
+                print(f"[SegmentSelector] 🥈 Level 2 命中: 检测到 {len(osc_segments)} 个振荡段")
+                qualified_windows = _segments_to_windows(osc_segments, timestamps)
+                return {
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "qualified_windows": qualified_windows
+                }
+            else:
+                print("[SegmentSelector] Level 2 未命中振荡段，降级到 Level 3...")
+        except Exception as e:
+            print(f"[SegmentSelector] Level 2 异常({e})，降级到 Level 3...")
+        
+        # Level 3: 扰动段检测（现有的 StabilityDetector，兜底）
+        print("[SegmentSelector] 🥉 Level 3: 执行扰动段检测（兜底）...")
+        detector = StabilityDetector()
         non_steady_segments = detector.detect_non_steady_segments(pv_data, sv_data)
         
         # 构建 qualified_windows：每个扰动段的开始和结束时间
@@ -1646,6 +1706,25 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
             "end_time": None,
             "qualified_windows": []
         }
+
+
+def _segments_to_windows(segments: List[Tuple], timestamps: List) -> List[Dict]:
+    """
+    将 (start_idx, end_idx, setpoint, quality_score) 格式的段列表
+    转换为 {"start_time": ..., "end_time": ...} 格式的窗口列表
+    """
+    windows = []
+    for seg in segments:
+        seg_start, seg_end = seg[0], seg[1]
+        if seg_start < len(timestamps) and seg_end > 0:
+            seg_start_time = int(timestamps[seg_start])
+            seg_end_idx = min(seg_end - 1, len(timestamps) - 1)
+            seg_end_time = int(timestamps[seg_end_idx])
+            windows.append({
+                "start_time": seg_start_time,
+                "end_time": seg_end_time
+            })
+    return windows
 
 
 def merge_adjacent_periods(

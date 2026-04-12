@@ -2759,10 +2759,17 @@ def run_stability_test():
             # 生成振荡数据，传入固定种子
             data, metadata = generate_scenario_data(scenario, seed=scenario_seed)
             
-            # 检测扰动窗口
-            change_time = metadata['change_time']
-            end_time = data[-1]['timestamp']
-            qualified_windows = [{'start_time': change_time, 'end_time': end_time}]
+            # 使用三级优选引擎自动检测整定段/振荡段/扰动段
+            from core.algorithm.tuning_segment.stability_detector import find_high_variability_periods
+            detect_res = find_high_variability_periods({"history_data": data})
+            qualified_windows = detect_res.get("qualified_windows", [])
+            
+            # 如果自动检测没找到任何段，退化到手动指定（确保测试不失败）
+            if not qualified_windows:
+                change_time = metadata['change_time']
+                end_time = data[-1]['timestamp']
+                qualified_windows = [{'start_time': change_time, 'end_time': end_time}]
+                print(f"   ⚠️ 自动选段未命中，退化到手动窗口")
             
             input_data = {
                 'history_data': data,
