@@ -203,27 +203,33 @@ class SelfOptimizeStage(PipelineStage):
                         pass
 
             # --- TD (调 Kd，保持 Kp) ---
-            # 设计说明 (Fix #5): 仅当原始参数已包含 D 项 (Kd≠0) 时才微调 TD。
-            # PI 控制器不会在微调阶段被升级为 PID，这是有意设计。
-            if abs(best_pid.get('Kd', 0.0)) > eps:
-                base_td = abs(best_pid['Kd'] / best_pid['Kp']) if abs(best_pid['Kp']) > eps else 0
-                if base_td > eps:
-                    for ratio in ratios:
-                        if abs(ratio - 1.0) < 1e-6:
-                            continue
-                        c = dict(best_pid)
-                        c['Kd'] = c['Kp'] * base_td * ratio
-                        try:
-                            extra_info = {'param': 'TD', 'ratio': ratio, 'round': round_idx + 1}
-                            if method_conf is not None: extra_info['method_conf'] = method_conf
-                            score, detail = self._evaluate_pid(
-                                fusion, c, sp_initial, sp_final, pv_initial, loop_type,
-                                extra=extra_info)
-                            search_log.append(detail)
-                            if score > best_score + min_improv:
-                                best_score, best_pid, best_detail, improved = score, c, detail, True
-                        except Exception:
-                            pass
+            # [FIX] 不再限制"PI 控制器不升级为 PID"。
+            # 首要目标是调稳，如果加入微分项能提升评分（降低超调/加速收敛），就应该被允许。
+            # 如果加了 Td 反而导致不稳定或噪声放大，评分自然会低，不会被选中。
+            base_td_val = abs(best_pid['Kd'] / best_pid['Kp']) if (abs(best_pid['Kp']) > eps and abs(best_pid.get('Kd', 0.0)) > eps) else 0
+            
+            if base_td_val < eps:
+                # 原始是 PI 控制器 (Kd=0)，用 Ti 的 1/8 作为探索性 Td 种子
+                base_ti_val = abs(best_pid['Kp'] / best_pid['Ki']) if abs(best_pid['Ki']) > eps else 10.0
+                base_td_val = base_ti_val / 8.0  # 经典 PID 整定中 Td ≈ Ti/4~Ti/8 的保守端
+            
+            if base_td_val > eps:
+                for ratio in ratios:
+                    if abs(ratio - 1.0) < 1e-6:
+                        continue
+                    c = dict(best_pid)
+                    c['Kd'] = c['Kp'] * base_td_val * ratio
+                    try:
+                        extra_info = {'param': 'TD', 'ratio': ratio, 'round': round_idx + 1}
+                        if method_conf is not None: extra_info['method_conf'] = method_conf
+                        score, detail = self._evaluate_pid(
+                            fusion, c, sp_initial, sp_final, pv_initial, loop_type,
+                            extra=extra_info)
+                        search_log.append(detail)
+                        if score > best_score + min_improv:
+                            best_score, best_pid, best_detail, improved = score, c, detail, True
+                    except Exception:
+                        pass
 
             if not improved:
                 break
