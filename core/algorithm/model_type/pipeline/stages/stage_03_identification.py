@@ -89,9 +89,12 @@ class IdentificationStage(PipelineStage):
             fit_best_quality = max((getattr(r, 'quality_score', 0.0) for r in fitting_results), default=0.0)
             
             if osc_best_quality >= fit_best_quality:
-                self.log(f"   🔄 高振荡段质量({osc_best_quality:.2f}) ≥ 正常段({fit_best_quality:.2f})，优先尝试全量振荡整定")
+                self.log(f"   🔄 高振荡段质量({osc_best_quality:.2f}) ≥ 正常段({fit_best_quality:.2f})，优先用纯振荡段做振荡整定")
+                # [FIX-v2] 只传高振荡段！不要掺入 poor quality 的正常段。
+                # 原因：混入弱信号段会导致 (1) 振荡整定器内部走不同分支 (2) 相关性互相抵消导致符号校正失败
+                # Grid Search 之所以得分更高，正是因为它只用了一个纯净的窗口。
                 oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
-                    all_segs, all_results, context.current_pid, force=True,
+                    osc_segs, osc_results, context.current_pid, force=True,
                     tuning_constraints=context.export_tuning_constraints()
                 )
                 if oscillation_result is not None and oscillation_result.get('success', False):
@@ -102,7 +105,7 @@ class IdentificationStage(PipelineStage):
                     )
                     return context
                 else:
-                    self.log(f"   ⚠️ 全量振荡整定未成功，降级到正常段模型拟合")
+                    self.log(f"   ⚠️ 纯振荡段整定未成功，降级到正常段模型拟合")
         
         # 3. 对正常段尝试模型拟合
         segment_results_fitted = self._segment_fitter.fit_all_segments(
