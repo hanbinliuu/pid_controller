@@ -643,6 +643,13 @@ class OscillationTuner(LoggerMixin):
         if T1_approx > t1_threshold:
             # 减缓慢系统 PB 膨胀 (150 -> 300)
             pb_base *= 1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 300.0)
+            
+        # [NEW] Flow 回路大滞后专杀 (Dead-time Dominant Flow)
+        # 如果流量回路测出了明显大于物理常理的滞后时间，直接放弃快响应要求，强制拉开积分时间和比例度。
+        if self._loop_type == 'flow' and L_approx > 3.0:
+            self.log(f"   ⚠️ 触发 Flow 回路大滞后专杀 (L={L_approx:.1f}s > 3.0s)，放弃快响应强制求稳")
+            pb_base *= 1.5
+            ti_multiplier *= max(1.5, L_approx / 4.0)
         
         # 应用 Loop Preset 的安全系数和范围限制
         preset = tuning_constraints
