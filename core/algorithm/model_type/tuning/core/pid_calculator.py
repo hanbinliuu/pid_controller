@@ -114,9 +114,9 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         Kp, Ti, Td = self._apply_constraints(Kp, Ti, Td, K_sign, loop_type, tuning_constraints)
         
         # [FIX] 极端积分下限保护（防止微观假象导致真实DCS崩溃）
-        # level 回路积分特性强，Ti 下限设高；temperature 回路可能有快速场景，下限适中
+        # level 回路积分特性强，行业标准 Ti_min 通常在 60s 以上；temperature 回路下限适中
         if loop_type == 'level':
-            Ti = max(Ti, 20.0)
+            Ti = max(Ti, 60.0)
         elif loop_type == 'temperature':
             Ti = max(Ti, 5.0)
             

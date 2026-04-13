@@ -65,7 +65,7 @@ class IdentificationStage(PipelineStage):
 
         if force_fallback:
             oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
-                context.segments_for_fitting, context.results_for_fitting, context.current_pid, force=True
+                context.segments_for_fitting, context.results_for_fitting, context.get_current_pid(), force=True
             )
             if oscillation_result is not None:
                 context.final_result = self._oscillation_tuner.build_oscillation_output(
@@ -94,7 +94,7 @@ class IdentificationStage(PipelineStage):
                 # 原因：混入弱信号段会导致 (1) 振荡整定器内部走不同分支 (2) 相关性互相抵消导致符号校正失败
                 # Grid Search 之所以得分更高，正是因为它只用了一个纯净的窗口。
                 oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
-                    osc_segs, osc_results, context.current_pid, force=True,
+                    osc_segs, osc_results, context.get_current_pid(), force=True,
                     tuning_constraints=context.export_tuning_constraints()
                 )
                 if oscillation_result is not None and oscillation_result.get('success', False):
@@ -116,7 +116,7 @@ class IdentificationStage(PipelineStage):
         # [FIX] 使用全量段（含高振荡段）做振荡整定，而非仅用质量差的正常段
         oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
             all_segs, all_results + segment_results_fitted if osc_segs else segment_results_fitted,
-            context.current_pid
+            context.get_current_pid()
         )
         if oscillation_result is not None:
             context.final_result = self._oscillation_tuner.build_oscillation_output(
@@ -133,7 +133,7 @@ class IdentificationStage(PipelineStage):
             fallback_result = self._oscillation_tuner.try_oscillation_tuning(
                 all_segs if osc_segs else (context.valid_segments or all_segs),
                 all_results if osc_segs else (context.segment_results or all_results),
-                context.current_pid, force=True,
+                context.get_current_pid(), force=True,
                 tuning_constraints=context.export_tuning_constraints()
             )
             if fallback_result is not None:

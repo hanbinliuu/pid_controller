@@ -44,6 +44,49 @@ class OscillationSegmentDetector:
         self.scan_step = scan_step
         self.min_quality_score = min_quality_score
     
+    def adapt_to_timescale(self, pv_data: np.ndarray):
+        """
+        [NEW] 根据 PV 数据的自相关特征时间，自适应调整扫描窗口大小。
+        
+        对于快过程（flow/pressure）：PV 振荡快，200 点窗口足以覆盖 3 个周期。
+        对于慢过程（level/temperature）：PV 振荡慢，需要更大的窗口才能看到完整的振荡。
+        
+        逻辑：窗口至少要容纳 min_oscillation_cycles 个估计周期，
+              即 scan_window >= tau * 2 * min_oscillation_cycles（每周期 ≈ 2τ）
+        """
+        n = len(pv_data)
+        
+        # 估计 PV 的特征时间常数（自相关降到 1/e 的时间）
+        pv_centered = pv_data - np.mean(pv_data)
+        var = np.var(pv_centered)
+        
+        if var < 1e-10:
+            return  # 数据几乎不变，保持默认
+        
+        max_lag = min(n // 4, 2000)
+        target = 1.0 / np.e
+        tau = 50.0  # 默认值
+        
+        for lag in range(1, max_lag):
+            if lag < n:
+                autocorr = np.mean(pv_centered[:n-lag] * pv_centered[lag:]) / var
+            else:
+                break
+            if autocorr < target:
+                tau = float(lag)
+                break
+        else:
+            tau = float(max_lag)
+        
+        # 估计振荡伪周期 ≈ 2τ，窗口需覆盖至少 min_oscillation_cycles 个周期
+        estimated_period = tau * 2.0
+        adaptive_window = int(estimated_period * self.min_oscillation_cycles)
+        
+        # 约束：不小于 200，不超过总数据的 40%，硬上限 5000
+        self.scan_window = max(200, min(adaptive_window, int(n * 0.4), 5000))
+        self.scan_step = max(50, self.scan_window // 4)
+        self.min_segment_points = max(60, int(estimated_period * 1.5))
+    
     def detect(self, pv_data: np.ndarray, 
                sv_data: np.ndarray) -> List[Tuple[int, int, float, float]]:
         """

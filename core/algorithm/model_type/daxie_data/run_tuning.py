@@ -137,7 +137,7 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
             
             input_data_seg = {
                 'history_data': sliced_data,
-                'params': {'model_type': 'FOPDT', 'turning_type': 'PID', 'analyst_column': 'pv'},
+                'params': {'model_type': 'FOPDT', 'turning_type': 'PID', 'analyst_column': 'pv', 'exact_window': True},
                 'qualified_windows': [window],
                 'response_mode': 'balanced'
             }
@@ -205,6 +205,9 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
         
         if not final_run_windows:
             print("⚠️ 未检测到突出的扰动段，使用全量数据包作为整定窗口")
+            if not sliced_data:
+                print("❌ 截取的数据为空，请检查你在 LOOP_CONFIGS 设置的 start_time 和 end_time 是否超出了源数据的范围！")
+                return
             final_run_windows = [{"start_time": sliced_data[0]["timestamp"], "end_time": sliced_data[-1]["timestamp"]}]
         
         print("\n🚀 运行 TuningOrchestrator (常规算法探测段评估) ...")
@@ -319,22 +322,22 @@ if __name__ == "__main__":
     # 使用 argparse 来支持行命令运行和参数动态调整
     parser = argparse.ArgumentParser(description="大榭现场数据自整定入口脚本")
     parser.add_argument("loop_id", nargs="?", default="50104", help="指定回路ID进行测试，如: 50104")
-    parser.add_argument("--mode", choices=["grid_search", "auto_detect"], default="grid_search",
-                        help="运行模式: 'grid_search' 为自动滑窗提分模式，'auto_detect' 为算法自检测整定段旧模式。")
+    parser.add_argument("--mode", choices=["benchmark", "auto_pipeline"], default="auto_pipeline",
+                        help="运行模式: 'benchmark' 为多线程并发测分压测仪，'auto_pipeline' 为模拟真实后端全自动智能流转。")
     parser.add_argument("--window", type=float, default=6.0, help="滑窗寻优模式下的满窗长度(小时), 默认 4.0")
     parser.add_argument("--step", type=float, default=2.0, help="滑窗寻优模式下每次移动的步长(小时), 改大可提速, 默认 2.0")
     args = parser.parse_args()
 
     TARGET_LOOP = args.loop_id
-    ENABLE_GRID_SEARCH = (args.mode == "auto_detect")
+    ENABLE_GRID_SEARCH = (args.mode == "auto_pipeline")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-12-15 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-12-16 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2026-02-12 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2026-02-13 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")
-    print(f"🌍 运行模式: {'[滑窗搜参数提分]' if ENABLE_GRID_SEARCH else '[算法寻扰动段(旧模式)]'}")
+    print(f"🌍 运行模式: {'[Benchmark (并发性能压测模式)]' if ENABLE_GRID_SEARCH else '[Auto Pipeline (后端混合演练模式)]'}")
     print("=" * 60)
     
     run_tuning(TARGET_LOOP, enable_grid_search=ENABLE_GRID_SEARCH, window_h=args.window, step_h=args.step)

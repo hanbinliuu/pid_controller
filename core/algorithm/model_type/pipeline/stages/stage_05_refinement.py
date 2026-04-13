@@ -543,7 +543,8 @@ class RefinementStage(PipelineStage):
         if abs(fusion_result.K) < self._epsilon or (not is_integrator and fusion_result.T1 < self._epsilon):
             self.log("\n   ⚠️ 参数融合失败（K或T1无效），尝试振荡整定fallback...")
             fallback_result = self._oscillation_tuner.try_oscillation_tuning(
-                context.segments_for_fitting, context.segment_results_fitted, context.current_pid, force=True
+                context.segments_for_fitting, context.segment_results_fitted, context.get_current_pid(), force=True,
+                tuning_constraints=context.export_tuning_constraints()
             )
             if fallback_result is not None:
                 self.log("   ✅ 振荡整定fallback成功")

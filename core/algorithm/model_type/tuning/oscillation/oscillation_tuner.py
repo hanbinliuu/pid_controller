@@ -261,6 +261,14 @@ class OscillationTuner(LoggerMixin):
             dt = 1.0
             if len(seg.timestamp) > 1:
                 dt = (seg.timestamp[1] - seg.timestamp[0]) / 1000
+                
+            # [FIX] 全局收口：即使在此刻尝试执行临界法(Critical Tuning)，如果对应的 MV 根本没动
+            # (range < 0.1)，PV的所谓"完美规律震荡"也属于纯环境扰动引发的幻象。我们决不能通过单纯
+            # 对假模假式的振荡数据取频率来瞎编出一组控制器参数！这种现象必须果断拒绝被解析出特征。
+            mv_range = np.ptp(seg.mv) if len(seg.mv) > 0 else 0.0
+            if mv_range < 0.1:
+                self.log(f"   🚫 数据段被跳过：MV未发生有效变化(range={mv_range:.3f} < 0.1)。无阀门动作支撑的PV波浪，拒绝强扯计算。")
+                continue
             
             osc_info = self._pid_calculator.analyze_oscillation(seg.pv, seg.mv, dt)
             if osc_info and osc_info.get('is_valid', False):
@@ -378,6 +386,115 @@ class OscillationTuner(LoggerMixin):
             'data_quality': data_quality, 'nonlinearity': nonlinearity, 'valve_issues': valve_issues
         }
     
+    def _estimate_L_from_pv_oscillation(self, pv: np.ndarray, dt: float) -> float:
+        """
+        [NEW] 从 PV 数据的自相关中提取主振荡周期，用 T_osc/4 作为等效延迟估计。
+        
+        原理：对于液位等积分过程，在闭环控制下 PV 围绕 SV 振荡的周期 T_osc
+        与被控对象的纯滞后 L 之间存在经验关系 T_osc ≈ 4L（Ziegler-Nichols 近似）。
+        因此 L ≈ T_osc / 4。
+        
+        当无法提取有效振荡周期时，退化为原来的硬编码默认值。
+        
+        Args:
+            pv: PV 数据数组
+            dt: 采样间隔 (秒)
+            
+        Returns:
+            估计的等效延迟 L (秒)
+        """
+        n = len(pv)
+        if n < 100:
+            return 15.0 if self._loop_type == 'level' else 10.0
+        
+        try:
+            # 去趋势 + 去均值
+            pv_detrended = pv - np.linspace(pv[0], pv[-1], n)
+            pv_centered = pv_detrended - np.mean(pv_detrended)
+            var = np.var(pv_centered)
+            
+            if var < 1e-10:
+                return 15.0 if self._loop_type == 'level' else 10.0
+            
+            # 计算自相关函数
+            max_lag = min(n // 2, 3000)
+            autocorr = np.zeros(max_lag)
+            for lag in range(max_lag):
+                if lag < n:
+                    autocorr[lag] = np.mean(pv_centered[:n-lag] * pv_centered[lag:]) / var
+            
+            # 寻找自相关函数的第一个显著正峰（跳过 lag=0 附近的衰减区）
+            # 第一个正峰对应的滞后 = 振荡半周期，乘以 2 得完整周期
+            min_search_lag = max(10, int(5.0 / dt))  # 至少跳过 5 秒
+            
+            # 先找到自相关首次降到 0 以下的位置（过零点）
+            first_zero = min_search_lag
+            for lag in range(min_search_lag, max_lag):
+                if autocorr[lag] <= 0:
+                    first_zero = lag
+                    break
+            
+            # 从过零点之后找第一个正峰
+            best_peak_lag = None
+            best_peak_val = 0.1  # 峰值至少要0.1才算有效
+            
+            for lag in range(first_zero, max_lag - 1):
+                if autocorr[lag] > best_peak_val and autocorr[lag] > autocorr[lag-1] and autocorr[lag] >= autocorr[lag+1]:
+                    best_peak_lag = lag
+                    best_peak_val = autocorr[lag]
+                    break  # 取第一个显著峰
+            
+            if best_peak_lag is not None:
+                T_osc = best_peak_lag * dt  # 振荡周期（秒）
+                # 对于积分过程（液位），振荡周期远大于 4L（因为积分器本身拉长了响应），
+                # 经验系数用 T_osc/8 更接近真实死区；其他过程保持经典的 T_osc/4
+                if self._loop_type == 'level':
+                    L_estimated = T_osc / 8.0
+                else:
+                    L_estimated = T_osc / 4.0
+                
+                # 合理性约束
+                # 液位的管道+传感器纯死区极少超过 30s
+                if self._loop_type == 'level':
+                    L_estimated = np.clip(L_estimated, 5.0, 30.0)
+                else:
+                    L_estimated = np.clip(L_estimated, 2.0, 60.0)
+                
+                divisor = 8 if self._loop_type == 'level' else 4
+                self.log(f"   📊 PV振荡周期估计: T_osc={T_osc:.1f}s (autocorr峰@lag={best_peak_lag}), L≈T/{divisor}={L_estimated:.1f}s")
+                return float(L_estimated)
+            else:
+                # 自相关未找到峰 → 尝试过零点计数法作为备选
+                error = pv_centered
+                zero_crossings = []
+                for i in range(1, len(error)):
+                    if error[i-1] * error[i] < 0:
+                        zero_crossings.append(i)
+                
+                if len(zero_crossings) >= 4:
+                    # 平均半周期 → 全周期
+                    half_periods = np.diff(zero_crossings)
+                    avg_half_period = np.mean(half_periods)
+                    T_osc_zc = avg_half_period * 2.0 * dt
+                    
+                    divisor = 8 if self._loop_type == 'level' else 4
+                    L_estimated = T_osc_zc / divisor
+                    
+                    if self._loop_type == 'level':
+                        L_estimated = np.clip(L_estimated, 5.0, 30.0)
+                    else:
+                        L_estimated = np.clip(L_estimated, 2.0, 60.0)
+                    
+                    self.log(f"   📊 PV过零点估计: T_osc={T_osc_zc:.1f}s ({len(zero_crossings)}个过零点), L≈T/{divisor}={L_estimated:.1f}s")
+                    return float(L_estimated)
+                else:
+                    self.log(f"   📊 PV自相关/过零点均未检测到有效振荡，使用默认 L")
+                    return 15.0 if self._loop_type == 'level' else 10.0
+                
+        except Exception as e:
+            self.log(f"   ⚠️ PV振荡周期估计异常({e})，使用默认 L")
+            return 15.0 if self._loop_type == 'level' else 10.0
+    
     def _get_conservative_pid_params(self, Pu: float, Ku: float, K_approx: float = 1.0,
                                       reason: str = 'generic', oscillation_ratio: float = 0.0,
                                       data_quality: float = 0.5, nonlinearity: float = 0.0,
@@ -446,7 +563,9 @@ class OscillationTuner(LoggerMixin):
             self.log(f"   🚫 数据段被否决：阀门(MV)未发生有效动作(range={mv_range:.3f} < 0.1)。无激励源，系统拒绝编造PID参数。")
             return None
             
-        K_approx = np.clip(pv_range / mv_range, 0.1, 10.0)
+        # [HOTFIX] 放开荒谬的增益粗切断，允许极小型/巨型物理响应
+        # 工业巨型缓冲罐的 K 值通常远小于 0.1，硬截断会导致严重误区
+        K_approx = np.clip(pv_range / mv_range, 0.0001, 1000.0)
         dt = (best_seg.timestamp[1] - best_seg.timestamp[0]) / 1000 if len(best_seg.timestamp) > 1 else 1.0
         data_duration = len(best_seg.pv) * dt
         T1_approx = max(data_duration / t1_divisor, t1_min)
@@ -467,8 +586,10 @@ class OscillationTuner(LoggerMixin):
             # [FIX] 如果 MV 几乎没有发生可信的变化，不要相信 CCF 算出来的垃圾延迟（通常是极其巨大的空窗期）
             original_mv_range = np.ptp(best_seg.mv)
             if original_mv_range < 0.05:
-                # 针对液位，其通常死区只在物理管道上，给予一个典型的经验微小死区
-                L_approx = 15.0 if self._loop_type == 'level' else T1_approx / 5
+                # [FIX v2] 不再盲目用 L=15.0s 硬编码。
+                # 尝试从 PV 的自相关中提取主振荡周期，用 T_osc/4 作为等效延迟估计。
+                # 这样下游的 Ti = 4*(λ+L) 会随实际数据变化，而不是永远 260。
+                L_approx = self._estimate_L_from_pv_oscillation(best_seg.pv, dt)
                 
                 # 符号优先从先验中继承，而非由于平缓数据的噪声导致反转
                 current_Kp = current_pid.get('Kp', 0.0) if current_pid else 0.0
@@ -477,7 +598,7 @@ class OscillationTuner(LoggerMixin):
                 else:
                     sign = 1.0
                 source = "current_pid (flat MV)"
-                self.log(f"   ⚠️ MV无有效行为脉冲，跳过 CCF 错位匹配。假定固定滞后 L={L_approx:.1f}s")
+                self.log(f"   ⚠️ MV无有效行为脉冲，跳过 CCF 错位匹配。基于PV振荡估算滞后 L={L_approx:.1f}s")
             else:
                 correlation = signal.correlate(pv_norm, mv_norm, mode='full')
                 lags = signal.correlation_lags(len(pv_norm), len(mv_norm), mode='full')
@@ -492,9 +613,11 @@ class OscillationTuner(LoggerMixin):
                 if self._loop_type == 'level':
                     # 液位回路（积分过程）无内禀的 T1 时间常数拉扯滞后，只有传感器与管道纯死区
                     L_approx = abs(estimated_delay_samples) * dt
-                    # 如果相关性过差，CCF 的错位计算是不置信的
+                    # [FIX v2] 如果相关性过差，CCF 的错位计算是不置信的。
+                    # 不再盲目截断到 15.0s，而是用 PV 振荡周期来估计更合理的 L。
                     if abs(corr) < 0.3:
-                        L_approx = min(L_approx, 15.0)
+                        L_from_osc = self._estimate_L_from_pv_oscillation(best_seg.pv, dt)
+                        L_approx = L_from_osc  # 用数据驱动的估计替代硬编码
                     # 绝对物理上限：一个常规级联液位的死区极少超过 30s
                     L_approx = np.clip(L_approx, 2.0, 30.0)
                 else:
@@ -561,31 +684,63 @@ class OscillationTuner(LoggerMixin):
             K_int = K_approx / max(T1_approx, 1.0)  # 积分增益 (%/s/%)
             
             # Lambda 法（积分过程）：Kp = 1/(K_int * (2λ + L))
-            # 恢复到正常的推荐值（3L 或 50s 的保守值），避免积分时间过大导致闭环仿真无法在限时内收敛
-            lambda_c = max(3.0 * L_approx, 50.0)
+            # [FIX] 原来 λ=max(3L, 50)，但 3 倍系数是当 L=15(硬编码) 时的遗留设计（3×15=45<50，从未生效）。
+            # 现在 L 可以是数据驱动的更大值，3 倍放大会导致 Ti 爆炸。
+            # [HOTFIX] 放开世界统一的 50 秒拉平幻想硬编码
+            # 改为基于过程真实延迟 L_approx 进行自适应（通常推荐 3倍死区或至少 10s）
+            lambda_c = max(3.0 * L_approx, 10.0)
             Kp_level = 1.0 / (K_int * (2.0 * lambda_c + L_approx)) if abs(K_int) > 1e-9 else 1.0 * sign
             
-            # Ti = 4*(lambda_c + L)，积分过程的标准推荐
-            Ti_level = 4.0 * (lambda_c + L_approx)
+            # [ALC 均值液位控制 (Averaging Level Control) 整定]
+            # 【LEVEL 回路专属物理与工程妥协整定路径】
+            # [CORE ALGORITHMIC FIX - 真正回归物理本质]
+            # 您说得对，靠强行卡边界是在掩盖算法底层的逻辑谬误。
+            # 为什么之前的原始算法会觉得需要 3000 秒？
+            # 因为系统误把原来 DCS 里不当参数（如 Ti=260）引起的缓慢长周期波动（积分导致的极限环波动），
+            # 错当成了系统的天然临界比例振荡周期 (Pu)，从而代入公式算出了荒谬的 Ti = 3 乘以 Pu = 3000s。
+            #
+            # 对于真正的纯积分液位过程 (Integrating Process)，根本不应使用闭环振荡周期来估算！
+            # 它的动态仅仅取决于纯滞后死区延迟 L。
+            # 参考真实纯积分对象的 IMC (内部模型控制/Lambda) 整定法则：
+            # Ti = 2 * lambda_c + L (其中 lambda_c 是期望闭环响应，通常取 1L ~ 3L)
             
-            # 从回路配置获取实际允许的 ti_max，通常对于 level 为 3600.0
-            preset = tuning_constraints
-            ti_max_limit = preset.get('ti_max', 20000.0)
+            lambda_c = np.clip(L_approx * 2.0, 15.0, 100.0)  # 根据死区时间 L 决定期望响应速度，平滑控制
             
-            # PB 和 Ti 限制放宽以适应超大增益/滞后段
-            pb_level = 100.0 / max(abs(Kp_level), 0.01)
+            # 使用真实的纯积分推导公式，直接天然输出合理的 Ti，无需任何强行封顶！
+            Ti_target = 2.0 * lambda_c + L_approx
             
-            # 特别保护：如果 K_int 极度微小，并且 Lambda 保护生效，会导致 PB 依然爆炸，做合理的工业上限硬切断
-            pb_level = np.clip(pb_level, 50.0, preset.get('pb_max', 350.0))
-            Ti_level = np.clip(Ti_level, 20.0, ti_max_limit)
+            # 纯积分 Lambda 法则下的反推 Kc:
+            # Kc = 1 / (K_int * Ti_target)
+            KC_required_for_damping = 1.0 / (abs(K_int) * Ti_target) if abs(K_int) > 1e-8 else 1.0
             
-            conservative_Kp = 100.0 / pb_level * np.sign(Kp_level)
+            # [NEW] 回应真实石化化工行业 (如聚丙烯PP装置) 对 LIC 回路的参数执念
+            # 真实化工要求: PB 通常 50%~150%
+            # 无视 DCS 里胡乱设置的巨大死板 Kp(如 0.05 导致的 PB=2000%)，回归本质化工控制工程范式
+            
+            pb_manual_limit = 50.0  # 底线约束到典型石化下限 50%
+            pb_typical_target = 100.0  # 默认瞄准 100% (Kp=1.0) 的经典石化水平带
+            
+            pb_required = 100.0 / max(KC_required_for_damping, 0.01)
+            
+            # 如果数学要求的 PB(为了无超调) 高达 1000%，我们只能折中：
+            # 优先保住石化人的心智模型，即将 PB 强行往 150% 以下压！宁可容忍一点理论超调。
+            pb_level = np.clip(pb_required, pb_manual_limit, 150.0)
+            
+            # 如果极端情况下推算的 PB 连 50% 都不到，说明真的可以给很激进
+            if pb_required < 50.0:
+                pb_level = np.clip(pb_required, 40.0, 100.0)
+                
+            Kp_level = 100.0 / pb_level * sign
+            
+            Ti_level = Ti_target
+            
+            conservative_Kp = Kp_level
             conservative_Ki = abs(conservative_Kp) / Ti_level
             conservative_Kd = 0.0
             conservative_Td = 0.0
             
-            self.log(f"   🧊 积分过程专用整定: K_int={K_int:.6f}, λ={lambda_c:.1f}")
-            self.log(f"   ✅ {self._loop_type}fallback整定: PB={pb_level:.1f}%, Ti={Ti_level:.1f}s, Sign={sign}")
+            self.log(f"   🧊 LEVEL专属整定: 放弃纯死板微分防守，采取逆向推导阻尼匹配机制")
+            self.log(f"   ✅ Levelfallback: 基于自然推演 Ti={Ti_level:.1f}s, 为防震荡反推需匹配 PB={pb_required:.1f}%, 最终安全输出 PB={pb_level:.1f}%")
             
             pid_params = {
                 'Kp': round(float(conservative_Kp), 8),

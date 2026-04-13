@@ -59,11 +59,13 @@ class SelfOptimizeStage(PipelineStage):
         从 final_result 提取 PID + 模型参数 → 仅 Phase 2
     """
 
-    def __init__(self, pid_calculator, verbose: bool = False, logger_mixin=None):
+    def __init__(self, pid_calculator, verbose: bool = False, logger_mixin=None, fast_mode: bool = False):
         super().__init__(logger_mixin)
         self._pid_calculator = pid_calculator
         self._verbose = verbose
-        self._config = getattr(Config, 'SELF_OPTIMIZE', _DEFAULT_CONFIG)
+        self.fast_mode = fast_mode
+        self._config = copy.deepcopy(_DEFAULT_CONFIG)
+        self._config.update(getattr(Config, 'SELF_OPTIMIZE', {}))
 
     # ------------------------------------------------------------------
     # 评估: 给定 lambda 计算 PID 并评分
@@ -160,6 +162,14 @@ class SelfOptimizeStage(PipelineStage):
                 if abs(ratio - 1.0) < 1e-6:
                     continue
                 new_kp = base_kp / ratio
+                
+                # [FIX] 石化化工级 PB(Kp) 底线：Level 回路避免 PB 盲目滑向极致
+                if loop_type == 'level':
+                    current_pb = 100.0 / new_kp if new_kp > 1e-6 else 9999.0
+                    # PP工艺级别: PB < 50% 极其危险，PB > 200% 基本无效丧失控制能力
+                    if current_pb < 50.0 or current_pb > 200.0:
+                        continue
+                        
                 if new_kp < 0.01 or new_kp > max_kp_limit:
                     continue
                 c = dict(best_pid)
@@ -184,12 +194,19 @@ class SelfOptimizeStage(PipelineStage):
                 base_ti = abs(best_pid['Kp'] / best_pid['Ki'])
                 preset = tuning_constraints
                 ti_max_limit = preset.get('ti_max', 300.0)
+                ti_min_limit = 0.1
+                
+                if loop_type == 'level':
+                    ti_min_limit = max(ti_min_limit, 60.0)
+                    # 强硬锁定探索上限不超过 300s，极度压缩 Ti 以迎合操作员工艺直觉
+                    if base_ti <= 350.0:
+                        ti_max_limit = min(ti_max_limit, 300.0)
                 
                 for ratio in ratios:
                     if abs(ratio - 1.0) < 1e-6:
                         continue
                     new_ti = base_ti * ratio
-                    if new_ti < 0.1:
+                    if new_ti < ti_min_limit:
                         continue
                         
                     # 应用上位机/DCS的最大限制

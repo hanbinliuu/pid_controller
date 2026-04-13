@@ -87,11 +87,11 @@ def plot_device(device_id, start_str, end_str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="按指定时间段可视化回路 PV/SV/MV 数据")
-    parser.add_argument("--loop", choices=["50104", "50108", "both"], default="both", 
+    parser.add_argument("--loop", choices=["50104", "50108", "both"], default="50104", 
                         help="指定需要可视化的回路，可选 '50104', '50108', 或是默认的 'both' (同时出两张图)")
-    parser.add_argument("--start", type=str, default="2025-10-01 00:00:00", 
+    parser.add_argument("--start", type=str, default="2025-11-28 00:00:00", 
                         help="开始时间，格式: YYYY-MM-DD HH:MM:SS")
-    parser.add_argument("--end", type=str, default="2026-02-01 00:00:00", 
+    parser.add_argument("--end", type=str, default="2025-11-29 00:00:00", 
                         help="结束时间，格式: YYYY-MM-DD HH:MM:SS")
     
     args = parser.parse_args()

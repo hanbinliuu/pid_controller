@@ -180,12 +180,34 @@ class TuningOrchestrator(LoggerMixin):
         sw_config = Config.SLIDING_WINDOW
         enable_sw = params.get('sliding_window', sw_config.get('enabled', False))
         
+        # [NEW] 混合架构拦截器 (Hybrid Auto-Enable)
+        # 前端可能传来了由探测器选出的 qualified_windows，我们需要快速验明正身
+        exact_window_mode = params.get('exact_window', False)
+        has_high_quality_step = False
+        
+        if qualified_windows and not exact_window_mode:
+            for w in qualified_windows:
+                sv_values = [d.get('sv', d.get('SV', 0)) for d in history_data 
+                             if w.get('start_time', 0) <= d.get('timestamp', 0) <= w.get('end_time', float('inf'))]
+                # SV阶跃幅度 > 0.5 视为高质量的明确阶跃变动 (Level 1/2)
+                if sv_values and (max(sv_values) - min(sv_values)) > 0.5:
+                    has_high_quality_step = True
+                    break
+                    
+        # 如果既不是强制模式，且里面没有找到明确阶跃(说明是 Level 3 瞎猜的兜底段)
+        if not has_high_quality_step and not exact_window_mode:
+            # 直接在主入口“静默”开启 Grid Search 洗地，无需提示用户，用户自动获得最高收益
+            enable_sw = True
+        
         if enable_sw and history_data:
+            if not has_high_quality_step:
+                self.log("   🔍 未检测到高质量阶跃特征，系统已在后台自动升级为 Grid Search 滑窗寻优模式...")
+            
             best_window = self._sliding_window_search(
                 history_data, params, current_pid, sw_config
             )
             if best_window is not None:
-                # 用最优窗口覆盖 qualified_windows，走后续正常流程
+                # 用最优窗口无缝覆盖掉前端传进来的 qualified_windows，走后续正常流程
                 qualified_windows = [best_window]
         
         if not qualified_windows:
@@ -201,10 +223,14 @@ class TuningOrchestrator(LoggerMixin):
             ]
         }
         
+        # 补充：提取 fast_mode (供 sliding_window 极速探针模式使用)
+        fast_mode = params.get('fast_mode', False)
+        
         result = self.fit(tuning_input, history_data,
                           lambda_factor=Config.TUNING_DEFAULTS['lambda_factor'],
                           current_pid=current_pid,
-                          process_context=ext_process_context)
+                          process_context=ext_process_context,
+                          fast_mode=fast_mode)
                           
         # 补全可能丢失的前端强行指定的参数
         if not result.get('success'):
@@ -267,17 +293,22 @@ class TuningOrchestrator(LoggerMixin):
         self.log(f"🔍 滑动窗口寻优: {len(search_windows)} 个候选窗口 (窗口={window_h}h, 步长={step_h}h)")
         self.log('='*60)
         
-        # 快速筛选：对每个窗口跑一次完整管线（verbose=False）
+        # 快速筛选：对每个窗口跑一次完整管线（并发执行）
+        import concurrent.futures
+        import os
+        from datetime import datetime
+        
         candidates = []
-        for i, window in enumerate(search_windows):
+        
+        def evaluate_window(i, window):
             try:
                 fast_input = {
                     'history_data': history_data,
-                    'params': {**params, 'sliding_window': False},  # 防止递归
+                    'params': {**params, 'sliding_window': False, 'fast_mode': True},  # 极速模式（跳过Phase2精调和多起点模拟）
                     'qualified_windows': [window],
                     'current_pid': current_pid,
                 }
-                # 构建轻量级 orchestrator（复用已有子模块实例，只关日志）
+                # 构建轻量级 orchestrator（复用已有工艺上下文，只关日志）
                 fast_orc = TuningOrchestrator(
                     verbose=fast_verbose, 
                     process_context=self._process_context
@@ -289,21 +320,30 @@ class TuningOrchestrator(LoggerMixin):
                 kp = pid.get('kp', pid.get('Kp', 0.0))
                 pb = pid.get('pb', pid.get('Pb', 0.0))
                 
-                candidates.append({
+                return {
                     'window': window,
                     'score': score,
                     'kp': kp,
                     'pb': pb,
                     'idx': i,
-                })
-                
-                from datetime import datetime
-                st_str = datetime.fromtimestamp(window['start_time']/1000).strftime('%m-%d %H:%M')
-                et_str = datetime.fromtimestamp(window['end_time']/1000).strftime('%m-%d %H:%M')
-                self.log(f"   窗口 {i+1:2d}/{len(search_windows)}: {st_str} ~ {et_str} | 评分={score:5.2f} | Pb={pb:.1f}%")
-                
+                    'error': None
+                }
             except Exception as e:
-                self.log(f"   窗口 {i+1}: 评估异常 ({e})")
+                return {'idx': i, 'error': str(e)}
+
+        self.log(f"   🚀 正在启动 {os.cpu_count() or 4} 线程并发提速评估...")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+            futures = {executor.submit(evaluate_window, i, w): i for i, w in enumerate(search_windows)}
+            for future in concurrent.futures.as_completed(futures):
+                res = future.result()
+                if res.get('error'):
+                    self.log(f"   窗口 {res['idx']+1}: 评估异常 ({res['error']})")
+                else:
+                    candidates.append(res)
+                    st_str = datetime.fromtimestamp(res['window']['start_time']/1000).strftime('%m-%d %H:%M')
+                    et_str = datetime.fromtimestamp(res['window']['end_time']/1000).strftime('%m-%d %H:%M')
+                    self.log(f"   窗口 {res['idx']+1:2d}/{len(search_windows)}: {st_str} ~ {et_str} | 评分={res['score']:5.2f} | Pb={res['pb']:.1f}%")
         
         if not candidates:
             self.log("   ⚠️ 所有窗口评估失败，跳过滑窗寻优")
@@ -332,7 +372,8 @@ class TuningOrchestrator(LoggerMixin):
             current_pid: Dict = None,
             enable_downsample: bool = None,
             downsample_target: int = None,
-            process_context: Dict = None) -> Dict[str, Any]:
+            process_context: Dict = None,
+            fast_mode: bool = False) -> Dict[str, Any]:
         """模型整定主入口（流水线架构重构版）"""
         tuning_defaults = Config.TUNING_DEFAULTS
         if lambda_factor is None:
@@ -374,7 +415,7 @@ class TuningOrchestrator(LoggerMixin):
         ]
         
         post_stages = [
-            SelfOptimizeStage(self._pid_calculator, verbose=self._verbose, logger_mixin=self),
+            SelfOptimizeStage(self._pid_calculator, verbose=self._verbose, logger_mixin=self, fast_mode=fast_mode),
             OutputVerificationStage(self._preprocessor, self._output_builder, logger_mixin=self),
         ]
         

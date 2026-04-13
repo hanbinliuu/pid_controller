@@ -158,6 +158,8 @@ def pid_to_full_dict(Kp: float, Ki: float, Kd: float, eps: float = 1e-10) -> dic
         'pb': round(pb, 2),
         'ti': round(ti, 2),
         'td': round(td, 2),
+        'Ti': round(ti, 2),
+        'Td': round(td, 2),
     }
     return result
 

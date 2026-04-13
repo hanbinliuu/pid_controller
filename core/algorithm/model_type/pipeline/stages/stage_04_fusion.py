@@ -121,7 +121,16 @@ class FusionStage(PipelineStage):
                         best_sr_model = model_name
             
             r2_gap = best_sr_r2 - integrator_r2
-            if best_sr_r2 > 0.90 and r2_gap > 0.05:
+            
+            # 判定条件：
+            # 1. 自平衡极好 (R² > 0.9) 且比积分器优
+            # 2. 自平衡尚可 (R² > 0.4) 且比积分器显著优 (差距 > 0.3)
+            # 3. 积分器完全失效 (R² < 0) 且自平衡具备价值 (R² > 0)
+            use_sr = (best_sr_r2 > 0.90 and r2_gap > 0.05) or \
+                     (best_sr_r2 > 0.40 and r2_gap > 0.30) or \
+                     (integrator_r2 < 0.0 and best_sr_r2 > 0.0)
+                     
+            if use_sr:
                 # 自平衡模型明显更优，数据表明这个"液位"回路有自平衡特性
                 self.log(f"   🧊 液位回路检测到显著自平衡特征: {best_sr_model} R²={best_sr_r2:.4f} >> FO_INTEGRATOR R²={integrator_r2:.4f} (差距={r2_gap:.4f})")
                 self.log(f"   → 放弃强制积分器，尊重数据选择自平衡模型")

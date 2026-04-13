@@ -1629,13 +1629,17 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
         end_time = int(timestamps[-1])
         
         # =============================================
-        # 三级优选调度（瀑布式 + 质量门槛）
+        # 三级优选调度（瀑布式 + 质量门槛 + 亚合格回捞）
         # Level 1 质量达标 → 直接返回
-        # Level 1 质量不达标或无结果 → 尝试 Level 2
-        # Level 2 无结果 → 兜底 Level 3
+        # Level 1 质量亚合格 [0.45, 0.55) → 暂存，等 Level 2
+        # Level 2 命中 → 返回 Level 2
+        # Level 2 也未命中 → 优先用 Level 1 亚合格段（而非 Level 3 兜底）
+        # 全部未命中 → Level 3 兜底
         # =============================================
         
-        QUALITY_GATE = 0.55  # Level 1/2 需要最高质量 >= 此值才算有效命中
+        QUALITY_GATE = 0.55       # Level 1/2 需要最高质量 >= 此值才算有效命中
+        SUB_QUALITY_GATE = 0.45   # [NEW] 亚合格门槛：有真实 MV 阶跃但信噪比偏弱
+        level1_sub_qualified = None  # 暂存 Level 1 亚合格段
 
         # Level 1: 整定段检测（MV阶跃 → PV响应）
         if mv_data is not None:
@@ -1655,8 +1659,14 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
                             "end_time": end_time,
                             "qualified_windows": qualified_windows
                         }
+                    elif max_q >= SUB_QUALITY_GATE:
+                        # [NEW] 亚合格：有真实的 MV 阶跃段，但质量差一点点（常见于液位等慢过程）
+                        # 先暂存，如果 Level 2 也没有更好的结果，就用这些段（远比 Level 3 全量兜底好）
+                        print(f"[SegmentSelector] Level 1 亚合格 (maxQ={max_q:.2f}, 门槛={QUALITY_GATE})，"
+                              f"暂存 {len(tuning_segments)} 个段，继续尝试 Level 2...")
+                        level1_sub_qualified = tuning_segments
                     else:
-                        print(f"[SegmentSelector] Level 1 质量不达标 (maxQ={max_q:.2f}<{QUALITY_GATE})，降级...")
+                        print(f"[SegmentSelector] Level 1 质量不达标 (maxQ={max_q:.2f}<{SUB_QUALITY_GATE})，降级...")
                 else:
                     print("[SegmentSelector] Level 1 未命中，降级到 Level 2...")
             except Exception as e:
@@ -1668,6 +1678,8 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
         try:
             from .oscillation_segment_detector import OscillationSegmentDetector
             osc_detector = OscillationSegmentDetector()
+            # [NEW] 让 Level 2 也做时间尺度自适应（与 Level 1 一致）
+            osc_detector.adapt_to_timescale(pv_data)
             osc_segments = osc_detector.detect(pv_data, sv_data)
             
             if osc_segments:
@@ -1687,6 +1699,18 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
                 print("[SegmentSelector] Level 2 未命中，降级到 Level 3...")
         except Exception as e:
             print(f"[SegmentSelector] Level 2 异常({e})，降级...")
+        
+        # [NEW] Level 1.5: 如果 Level 1 有亚合格段，优先使用（远优于 Level 3 全量兜底）
+        if level1_sub_qualified:
+            max_q = max(s[3] for s in level1_sub_qualified)
+            print(f"[SegmentSelector] 🥇↩ Level 1 亚合格段回捞: {len(level1_sub_qualified)} 个整定段 "
+                  f"(最高质量={max_q:.2f}，优于 Level 3 全量兜底)")
+            qualified_windows = _segments_to_windows(level1_sub_qualified, timestamps)
+            return {
+                "start_time": start_time,
+                "end_time": end_time,
+                "qualified_windows": qualified_windows
+            }
         
         # Level 3: 扰动段检测（兜底）
         print("[SegmentSelector] 🥉 Level 3: 扰动段检测（兜底）...")

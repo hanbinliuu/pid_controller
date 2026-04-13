@@ -49,7 +49,7 @@ class SegmentationStage(PipelineStage):
                     for i, seg in enumerate(raw_segs)
                 ]
                 osc_result = self._oscillation_tuner.try_oscillation_tuning(
-                    raw_segs, dummy_results, context.current_pid, force=True
+                    raw_segs, dummy_results, context.get_current_pid(), force=True
                 )
                 if osc_result and osc_result.get('success'):
                     self.log(f"✅ 振荡整定fallback成功")

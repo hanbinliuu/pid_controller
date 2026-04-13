@@ -295,6 +295,18 @@ class TuningMethodSelector(LoggerMixin):
             loop_type=loop_type
         )
         
+        # [FIX] Level + FO_INTEGRATOR 的 Ti 下限保护
+        # 纯积分器 T1=0 导致 PIDCalculator 的 lambda 公式算出极短的 Ti (18~20s)，
+        # 这对液位回路来说完全不合理（行业标准 Ti ≥ 60s）。
+        # 强制 Ti 不低于 60s，避免 model_based 路径输出危险的快速积分。
+        if loop_type == 'level' and is_integrator_model:
+            ti_val = pid_params.get('Ti', 0)
+            TI_MIN_LEVEL = 60.0
+            if ti_val < TI_MIN_LEVEL:
+                self.log(f"   ⚠️ Level积分器 Ti={ti_val:.1f}s < {TI_MIN_LEVEL}s (行业下限)，强制提升")
+                pid_params['Ti'] = TI_MIN_LEVEL
+                kp_val = pid_params.get('Kp', 1.0)
+                pid_params['Ki'] = round(kp_val / TI_MIN_LEVEL, 4)
         
         return TuningMethodResult(
             method=TuningMethod.MODEL_BASED, confidence=chars.step_quality,

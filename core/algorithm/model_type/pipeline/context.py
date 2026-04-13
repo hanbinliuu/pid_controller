@@ -139,6 +139,20 @@ class TuningContext:
             return self.knowledge_model.td_enable
         return self._get_preset().get('td_enable', False)
 
+    def get_current_pid(self) -> Optional[Dict[str, float]]:
+        """获取当前 DCS 中的 PID 参数，优先从 input_data 获取，否则从 process_context 获取"""
+        if self.current_pid:
+            return self.current_pid
+        if self.process_context and self.process_context.get('current_pid'):
+            pid = self.process_context['current_pid']
+            return {
+                'Kp': pid.get('kp', pid.get('Kp', 0.0)),
+                'Ti': pid.get('ti', pid.get('Ti', 0.0)),
+                'Td': pid.get('td', pid.get('Td', 0.0)),
+                'action_type': pid.get('action_type', '')
+            }
+        return None
+
     def get_max_overshoot(self) -> float:
         """最大允许超调量（%）：优先 knowledge_model"""
         if self.knowledge_model:
