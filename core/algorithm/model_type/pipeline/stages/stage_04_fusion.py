@@ -104,8 +104,31 @@ class FusionStage(PipelineStage):
             return ModelType.FOPDT
         
         if loop_type == 'level':
-            self.log("   🧊 识别为液位过程，基于物理本质强制选择积分器模型(FO_INTEGRATOR)")
-            best_model = ModelType.FOPI
+            # [FIX] 不再无条件强制积分器。如果自平衡模型拟合显著优于积分器，应尊重数据。
+            # 50104(11-28): FOPDT R²=0.97/K=0.24 vs FO_INTEGRATOR R²=0.90/K=0.0003
+            # 强制积分器导致 K 小了 1000 倍 → Pb=14.8%（液位回路致命激进参数）
+            best_sr_r2 = -999.0  # 最佳自平衡模型 R²
+            integrator_r2 = -999.0
+            best_sr_model = None
+            
+            for fit in segment_fits:
+                for model_name, model_data in fit.model_fits.items():
+                    r2 = model_data.get('r2', -999)
+                    if model_name == ModelType.FOPI:
+                        integrator_r2 = max(integrator_r2, r2)
+                    elif r2 > best_sr_r2:
+                        best_sr_r2 = r2
+                        best_sr_model = model_name
+            
+            r2_gap = best_sr_r2 - integrator_r2
+            if best_sr_r2 > 0.90 and r2_gap > 0.05:
+                # 自平衡模型明显更优，数据表明这个"液位"回路有自平衡特性
+                self.log(f"   🧊 液位回路检测到显著自平衡特征: {best_sr_model} R²={best_sr_r2:.4f} >> FO_INTEGRATOR R²={integrator_r2:.4f} (差距={r2_gap:.4f})")
+                self.log(f"   → 放弃强制积分器，尊重数据选择自平衡模型")
+                best_model, reasoning, need_fulldata = self._unified_selector.select_unified_model_type(segment_fits)
+            else:
+                self.log("   🧊 识别为液位过程，基于物理本质强制选择积分器模型(FO_INTEGRATOR)")
+                best_model = ModelType.FOPI
             need_fulldata = False
         else:
             best_model, reasoning, need_fulldata = self._unified_selector.select_unified_model_type(segment_fits)
