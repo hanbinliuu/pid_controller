@@ -269,13 +269,17 @@ class TuningMethodSelector(LoggerMixin):
         T2 = model_params.get('T2', 0.0)
         L = model_params.get('L', 1.0)
         
-        # [NEW] Level 积分过程校正
+        # [FIX] Level 积分过程校正 — 仅在模型确实是积分器时才放大 lambda
         # 对近积分过程，FOPDT 拟合会系统性地压缩 T1（600→30）和放大 K（0.01→0.5）
-        # 需要使用更保守的 lambda_factor 来补偿
+        # 但如果 fusion stage 已经选了自平衡模型（FO/SO），说明数据有自平衡特性，不应膨胀 lambda
         actual_lambda = lambda_factor
-        if loop_type == 'level':
+        model_type = model_params.get('model_type', '')
+        is_integrator_model = model_type in ('FO_INTEGRATOR', 'SO_INTEGRATOR')
+        if loop_type == 'level' and is_integrator_model:
             actual_lambda = max(lambda_factor * 5.0, 4.0)  # 大幅放大，至少 4.0
             self.log(f"   🧊 Level 积分过程: lambda_factor {lambda_factor:.1f} → {actual_lambda:.1f}")
+        elif loop_type == 'level':
+            self.log(f"   🧊 Level 自平衡过程({model_type}): 保持 lambda_factor={lambda_factor:.1f}，不做积分器膨胀")
         
         # 使用 PIDCalculator.calculate 方法
         pid_params = self._pid_calculator.calculate(

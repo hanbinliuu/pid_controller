@@ -559,7 +559,8 @@ class RefinementStage(PipelineStage):
         # 4. 使用方法选择器验证稳定性，必要时使用继电反馈法(Relay Feedback)
         model_params = {
             'K': fusion_result.K, 'T1': fusion_result.T1,
-            'T2': fusion_result.T2, 'L': fusion_result.L
+            'T2': fusion_result.T2, 'L': fusion_result.L,
+            'model_type': fusion_result.model_type  # 传递模型类型以便 method_selector 区分积分器/自平衡
         }
         method_result = self._method_selector.select_and_tune(
             context.segments_for_fitting, context.segment_results_fitted,

@@ -235,8 +235,15 @@ class ParameterFusion(LoggerMixin):
     def _apply_constraints(self, fusion: FusionResult) -> FusionResult:
         """应用模型参数合理性约束"""
         param_constraints = Config.PARAMETER_CONSTRAINTS
-        T1_max = param_constraints['T1_max']
+        T1_max = param_constraints['T1_max']  # 默认 30s（积分器模型）
         L_max = param_constraints['L_max']
+        
+        # [FIX] 自平衡模型(FO/FOPDT/SO/SOPDT)的 T1 上限应远大于积分器。
+        # 50104(11-28): FO 辨识出 T1=452s 是完全合理的慢速自平衡液位过程，
+        # 被 T1_max=30s 截断后导致 Kp 激进了 15 倍。
+        is_self_regulating = fusion.model_type not in ('FO_INTEGRATOR', 'SO_INTEGRATOR')
+        if is_self_regulating:
+            T1_max = max(T1_max, 600.0)  # 自平衡模型允许到 600s（慢速过程如液位、温度）
         
         if fusion.T1 > T1_max:
             self.log(f"   ⚠️ T1={fusion.T1:.2f}s 过大，限制为 {T1_max}s")

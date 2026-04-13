@@ -326,11 +326,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     TARGET_LOOP = args.loop_id
-    ENABLE_GRID_SEARCH = (args.mode == "grid_search")
+    ENABLE_GRID_SEARCH = (args.mode == "auto_detect")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2026-01-13 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2026-01-14 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-12-15 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-12-16 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")
