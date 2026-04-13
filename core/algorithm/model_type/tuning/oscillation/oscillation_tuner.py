@@ -413,9 +413,20 @@ class OscillationTuner(LoggerMixin):
         
         min_points = 50 if self._loop_type == 'level' else 20
         best_seg, best_result, max_points = None, None, 0
+        best_quality = -1.0
         
         for idx, seg, result in oscillating_segments:
-            if len(seg.pv) > max_points:
+            # [FIX] 选质量最好的段，而不是点数最多的段。
+            # 原因：50104 中段1(corr=-0.229, quality=0.58) 和段2(corr=+0.830, quality=0.71)
+            # 降采样后点数相同(1000)，按点数选会选到段1导致符号算反 → K_int 取反 → 闭环不稳定。
+            seg_quality = getattr(result, 'quality_score', 0.0) if result else 0.0
+            # 多段同质量时，优先选相关性更强（信号更清晰）的段
+            seg_corr_strength = abs(getattr(result, 'correlation', 0.0)) if result else 0.0
+            seg_score = seg_quality + 0.01 * seg_corr_strength  # 质量为主，相关性为辅
+            
+            if len(seg.pv) >= min_points and (seg_score > best_quality or 
+                (abs(seg_score - best_quality) < 1e-6 and len(seg.pv) > max_points)):
+                best_quality = seg_score
                 max_points = len(seg.pv)
                 best_seg = seg
                 best_result = result
