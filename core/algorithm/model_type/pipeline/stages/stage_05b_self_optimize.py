@@ -40,11 +40,11 @@ from ...utils import (
 _DEFAULT_CONFIG = {
     'enabled': True,
     'lambda_multipliers': [0.6, 0.8, 1.0, 1.2, 1.5, 2.0],
-    'min_score_improvement': 0.3,
+    'min_score_improvement': 0.1,  # [FIX] 匹配新连续评分机制，降低触发阈值以接纳更多优质微操
     'fine_tune_enabled': True,
     'fine_tune_ratios': [0.5, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 2.0],
     'fine_tune_max_rounds': 3,  # 增加一轮微调机会
-    'fine_tune_min_improvement': 0.1,
+    'fine_tune_min_improvement': 0.02, # [FIX] 在平滑分数下，0.02 分代表着物理指标实质性改善，不再需要 0.1 才能接纳
 }
 
 
@@ -167,8 +167,10 @@ class SelfOptimizeStage(PipelineStage):
                 if loop_type == 'level':
                     current_pb = 100.0 / new_kp if new_kp > 1e-6 else 9999.0
                     # PP工艺级别: PB < 50% 极其危险，PB > 200% 基本无效丧失控制能力
-                    if current_pb < 50.0 or current_pb > 200.0:
-                        continue
+                    if current_pb < 50.0:
+                        new_kp = 100.0 / 50.0  # 自动卡死在 50% 的极限边界
+                    elif current_pb > 200.0:
+                        new_kp = 100.0 / 200.0 # 自动卡死在 200% 的极软边界
                         
                 if new_kp < 0.01 or new_kp > max_kp_limit:
                     continue
@@ -201,13 +203,19 @@ class SelfOptimizeStage(PipelineStage):
                     # 强硬锁定探索上限不超过 300s，极度压缩 Ti 以迎合操作员工艺直觉
                     if base_ti <= 350.0:
                         ti_max_limit = min(ti_max_limit, 300.0)
+                elif loop_type == 'flow':
+                    # [FIX] 流量回路响应极快，无论评分引擎如何逼迫，Ti 探索上限死死卡住 20s
+                    ti_max_limit = min(ti_max_limit, 20.0)
+                elif loop_type == 'pressure':
+                    # [FIX] 压力回路天花板锁在 60s
+                    ti_max_limit = min(ti_max_limit, 60.0)
                 
                 for ratio in ratios:
                     if abs(ratio - 1.0) < 1e-6:
                         continue
                     new_ti = base_ti * ratio
                     if new_ti < ti_min_limit:
-                        continue
+                        new_ti = ti_min_limit  # [FIX] 如果试图过度激进，直接撞墙（卡在上边界测试）而不是丢弃
                         
                     # 应用上位机/DCS的最大限制
                     new_ti = min(new_ti, ti_max_limit)
@@ -227,15 +235,21 @@ class SelfOptimizeStage(PipelineStage):
                         pass
 
             # --- TD (调 Kd，保持 Kp) ---
-            # [FIX] 不再限制"PI 控制器不升级为 PID"。
-            # 首要目标是调稳，如果加入微分项能提升评分（降低超调/加速收敛），就应该被允许。
-            # 如果加了 Td 反而导致不稳定或噪声放大，评分自然会低，不会被选中。
+            # [FIX] 对 Td (微分项) 的探索施加严苛的工业防线
+            # 原本我们说：如果加入微分项能提升评分，就应该被允许。
+            # 这在仿真是没问题的，但是在真实工厂中，对于流体流动和界面液位，
+            # 引入微分会导致不可逆的高频噪声放大和阀门寿命急剧衰减！
             base_td_val = abs(best_pid['Kd'] / best_pid['Kp']) if (abs(best_pid['Kp']) > eps and abs(best_pid.get('Kd', 0.0)) > eps) else 0
             
             if base_td_val < eps:
-                # 原始是 PI 控制器 (Kd=0)，用 Ti 的 1/8 作为探索性 Td 种子
-                base_ti_val = abs(best_pid['Kp'] / best_pid['Ki']) if abs(best_pid['Ki']) > eps else 10.0
-                base_td_val = base_ti_val / 8.0  # 经典 PID 整定中 Td ≈ Ti/4~Ti/8 的保守端
+                # 原始是 PI 控制器 (Kd=0)。这时候是否允许升格为 PID？
+                if loop_type in ['flow', 'level']:
+                    # 流量和液位回路拥有压倒性的否决权：如果底层不出 D 参数，坚决不允许它瞎长出 D 参数
+                    pass
+                else:
+                    # 对于温度回路这种大滞后非噪声主导的系统，容许借用近似逻辑增加尝试空间
+                    base_ti_val = abs(best_pid['Kp'] / best_pid['Ki']) if abs(best_pid['Ki']) > eps else 10.0
+                    base_td_val = base_ti_val / 8.0  # 经典 PID 整定中 Td ≈ Ti/4~Ti/8 的保守端
             
             if base_td_val > eps:
                 for ratio in ratios:

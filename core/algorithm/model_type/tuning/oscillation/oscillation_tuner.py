@@ -683,6 +683,13 @@ class OscillationTuner(LoggerMixin):
             # G(s) ≈ K_int/s，其中 K_int = K/T1（归一化积分增益），必须保留真实物理符号！
             K_int = K_approx / max(T1_approx, 1.0)  # 积分增益 (%/s/%)
             
+            # [FIX] 如果数据段质量奇差（例如 PV 或 MV 完全没变化），K_int 会算出 0 甚至是 1e-7。
+            # 这会导致下游闭环闭环仿真时，被控对象变成一块“死石头”，不管 PID 怎么调，稳态误差都是无穷大，Phase 2 全部给最低分。
+            # 这里给一个物理上的兜底值：正常液位容器不可能完全不响应。
+            if abs(K_int) < 1e-4:
+                self.log(f"   ⚠️ 数据静态致积分增益极小(K_int={K_int:.6f})，修正至物理下限 1e-4")
+                K_int = 1e-4 * sign if sign != 0 else 1e-4
+            
             # Lambda 法（积分过程）：Kp = 1/(K_int * (2λ + L))
             # [FIX] 原来 λ=max(3L, 50)，但 3 倍系数是当 L=15(硬编码) 时的遗留设计（3×15=45<50，从未生效）。
             # 现在 L 可以是数据驱动的更大值，3 倍放大会导致 Ti 爆炸。
@@ -704,7 +711,7 @@ class OscillationTuner(LoggerMixin):
             # 参考真实纯积分对象的 IMC (内部模型控制/Lambda) 整定法则：
             # Ti = 2 * lambda_c + L (其中 lambda_c 是期望闭环响应，通常取 1L ~ 3L)
             
-            lambda_c = np.clip(L_approx * 2.0, 15.0, 100.0)  # 根据死区时间 L 决定期望响应速度，平滑控制
+            lambda_c = np.clip(L_approx * 2.0, 30.0, 100.0)  # 为了对齐 Level 回路至少 Ti > 60s 的工业强行规约，lambda最小应为30 (Ti≈2*30=60)
             
             # 使用真实的纯积分推导公式，直接天然输出合理的 Ti，无需任何强行封顶！
             Ti_target = 2.0 * lambda_c + L_approx
@@ -728,7 +735,7 @@ class OscillationTuner(LoggerMixin):
             
             # 如果极端情况下推算的 PB 连 50% 都不到，说明真的可以给很激进
             if pb_required < 50.0:
-                pb_level = np.clip(pb_required, 40.0, 100.0)
+                pb_level = np.clip(pb_required, 50.0, 100.0)
                 
             Kp_level = 100.0 / pb_level * sign
             
@@ -753,6 +760,7 @@ class OscillationTuner(LoggerMixin):
                 'Pu': round(float(T1_approx), 2),
                 'Ku': round(float(1.0 / max(abs(K_approx), 0.01)), 2),
                 'K_int': round(float(K_int), 8),  # [FIX] 保存真实积分增益，供下游闭环验证/可视化使用
+                'L_approx': round(float(L_approx), 2), # 保存推断出的死区时间，供积分仿真器一致性使用
             }
             osc_info = {
                 'Pu': T1_approx, 'Ku': 1.0 / max(abs(K_approx), 0.01),
@@ -942,10 +950,9 @@ class OscillationTuner(LoggerMixin):
         if is_integrating_fb:
             # 从 pid_params 中取出真实的 K_int（在 _fallback_tuning 中已保存）
             K_int_real = pid_params.get('K_int', 0.01)
-            # 纯积分过程的真实测量滞后通常 5~30s（DCS 采样 + 传感器惰性）
-            # 绝不能用 Pu（振荡周期/时间常数，可达数千秒）来估计
+            # 从 pid_params 中取出真实的死区时间
             Ts_val = pid_params.get('Ts', 5.0) or 5.0
-            L_est = min(Ts_val * 3.0, 30.0)
+            L_est = pid_params.get('L_approx', min(Ts_val * 3.0, 30.0))
             T1_est = 1.0      # 对纯积分器，T1 无物理意义，设为 1.0 避免除零
             K_est_final = K_int_real  # K 直接就是积分增益
             sim_model_type = ModelType.FOPI  # FO_INTEGRATOR

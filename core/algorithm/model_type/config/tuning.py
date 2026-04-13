@@ -203,7 +203,7 @@ SELF_OPTIMIZE = {
     'fine_tune_enabled': True,               # 是否启用 PB/TI/TD 微调
     'fine_tune_ratios': [0.8, 0.9, 1.0, 1.1, 1.2],   # 扰动比例
     'fine_tune_max_rounds': 2,               # 坐标轮换最大轮数
-    'fine_tune_min_improvement': 0.1,        # 微调最低提升阈值
+    'fine_tune_min_improvement': 0.02,       # 微调最低提升阈值 (修改为 0.02 以匹配平滑打分)
 }
 
 # ============================================================

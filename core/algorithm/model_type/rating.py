@@ -141,101 +141,52 @@ class ModelRating:
         is_stable = getattr(metrics, 'is_stable', True)
         details['is_stable'] = is_stable
         
-        # 【1】超调量评分 (0-10)，权重 25%
+        # 【1】超调量评分 (0-10)，权重 25% (连续平滑插值)
+        import numpy as np
         overshoot = getattr(metrics, 'overshoot', 0)
-        if overshoot <= 2:
-            os_score = 10.0
-        elif overshoot <= 5:
-            os_score = 9.0
-        elif overshoot <= 10:
-            os_score = 8.0
-        elif overshoot <= 15:
-            os_score = 7.0
-        elif overshoot <= 25:
-            os_score = 6.0
-        elif overshoot <= 40:
-            os_score = 4.0
-        elif overshoot <= 60:
-            os_score = 2.5
-        elif overshoot <= 100:
-            os_score = 1.5
-        else:
-            os_score = max(0.0, 1.0 - (overshoot - 100) / 200)
+        os_score = float(np.interp(overshoot, 
+            [0, 2, 5, 10, 15, 25, 40, 60, 100, 300],
+            [10.0, 10.0, 9.0, 8.0, 7.0, 6.0, 4.0, 2.5, 1.5, 0.0]
+        ))
         details['overshoot'] = round(overshoot, 2)
         details['overshoot_score'] = round(os_score, 2)
         
-        # 【2】调节时间评分 (0-10)，权重 20%
+        # 【2】调节时间评分 (0-10)，权重 20% (连续平滑插值)
         settling_time = getattr(metrics, 'settling_time', float('inf'))
         if settling_time < float('inf'):
-            if settling_time <= 15:
-                st_score = 10.0
-            elif settling_time <= 30:
-                st_score = 9.0
-            elif settling_time <= 60:
-                st_score = 7.5
-            elif settling_time <= 120:
-                st_score = 6.0
-            elif settling_time <= 300:
-                st_score = 4.0
-            elif settling_time <= 600:
-                st_score = 2.0
-            else:
-                st_score = 1.0
+            st_score = float(np.interp(settling_time,
+                [0, 15, 30, 60, 120, 300, 600, 1500, 3000],
+                [10.0, 10.0, 9.0, 7.5, 6.0, 4.0, 2.0, 1.0, 0.0]
+            ))
         else:
             st_score = 0.0  # 未收敛
         details['settling_time'] = round(settling_time, 2) if settling_time < float('inf') else -1
         details['settling_time_score'] = round(st_score, 2)
         
-        # 【3】稳态误差评分 (0-10)，权重 25%
+        # 【3】稳态误差评分 (0-10)，权重 25% (连续平滑插值)
         sse = getattr(metrics, 'steady_state_error', 0)
-        if sse <= 0.5:
-            sse_score = 10.0
-        elif sse <= 1.0:
-            sse_score = 9.0
-        elif sse <= 2.0:
-            sse_score = 7.5
-        elif sse <= 5.0:
-            sse_score = 5.5
-        elif sse <= 10.0:
-            sse_score = 3.5
-        elif sse <= 20.0:
-            sse_score = 2.0
-        else:
-            sse_score = max(0.0, 1.0 - (sse - 20) / 50)
+        sse_score = float(np.interp(sse,
+            [0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 70.0],
+            [10.0, 10.0, 9.0, 7.5, 5.5, 3.5, 2.0, 0.0]
+        ))
         details['steady_state_error'] = round(sse, 2)
         details['steady_state_error_score'] = round(sse_score, 2)
         
-        # 【4】振荡次数评分 (0-10)，权重 15%
+        # 【4】振荡次数评分 (0-10)，权重 15% (连续平滑插值)
         osc_count = getattr(metrics, 'oscillation_count', 0)
-        if osc_count == 0:
-            oc_score = 7.0    # 过阻尼，没有振荡
-        elif osc_count <= 2:
-            oc_score = 10.0   # 经典欠阻尼，最优
-        elif osc_count <= 4:
-            oc_score = 7.0
-        elif osc_count <= 6:
-            oc_score = 5.0
-        elif osc_count <= 10:
-            oc_score = 3.0
-        else:
-            oc_score = max(0.0, 2.0 - (osc_count - 10) / 5)
-        details['oscillation_count'] = osc_count
+        oc_score = float(np.interp(osc_count,
+            [0, 1, 2, 4, 6, 10, 20],
+            [7.0, 10.0, 10.0, 7.0, 5.0, 3.0, 0.0]
+        ))
+        details['oscillation_count'] = round(osc_count, 2)
         details['oscillation_count_score'] = round(oc_score, 2)
         
-        # 【5】衰减比评分 (0-10)，权重 15%
+        # 【5】衰减比评分 (0-10)，权重 15% (连续平滑插值)
         decay_ratio = getattr(metrics, 'decay_ratio', 0)
-        if decay_ratio <= 0.1:
-            dr_score = 10.0
-        elif decay_ratio <= 0.25:
-            dr_score = 9.0   # 经典 4:1 衰减
-        elif decay_ratio <= 0.5:
-            dr_score = 6.0
-        elif decay_ratio <= 0.8:
-            dr_score = 3.0
-        elif decay_ratio <= 1.0:
-            dr_score = 1.0
-        else:
-            dr_score = 0.0   # 发散
+        dr_score = float(np.interp(decay_ratio,
+            [0, 0.1, 0.25, 0.5, 0.8, 1.0, 1.1],
+            [10.0, 10.0, 9.0, 6.0, 3.0, 1.0, 0.0]
+        ))
         details['decay_ratio'] = round(decay_ratio, 4)
         details['decay_ratio_score'] = round(dr_score, 2)
         
