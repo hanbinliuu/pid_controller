@@ -144,12 +144,18 @@ class SemanticProvider:
         quality = std.get('quality_thresholds', {})
         kg = std.get('knowledge_graph', {})
 
-        # 实例级别的 DCS 限制可以覆盖标准值
+        # 实例级别的 DCS 限制可以覆盖标准值，但必须同时满足算法安全性和硬件限制
+        # pb_min 取两者最大值（越保守越好），pb_max 取两者最小值
         dcs = (inst or {}).get('dcs_config', {})
         op_constraints = (inst or {}).get('operating_constraints', {})
 
-        pb_min = dcs.get('pb_min_limit', pid_c.get('pb_min', 10.0))
-        pb_max = dcs.get('pb_max_limit', pid_c.get('pb_max', 500.0))
+        std_pb_min = pid_c.get('pb_min', 10.0)
+        std_pb_max = pid_c.get('pb_max', 500.0)
+        
+        # 如果 DCS 没有配置 limit，则取标准算法限制；如果有配置，则取交集更保守的部分
+        pb_min = max(std_pb_min, dcs.get('pb_min_limit', std_pb_min))
+        pb_max = min(std_pb_max, dcs.get('pb_max_limit', std_pb_max))
+        
         max_overshoot = op_constraints.get('max_overshoot_percent',
                                            quality.get('max_overshoot', 10.0))
 

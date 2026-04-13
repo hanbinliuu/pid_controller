@@ -248,6 +248,11 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
             elif loop_type in ['temperature', 'level']:
                 pb_min = max(pb_min, robust_cfg.get('min_pb_temp', 100.0))
                 
+        # [FIX] 从 tuning_constraints (来源于 loop_presets) 应用回路硬性下限保护
+        preset_pb_min = tuning_constraints.get('pb_min', 0.0)
+        if preset_pb_min > 0:
+            pb_min = max(pb_min, preset_pb_min)
+            
         return conservative_level, pb_min
     
     def _log_robust(self, msg: str):

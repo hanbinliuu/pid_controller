@@ -69,8 +69,11 @@ class SelfOptimizeStage(PipelineStage):
     # 评估: 给定 lambda 计算 PID 并评分
     # ------------------------------------------------------------------
     def _evaluate_candidate(self, fusion, lambda_factor, sp_initial, sp_final, pv_initial, loop_type):
+        # [FIX] 传入 tuning_constraints 以启用 level 回路的 pb_min 保护等约束
+        tuning_constraints = self._context.export_tuning_constraints() if self._context else {}
         pid_params = self._pid_calculator.calculate_from_fusion(
-            fusion, lambda_factor, loop_type=loop_type
+            fusion, lambda_factor, loop_type=loop_type,
+            tuning_constraints=tuning_constraints
         )
         # Fix #1: 确保 key 统一为大写
         pid_params = _normalize_pid_keys(pid_params)
@@ -149,11 +152,15 @@ class SelfOptimizeStage(PipelineStage):
 
             # --- PB (调 |Kp|, 联动 Ki/Kd 保持 TI/TD) ---
             base_kp = abs(best_pid['Kp'])
+            preset = tuning_constraints
+            preset_pb_min = preset.get('pb_min', 0.0)
+            max_kp_limit = 100.0 / preset_pb_min if preset_pb_min > 0 else 9999.0
+            
             for ratio in ratios:
                 if abs(ratio - 1.0) < 1e-6:
                     continue
                 new_kp = base_kp / ratio
-                if new_kp < 0.01:
+                if new_kp < 0.01 or new_kp > max_kp_limit:
                     continue
                 c = dict(best_pid)
                 c['Kp'] = Kp_sign * new_kp

@@ -47,12 +47,12 @@ LOOP_TYPE_PRESETS = {
     # ========== 液位回路 ==========
     # 特点：积分过程、需平滑控制、避免MV频繁动作
     'level': {
-        'pb_min': 100.0,          
-        'pb_max': 1000.0,         
+        'pb_min': 40.0,          
+        'pb_max': 2000.0,         
         'ti_max': 3600.0,         
         'tau_c_factor': 1.5,      # [优化] 2.0 -> 1.5：稍微收紧液位响应周期，提升稳态恢复得分
         'safety_factor': 1.0,     
-        'ti_multiplier': 1.2,     # [优化] 1.5 -> 1.2：适度减少积分时间，防止过长回稳
+        'ti_multiplier': 0.5,     # [优化] 1.2 -> 0.5：适配需要较强积分消除误差的近积分自平衡液位槽
         'td_enable': False,       
         'aggressive': False,      
         'integrating_mode': True, 

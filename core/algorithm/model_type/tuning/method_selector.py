@@ -269,22 +269,30 @@ class TuningMethodSelector(LoggerMixin):
         T2 = model_params.get('T2', 0.0)
         L = model_params.get('L', 1.0)
         
-        # [FIX] Level 积分过程校正 — 仅在模型确实是积分器时才放大 lambda
+        # [FIX] Level 积分过程校正 — 根据模型类型分级放大 lambda
         # 对近积分过程，FOPDT 拟合会系统性地压缩 T1（600→30）和放大 K（0.01→0.5）
-        # 但如果 fusion stage 已经选了自平衡模型（FO/SO），说明数据有自平衡特性，不应膨胀 lambda
+        # 但如果 fusion stage 已经选了自平衡模型（FO/SO），说明数据有自平衡特性
         actual_lambda = lambda_factor
         model_type = model_params.get('model_type', '')
         is_integrator_model = model_type in ('FO_INTEGRATOR', 'SO_INTEGRATOR')
         if loop_type == 'level' and is_integrator_model:
-            actual_lambda = max(lambda_factor * 5.0, 4.0)  # 大幅放大，至少 4.0
+            actual_lambda = max(lambda_factor * 5.0, 4.0)  # 积分器：大幅放大，至少 4.0
             self.log(f"   🧊 Level 积分过程: lambda_factor {lambda_factor:.1f} → {actual_lambda:.1f}")
         elif loop_type == 'level':
-            self.log(f"   🧊 Level 自平衡过程({model_type}): 保持 lambda_factor={lambda_factor:.1f}，不做积分器膨胀")
+            # 自平衡模型但 T1 很大（>200s）→ 近积分过程，需适度保守化
+            if T1 > 200:
+                actual_lambda = max(lambda_factor * 2.5, 2.0)  # 适度放大（不是 ×5）
+                self.log(f"   🧊 Level 近积分自平衡过程({model_type}, T1={T1:.0f}s): lambda_factor {lambda_factor:.1f} → {actual_lambda:.1f}")
+            else:
+                self.log(f"   🧊 Level 自平衡过程({model_type}): 保持 lambda_factor={lambda_factor:.1f}")
         
         # 使用 PIDCalculator.calculate 方法
+        # [FIX] 使用实际模型类型（不是硬编码 FOPDT），并传入 loop_type 以启用 pb_min 保护
+        actual_model_type = model_type if model_type else 'FOPDT'
         pid_params = self._pid_calculator.calculate(
             K=K, T1=T1, T2=T2, L=L,
-            model_type='FOPDT', lambda_factor=actual_lambda, method='lambda'
+            model_type=actual_model_type, lambda_factor=actual_lambda, method='lambda',
+            loop_type=loop_type
         )
         
         

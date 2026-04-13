@@ -20,8 +20,8 @@
     "response_speed": "slow"
   },
   "pid_constraints": {
-    "pb_min": 100.0,
-    "pb_max": 1000.0,
+    "pb_min": 40.0,
+    "pb_max": 2000.0,
     "ti_max": 3600.0,
     "td_enable": false,
     "td_ratio": 0.0,
@@ -31,7 +31,7 @@
   "tuning_strategy": {
     "tau_c_factor": 1.5,
     "safety_factor": 1.0,
-    "ti_multiplier": 1.2,
+    "ti_multiplier": 0.5,
     "integrating_mode": true,
     "lambda_default": 50.0
   },
