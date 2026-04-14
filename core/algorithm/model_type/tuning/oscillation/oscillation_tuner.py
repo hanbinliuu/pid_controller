@@ -1148,7 +1148,8 @@ class OscillationTuner(LoggerMixin):
                 'recommendation': get_recommendation(model_rating)
             },
             'closed_loop_verification': closed_loop_info,
-            'tuning_features': tuning_features
+            'tuning_features': tuning_features,
+            'rating_details': rating_details
         }
     
     def _reconstruct_model_from_oscillation(self, Pu: float, Ku: float, K_approx: float, loop_type: str) -> Tuple[float, float, float]:

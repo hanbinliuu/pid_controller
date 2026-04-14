@@ -356,7 +356,8 @@ class OutputBuilder(LoggerMixin):
                 'recommendation': get_recommendation(model_rating)
             },
             'closed_loop_verification': closed_loop_info,
-            'tuning_features': tuning_features
+            'tuning_features': tuning_features,
+            'rating_details': score_details
         }
     
 
