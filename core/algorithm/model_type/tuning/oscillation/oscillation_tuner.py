@@ -696,21 +696,21 @@ class OscillationTuner(LoggerMixin):
             # 对于纯积分液位过程，使用 Lambda 法基于物理死区时间 L 推导。
             # Ti 和 PB 均从 L_approx 出发，不依赖数值不稳定的 K_int 公式。
             # ================================================================
+            # [真正的均值控制 (Averaging Control) 物理推导]
+            # ================================================================
+            # 1. 解绑对纯死区 L 的依赖：
+            # 均值控制不应该用极短的 L 要求系统极速平稳（否则必然推导巨大 Kp）。
+            # Lambda 应该与大容积的物理振荡周期挂钩，既然 T_osc ≈ 8 * L_approx，取 T_osc/4 ≈ L_approx * 2
+            lambda_c = max(L_approx * 2.0, 60.0)
             
-            # 1. Lambda 法推导 Ti（基于死区 L，数值稳定）
-            # Lambda = 期望闭环响应时间常数，经典推荐取 2L ~ 3L
-            lambda_c = np.clip(L_approx * 2.0, 30.0, 100.0)
-            Ti_level = 2.0 * lambda_c + L_approx  # 天然产出合理的几百秒级 Ti
+            # 使用经典的推导式子，允许大罐子自然产出上百、甚至上千秒的积分时间
+            Ti_level = 2.0 * lambda_c + L_approx
             
-            # 从 tuning_constraints 读取统一的 ti_max（与 loop_presets 保持一致）
+            # 从 tuning_constraints 读取统一的 ti_max，通常设为 3600 (一小时作为上限)
             ti_max_limit = tuning_constraints.get('ti_max', 3600.0)
-            Ti_level = np.clip(Ti_level, 60.0, ti_max_limit)
+            Ti_level = min(Ti_level, ti_max_limit)
             
-            # 2. Lambda 法推导 Kp，然后用 loop_presets 的 PB 范围约束
-            Kp_lambda = 1.0 / (abs(K_int) * Ti_level) if abs(K_int) > 1e-8 else 1.0
-            pb_from_lambda = 100.0 / abs(Kp_lambda) if abs(Kp_lambda) > 1e-6 else 200.0
-            
-            # 用 loop_presets 中的 PB 范围防止极端值
+            # 2. 从“容忍液位波动空间”原生推导 Kp (取代对极小 K_int 的紧密求解)
             pb_min_limit = tuning_constraints.get('pb_min', 40.0)
             pb_max_limit = tuning_constraints.get('pb_max', 2000.0)
             
@@ -718,32 +718,37 @@ class OscillationTuner(LoggerMixin):
             pv_mean = np.mean(best_seg.pv)
             pv_range_pct = (pv_range / max(abs(pv_mean), 1.0)) * 100
             
-            # 约束 PB 到 loop_presets 范围
-            if pb_from_lambda < pb_min_limit:
+            # 【Averaging Heuristic 法则】
+            # 直接计算能容忍此等波动的温和比例带：比如 PV 波动 10%，阀门允许放宽动作 50% → PB = 50%
+            # 我们引入物理平滑放大系数 buffer_factor = 4.0 ~ 8.0
+            buffer_factor = 5.0
+            pb_from_physics = max(pv_range_pct * buffer_factor, 60.0)  # 底线原生就有 60%
+            
+            if pb_from_physics < pb_min_limit:
                 pb_level = pb_min_limit
-                self.log(f"   📊 Lambda法推导PB={pb_from_lambda:.1f}%过小，钳制到预设下限{pb_min_limit:.0f}%")
-            elif pb_from_lambda > pb_max_limit:
+                self.log(f"   📊 均值物理PB={pb_from_physics:.1f}%过小，钳制到预设下限{pb_min_limit:.0f}%")
+            elif pb_from_physics > pb_max_limit:
                 pb_level = pb_max_limit
             else:
-                pb_level = pb_from_lambda
+                pb_level = pb_from_physics
+                self.log(f"   📊 均值推导自然演进 PB={pb_level:.1f}%，完美落入安全区间")
             
-            # 波动剧烈时：适度收紧 PB
-            if pv_range_pct > 15.0 and pb_level > 80.0:
+            # 高频剧烈波动时适度收紧，确保不会完全丧失控制
+            if pv_range_pct > 25.0 and pb_level > 120.0:
                 pb_level = max(pb_level * 0.7, pb_min_limit)
-                self.log(f"   📊 PV波动剧烈({pv_range_pct:.1f}%)，收紧PB至{pb_level:.1f}%")
+                self.log(f"   📊 PV波动过于剧烈({pv_range_pct:.1f}%)，适度收紧PB至{pb_level:.1f}%")
             
             Kp_level = 100.0 / pb_level * sign
             
             conservative_Kp = Kp_level
             conservative_Ki = abs(conservative_Kp) / Ti_level
             conservative_Kd = 0.0
-            conservative_Td = 0.0
             
             # 用仿真专用的 K_int 替换原始值（仅影响下游闭环验证和可视化）
             K_int = K_int_for_sim
             
-            self.log(f"   🧊 LEVEL专属整定: Lambda法 λ={lambda_c:.0f}s, L={L_approx:.1f}s")
-            self.log(f"   ✅ Levelfallback: Ti={Ti_level:.1f}s (Lambda法), PB={pb_level:.1f}% (Lambda→{pb_from_lambda:.1f}%, 预设范围[{pb_min_limit:.0f},{pb_max_limit:.0f}])")
+            self.log(f"   🧊 LEVEL专属整定: 均值控制法 λ={lambda_c:.0f}s, L={L_approx:.1f}s")
+            self.log(f"   ✅ Levelfallback: Ti={Ti_level:.1f}s, PB={pb_level:.1f}% (原生均值推算={pb_from_physics:.1f}%)")
             
             pid_params = {
                 'Kp': round(float(conservative_Kp), 8),
@@ -1060,14 +1065,14 @@ class OscillationTuner(LoggerMixin):
         if osc_result.get('method') == 'integrating_fallback':
             # [FIX] 不再硬编码 8.5 分，使用真实闭环性能评分。
             # 如果参数确实稳定，performance_score 自然会给出高分。
-            perf_score, perf_details = ModelRating.performance_score(cl_metrics_for_rating)
+            perf_score, perf_details = ModelRating.performance_score(cl_metrics_for_rating, loop_type=self._loop_type)
             # 方法置信度仍基于工程先验：积分兜底法的方法本身是可靠的
             method_confidence = 0.85
             confidence_details = {'note': 'physics based integrating_fallback'}
             warnings = []
         else:
             # Layer 1: 闭环性能评分
-            perf_score, perf_details = ModelRating.performance_score(cl_metrics_for_rating)
+            perf_score, perf_details = ModelRating.performance_score(cl_metrics_for_rating, loop_type=self._loop_type)
             
             # Layer 2: 振荡整定置信度
             from ...config import Config as OscConfig

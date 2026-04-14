@@ -276,7 +276,8 @@ class OutputBuilder(LoggerMixin):
         # ====== 三层评分 ======
         
         # Layer 1: 闭环性能评分
-        perf_score, perf_details = ModelRating.performance_score(cl_metrics)
+        current_loop_type = loop_type or 'flow'
+        perf_score, perf_details = ModelRating.performance_score(cl_metrics, loop_type=current_loop_type)
         
         # Layer 2: 模型辨识置信度
         method_confidence, confidence_details = ModelRating.model_id_confidence(fusion)

@@ -114,7 +114,7 @@ class ModelRating:
     # ================================================================
     
     @staticmethod
-    def performance_score(metrics) -> Tuple[float, Dict[str, float]]:
+    def performance_score(metrics, loop_type: str = 'flow') -> Tuple[float, Dict[str, float]]:
         """
         Layer 1: 纯闭环阶跃响应的控制品质评分
         
@@ -141,23 +141,37 @@ class ModelRating:
         is_stable = getattr(metrics, 'is_stable', True)
         details['is_stable'] = is_stable
         
-        # 【1】超调量评分 (0-10)，权重 25% (连续平滑插值)
+        # 【1】超调量评分 (0-10)
         import numpy as np
         overshoot = getattr(metrics, 'overshoot', 0)
-        os_score = float(np.interp(overshoot, 
-            [0, 2, 5, 10, 15, 25, 40, 60, 100, 300],
-            [10.0, 10.0, 9.0, 8.0, 7.0, 6.0, 4.0, 2.5, 1.5, 0.0]
-        ))
+        if loop_type == 'level':
+            # 液位经常带有极大的缓冲宽容度，超调量可以放得极大
+            os_score = float(np.interp(overshoot, 
+                [0, 10, 25, 50, 100, 150, 250, 400],
+                [10.0, 10.0, 9.0, 8.0, 6.0, 4.0, 2.0, 0.0]
+            ))
+        else:
+            os_score = float(np.interp(overshoot, 
+                [0, 2, 5, 10, 15, 25, 40, 60, 100, 300],
+                [10.0, 10.0, 9.0, 8.0, 7.0, 6.0, 4.0, 2.5, 1.5, 0.0]
+            ))
         details['overshoot'] = round(overshoot, 2)
         details['overshoot_score'] = round(os_score, 2)
         
-        # 【2】调节时间评分 (0-10)，权重 20% (连续平滑插值)
+        # 【2】调节时间评分 (0-10)
         settling_time = getattr(metrics, 'settling_time', float('inf'))
         if settling_time < float('inf'):
-            st_score = float(np.interp(settling_time,
-                [0, 15, 30, 60, 120, 300, 600, 1500, 3000],
-                [10.0, 10.0, 9.0, 7.5, 6.0, 4.0, 2.0, 1.0, 0.0]
-            ))
+            if loop_type == 'level':
+                # 液位是积分容量，慢动作，几小时很正常
+                st_score = float(np.interp(settling_time,
+                    [0, 300, 1500, 3600, 7200, 14400, 21600],
+                    [10.0, 10.0, 9.0, 7.5, 6.0, 3.0, 0.0]
+                ))
+            else:
+                st_score = float(np.interp(settling_time,
+                    [0, 15, 30, 60, 120, 300, 600, 1500, 3000],
+                    [10.0, 10.0, 9.0, 7.5, 6.0, 4.0, 2.0, 1.0, 0.0]
+                ))
         else:
             st_score = 0.0  # 未收敛
         details['settling_time'] = round(settling_time, 2) if settling_time < float('inf') else -1
@@ -191,13 +205,23 @@ class ModelRating:
         details['decay_ratio_score'] = round(dr_score, 2)
         
         # 加权综合
-        weights = {
-            'overshoot': 0.25,
-            'settling_time': 0.20,
-            'steady_state_error': 0.25,
-            'oscillation_count': 0.15,
-            'decay_ratio': 0.15,
-        }
+        if loop_type == 'level':
+            # 液位轻超调与调节时间，重稳定性、振荡限制和稳态误差
+            weights = {
+                'overshoot': 0.15,
+                'settling_time': 0.15,
+                'steady_state_error': 0.30,
+                'oscillation_count': 0.20,
+                'decay_ratio': 0.20,
+            }
+        else:
+            weights = {
+                'overshoot': 0.25,
+                'settling_time': 0.20,
+                'steady_state_error': 0.25,
+                'oscillation_count': 0.15,
+                'decay_ratio': 0.15,
+            }
         raw_score = (
             weights['overshoot'] * os_score +
             weights['settling_time'] * st_score +
@@ -920,7 +944,7 @@ class ModelRating:
         )
         
         # Layer 1
-        perf_score, perf_details = ModelRating.performance_score(m)
+        perf_score, perf_details = ModelRating.performance_score(m, loop_type=loop_type)
         
         result = {
             'performance_score': perf_score,

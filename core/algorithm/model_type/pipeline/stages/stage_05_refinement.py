@@ -426,12 +426,7 @@ class RefinementStage(PipelineStage):
         )
         
         cl_metrics_for_rating = copy.deepcopy(cl_metrics)
-        if loop_type == 'level':
-            cl_metrics_for_rating.overshoot = cl_metrics.overshoot / 2.5
-            if cl_metrics.settling_time < float('inf'):
-                cl_metrics_for_rating.settling_time = cl_metrics.settling_time / 5.0
-
-        perf_score, perf_details = ModelRating.performance_score(cl_metrics_for_rating)
+        perf_score, perf_details = ModelRating.performance_score(cl_metrics_for_rating, loop_type=loop_type)
         
         margins = method_result.stability_margins
         closed_loop_info = build_cl_verification(
