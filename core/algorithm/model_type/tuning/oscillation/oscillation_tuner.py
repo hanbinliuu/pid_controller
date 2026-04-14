@@ -703,10 +703,19 @@ class OscillationTuner(LoggerMixin):
                 for i in range(1, len(pv_centered)):
                     if pv_centered[i-1] * pv_centered[i] < 0:
                         zc_indices.append(i)
+                
+                data_duration = len(pv_centered) * dt
                 if len(zc_indices) >= 4:
                     T_osc = float(np.mean(np.diff(zc_indices)) * 2.0 * dt)
+                elif len(zc_indices) >= 2:
+                    T_osc = float((zc_indices[-1] - zc_indices[0]) / (len(zc_indices)-1) * 2.0 * dt)
+                elif len(zc_indices) == 1:
+                    T_osc = float(data_duration * 1.5)
                 else:
-                    T_osc = max(L_approx * 8.0, 240.0)  # 不足4个过零点，回退估算
+                    T_osc = float(data_duration)
+                
+                # 下限托底
+                T_osc = max(T_osc, L_approx * 8.0, 240.0)
             except Exception:
                 T_osc = max(L_approx * 8.0, 240.0)
             
@@ -729,10 +738,15 @@ class OscillationTuner(LoggerMixin):
             pv_range_pct = (pv_range / max(abs(pv_mean), 1.0)) * 100
             
             # 【Averaging Heuristic 法则】
-            # 直接计算能容忍此等波动的温和比例带：比如 PV 波动 10%，阀门允许放宽动作 50% → PB = 50%
-            # 我们引入物理平滑放大系数 buffer_factor = 4.0 ~ 8.0
-            buffer_factor = 5.0
-            pb_from_physics = max(pv_range_pct * buffer_factor, 60.0)  # 底线原生就有 60%
+            # 对于化工储罐，均值控制的天然 PB 黄金区间通常在 100% ~ 125%。
+            # 只有当原始数据中的 pv_range 波动极其剧烈（相对 mv_range）时才收紧它。
+            try:
+                # 评估单位阀门动作带来的液位波动 (K_approx = pv_range/mv_range)
+                gain_magnitude = abs(K_approx) if K_approx is not None and abs(K_approx) > 0.001 else 1.0
+                # 以 100% PB 作为基准。若数据表现出增益庞大，PB需拉高以增加柔软度；增益极小，PB适度缩减
+                pb_from_physics = 100.0 * max(0.8, min(gain_magnitude * 2.0, 1.5))
+            except Exception:
+                pb_from_physics = 100.0
             
             if pb_from_physics < pb_min_limit:
                 pb_level = pb_min_limit
@@ -817,14 +831,13 @@ class OscillationTuner(LoggerMixin):
         K_abs_approx = abs(K_approx)
         if K_abs_approx > 2.0:
             boost_factor = 0.22
-            if self._loop_type == 'level':
-                boost_factor = 0.18
-            elif self._loop_type == 'flow':
+            # 注意: level 回路已经在上方 return，此处仅适用于非 level 过程
+            if self._loop_type == 'flow':
                 boost_factor = 0.1   # 对高增益更激进 (0.15 -> 0.1)
             elif self._loop_type == 'pressure':
                 boost_factor = 0.08  # 回调 (0.1 -> 0.08)
             pb_base *= 1.0 + (K_abs_approx - 2.0) * boost_factor
-        elif K_abs_approx < 0.5 and self._loop_type != 'level':
+        elif K_abs_approx < 0.5:
             # 适度恢复低增益补偿以提升稳定性
             low_gain_boost = 1.15 if self._loop_type in ['flow', 'pressure'] else 1.4
             pb_base *= low_gain_boost
@@ -843,7 +856,7 @@ class OscillationTuner(LoggerMixin):
             ti_multiplier *= max(1.5, L_approx / 4.0)
         
         # 应用 Loop Preset 的安全系数和范围限制
-        preset = tuning_constraints
+        preset = tuning_constraints or {}
         safety_factor = preset.get('safety_factor', 1.05)
         pb_base *= safety_factor
         
@@ -1013,30 +1026,23 @@ class OscillationTuner(LoggerMixin):
         
         # 如果已经是物理极限积分兜底参数，连“强制保守迭代”也直接跳过，因为再调只会让它变成一滩死水
         if osc_result.get('method') == 'integrating_fallback':
-            force_conservative = False
-            
-        # Fallback 尝试
-        max_fallback_attempts = 5
-        for fallback_attempt in range(1, max_fallback_attempts + 1):
-            if (is_stable and not force_conservative) or (fallback_attempt > 1 and is_stable):
-                break
-            
-            if force_conservative:
-                self.log(f"   ⚠️ 模型置信度低 (R²={r_squared:.2f})，强制进行保守迭代 (第{fallback_attempt}次)...")
+            # 直接退出保守迭代过程，但保留原始闭环稳定性的诚实评判
+            if is_stable:
+                self.log("   ✅ integrating_fallback 闭环验证通过！")
             else:
-                self.log(f"   ⚠️ 闭环不稳定，尝试更保守的参数 (第{fallback_attempt}次)...")
+                self.log(f"   ⚠️ integrating_fallback 闭环验证未通过 (超调={cl_metrics.overshoot:.1f}%, 稳态误差={cl_metrics.steady_state_error:.1f}%)")
+        else:
+            # Fallback 尝试 (非积分过程)
+            max_fallback_attempts = 5
+            for fallback_attempt in range(1, max_fallback_attempts + 1):
+                if (is_stable and not force_conservative) or (fallback_attempt > 1 and is_stable):
+                    break
                 
-            if osc_result.get('method') == 'integrating_fallback':
-                # 针对积分过程的平滑保守退降
-                preset = tuning_constraints
-                ti_max_limit = preset.get('ti_max', 20000.0)
-                new_pb = min(abs(100.0 / pid_params['Kp']) * 1.3, 1000.0 if self._loop_type == 'level' else 400.0)
-                new_ti = min(pid_params['Ti'] * 1.2, ti_max_limit)
-                pid_params['Kp'] = (100.0 / new_pb) * np.sign(pid_params['Kp'])
-                pid_params['Ki'] = pid_params['Kp'] / new_ti
-                pid_params['pb'] = new_pb
-                pid_params['Ti'] = new_ti
-            else:
+                if force_conservative:
+                    self.log(f"   ⚠️ 模型置信度低 (R²={r_squared:.2f})，强制进行保守迭代 (第{fallback_attempt}次)...")
+                else:
+                    self.log(f"   ⚠️ 闭环不稳定，尝试更保守的参数 (第{fallback_attempt}次)...")
+                    
                 K_approx = pv_range / mv_range if mv_range > 0.1 and pv_range > 0.01 else 1.0
                 fallback_confidence = osc_info.get('confidence', 0.3) * (0.5 ** fallback_attempt)
                 adjusted_osc_ratio = min(0.95, osc_info.get('oscillation_ratio', 0.5) + 0.15 * fallback_attempt)
@@ -1057,21 +1063,13 @@ class OscillationTuner(LoggerMixin):
                 pid_params['pb'] = 100.0 / abs(pid_params['Kp']) if abs(pid_params['Kp']) > 1e-6 else 100.0
                 pid_params['Ti'] = pid_params['Kp'] / pid_params['Ki'] if abs(pid_params['Ki']) > 1e-6 else 0.0
                 pid_params['td'] = pid_params['Kd'] / pid_params['Kp'] if abs(pid_params['Kp']) > 1e-6 else 0.0
+                
+                is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
+                    temp_fusion, pid_params, sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_mean, 
+                    loop_type=self._loop_type, verbose=self._verbose
+                )
             
-            is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
-                temp_fusion, pid_params, sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_mean, 
-                loop_type=self._loop_type, verbose=self._verbose
-            )
-            
-            # [FIX] integrating_fallback 的参数已经是最保守的物理极限了，
-            # 再迭代只会变成死水。跳出保守迭代循环，但不强制覆盖稳定性结果——
-            # 让闭环验证引擎用真实的 FO_INTEGRATOR 模型诚实评判。
-            if osc_result.get('method') == 'integrating_fallback':
-                if is_stable:
-                    self.log("   ✅ integrating_fallback 闭环验证通过！")
-                else:
-                    self.log(f"   ⚠️ integrating_fallback 闭环验证未通过 (超调={cl_metrics.overshoot:.1f}%, 稳态误差={cl_metrics.steady_state_error:.1f}%)")
-                break
+
         
         # ====== 三层评分 ======
         from ...rating import ModelRating

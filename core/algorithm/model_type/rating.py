@@ -145,10 +145,11 @@ class ModelRating:
         import numpy as np
         overshoot = getattr(metrics, 'overshoot', 0)
         if loop_type == 'level':
-            # 液位经常带有极大的缓冲宽容度，超调量可以放得极大
+            # [FIX] 均值液位控制 (ALC) 的核心是平缓控制阀 (MV)。如果超调极大（超过 45%），
+            # 意味着参数被调得虚高激进了，必须严厉扣分，构筑有机防波堤，防止优化器为追求0误差而把 PB 压向极限。
             os_score = float(np.interp(overshoot, 
-                [0, 10, 25, 50, 100, 150, 250, 400],
-                [10.0, 10.0, 9.0, 8.0, 6.0, 4.0, 2.0, 0.0]
+                [0, 10, 25, 45, 70, 100, 150, 300],
+                [10.0, 10.0, 9.0, 6.5, 3.5, 1.5, 0.5, 0.0]
             ))
         else:
             os_score = float(np.interp(overshoot, 
@@ -179,10 +180,18 @@ class ModelRating:
         
         # 【3】稳态误差评分 (0-10)，权重 25% (连续平滑插值)
         sse = getattr(metrics, 'steady_state_error', 0)
-        sse_score = float(np.interp(sse,
-            [0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 70.0],
-            [10.0, 10.0, 9.0, 7.5, 5.5, 3.5, 2.0, 0.0]
-        ))
+        if loop_type == 'level':
+            # [FIX] 液位均值控制对于稳态误差有着极高的容忍度。
+            # 让优化器不会因为贪图把 SSE 从 8% 压到 0% 而去拼命压迫 PB 引发阀门磨损。
+            sse_score = float(np.interp(sse,
+                [0, 2.0, 5.0, 15.0, 30.0, 60.0, 100.0],
+                [10.0, 10.0, 9.5, 8.0, 5.0, 2.0, 0.0]
+            ))
+        else:
+            sse_score = float(np.interp(sse,
+                [0, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 70.0],
+                [10.0, 10.0, 9.0, 7.5, 5.5, 3.5, 2.0, 0.0]
+            ))
         details['steady_state_error'] = round(sse, 2)
         details['steady_state_error_score'] = round(sse_score, 2)
         
