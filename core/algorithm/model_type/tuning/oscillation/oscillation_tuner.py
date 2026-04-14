@@ -683,71 +683,67 @@ class OscillationTuner(LoggerMixin):
             # G(s) ≈ K_int/s，其中 K_int = K/T1（归一化积分增益），必须保留真实物理符号！
             K_int = K_approx / max(T1_approx, 1.0)  # 积分增益 (%/s/%)
             
-            # [FIX] 如果数据段质量奇差（例如 PV 或 MV 完全没变化），K_int 会算出 0 甚至是 1e-7。
-            # 这会导致下游闭环闭环仿真时，被控对象变成一块“死石头”，不管 PID 怎么调，稳态误差都是无穷大，Phase 2 全部给最低分。
-            # 这里给一个物理上的兜底值：正常液位容器不可能完全不响应。
-            if abs(K_int) < 1e-4:
-                self.log(f"   ⚠️ 数据静态致积分增益极小(K_int={K_int:.6f})，修正至物理下限 1e-4")
-                K_int = 1e-4 * sign if sign != 0 else 1e-4
+            # [FIX] K_int 仿真兜底：极小 K_int 会让闭环仿真中的被控对象变成"死石头"。
+            # 这里仅对仿真用的 K_int 设置地板值，不影响整定公式推导。
+            K_int_for_sim = K_int
+            if abs(K_int_for_sim) < 1e-4:
+                self.log(f"   ⚠️ 数据静态致积分增益极小(K_int={K_int:.6f})，仿真用值修正至物理下限 1e-4")
+                K_int_for_sim = 1e-4 * sign if sign != 0 else 1e-4
             
-            # Lambda 法（积分过程）：Kp = 1/(K_int * (2λ + L))
-            # [FIX] 原来 λ=max(3L, 50)，但 3 倍系数是当 L=15(硬编码) 时的遗留设计（3×15=45<50，从未生效）。
-            # 现在 L 可以是数据驱动的更大值，3 倍放大会导致 Ti 爆炸。
-            # [HOTFIX] 放开世界统一的 50 秒拉平幻想硬编码
-            # 改为基于过程真实延迟 L_approx 进行自适应（通常推荐 3倍死区或至少 10s）
-            lambda_c = max(3.0 * L_approx, 10.0)
-            Kp_level = 1.0 / (K_int * (2.0 * lambda_c + L_approx)) if abs(K_int) > 1e-9 else 1.0 * sign
-            
+            # ================================================================
             # [ALC 均值液位控制 (Averaging Level Control) 整定]
-            # 【LEVEL 回路专属物理与工程妥协整定路径】
-            # [CORE ALGORITHMIC FIX - 真正回归物理本质]
-            # 您说得对，靠强行卡边界是在掩盖算法底层的逻辑谬误。
-            # 为什么之前的原始算法会觉得需要 3000 秒？
-            # 因为系统误把原来 DCS 里不当参数（如 Ti=260）引起的缓慢长周期波动（积分导致的极限环波动），
-            # 错当成了系统的天然临界比例振荡周期 (Pu)，从而代入公式算出了荒谬的 Ti = 3 乘以 Pu = 3000s。
-            #
-            # 对于真正的纯积分液位过程 (Integrating Process)，根本不应使用闭环振荡周期来估算！
-            # 它的动态仅仅取决于纯滞后死区延迟 L。
-            # 参考真实纯积分对象的 IMC (内部模型控制/Lambda) 整定法则：
-            # Ti = 2 * lambda_c + L (其中 lambda_c 是期望闭环响应，通常取 1L ~ 3L)
+            # ================================================================
+            # 对于纯积分液位过程，使用 Lambda 法基于物理死区时间 L 推导。
+            # Ti 和 PB 均从 L_approx 出发，不依赖数值不稳定的 K_int 公式。
+            # ================================================================
             
-            lambda_c = np.clip(L_approx * 2.0, 30.0, 100.0)  # 为了对齐 Level 回路至少 Ti > 60s 的工业强行规约，lambda最小应为30 (Ti≈2*30=60)
+            # 1. Lambda 法推导 Ti（基于死区 L，数值稳定）
+            # Lambda = 期望闭环响应时间常数，经典推荐取 2L ~ 3L
+            lambda_c = np.clip(L_approx * 2.0, 30.0, 100.0)
+            Ti_level = 2.0 * lambda_c + L_approx  # 天然产出合理的几百秒级 Ti
             
-            # 使用真实的纯积分推导公式，直接天然输出合理的 Ti，无需任何强行封顶！
-            Ti_target = 2.0 * lambda_c + L_approx
+            # 从 tuning_constraints 读取统一的 ti_max（与 loop_presets 保持一致）
+            ti_max_limit = tuning_constraints.get('ti_max', 3600.0)
+            Ti_level = np.clip(Ti_level, 60.0, ti_max_limit)
             
-            # 纯积分 Lambda 法则下的反推 Kc:
-            # Kc = 1 / (K_int * Ti_target)
-            KC_required_for_damping = 1.0 / (abs(K_int) * Ti_target) if abs(K_int) > 1e-8 else 1.0
+            # 2. Lambda 法推导 Kp，然后用 loop_presets 的 PB 范围约束
+            Kp_lambda = 1.0 / (abs(K_int) * Ti_level) if abs(K_int) > 1e-8 else 1.0
+            pb_from_lambda = 100.0 / abs(Kp_lambda) if abs(Kp_lambda) > 1e-6 else 200.0
             
-            # [NEW] 回应真实石化化工行业 (如聚丙烯PP装置) 对 LIC 回路的参数执念
-            # 真实化工要求: PB 通常 50%~150%
-            # 无视 DCS 里胡乱设置的巨大死板 Kp(如 0.05 导致的 PB=2000%)，回归本质化工控制工程范式
+            # 用 loop_presets 中的 PB 范围防止极端值
+            pb_min_limit = tuning_constraints.get('pb_min', 40.0)
+            pb_max_limit = tuning_constraints.get('pb_max', 2000.0)
             
-            pb_manual_limit = 50.0  # 底线约束到典型石化下限 50%
-            pb_typical_target = 100.0  # 默认瞄准 100% (Kp=1.0) 的经典石化水平带
+            # PV 波动幅度归一化判断（相对于 PV 均值的百分比）
+            pv_mean = np.mean(best_seg.pv)
+            pv_range_pct = (pv_range / max(abs(pv_mean), 1.0)) * 100
             
-            pb_required = 100.0 / max(KC_required_for_damping, 0.01)
+            # 约束 PB 到 loop_presets 范围
+            if pb_from_lambda < pb_min_limit:
+                pb_level = pb_min_limit
+                self.log(f"   📊 Lambda法推导PB={pb_from_lambda:.1f}%过小，钳制到预设下限{pb_min_limit:.0f}%")
+            elif pb_from_lambda > pb_max_limit:
+                pb_level = pb_max_limit
+            else:
+                pb_level = pb_from_lambda
             
-            # 如果数学要求的 PB(为了无超调) 高达 1000%，我们只能折中：
-            # 优先保住石化人的心智模型，即将 PB 强行往 150% 以下压！宁可容忍一点理论超调。
-            pb_level = np.clip(pb_required, pb_manual_limit, 150.0)
+            # 波动剧烈时：适度收紧 PB
+            if pv_range_pct > 15.0 and pb_level > 80.0:
+                pb_level = max(pb_level * 0.7, pb_min_limit)
+                self.log(f"   📊 PV波动剧烈({pv_range_pct:.1f}%)，收紧PB至{pb_level:.1f}%")
             
-            # 如果极端情况下推算的 PB 连 50% 都不到，说明真的可以给很激进
-            if pb_required < 50.0:
-                pb_level = np.clip(pb_required, 50.0, 100.0)
-                
             Kp_level = 100.0 / pb_level * sign
-            
-            Ti_level = Ti_target
             
             conservative_Kp = Kp_level
             conservative_Ki = abs(conservative_Kp) / Ti_level
             conservative_Kd = 0.0
             conservative_Td = 0.0
             
-            self.log(f"   🧊 LEVEL专属整定: 放弃纯死板微分防守，采取逆向推导阻尼匹配机制")
-            self.log(f"   ✅ Levelfallback: 基于自然推演 Ti={Ti_level:.1f}s, 为防震荡反推需匹配 PB={pb_required:.1f}%, 最终安全输出 PB={pb_level:.1f}%")
+            # 用仿真专用的 K_int 替换原始值（仅影响下游闭环验证和可视化）
+            K_int = K_int_for_sim
+            
+            self.log(f"   🧊 LEVEL专属整定: Lambda法 λ={lambda_c:.0f}s, L={L_approx:.1f}s")
+            self.log(f"   ✅ Levelfallback: Ti={Ti_level:.1f}s (Lambda法), PB={pb_level:.1f}% (Lambda→{pb_from_lambda:.1f}%, 预设范围[{pb_min_limit:.0f},{pb_max_limit:.0f}])")
             
             pid_params = {
                 'Kp': round(float(conservative_Kp), 8),
@@ -1057,15 +1053,9 @@ class OscillationTuner(LoggerMixin):
         from ...rating import ModelRating
         import copy
         
-        # [NEW] 因为评级模块 (rating.py) 要求完全通用不可修改，
-        # 我们针对极大物理惯性的积分回路（如液位 Level）对其评价指标在送审前按允许限宽比例折算
-        cl_metrics_for_rating = copy.deepcopy(cl_metrics)
-        if self._loop_type == 'level':
-            # 液位缓冲容器允许大波动，因此通过缩小送审的 overshoot 和 settling_time
-            # 变相让通用的评级模块打出不差的性能分。
-            cl_metrics_for_rating.overshoot = cl_metrics.overshoot / 2.5
-            if cl_metrics.settling_time < float('inf'):
-                cl_metrics_for_rating.settling_time = cl_metrics.settling_time / 5.0
+        # [FIX] 不再修改原始闭环指标，让评分系统诚实反映真实物理性能。
+        # 如果 Level 回路需要更宽容的评分标准，应在 ModelRating 中增加 loop_type 支持。
+        cl_metrics_for_rating = cl_metrics
 
         if osc_result.get('method') == 'integrating_fallback':
             # [FIX] 不再硬编码 8.5 分，使用真实闭环性能评分。
@@ -1135,24 +1125,30 @@ class OscillationTuner(LoggerMixin):
         if is_integrating_fb:
             out_model_params['K_int'] = K_est_final  # 显式标记
         
+        # 确定整定类型 (P/PI/PID)
+        from ...utils import determine_turning_type, get_recommendation
+        turning_type = determine_turning_type(
+            pid_params['Kp'], pid_params.get('Ti', 0), pid_params.get('Td', 0)
+        )
+        
         return {
-            'success': tuning_success, 'model_type': out_model_type, 'model_rating': model_rating,
-            'method_confidence': method_confidence,
-            'method_confidence_details': confidence_details,
-            'start_time': time_range.get('start_time'), 'end_time': time_range.get('end_time'),
+            'success': tuning_success,
+            'model_type': out_model_type,
+            'model_rating': model_rating,
+            'start_time': time_range.get('start_time'),
+            'end_time': time_range.get('end_time'),
             'model_parameters': out_model_params,
             'pid_parameters': pid_params,
+            'turning_type': turning_type,
             'fitting_result': {
                 'timestamp': ts.tolist(), 'sv': sv.tolist(), 'pv': y.tolist(), 'mv': u.tolist(),
-                'pv_model': pv_model.tolist(), 'r_squared': calculate_r2(y, pv_model), 'rmse': calculate_rmse(y, pv_model)
+                'pv_model': pv_model.tolist(),
+                'r_squared': calculate_r2(y, pv_model),
+                'rmse': calculate_rmse(y, pv_model),
+                'recommendation': get_recommendation(model_rating)
             },
-            'fusion_info': {
-                'method': pid_params.get('method', 'oscillation_critical'), 'n_segments': 1, 'consistency_score': 0.0,
-                'oscillation_type': osc_info['oscillation_type'], 'oscillation_amplitude': osc_info['amplitude']
-            },
-            'closed_loop_verification': closed_loop_info, 'rating_details': rating_details,
-            'tuning_features': tuning_features,
-            'segment_info': self._build_segment_info(segments, segment_results) if segments else []
+            'closed_loop_verification': closed_loop_info,
+            'tuning_features': tuning_features
         }
     
     def _reconstruct_model_from_oscillation(self, Pu: float, Ku: float, K_approx: float, loop_type: str) -> Tuple[float, float, float]:
