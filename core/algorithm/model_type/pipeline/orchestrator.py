@@ -120,14 +120,6 @@ class TuningOrchestrator(LoggerMixin):
                 - loop_type: 回路类型 (flow/temperature/pressure/level)
                 - loop_name: 回路名称
                 - safety_critical: 是否安全关键
-        
-        使用示例:
-            selector = ModelSelector(verbose=True)
-            selector.set_llm_client(
-                llm_client=OllamaClient(model="qwen2.5:7b"),
-                process_context={'loop_type': 'temperature', 'loop_name': '反应釜温度'}
-            )
-            result = selector.run(input_data)
         """
         self._llm_client = llm_client
         self._process_context = process_context
@@ -175,39 +167,66 @@ class TuningOrchestrator(LoggerMixin):
             return OutputBuilder.create_empty_result(model_type=model_type, turning_type=turning_type)
         
         # ============================================================
-        # 滑动窗口寻优：当启用时，自动生成重叠窗口并选出最优
+        # 窗口策略路由 (Window Strategy Router)
+        # ============================================================
+        # 内部自动分类数据所属阶段:
+        #   Stage 1: MV 阶跃响应 → 三阶段窗口流水线
+        #   Stage 2: SV 阶跃响应 → 三阶段窗口流水线 (+ 闭环修正)
+        #   Stage 3: 无明确阶跃 / 自然扰动 → 滑动窗口寻优
         # ============================================================
         sw_config = Config.SLIDING_WINDOW
         enable_sw = params.get('sliding_window', sw_config.get('enabled', False))
-        
-        # [NEW] 混合架构拦截器 (Hybrid Auto-Enable)
-        # 前端可能传来了由探测器选出的 qualified_windows，我们需要快速验明正身
         exact_window_mode = params.get('exact_window', False)
-        has_high_quality_step = False
+        detected_stage = 3  # 默认假设 Stage 3
         
         if qualified_windows and not exact_window_mode:
             for w in qualified_windows:
-                sv_values = [d.get('sv', d.get('SV', 0)) for d in history_data 
-                             if w.get('start_time', 0) <= d.get('timestamp', 0) <= w.get('end_time', float('inf'))]
-                # SV阶跃幅度 > 0.5 视为高质量的明确阶跃变动 (Level 1/2)
-                if sv_values and (max(sv_values) - min(sv_values)) > 0.5:
-                    has_high_quality_step = True
+                w_start = w.get('start_time', 0)
+                w_end = w.get('end_time', float('inf'))
+                w_data = [d for d in history_data if w_start <= d.get('timestamp', 0) <= w_end]
+                
+                if not w_data:
+                    continue
+                
+                sv_values = [d.get('sv', d.get('SV', 0)) for d in w_data]
+                mv_values = [d.get('mv', d.get('MV', 0)) for d in w_data]
+                
+                sv_range = max(sv_values) - min(sv_values) if sv_values else 0
+                mv_range = max(mv_values) - min(mv_values) if mv_values else 0
+                
+                # Stage 1: MV 有显著阶跃且 SV 无变化 → 开环 MV 阶跃测试
+                if mv_range > 0.5 and sv_range < 0.5:
+                    detected_stage = 1
                     break
-                    
-        # 如果既不是强制模式，且里面没有找到明确阶跃(说明是 Level 3 瞎猜的兜底段)
-        if not has_high_quality_step and not exact_window_mode:
-            # 直接在主入口“静默”开启 Grid Search 洗地，无需提示用户，用户自动获得最高收益
+                # Stage 2: SV 有显著阶跃 → 闭环 SV 阶跃响应
+                elif sv_range > 0.5:
+                    detected_stage = 2
+                    break
+                # 否则保持 Stage 3
+        
+        if exact_window_mode:
+            detected_stage = 0  # 标记为强制模式，不做阶段路由
+        
+        self.log(f"   📋 数据阶段自动分类: Stage {detected_stage}"
+                 f"{' (MV阶跃→三阶段流水线)' if detected_stage == 1 else ''}"
+                 f"{' (SV阶跃→三阶段流水线)' if detected_stage == 2 else ''}"
+                 f"{' (无明确阶跃→滑窗寻优)' if detected_stage == 3 else ''}"
+                 f"{' (exact_window强制模式)' if detected_stage == 0 else ''}")
+        
+        # Stage 1/2: 有明确阶跃 → 不需要滑窗，直接走三阶段窗口流水线
+        if detected_stage in (1, 2):
+            enable_sw = False
+        # Stage 3: 无明确阶跃 → 自动开启滑窗寻优
+        elif detected_stage == 3:
             enable_sw = True
         
         if enable_sw and history_data:
-            if not has_high_quality_step:
-                self.log("   🔍 未检测到高质量阶跃特征，系统已在后台自动升级为 Grid Search 滑窗寻优模式...")
+            self.log("   🔍 Stage 3: 未检测到明确阶跃特征，启动 Grid Search 滑窗寻优...")
             
             best_window = self._sliding_window_search(
                 history_data, params, current_pid, sw_config
             )
             if best_window is not None:
-                # 用最优窗口无缝覆盖掉前端传进来的 qualified_windows，走后续正常流程
                 qualified_windows = [best_window]
         
         if not qualified_windows:

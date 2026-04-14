@@ -93,8 +93,6 @@ class OutputBuilder(LoggerMixin):
             'model_type': model_type or ModelType.FOPDT,
             'turning_type': turning_type or 'PID',
             'model_rating': 0.0,
-            'method_confidence': 0.0,
-            'method_confidence_details': {},
             'start_time': getattr(input_data, 'start_time', None) if input_data else None,
             'end_time': getattr(input_data, 'end_time', None) if input_data else None,
             'model_parameters': {'K': 0.0, 'T1': 0.0, 'T2': 0.0, 'L': 0.0},
@@ -104,16 +102,8 @@ class OutputBuilder(LoggerMixin):
                 'pv_model': [], 'r_squared': 0.0, 'rmse': 0.0,
                 'recommendation': '不可用'
             },
-            'fusion_info': {
-                'method': 'none', 'n_segments': 0, 'consistency_score': 0.0
-            },
             'closed_loop_verification': {},
-            'rating_details': {
-                'r2_score': 0.0, 'consistency_score': 0.0, 'validity_score': 0.0,
-                'coverage_score': 0.0, 'n_segments': 0, 'total_data_points': 0
-            },
-            'tuning_features': {},
-            'segment_info': []
+            'tuning_features': {}
         }
     
     def build_full_output(self, fusion: FusionResult, hist_data: HistoricalData,
@@ -345,8 +335,6 @@ class OutputBuilder(LoggerMixin):
             'success': success,
             'model_type': fusion.model_type,
             'model_rating': model_rating,
-            'method_confidence': method_confidence,
-            'method_confidence_details': confidence_details,
             'start_time': time_range.get('start_time'),
             'end_time': time_range.get('end_time'),
             'model_parameters': {
@@ -367,17 +355,8 @@ class OutputBuilder(LoggerMixin):
                 'rmse': round(fusion.global_rmse, 4),
                 'recommendation': get_recommendation(model_rating)
             },
-            'fusion_info': {
-                'method': fusion.fusion_method,
-                'n_segments': fusion.n_segments_used,
-                'consistency_score': round(fusion.consistency_score, 4),
-                'K_std': round(fusion.K_std, 4),
-                'T1_std': round(fusion.T1_std, 4)
-            },
             'closed_loop_verification': closed_loop_info,
-            'rating_details': score_details,
-            'tuning_features': tuning_features,
-            'segment_info': _build_segment_info(segments, segment_results) if segments else []
+            'tuning_features': tuning_features
         }
     
 

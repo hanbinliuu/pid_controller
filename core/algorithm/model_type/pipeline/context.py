@@ -265,11 +265,21 @@ class TuningContext:
     def export_tuning_constraints(self) -> dict:
         """
         导出完整的整定约束字典（供底层无状态算子使用）。
-        语义层有值的用语义层，没有值的回退到 loop_presets 兜底。
+        
+        这是 OS 语义层 → 整定算法的核心桥接出口。
+        优先级: OS 传入的语义模型(mechanism/knowledge/characterization)
+               → 没有则 fallback 到 loop_presets 硬编码兜底。
+        
+        消费方: stage_03 (模型辨识), stage_05 (优化), stage_05b (自优化), stage_06 (输出)
         """
         preset = self._get_preset()
         pb_range = self.get_pb_range()
+        tc_range = self.get_time_constant_range()
+        dt_range = self.get_dead_time_range()
+        ob_range = self.get_output_bounds()
+        
         return {
+            # ---- 基础 PID 约束 (knowledge_model → preset) ----
             'pb_min': pb_range[0],
             'pb_max': pb_range[1],
             'tau_c_factor': self.get_tau_c_factor(),
@@ -277,12 +287,37 @@ class TuningContext:
             'ti_multiplier': self.get_ti_multiplier(),
             'ti_max': self.get_ti_max(),
             'td_enable': self.get_td_enable(),
-            'aggressive': self.get_tuning_strategy() == 'aggressive',
-            'integrating_mode': self.get_process_nature() == 'integrating',
-            
-            # 以下是没有语义桥接，暂时仅能从 preset 获取的兜底字段
             'td_ratio': preset.get('td_ratio', 0.15),
             'td_max': preset.get('td_max', 999.0),
+            'aggressive': self.get_tuning_strategy() == 'aggressive',
+            
+            # ---- 过程物理性质 (mechanism_model → preset) ----
+            'process_nature': self.get_process_nature(),
+            'integrating_mode': self.get_process_nature() == 'integrating',
+            'preferred_model': self.get_preferred_model(),
+            'allowed_models': self.get_allowed_models(),
+            'coupling_risk': self.get_coupling_risk(),
+            'dead_time_dominant': self.is_dead_time_dominant(),
+            
+            # ---- 物理范围约束 (mechanism_model → 宽松默认) ----
+            'time_constant_min': tc_range[0],
+            'time_constant_max': tc_range[1],
+            'dead_time_min': dt_range[0],
+            'dead_time_max': dt_range[1],
+            'output_bound_min': ob_range[0],
+            'output_bound_max': ob_range[1],
+            
+            # ---- 评分/策略约束 (knowledge_model → 默认) ----
+            'max_overshoot': self.get_max_overshoot(),
+            'tuning_strategy': self.get_tuning_strategy(),
+            'overshoot_discount': self.get_overshoot_discount(),
+            'settling_time_factor': self.get_settling_time_factor(),
+            'oscillation_tolerance': self.get_oscillation_tolerance(),
+            
+            # ---- 表征特征 (characterization_model → 0.0 默认) ----
+            'oscillation_ratio': self.get_oscillation_ratio(),
+            'noise_level': self.get_noise_level(),
+            'stiction_index': self.get_stiction_index(),
         }
 
     # ---- 表征特征（运行时回填）----
@@ -304,3 +339,4 @@ class TuningContext:
         if self.characterization_model:
             return self.characterization_model.valve.stiction_index_estimated
         return 0.0
+
