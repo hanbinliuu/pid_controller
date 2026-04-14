@@ -691,19 +691,29 @@ class OscillationTuner(LoggerMixin):
                 K_int_for_sim = 1e-4 * sign if sign != 0 else 1e-4
             
             # ================================================================
-            # [ALC 均值液位控制 (Averaging Level Control) 整定]
+            # [均值液位控制 (Averaging Level Control) 物理推导]
             # ================================================================
-            # 对于纯积分液位过程，使用 Lambda 法基于物理死区时间 L 推导。
-            # Ti 和 PB 均从 L_approx 出发，不依赖数值不稳定的 K_int 公式。
+            # 解绑对钳位后的 L_approx 的依赖：均值控制的时间尺度应与罐体
+            # 自然振荡周期挂钩，而非被 L_approx 的 30s 安全钳位所限制。
+            # 直接从 PV 过零点重新估算未钳位的原始 T_osc。
             # ================================================================
-            # [真正的均值控制 (Averaging Control) 物理推导]
-            # ================================================================
-            # 1. 解绑对纯死区 L 的依赖：
-            # 均值控制不应该用极短的 L 要求系统极速平稳（否则必然推导巨大 Kp）。
-            # Lambda 应该与大容积的物理振荡周期挂钩，既然 T_osc ≈ 8 * L_approx，取 T_osc/4 ≈ L_approx * 2
-            lambda_c = max(L_approx * 2.0, 60.0)
+            try:
+                pv_centered = best_seg.pv - np.mean(best_seg.pv)
+                zc_indices = []
+                for i in range(1, len(pv_centered)):
+                    if pv_centered[i-1] * pv_centered[i] < 0:
+                        zc_indices.append(i)
+                if len(zc_indices) >= 4:
+                    T_osc = float(np.mean(np.diff(zc_indices)) * 2.0 * dt)
+                else:
+                    T_osc = max(L_approx * 8.0, 240.0)  # 不足4个过零点，回退估算
+            except Exception:
+                T_osc = max(L_approx * 8.0, 240.0)
             
-            # 使用经典的推导式子，允许大罐子自然产出上百、甚至上千秒的积分时间
+            # Lambda 挂钩振荡周期的 1/4，确保阀门有足够的缓冲吞吐时间
+            lambda_c = max(T_osc / 4.0, 60.0)
+            
+            # 经典积分过程推导: Ti = 2λ + L，允许大罐子自然产出上百甚至上千秒的积分时间
             Ti_level = 2.0 * lambda_c + L_approx
             
             # 从 tuning_constraints 读取统一的 ti_max，通常设为 3600 (一小时作为上限)
@@ -747,7 +757,7 @@ class OscillationTuner(LoggerMixin):
             # 用仿真专用的 K_int 替换原始值（仅影响下游闭环验证和可视化）
             K_int = K_int_for_sim
             
-            self.log(f"   🧊 LEVEL专属整定: 均值控制法 λ={lambda_c:.0f}s, L={L_approx:.1f}s")
+            self.log(f"   🧊 LEVEL专属整定: 均值控制法 T_osc={T_osc:.0f}s, λ={lambda_c:.0f}s, L={L_approx:.1f}s")
             self.log(f"   ✅ Levelfallback: Ti={Ti_level:.1f}s, PB={pb_level:.1f}% (原生均值推算={pb_from_physics:.1f}%)")
             
             pid_params = {
@@ -777,6 +787,12 @@ class OscillationTuner(LoggerMixin):
                 'data_quality': 0.5, 'nonlinearity': 0.0, 'valve_issues': {}
             }
 
+        # ================================================================
+        # 以下为非积分过程的通用 fallback 路径 (flow / temperature / pressure)
+        # 注意：所有 loop_type=='level' 的回路已在上方 is_integrating 分支中 return，
+        #       因此以下 self._loop_type=='level' 的分支仅对 T1>100 & K<0.3 的
+        #       非 level 近积分过程才可能触发。
+        # ================================================================
         extreme_delay_threshold = osc_config.get('extreme_delay_ratio_threshold', 0.8)
         large_delay_threshold = osc_config.get('large_delay_ratio_threshold', 0.5)
         
@@ -886,6 +902,9 @@ class OscillationTuner(LoggerMixin):
                     conservative_Td, conservative_Kd = 0.0, 0.0
         
         # [NEW] 符号对齐：确保 PID 参数符号与过程增益一致，支持反向作用系统 (Reverse Acting)
+        # [NOTE] K_approx 在 L635 已经带上了正确符号 (abs(K) * sign)，
+        # 这里从 K_approx 重新提取符号并乘上去，数学上等价于取绝对值后重赋号。
+        # 如果将来修改了 K_approx 的符号处理逻辑，务必同步检查此处。
         sign = np.sign(K_approx) if abs(K_approx) > 0.001 else 1.0
         conservative_Kp *= sign
         conservative_Ki *= sign
