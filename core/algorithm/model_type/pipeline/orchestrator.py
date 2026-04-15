@@ -223,11 +223,11 @@ class TuningOrchestrator(LoggerMixin):
         if enable_sw and history_data:
             self.log("   🔍 Stage 3: 未检测到明确阶跃特征，启动 Grid Search 滑窗寻优...")
             
-            best_window = self._sliding_window_search(
+            top_windows = self._sliding_window_search(
                 history_data, params, current_pid, sw_config
             )
-            if best_window is not None:
-                qualified_windows = [best_window]
+            if top_windows:
+                qualified_windows = top_windows
         
         if not qualified_windows:
             self.log("⚠️ 无扰动窗口（tuning_segment未检测到振荡），跳过整定")
@@ -264,14 +264,14 @@ class TuningOrchestrator(LoggerMixin):
     
     def _sliding_window_search(self, history_data: List[Dict],
                                 params: Dict, current_pid: Dict,
-                                sw_config: Dict) -> Optional[Dict]:
+                                sw_config: Dict) -> List[Dict]:
         """
-        在历史数据上进行滑动窗口快速筛选，返回评分最高的窗口。
+        在历史数据上进行滑动窗口快速筛选，返回 Top-N 高分窗口用于多段融合。
         
         流程:
         1. 将连续数据切成 N 个重叠窗口
         2. 对每个窗口运行快速整定（verbose=False）
-        3. 按评分排序，返回最优窗口
+        3. 按评分排序，返回 Top-N 窗口
         
         Args:
             history_data: 完整历史数据
@@ -280,7 +280,7 @@ class TuningOrchestrator(LoggerMixin):
             sw_config: 滑动窗口配置
             
         Returns:
-            最优窗口 dict {'start_time': ms, 'end_time': ms} 或 None
+            Top-N 窗口列表 [{'start_time': ms, 'end_time': ms}, ...] 或空列表
         """
         window_h = params.get('window_hours', sw_config.get('window_hours', 6.0))
         step_h = params.get('step_hours', sw_config.get('step_hours', 2.0))
@@ -306,7 +306,7 @@ class TuningOrchestrator(LoggerMixin):
         
         if len(search_windows) < min_windows:
             self.log(f"   ℹ️ 滑窗: 数据时长不足，仅能切出 {len(search_windows)} 个窗口（需≥{min_windows}），跳过滑窗寻优")
-            return None
+            return []
         
         self.log(f"\n{'='*60}")
         self.log(f"🔍 滑动窗口寻优: {len(search_windows)} 个候选窗口 (窗口={window_h}h, 步长={step_h}h)")
@@ -366,18 +366,27 @@ class TuningOrchestrator(LoggerMixin):
         
         if not candidates:
             self.log("   ⚠️ 所有窗口评估失败，跳过滑窗寻优")
-            return None
+            return []
         
         # 按评分降序排列
         candidates.sort(key=lambda c: c['score'], reverse=True)
-        best = candidates[0]
+        
+        # 选取 Top N 个分数达标的窗口用于多段融合
+        top_n = sw_config.get('top_n', 1)
+        min_score_ratio = sw_config.get('top_n_min_score_ratio', 0.85)
+        best_score = candidates[0]['score']
+        score_threshold = best_score * min_score_ratio
+        
+        top_candidates = [c for c in candidates[:top_n] if c['score'] >= score_threshold]
         
         from datetime import datetime
-        best_st = datetime.fromtimestamp(best['window']['start_time']/1000).strftime('%m-%d %H:%M')
-        best_et = datetime.fromtimestamp(best['window']['end_time']/1000).strftime('%m-%d %H:%M')
-        self.log(f"\n   🏆 最优窗口: {best_st} ~ {best_et} (评分={best['score']:.2f})")
+        self.log(f"\n   🏆 Top {len(top_candidates)} 窗口 (最高分={best_score:.2f}, 阈值={score_threshold:.2f}):")
+        for rank, c in enumerate(top_candidates, 1):
+            st_str = datetime.fromtimestamp(c['window']['start_time']/1000).strftime('%m-%d %H:%M')
+            et_str = datetime.fromtimestamp(c['window']['end_time']/1000).strftime('%m-%d %H:%M')
+            self.log(f"      #{rank}: {st_str} ~ {et_str} (评分={c['score']:.2f})")
         
-        return best['window']
+        return [c['window'] for c in top_candidates]
     
 
     

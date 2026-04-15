@@ -710,12 +710,23 @@ class OscillationTuner(LoggerMixin):
                 elif len(zc_indices) >= 2:
                     T_osc = float((zc_indices[-1] - zc_indices[0]) / (len(zc_indices)-1) * 2.0 * dt)
                 elif len(zc_indices) == 1:
-                    T_osc = float(data_duration * 1.5)
+                    # [FIX] 单过零点时 T_osc 估计极不可靠，原先 data_duration*1.5 会导致
+                    # T_osc=7500s → Ti=3780s → 触碰 ti_max=3600 边界。
+                    # 改用更保守的 data_duration（不乘 1.5），并设上限 1800s
+                    T_osc = float(min(data_duration, 1800.0))
                 else:
-                    T_osc = float(data_duration)
+                    # [FIX] 无过零点：数据可能有单向趋势，不是真正的振荡。
+                    # 原先取 data_duration 会导致极大 T_osc。改为保守估计。
+                    T_osc = float(min(data_duration * 0.5, 1200.0))
                 
                 # 下限托底
                 T_osc = max(T_osc, L_approx * 8.0, 240.0)
+                
+                # [NEW] 物理上限钳位：液位罐体的自然振荡周期极少超过 1 小时
+                T_osc_max = 3600.0
+                if T_osc > T_osc_max:
+                    self.log(f"   ⚠️ T_osc={T_osc:.0f}s 超出物理合理范围，钳位至 {T_osc_max:.0f}s (过零点={len(zc_indices)}个)")
+                    T_osc = T_osc_max
             except Exception:
                 T_osc = max(L_approx * 8.0, 240.0)
             

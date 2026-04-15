@@ -404,6 +404,14 @@ class DataPreprocessor(LoggerMixin):
         # 综合判断是否有效
         is_valid = (is_correlated or self._check_integral_response(y, u)) and not is_nonlinear
         
+        # [FIX] Causal Response Hard Gate (因果响应硬门控)
+        # 如果 MV 有显著变化（MV range > 1.0），但 PV 几乎没有相关响应（abs(correlation) < 0.15），
+        # 极大概率是前馈干扰、闭环强压或阀门卡死，模型辨识会彻底失效，直接判为无效
+        mv_range = np.ptp(u)
+        if mv_range > 1.0 and abs(correlation) < 0.15 and not self._check_integral_response(y, u):
+            is_valid = False
+            self.log(f"   ⚠️ 触发因果硬门控: MV剧烈变化({mv_range:.2f})但PV无相关响应(corr={correlation:.3f})")
+        
         quality = DataQuality(
             noise_ratio=noise_ratio,
             correlation=correlation,

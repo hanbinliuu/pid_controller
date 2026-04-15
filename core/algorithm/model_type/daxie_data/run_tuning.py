@@ -62,13 +62,13 @@ LOOP_CONFIGS = {
     "50104": {
         "device": "2216_LIC_50104",
         "loop_type": "level",
-        "start_time": "2025-11-20 00:00:00",
+        "start_time": "2026-03-13 00:00:00",
         "end_time": "2025-11-23 00:00:00"
     },
     "50108": {
         "device": "2216_LIC_50108",
         "loop_type": "level",
-        "start_time": "2025-11-25 00:00:00",
+        "start_time": "2026-03-13 00:00:00",
         "end_time": "2025-11-28 00:00:00"
     }
 }
@@ -188,11 +188,23 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
                 
             print(f"\n✅ 滑窗寻优记录表已导出至 {csv_path.relative_to(SCRIPT_DIR)}")
             
-            # 取最优片段作为正式输出
-            best_record = csv_records[0]
-            best_idx = int(best_record["segment_idx"]) - 1
-            final_run_windows = [search_windows[best_idx]]
-            print(f"\n🚀 正在提取 Top 1 最优测试段 (得分 {best_record['score']:.2f}) 重新生成最终分析大图与报告...")
+            # 取 Top N 高分片段用于多窗口融合（提升参数鲁棒性）
+            top_n = 3
+            min_score_ratio = 0.85
+            best_score = csv_records[0]['score']
+            score_threshold = best_score * min_score_ratio
+            top_records = [r for r in csv_records[:top_n] if r['score'] >= score_threshold]
+            final_run_windows = [search_windows[int(r["segment_idx"]) - 1] for r in top_records]
+            scores_str = ", ".join(f"{r['score']:.2f}" for r in top_records)
+            
+            # 保存 Top-1 信息用于质量门控（如果多段融合效果更差则退化为 Top-1）
+            best_single_score = best_score
+            best_single_window = [search_windows[int(csv_records[0]["segment_idx"]) - 1]]
+            
+            if len(top_records) > 1:
+                print(f"\n🚀 正在提取 Top {len(top_records)} 最优测试段 (得分: {scores_str}) 进行多窗口融合...")
+            else:
+                print(f"\n🚀 正在提取最优测试段 (得分: {scores_str}) 生成最终分析大图与报告...")
             
     else:
         # ---------------------------------------------------------
@@ -209,7 +221,6 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
                 print("❌ 截取的数据为空，请检查你在 LOOP_CONFIGS 设置的 start_time 和 end_time 是否超出了源数据的范围！")
                 return
             final_run_windows = [{"start_time": sliced_data[0]["timestamp"], "end_time": sliced_data[-1]["timestamp"]}]
-        
         print("\n🚀 运行 TuningOrchestrator (常规算法探测段评估) ...")
 
     # ==========================================
@@ -246,6 +257,31 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
     
     final_score = result.get('model_rating', 0.0)
     final_pid = result.get('pid_parameters', {})
+    
+    # ==========================================
+    # 质量门控 (Quality Gate): 多段融合 vs Top-1
+    # ==========================================
+    # 如果多段融合评分低于网格搜索阶段的最高单段评分，
+    # 自动退化为 Top-1 单段重跑，确保多段融合不会劣化结果
+    if enable_grid_search and len(final_run_windows) > 1 and csv_records:
+        if final_score < best_single_score:
+            print(f"\n⚠️ [质量门控] 多段融合评分 {final_score:.2f} < 最佳单段评分 {best_single_score:.2f}")
+            print(f"   → 自动退化为 Top-1 最优单段重跑...")
+            
+            final_run_windows = best_single_window
+            input_data_final['qualified_windows'] = final_run_windows
+            
+            t0 = time.time()
+            orchestrator_final = TuningOrchestrator(verbose=True, process_context=tuning_context)
+            result = orchestrator_final.run(input_data_final)
+            t1 = time.time()
+            
+            print(f"\n⏱️ Top-1 重跑耗时: {t1 - t0:.2f} 秒")
+            final_score = result.get('model_rating', 0.0)
+            final_pid = result.get('pid_parameters', {})
+            print(f"   ✅ Top-1 重跑评分: {final_score:.2f} (原多段: {final_score:.2f})")
+        else:
+            print(f"\n✅ [质量门控] 多段融合评分 {final_score:.2f} ≥ 最佳单段评分 {best_single_score:.2f}，保持融合结果")
     rating_details = result.get('rating_details', {})
     perf_score = rating_details.get('performance_score', 0.0)
     conf_score = rating_details.get('method_confidence', 0.0)
@@ -332,8 +368,8 @@ if __name__ == "__main__":
     ENABLE_GRID_SEARCH = (args.mode == "auto_pipeline")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-11-25 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-11-26 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2026-03-13 00:00:00"
+    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2026-03-14 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")

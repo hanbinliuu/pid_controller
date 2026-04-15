@@ -216,4 +216,6 @@ SLIDING_WINDOW = {
     'min_windows': 2,                        # 最少需要的窗口数（少于此数直接跳过滑窗）
     'max_windows': 20,                       # 最大窗口数限制（防止数据过长导致过多计算）
     'fast_screen_verbose': False,            # 快筛阶段是否输出详细日志
+    'top_n': 3,                              # 滑窗寻优返回 Top N 个高分窗口用于多段融合（1=退化为原始单窗口行为）
+    'top_n_min_score_ratio': 0.85,           # Top N 窗口的最低评分比率（相对于最高分），低于此的窗口不纳入融合
 }
