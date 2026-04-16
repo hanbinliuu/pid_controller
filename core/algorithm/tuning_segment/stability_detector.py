@@ -1729,10 +1729,13 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
                 seg_start_time = int(timestamps[seg_start])
                 seg_end_idx = min(seg_end - 1, len(timestamps) - 1)
                 seg_end_time = int(timestamps[seg_end_idx])
+                quality_score = _estimate_level3_window_quality(
+                    pv_data, mv_data, seg_start, seg_end
+                )
                 qualified_windows.append({
                     "start_time": seg_start_time,
                     "end_time": seg_end_time,
-                    "quality_score": 0.2,  # Level 3 兜底段，默认较低质量
+                    "quality_score": quality_score,
                     "source": "level3_fallback",
                 })
         
@@ -1798,6 +1801,37 @@ def _segments_to_windows(segments: List[Tuple], timestamps: List, source: str = 
         selected.append(w)
 
     return selected
+
+
+def _estimate_level3_window_quality(pv_data: np.ndarray, mv_data: Optional[np.ndarray],
+                                    seg_start: int, seg_end: int) -> float:
+    """
+    Level3 兜底窗口质量估计（0~1）:
+    - MV 扰动幅度越明显越好
+    - PV 响应幅度越明显越好
+    - 段长度过短会降权
+    """
+    s = max(0, int(seg_start))
+    e = max(s + 1, int(seg_end))
+    pv_seg = np.asarray(pv_data[s:e], dtype=float)
+    if pv_seg.size < 5:
+        return 0.15
+
+    pv_range = float(np.max(pv_seg) - np.min(pv_seg))
+    pv_std = float(np.std(pv_seg))
+    length = pv_seg.size
+
+    mv_quality = 0.25  # 缺省给中低分，避免无 MV 时完全失真
+    if mv_data is not None and len(mv_data) >= e:
+        mv_seg = np.asarray(mv_data[s:e], dtype=float)
+        mv_range = float(np.max(mv_seg) - np.min(mv_seg))
+        mv_quality = float(np.clip(mv_range / 20.0, 0.0, 1.0))
+
+    pv_quality = float(np.clip((0.7 * (pv_range / 6.0) + 0.3 * (pv_std / 2.0)), 0.0, 1.0))
+    len_quality = float(np.clip(length / 360.0, 0.35, 1.0))
+
+    quality = 0.10 + 0.45 * mv_quality + 0.35 * pv_quality + 0.10 * len_quality
+    return round(float(np.clip(quality, 0.10, 0.65)), 4)
 
 
 def merge_adjacent_periods(

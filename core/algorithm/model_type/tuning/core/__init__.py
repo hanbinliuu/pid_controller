@@ -6,6 +6,7 @@
 """
 
 from .pid_calculator import PIDCalculator
+from .pid_guard import PidGuardService
 from .data_classes import DataQualityInfo, ClosedLoopMetrics
 
-__all__ = ["PIDCalculator", "DataQualityInfo", "ClosedLoopMetrics"]
+__all__ = ["PIDCalculator", "PidGuardService", "DataQualityInfo", "ClosedLoopMetrics"]

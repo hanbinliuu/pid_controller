@@ -9,10 +9,11 @@ class IdentificationStage(PipelineStage):
     2. 对正常段调用 SegmentFitter.fit_all_segments
     3. 检查拟合是否全失败，如果全失败且有兜底段，走 Oscillation Fallback
     """
-    def __init__(self, segment_fitter, oscillation_tuner, logger_mixin=None):
+    def __init__(self, segment_fitter, oscillation_tuner, fallback_manager=None, logger_mixin=None):
         super().__init__(logger_mixin)
         self._segment_fitter = segment_fitter
         self._oscillation_tuner = oscillation_tuner
+        self._fallback_manager = fallback_manager
 
     def _precheck_oscillation(self, context: TuningContext) -> tuple:
         """预检过滤高振荡段"""
@@ -64,16 +65,27 @@ class IdentificationStage(PipelineStage):
             force_fallback = False
 
         if force_fallback:
-            oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
-                context.segments_for_fitting, context.results_for_fitting, context.get_current_pid(), force=True
-            )
-            if oscillation_result is not None:
-                context.final_result = self._oscillation_tuner.build_oscillation_output(
-                    oscillation_result, context.hist_data, context.time_range, context.input_data.tuning_window,
-                    context.original_segments, context.original_results
+            if self._fallback_manager is not None:
+                ok = self._fallback_manager.try_fallback(
+                    context,
+                    context.segments_for_fitting,
+                    context.results_for_fitting,
+                    force=True,
+                    start_log=None,
                 )
+                if not ok:
+                    context.is_fallback_triggered = True
             else:
-                context.is_fallback_triggered = True
+                oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
+                    context.segments_for_fitting, context.results_for_fitting, context.get_current_pid(), force=True
+                )
+                if oscillation_result is not None:
+                    context.final_result = self._oscillation_tuner.build_oscillation_output(
+                        oscillation_result, context.hist_data, context.time_range, context.input_data.tuning_window,
+                        context.original_segments, context.original_results
+                    )
+                else:
+                    context.is_fallback_triggered = True
             return context
 
         # [FIX] 路由优先级修正：如果有高振荡段且质量优于正常段，优先用全量段做振荡整定
@@ -93,18 +105,28 @@ class IdentificationStage(PipelineStage):
                 # [FIX-v2] 只传高振荡段！不要掺入 poor quality 的正常段。
                 # 原因：混入弱信号段会导致 (1) 振荡整定器内部走不同分支 (2) 相关性互相抵消导致符号校正失败
                 # Grid Search 之所以得分更高，正是因为它只用了一个纯净的窗口。
-                oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
-                    osc_segs, osc_results, context.get_current_pid(), force=True,
-                    tuning_constraints=context.export_tuning_constraints()
-                )
-                if oscillation_result is not None and oscillation_result.get('success', False):
-                    context.final_result = self._oscillation_tuner.build_oscillation_output(
-                        oscillation_result, context.hist_data, context.time_range, context.input_data.tuning_window,
-                        context.original_segments, context.original_results,
+                if self._fallback_manager is not None:
+                    ok = self._fallback_manager.try_fallback(
+                        context,
+                        osc_segs,
+                        osc_results,
+                        force=True,
+                        start_log=None,
+                    )
+                    if ok:
+                        return context
+                else:
+                    oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
+                        osc_segs, osc_results, context.get_current_pid(), force=True,
                         tuning_constraints=context.export_tuning_constraints()
                     )
-                    return context
-                else:
+                    if oscillation_result is not None and oscillation_result.get('success', False):
+                        context.final_result = self._oscillation_tuner.build_oscillation_output(
+                            oscillation_result, context.hist_data, context.time_range, context.input_data.tuning_window,
+                            context.original_segments, context.original_results,
+                            tuning_constraints=context.export_tuning_constraints()
+                        )
+                        return context
                     self.log(f"   ⚠️ 纯振荡段整定未成功，降级到正常段模型拟合")
         
         # 3. 对正常段尝试模型拟合
@@ -114,35 +136,57 @@ class IdentificationStage(PipelineStage):
         
         # 4. 如果正常段拟合效果差，尝试振荡整定 (柔性fallback)
         # [FIX] 使用全量段（含高振荡段）做振荡整定，而非仅用质量差的正常段
-        oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
-            all_segs, all_results + segment_results_fitted if osc_segs else segment_results_fitted,
-            context.get_current_pid()
-        )
-        if oscillation_result is not None:
-            context.final_result = self._oscillation_tuner.build_oscillation_output(
-                oscillation_result, context.hist_data, context.time_range, context.input_data.tuning_window,
-                context.original_segments, context.original_results,
-                tuning_constraints=context.export_tuning_constraints()
+        if self._fallback_manager is not None:
+            ok = self._fallback_manager.try_fallback(
+                context,
+                all_segs,
+                all_results + segment_results_fitted if osc_segs else segment_results_fitted,
+                force=False,
+                start_log=None,
             )
-            return context
+            if ok:
+                return context
+        else:
+            oscillation_result = self._oscillation_tuner.try_oscillation_tuning(
+                all_segs, all_results + segment_results_fitted if osc_segs else segment_results_fitted,
+                context.get_current_pid()
+            )
+            if oscillation_result is not None:
+                context.final_result = self._oscillation_tuner.build_oscillation_output(
+                    oscillation_result, context.hist_data, context.time_range, context.input_data.tuning_window,
+                    context.original_segments, context.original_results,
+                    tuning_constraints=context.export_tuning_constraints()
+                )
+                return context
 
         # 5. 检查是否所有的时域拟合都彻底失败了
         if self._check_all_fitting_failed(segment_results_fitted):
             # [FIX] 最终兜底也使用全量段（包含被预检跳过的高振荡段）
             self.log("🔄 整定段拟合失败，使用全量段（含高振荡段）强制临界法整定")
-            fallback_result = self._oscillation_tuner.try_oscillation_tuning(
-                all_segs if osc_segs else (context.valid_segments or all_segs),
-                all_results if osc_segs else (context.segment_results or all_results),
-                context.get_current_pid(), force=True,
-                tuning_constraints=context.export_tuning_constraints()
-            )
-            if fallback_result is not None:
-                context.final_result = self._oscillation_tuner.build_oscillation_output(
-                    fallback_result, context.hist_data, context.time_range, context.input_data.tuning_window,
-                    context.original_segments, context.original_results,
+            if self._fallback_manager is not None:
+                ok = self._fallback_manager.try_fallback(
+                    context,
+                    all_segs if osc_segs else (context.valid_segments or all_segs),
+                    all_results if osc_segs else (context.segment_results or all_results),
+                    force=True,
+                    start_log=None,
+                )
+                if ok:
+                    return context
+            else:
+                fallback_result = self._oscillation_tuner.try_oscillation_tuning(
+                    all_segs if osc_segs else (context.valid_segments or all_segs),
+                    all_results if osc_segs else (context.segment_results or all_results),
+                    context.get_current_pid(), force=True,
                     tuning_constraints=context.export_tuning_constraints()
                 )
-                return context
+                if fallback_result is not None:
+                    context.final_result = self._oscillation_tuner.build_oscillation_output(
+                        fallback_result, context.hist_data, context.time_range, context.input_data.tuning_window,
+                        context.original_segments, context.original_results,
+                        tuning_constraints=context.export_tuning_constraints()
+                    )
+                    return context
             
             self.log("❌ 所有模型拟合和振荡检测均失败，无法整定")
             context.is_fallback_triggered = True

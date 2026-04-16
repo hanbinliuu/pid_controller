@@ -20,7 +20,6 @@
 """
 
 import numpy as np
-import math
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -29,6 +28,7 @@ from ..config import Config
 from ..data_models import HistoricalData, SegmentResult
 from ..logger import LoggerMixin
 from ..fitting.relay_identifier import RelayIdentifier
+from .core.pid_guard import PidGuardService
 from .verification.stability_analyzer import StabilityAnalyzer, StabilityMargins
 
 
@@ -222,123 +222,30 @@ class TuningMethodSelector(LoggerMixin):
         return best
     
     def _extract_pid_triplet(self, pid: Optional[Dict]) -> Tuple[float, float, float]:
-        """从任意 PID 字典中提取 Kp/Ti/Td，兼容 kp/Kp、ti/Ti、pb/Pb。"""
-        if not pid:
-            return 0.0, 0.0, 0.0
-        kp = pid.get('Kp', pid.get('kp', 0.0))
-        ti = pid.get('Ti', pid.get('ti', 0.0))
-        td = pid.get('Td', pid.get('td', 0.0))
-        if abs(kp) < self._epsilon:
-            pb = pid.get('pb', pid.get('Pb', 0.0))
-            if pb and abs(pb) > self._epsilon:
-                kp = 100.0 / float(pb)
-        return float(kp), float(ti), float(td)
+        """兼容包装：委托给共享护栏服务。"""
+        return PidGuardService.extract_pid_triplet(pid, self._epsilon)
 
     def _compute_pid_move_penalty(self, current_pid: Optional[Dict], candidate_pid: Dict) -> Tuple[float, Dict[str, float]]:
-        """
-        计算相对当前 PID 的变更惩罚（0~1）。
-        使用对数倍率度量，避免靠人工“试凑”保守度。
-        """
-        if not current_pid or not candidate_pid:
-            return 0.0, {
-                'enabled': 0.0,
-                'penalty': 0.0,
-                'kp_move': 0.0,
-                'ti_move': 0.0,
-                'sign_flip': 0.0,
-            }
-
-        cfg = Config.MODEL_SELECTOR
-        ratio_kp = max(1.01, float(cfg.get('method_select_move_ratio_kp', 4.0)))
-        ratio_ti = max(1.01, float(cfg.get('method_select_move_ratio_ti', 4.0)))
-        w_kp = float(cfg.get('method_select_move_kp_weight', 0.6))
-        w_ti = float(cfg.get('method_select_move_ti_weight', 0.4))
-        sign_flip_penalty = float(cfg.get('method_select_sign_flip_penalty', 0.7))
-
-        kp_old, ti_old, _ = self._extract_pid_triplet(current_pid)
-        kp_new, ti_new, _ = self._extract_pid_triplet(candidate_pid)
-
-        kp_move = 0.0
-        if abs(kp_old) > self._epsilon and abs(kp_new) > self._epsilon:
-            kp_move = min(1.0, abs(math.log(abs(kp_new) / abs(kp_old))) / math.log(ratio_kp))
-
-        ti_move = 0.0
-        if ti_old > self._epsilon and ti_new > self._epsilon:
-            ti_move = min(1.0, abs(math.log(ti_new / ti_old)) / math.log(ratio_ti))
-
-        sign_flip = 0.0
-        if abs(kp_old) > self._epsilon and abs(kp_new) > self._epsilon and kp_old * kp_new < 0:
-            sign_flip = 1.0
-
-        penalty = min(1.0, w_kp * kp_move + w_ti * ti_move + sign_flip_penalty * sign_flip)
-        return penalty, {
-            'enabled': 1.0,
-            'penalty': float(penalty),
-            'kp_move': float(kp_move),
-            'ti_move': float(ti_move),
-            'sign_flip': float(sign_flip),
-        }
+        """兼容包装：委托给共享护栏服务。"""
+        return PidGuardService.compute_move_penalty(
+            current_pid=current_pid,
+            candidate_pid=candidate_pid,
+            cfg=Config.MODEL_SELECTOR,
+            eps=self._epsilon,
+        )
 
     def _apply_current_pid_guard(self, pid_params: Dict[str, float],
                                  current_pid: Optional[Dict],
                                  data_confidence: float) -> Dict[str, float]:
-        """
-        相对 current_pid 的单次调参护栏。
-        数据质量越高，允许变化幅度越大；低质量时自动收敛到更保守的改变量。
-        """
-        cfg = Config.MODEL_SELECTOR
-        if not cfg.get('model_based_use_current_pid_guard', True):
-            return pid_params
-        if not current_pid:
-            return pid_params
-
-        kp_old, ti_old, _ = self._extract_pid_triplet(current_pid)
-        if abs(kp_old) < self._epsilon and ti_old <= self._epsilon:
-            return pid_params
-
-        q = float(np.clip(data_confidence, 0.0, 1.0))
-        kp_expand = float(cfg.get('model_based_kp_max_expand_base', 2.0)) + float(cfg.get('model_based_kp_max_expand_gain', 2.0)) * q
-        kp_shrink = float(cfg.get('model_based_kp_max_shrink_base', 2.0)) + float(cfg.get('model_based_kp_max_shrink_gain', 2.0)) * q
-        ti_expand = float(cfg.get('model_based_ti_max_expand_base', 1.8)) + float(cfg.get('model_based_ti_max_expand_gain', 1.2)) * q
-        ti_shrink = float(cfg.get('model_based_ti_max_shrink_base', 2.2)) + float(cfg.get('model_based_ti_max_shrink_gain', 1.8)) * q
-
-        adjusted = dict(pid_params)
-        changed = False
-
-        kp_new = float(adjusted.get('Kp', 0.0))
-        if abs(kp_old) > self._epsilon and abs(kp_new) > self._epsilon:
-            kp_abs = abs(kp_new)
-            kp_lower = abs(kp_old) / max(1.01, kp_shrink)
-            kp_upper = abs(kp_old) * max(1.01, kp_expand)
-            kp_abs_capped = float(np.clip(kp_abs, kp_lower, kp_upper))
-            kp_sign = 1.0 if kp_old >= 0 else -1.0
-            kp_capped = kp_sign * kp_abs_capped
-            if abs(kp_capped - kp_new) > 1e-9:
-                changed = True
-                adjusted['Kp'] = round(kp_capped, 4)
-
-        ti_new = float(adjusted.get('Ti', 0.0))
-        if ti_old > self._epsilon and ti_new > self._epsilon:
-            ti_lower = ti_old / max(1.01, ti_shrink)
-            ti_upper = ti_old * max(1.01, ti_expand)
-            ti_capped = float(np.clip(ti_new, ti_lower, ti_upper))
-            if abs(ti_capped - ti_new) > 1e-9:
-                changed = True
-                adjusted['Ti'] = round(ti_capped, 2)
-
-        if changed:
-            kp_val = float(adjusted.get('Kp', 0.0))
-            ti_val = float(adjusted.get('Ti', 0.0))
-            td_val = float(adjusted.get('Td', 0.0))
-            adjusted['Ki'] = round(kp_val / ti_val, 4) if ti_val > self._epsilon else 0.0
-            adjusted['Kd'] = round(kp_val * td_val, 4)
-            adjusted['pb'] = round(100.0 / abs(kp_val), 2) if abs(kp_val) > self._epsilon else adjusted.get('pb', 100.0)
-            self.log(
-                f"   🔒 current_pid护栏生效: Kp→{adjusted.get('Kp', 0.0):.4f}, "
-                f"Ti→{adjusted.get('Ti', 0.0):.2f}s (q={q:.2f})"
-            )
-
-        return adjusted
+        """兼容包装：委托给共享护栏服务。"""
+        return PidGuardService.apply_current_pid_guard(
+            pid_params=pid_params,
+            current_pid=current_pid,
+            data_confidence=data_confidence,
+            cfg=Config.MODEL_SELECTOR,
+            eps=self._epsilon,
+            log_fn=self.log,
+        )
 
     def _select_best_by_stability(self, candidates: List[TuningMethodResult],
                                   current_pid: Optional[Dict] = None) -> TuningMethodResult:

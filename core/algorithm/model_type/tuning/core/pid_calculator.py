@@ -18,6 +18,7 @@ from ...config import Config, ModelType
 from ...data_models import FusionResult
 
 from .data_classes import DataQualityInfo
+from .pid_guard import PidGuardService
 from .tuning_methods import TuningMethodsMixin
 from ..oscillation.oscillation_analysis import OscillationAnalysisMixin
 from ..verification.closed_loop_sim import ClosedLoopSimMixin
@@ -59,153 +60,40 @@ class PIDCalculator(TuningMethodsMixin, OscillationAnalysisMixin,
         return kp_max_from_pb / pb_min
 
     def _extract_pid_triplet(self, pid: Optional[Dict]) -> Tuple[float, float, float]:
-        """从任意 PID 字典中提取 Kp/Ti/Td，兼容 kp/Kp、ti/Ti、pb/Pb。"""
-        if not pid:
-            return 0.0, 0.0, 0.0
-        kp = pid.get('Kp', pid.get('kp', 0.0))
-        ti = pid.get('Ti', pid.get('ti', 0.0))
-        td = pid.get('Td', pid.get('td', 0.0))
-        if abs(kp) < self._epsilon:
-            pb = pid.get('pb', pid.get('Pb', 0.0))
-            if pb and abs(pb) > self._epsilon:
-                kp = 100.0 / float(pb)
-        return float(kp), float(ti), float(td)
+        """兼容包装：委托给共享护栏服务。"""
+        return PidGuardService.extract_pid_triplet(pid, self._epsilon)
 
     def _apply_current_pid_guard(self, pid_params: Dict[str, float],
                                  current_pid: Optional[Dict],
                                  data_confidence: float) -> Dict[str, float]:
-        """
-        相对 current_pid 的单次调参护栏。
-        数据质量越高，允许幅度越大；低质量时自动收紧。
-        """
-        cfg = Config.MODEL_SELECTOR
-        if not cfg.get('model_based_use_current_pid_guard', True):
-            return pid_params
-        if not current_pid:
-            return pid_params
-
-        kp_old, ti_old, _ = self._extract_pid_triplet(current_pid)
-        if abs(kp_old) < self._epsilon and ti_old <= self._epsilon:
-            return pid_params
-
-        q = float(np.clip(data_confidence, 0.0, 1.0))
-        kp_expand = float(cfg.get('model_based_kp_max_expand_base', 2.0)) + float(cfg.get('model_based_kp_max_expand_gain', 2.0)) * q
-        kp_shrink = float(cfg.get('model_based_kp_max_shrink_base', 2.0)) + float(cfg.get('model_based_kp_max_shrink_gain', 2.0)) * q
-        ti_expand = float(cfg.get('model_based_ti_max_expand_base', 1.8)) + float(cfg.get('model_based_ti_max_expand_gain', 1.2)) * q
-        ti_shrink = float(cfg.get('model_based_ti_max_shrink_base', 2.2)) + float(cfg.get('model_based_ti_max_shrink_gain', 1.8)) * q
-
-        adjusted = dict(pid_params)
-        changed = False
-
-        kp_new = float(adjusted.get('Kp', 0.0))
-        if abs(kp_old) > self._epsilon and abs(kp_new) > self._epsilon:
-            kp_abs = abs(kp_new)
-            kp_lower = abs(kp_old) / max(1.01, kp_shrink)
-            kp_upper = abs(kp_old) * max(1.01, kp_expand)
-            kp_abs_capped = float(np.clip(kp_abs, kp_lower, kp_upper))
-            kp_sign = 1.0 if kp_old >= 0 else -1.0
-            kp_capped = kp_sign * kp_abs_capped
-            if abs(kp_capped - kp_new) > 1e-9:
-                changed = True
-                adjusted['Kp'] = round(kp_capped, 4)
-
-        ti_new = float(adjusted.get('Ti', 0.0))
-        if ti_old > self._epsilon and ti_new > self._epsilon:
-            ti_lower = ti_old / max(1.01, ti_shrink)
-            ti_upper = ti_old * max(1.01, ti_expand)
-            ti_capped = float(np.clip(ti_new, ti_lower, ti_upper))
-            if abs(ti_capped - ti_new) > 1e-9:
-                changed = True
-                adjusted['Ti'] = round(ti_capped, 2)
-
-        if changed:
-            kp_val = float(adjusted.get('Kp', 0.0))
-            ti_val = float(adjusted.get('Ti', 0.0))
-            td_val = float(adjusted.get('Td', 0.0))
-            adjusted['Ki'] = round(kp_val / ti_val, 4) if ti_val > self._epsilon else 0.0
-            adjusted['Kd'] = round(kp_val * td_val, 4)
-            adjusted['pb'] = round(100.0 / abs(kp_val), 2) if abs(kp_val) > self._epsilon else adjusted.get('pb', 100.0)
-            self._log_robust(
-                f"   🔒 current_pid护栏生效: Kp→{adjusted.get('Kp', 0.0):.4f}, "
-                f"Ti→{adjusted.get('Ti', 0.0):.2f}s (q={q:.2f})"
-            )
-
-        return adjusted
+        """兼容包装：委托给共享护栏服务。"""
+        return PidGuardService.apply_current_pid_guard(
+            pid_params=pid_params,
+            current_pid=current_pid,
+            data_confidence=data_confidence,
+            cfg=Config.MODEL_SELECTOR,
+            eps=self._epsilon,
+            log_fn=self._log_robust,
+        )
 
     def _apply_no_current_pid_guard(self, pid_params: Dict[str, float],
                                     quality_info: DataQualityInfo,
                                     loop_type: str = None,
                                     tuning_constraints: dict = None,
                                     model_params: Optional[Dict[str, float]] = None) -> Dict[str, float]:
-        """
-        当 current_pid 缺失时，基于数据风险自适应约束 PID，避免算法输出过激参数。
-        """
-        cfg = Config.MODEL_SELECTOR
-        if not cfg.get('no_current_pid_guard_enabled', True):
-            return pid_params
-
-        tuning_constraints = tuning_constraints or {}
-        model_params = model_params or {}
-        adjusted = dict(pid_params)
-
-        q = float(np.clip(getattr(quality_info, 'quality_score', 0.5), 0.0, 1.0))
-        r2 = float(np.clip(getattr(quality_info, 'r_squared', 0.5), 0.0, 1.0))
-        consistency = float(np.clip(getattr(quality_info, 'consistency_score', 0.5), 0.0, 1.0))
-        osc = float(np.clip(getattr(quality_info, 'oscillation_ratio', 0.0), 0.0, 1.0))
-        risk = float(np.clip(1.0 - (0.40 * q + 0.35 * r2 + 0.15 * consistency + 0.10 * (1.0 - osc)), 0.0, 1.0))
-
-        pb_floor_factor = float(cfg.get('no_current_pid_pb_floor_factor', 0.8))
-        pb_risk_gain = float(cfg.get('no_current_pid_pb_risk_gain', 1.0))
-        ti_risk_gain = float(cfg.get('no_current_pid_ti_floor_risk_gain', 1.2))
-
-        # 1) PB 下限护栏（风险高时强制更保守）
-        pb_min = float(tuning_constraints.get('pb_min', 0.0) or 0.0)
-        if pb_min <= 0.0:
-            robust_cfg = Config.ROBUST_TUNING
-            if loop_type in ['flow', 'pressure']:
-                pb_min = float(robust_cfg.get('min_pb_flow', 50.0))
-            elif loop_type in ['temperature', 'level']:
-                pb_min = float(robust_cfg.get('min_pb_temp', 100.0))
-            else:
-                pb_min = 35.0
-        pb_floor = pb_min * max(0.2, pb_floor_factor + pb_risk_gain * risk)
-
-        kp = float(adjusted.get('Kp', 0.0))
-        if abs(kp) > self._epsilon:
-            pb_now = 100.0 / abs(kp)
-            if pb_now + 1e-9 < pb_floor:
-                kp_sign = 1.0 if kp >= 0 else -1.0
-                kp = kp_sign * (100.0 / pb_floor)
-                adjusted['Kp'] = round(kp, 4)
-
-        # 2) Ti 下限护栏（风险高时放大 Ti 下限）
-        T1 = max(float(model_params.get('T1', 0.0)), self._epsilon)
-        L = max(float(model_params.get('L', 0.0)), 0.0)
-        ti_min_cfg = float(self._pid_constraints.get('ti_min', 0.1))
-        if loop_type == 'level':
-            ti_base = 60.0 * (1.0 + self._pid_constraints.get('ti_lower_buffer_ratio', 0.08))
-        elif loop_type == 'temperature':
-            ti_base = 5.0
-        else:
-            ti_base = max(ti_min_cfg, 0.25 * T1, 1.5 * L)
-        ti_floor = ti_base * (1.0 + ti_risk_gain * risk)
-
-        ti = float(adjusted.get('Ti', 0.0))
-        if ti + 1e-9 < ti_floor:
-            adjusted['Ti'] = round(ti_floor, 2)
-
-        # 3) 回填一致性字段
-        kp_val = float(adjusted.get('Kp', 0.0))
-        ti_val = float(adjusted.get('Ti', 0.0))
-        td_val = float(adjusted.get('Td', 0.0))
-        adjusted['Ki'] = round(kp_val / ti_val, 4) if ti_val > self._epsilon else 0.0
-        adjusted['Kd'] = round(kp_val * td_val, 4)
-        adjusted['pb'] = round(100.0 / abs(kp_val), 2) if abs(kp_val) > self._epsilon else adjusted.get('pb', 100.0)
-        self._log_robust(
-            f"   🔒 no-current_pid护栏生效: 风险={risk:.2f}, PB={adjusted.get('pb', 0.0):.2f}%, "
-            f"Ti={adjusted.get('Ti', 0.0):.2f}s"
+        """兼容包装：委托给共享护栏服务。"""
+        return PidGuardService.apply_no_current_pid_guard(
+            pid_params=pid_params,
+            quality_info=quality_info,
+            loop_type=loop_type,
+            tuning_constraints=tuning_constraints or {},
+            model_params=model_params or {},
+            pid_constraints=self._pid_constraints,
+            robust_cfg=Config.ROBUST_TUNING,
+            cfg=Config.MODEL_SELECTOR,
+            eps=self._epsilon,
+            log_fn=self._log_robust,
         )
-        return adjusted
     
     def calculate(self, K: float, T1: float, T2: float, L: float,
                   model_type: str, lambda_factor: float,

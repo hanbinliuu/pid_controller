@@ -1,4 +1,5 @@
 from .context import TuningContext
+from .fallback_manager import PipelineFallbackManager
 from .stages.stage_01_data_prep import DataPrepStage
 from .stages.stage_02_segmentation import SegmentationStage
 from .stages.stage_03_identification import IdentificationStage
@@ -8,6 +9,7 @@ from .stages.stage_05b_self_optimize import SelfOptimizeStage
 from .stages.stage_06_output import OutputVerificationStage
 
 from typing import List, Dict, Any, Optional, Union, Tuple
+import numpy as np
 
 from ..config import Config, ModelType
 from ..data_models import TuningInput
@@ -100,6 +102,7 @@ class TuningOrchestrator(LoggerMixin):
             self._pid_calculator, self._simulator, verbose,
             llm_client=llm_client, loop_type=loop_type, loop_name=loop_name
         )
+        self._fallback_manager = PipelineFallbackManager(self._oscillation_tuner, logger_mixin=self)
         
         # 设置 OutputBuilder 的 oscillation_tuner（用于 fallback）
         self._output_builder.set_oscillation_tuner(self._oscillation_tuner)
@@ -214,6 +217,7 @@ class TuningOrchestrator(LoggerMixin):
                 qualified_windows,
                 max_keep=sw_config.get('top_n', 3),
                 max_overlap=sw_config.get('max_overlap_ratio', 0.8),
+                min_quality=sw_config.get('min_window_quality', 0.2),
             )
         
         self.log(f"   📋 数据阶段自动分类: Stage {detected_stage}"
@@ -331,6 +335,26 @@ class TuningOrchestrator(LoggerMixin):
         loop_constraints = self._get_loop_constraints()
         diversity_overlap = sw_config.get('max_overlap_ratio', 0.8)
 
+        def _extract_kp(candidate_pid: Dict[str, Any]) -> float:
+            if not isinstance(candidate_pid, dict):
+                return 0.0
+            for k in ('Kp', 'kp'):
+                if k in candidate_pid and candidate_pid.get(k) is not None:
+                    try:
+                        return float(candidate_pid.get(k))
+                    except Exception:
+                        pass
+            pb = candidate_pid.get('pb', candidate_pid.get('Pb', 0.0))
+            try:
+                pb = float(pb)
+                if abs(pb) > 1e-9:
+                    return 100.0 / pb
+            except Exception:
+                pass
+            return 0.0
+
+        current_kp = _extract_kp(current_pid or {})
+
         def evaluate_window(i, window):
             try:
                 fast_input = {
@@ -352,6 +376,10 @@ class TuningOrchestrator(LoggerMixin):
                 pb = pid.get('pb', pid.get('Pb', 0.0))
                 ti = pid.get('ti', pid.get('Ti', 0.0))
 
+                rating_details = result.get('rating_details', {}) or {}
+                perf_score = float(rating_details.get('performance_score', 0.0) or 0.0)
+                method_conf = float(rating_details.get('method_confidence', 0.5) or 0.5)
+
                 penalty, p_detail = self._window_boundary_penalty(pid, loop_constraints)
                 stability_bonus = 0.0
                 clv = result.get('closed_loop_verification', {}) or {}
@@ -360,8 +388,29 @@ class TuningOrchestrator(LoggerMixin):
                 elif clv.get('is_stable') is False:
                     stability_bonus = -0.15
 
+                # 对“模型分高但闭环性能偏低”的窗口增加扣分，避免误选假优窗口
+                perf_penalty = max(0.0, (7.0 - perf_score) * 0.08)  # perf<7 才惩罚
+                conf_penalty = max(0.0, (0.45 - method_conf) * 0.15)
+
+                # 若可用 current_pid，符号冲突通常意味着窗口方向性不稳定
+                sign_penalty = 0.0
+                if abs(current_kp) > 1e-9 and abs(kp) > 1e-9 and (current_kp * float(kp) < 0):
+                    sign_penalty = 0.25
+
+                settling_penalty = 0.0
+                st = clv.get('settling_time')
+                if st is not None:
+                    try:
+                        if not np.isfinite(float(st)):
+                            settling_penalty = 0.20
+                    except Exception:
+                        pass
+
                 success_penalty = 0.0 if result.get('success', False) else 0.4
-                adjusted_score = score - penalty + stability_bonus - success_penalty
+                adjusted_score = (
+                    score - penalty - perf_penalty - conf_penalty - sign_penalty - settling_penalty
+                    + stability_bonus - success_penalty
+                )
                 
                 return {
                     'window': window,
@@ -371,6 +420,10 @@ class TuningOrchestrator(LoggerMixin):
                     'pb': pb,
                     'ti': ti,
                     'edge_penalty': penalty,
+                    'perf_penalty': perf_penalty,
+                    'conf_penalty': conf_penalty,
+                    'sign_penalty': sign_penalty,
+                    'settling_penalty': settling_penalty,
                     'edge_detail': p_detail,
                     'idx': i,
                     'error': None
@@ -392,7 +445,8 @@ class TuningOrchestrator(LoggerMixin):
                     et_str = datetime.fromtimestamp(res['window']['end_time']/1000).strftime('%m-%d %H:%M')
                     self.log(
                         f"   窗口 {res['idx']+1:2d}/{len(search_windows)}: {st_str} ~ {et_str} | "
-                        f"评分={res['score']:5.2f} | 调整后={res['adjusted_score']:5.2f} | Pb={res['pb']:.1f}%"
+                        f"评分={res['score']:5.2f} | 调整后={res['adjusted_score']:5.2f} | "
+                        f"Perf罚={res['perf_penalty']:.2f} | Pb={res['pb']:.1f}%"
                     )
         
         if not candidates:
@@ -478,10 +532,10 @@ class TuningOrchestrator(LoggerMixin):
         #    后置阶段: SelfOptimizeStage 必须对所有路径的结果做自优化
         pre_stages = [
             DataPrepStage(logger_mixin=self),
-            SegmentationStage(self._segment_processor, self._segment_manager, self._oscillation_tuner, logger_mixin=self),
-            IdentificationStage(self._segment_fitter, self._oscillation_tuner, logger_mixin=self),
+            SegmentationStage(self._segment_processor, self._segment_manager, self._oscillation_tuner, fallback_manager=self._fallback_manager, logger_mixin=self),
+            IdentificationStage(self._segment_fitter, self._oscillation_tuner, fallback_manager=self._fallback_manager, logger_mixin=self),
             FusionStage(self._unified_selector, self._param_fusion, self._simulator, self._segment_processor, self._oscillation_tuner, logger_mixin=self),
-            RefinementStage(self._simulator, self._oscillation_tuner, self._method_selector, self._pid_calculator, verbose=self._verbose, logger_mixin=self),
+            RefinementStage(self._simulator, self._oscillation_tuner, self._method_selector, self._pid_calculator, fallback_manager=self._fallback_manager, verbose=self._verbose, logger_mixin=self),
         ]
         
         post_stages = [
@@ -590,13 +644,22 @@ class TuningOrchestrator(LoggerMixin):
         penalty = min(0.45, max(0.0, p_pb + p_ti))
         return penalty, {'pb': pb, 'ti': ti, 'pb_min': pb_min, 'ti_min': ti_min, 'ti_max': ti_max}
 
-    def _refine_detected_windows(self, windows: List[Dict[str, Any]], max_keep: int = 5, max_overlap: float = 0.8) -> List[Dict[str, Any]]:
+    def _refine_detected_windows(
+        self,
+        windows: List[Dict[str, Any]],
+        max_keep: int = 5,
+        max_overlap: float = 0.8,
+        min_quality: float = 0.2
+    ) -> List[Dict[str, Any]]:
         """
         对 detector 返回窗口做质量排序 + 重叠抑制。
         """
         if not windows:
             return windows
         ranked = sorted(windows, key=lambda w: float(w.get('quality_score', 0.0)), reverse=True)
+        qualified = [w for w in ranked if float(w.get('quality_score', 0.0)) >= min_quality]
+        if qualified:
+            ranked = qualified
         picked: List[Dict[str, Any]] = []
         for w in ranked:
             if len(picked) >= max_keep:

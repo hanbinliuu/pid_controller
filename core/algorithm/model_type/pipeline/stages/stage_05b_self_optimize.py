@@ -208,7 +208,8 @@ class SelfOptimizeStage(PipelineStage):
         }
         if extra:
             detail.update(extra)
-        return final_score, detail
+        # 关键修复：优化搜索与日志统一使用“已扣贴边惩罚”的分数
+        return final_score_adjusted, detail
 
     # ------------------------------------------------------------------
     # Phase 2: PB/TI/TD 坐标轮换微调
@@ -624,7 +625,9 @@ class SelfOptimizeStage(PipelineStage):
             # 关键修复：fallback 路径在 Phase 2 提升后，需要同步更新 rating_details，
             # 否则会出现“综合评分已更新，但闭环性能评分/方法置信度仍是旧值”的错位显示。
             rating_details = context.final_result.get('rating_details', {})
-            if isinstance(rating_details, dict) and tuned_detail:
+            if not isinstance(rating_details, dict):
+                rating_details = {}
+            if tuned_detail:
                 if 'performance_score' in tuned_detail:
                     rating_details['performance_score'] = round(float(tuned_detail['performance_score']), 2)
                 if 'method_confidence' in tuned_detail:

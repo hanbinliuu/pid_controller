@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional
+from core.algorithm.model_type.utils import normalize_pid_keys
 
 
 # ============================================================
@@ -114,25 +115,13 @@ def normalize_pid_params(pid_params: Dict) -> Dict:
     Returns:
         标准化后的 PID 参数（小写键名 kp/ki/kd/ti/td/pb/method 等）
     """
-    p = pid_params.copy()
-
-    # 统一小写
+    # 复用生产代码中的统一规范化逻辑，避免测试侧与主链路漂移
+    p = normalize_pid_keys(pid_params)
     p['kp'] = float(p.get('Kp', p.get('kp', 1.0)))
+    p['ki'] = float(p.get('Ki', p.get('ki', 0.0)))
+    p['kd'] = float(p.get('Kd', p.get('kd', 0.0)))
     p['ti'] = float(p.get('Ti', p.get('ti', 0.0)))
     p['td'] = float(p.get('Td', p.get('td', 0.0)))
-
-    # 从 Ti 推算 ki
-    if p.get('ki', 0.0) == 0.0 and p['ti'] > 0:
-        p['ki'] = p['kp'] / p['ti']
-    else:
-        p['ki'] = float(p.get('Ki', p.get('ki', 0.0)))
-
-    # 从 Td 推算 kd
-    if p.get('kd', 0.0) == 0.0 and p['td'] > 0:
-        p['kd'] = p['kp'] * p['td']
-    else:
-        p['kd'] = float(p.get('Kd', p.get('kd', 0.0)))
-
     return p
 
 

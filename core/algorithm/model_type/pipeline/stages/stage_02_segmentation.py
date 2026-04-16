@@ -12,11 +12,12 @@ class SegmentationStage(PipelineStage):
     4. 智能降采样
     5. 分类为整定段和振荡段
     """
-    def __init__(self, segment_processor, segment_manager, oscillation_tuner, logger_mixin=None):
+    def __init__(self, segment_processor, segment_manager, oscillation_tuner, fallback_manager=None, logger_mixin=None):
         super().__init__(logger_mixin)
         self._segment_processor = segment_processor
         self._segment_manager = segment_manager
         self._oscillation_tuner = oscillation_tuner
+        self._fallback_manager = fallback_manager
 
     def _check_mv_no_change(self, segments: list) -> bool:
         """检查MV是否基本无变化"""
@@ -48,15 +49,30 @@ class SegmentationStage(PipelineStage):
                                   data_points=len(seg.pv), is_valid=True)
                     for i, seg in enumerate(raw_segs)
                 ]
-                osc_result = self._oscillation_tuner.try_oscillation_tuning(
-                    raw_segs, dummy_results, context.get_current_pid(), force=True
-                )
-                if osc_result and osc_result.get('success'):
-                    self.log(f"✅ 振荡整定fallback成功")
-                    context.final_result = self._oscillation_tuner.build_oscillation_output(
-                        osc_result, context.hist_data, context.time_range, tuning_windows=None
+                if self._fallback_manager is not None:
+                    if self._fallback_manager.try_fallback(
+                        context,
+                        raw_segs,
+                        dummy_results,
+                        force=True,
+                        start_log=None,
+                        success_log="✅ 振荡整定fallback成功",
+                        fail_log="❌ 振荡整定fallback失败",
+                        output_windows=None,
+                        output_segments=raw_segs,
+                        output_results=dummy_results,
+                    ):
+                        return context
+                else:
+                    osc_result = self._oscillation_tuner.try_oscillation_tuning(
+                        raw_segs, dummy_results, context.get_current_pid(), force=True
                     )
-                    return context
+                    if osc_result and osc_result.get('success'):
+                        self.log(f"✅ 振荡整定fallback成功")
+                        context.final_result = self._oscillation_tuner.build_oscillation_output(
+                            osc_result, context.hist_data, context.time_range, tuning_windows=None
+                        )
+                        return context
             
             self.log("⚠️ 无有效扰动段，跳过整定")
             context.is_fallback_triggered = True # Mark failure path
