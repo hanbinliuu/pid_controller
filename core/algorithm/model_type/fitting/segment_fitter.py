@@ -233,8 +233,10 @@ class SegmentFitter(LoggerMixin):
                         else:
                             osc_negative_k_threshold = Config.OSCILLATION_TUNING.get('negative_k_oscillation_threshold', 0.3)
                             osc_severe_threshold = Config.OSCILLATION_TUNING.get('negative_k_severe_threshold', 0.5)
-                            
-                            if oscillation_ratio > osc_severe_threshold:
+
+                            # [FIX] 当 controller_sign 明确为正时，K不应为负 —— 强制校正
+                            # 原逻辑 '>' 漏掉了 ratio==0.5 的边界场景
+                            if controller_sign == 1 or oscillation_ratio >= osc_severe_threshold:
                                 # 剧烈震荡：直接取绝对值
                                 params_raw = list(params_raw)
                                 params_raw[0] = abs(params_raw[0])

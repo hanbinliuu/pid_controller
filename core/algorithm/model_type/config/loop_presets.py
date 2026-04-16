@@ -19,7 +19,7 @@ LOOP_TYPE_PRESETS = {
     # 特点：快速响应、积分特性强、允许较激进整定
     'flow': {
         'pb_min': 40.0,           
-        'pb_max': 300.0,          
+        'pb_max': 1000.0,          
         'tau_c_factor': 1.0,      # [优化] 1.2 -> 1.0：流量需要极快响应，加速比例作用
         'safety_factor': 1.0,     # [优化] 1.05 -> 1.0：解除过度保守限制
         'ti_multiplier': 1.0,     
@@ -33,7 +33,7 @@ LOOP_TYPE_PRESETS = {
     # 特点：慢速系统、大滞后、热容量大
     'temperature': {
         'pb_min': 60.0,           
-        'pb_max': 300.0,          
+        'pb_max': 600.0,          
         'tau_c_factor': 1.5,      # [优化] 2.0 -> 1.5：加速温度回稳，2.0 会导致超长拖尾使得评分跳水
         'safety_factor': 1.1,     
         'ti_multiplier': 1.2,     # [优化] 1.5 -> 1.2：缩小积分时间，加速消除余差
@@ -63,7 +63,7 @@ LOOP_TYPE_PRESETS = {
     # 特点：快速响应、可能有压缩性
     'pressure': {
         'pb_min': 80.0,           
-        'pb_max': 300.0,          
+        'pb_max': 600.0,          
         'tau_c_factor': 1.2,      # [优化] 1.8 -> 1.2：压力回路通常较快，大幅增加系统带宽
         'safety_factor': 1.0,     # [优化] 1.05 -> 1.0
         'ti_multiplier': 1.0,     # [优化] 1.05 -> 1.0
@@ -78,7 +78,7 @@ LOOP_TYPE_PRESETS = {
     # ========== 默认/未知回路 ==========
     'default': {
         'pb_min': 40.0,           # 默认 pb_min 放宽 [60→40，与 flow 对齐]
-        'pb_max': 300.0,          # 中等范围
+        'pb_max': 600.0,          # 中等范围
         'tau_c_factor': 1.5,      # 中等响应速度
         'safety_factor': 1.05,    # 略微保守
         'ti_multiplier': 1.0,     # 标准Ti

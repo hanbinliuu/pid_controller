@@ -355,7 +355,24 @@ class OscillationTuner(LoggerMixin):
         
         if pid_params is None:
             return None
-        
+
+        # [FIX] 基于 current_pid 的极限增益安全护栏
+        # 与 _fallback_tuning 中的同类保护一致：如果当前 PID 已经导致振荡，
+        # 说明 current_Kp 已接近系统极限增益 Ku，新参数不应比它更激进。
+        if current_pid:
+            current_Kp = abs(current_pid.get('Kp', 0.0))
+            if current_Kp > 0.01:
+                safe_divisor = 6.0 if self._loop_type == 'flow' else 4.0
+                min_safe_pb = (100.0 * safe_divisor) / current_Kp
+                current_pb = pid_params.get('pb', 100.0)
+                if current_pb < min_safe_pb:
+                    self.log(f"   ⚠️ [临界法护栏] current_Kp={current_Kp:.2f} 导致振荡，PB {current_pb:.1f}% → {min_safe_pb:.1f}%")
+                    new_kp = 100.0 / min_safe_pb
+                    pid_params['pb'] = round(min_safe_pb, 2)
+                    pid_params['Kp'] = round(new_kp, 6)
+                    pid_params['Ki'] = round(new_kp / pid_params['Ti'], 6) if pid_params.get('Ti', 0) > 0 else 0.0
+                    pid_params['Kd'] = round(new_kp * pid_params.get('Td', 0), 6) if pid_params.get('Td', 0) > 0 else 0.0
+
         # [FIX] 符号校正：conservative PID 总是输出正 Kp，需要根据 current_pid 或数据相关性校正
         if current_pid and abs(current_pid.get('Kp', 0)) > 1e-6:
             original_sign = np.sign(current_pid['Kp'])
@@ -855,6 +872,19 @@ class OscillationTuner(LoggerMixin):
         
         # 恢复稳定性: 恢复慢系统调整系数
         t1_threshold = 80.0 if self._loop_type == 'level' else 60.0  # 恢复阈值
+        
+        # [NEW] 基于当前不稳定 PID 的极限增益保护
+        # 如果当前 PID 导致了持续的等幅/发散振荡，说明其 Kp 已经接近或超出了系统的极限增益 Ku。
+        # 为了让系统恢复稳定，新计算的 Kp 不应超过原 Kp 的安全比例。
+        # 流量回路对增益突变极为敏感，将其视为 K 增加了 6 倍的极端暴增场景来兜底 (1/6.0)，其他采用 1/4.0。
+        if current_pid:
+            current_Kp = abs(current_pid.get('Kp', 0.0))
+            if current_Kp > 0.01:
+                safe_divisor = 6.0 if self._loop_type == 'flow' else 4.0
+                min_safe_pb = (100.0 * safe_divisor) / current_Kp
+                if pb_base < min_safe_pb:
+                    self.log(f"   ⚠️ 当前 Kp={current_Kp:.2f} 导致不稳定，强制基于极限增益修正 PB: {pb_base:.1f}% -> {min_safe_pb:.1f}%")
+                    pb_base = min_safe_pb
         if T1_approx > t1_threshold:
             # 减缓慢系统 PB 膨胀 (150 -> 300)
             pb_base *= 1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 300.0)

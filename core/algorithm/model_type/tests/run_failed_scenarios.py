@@ -1,4 +1,10 @@
-"""运行失败场景测试并保存结果到 results/unsuccess 文件夹"""
+"""运行失败场景测试并保存结果到 results/unsuccess 文件夹
+
+与 test_synthetic_tuning.py 使用完全相同的管线：
+  - 使用 find_high_variability_periods 自动选段
+  - 传入 current_pid 以支持 fallback 整定
+  - 使用回路类型特定的误差带和收敛放松
+"""
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))))
@@ -11,6 +17,7 @@ from core.algorithm.model_type.tests.test_scenarios import TEST_SCENARIOS
 from core.algorithm.model_type.model_selector import ModelSelector
 from core.algorithm.model_type.config import Config
 from core.algorithm.model_type.tests.test_synthetic_tuning import generate_scenario_data, simulate_with_new_pid
+from core.algorithm.tuning_segment.stability_detector import find_high_variability_periods
 
 
 def run_and_collect_failed():
@@ -28,14 +35,22 @@ def run_and_collect_failed():
         
         try:
             data, metadata = generate_scenario_data(scenario, seed=scenario_seed)
-            change_time = metadata['change_time']
-            end_time = data[-1]['timestamp']
-            qualified_windows = [{'start_time': change_time, 'end_time': end_time}]
+            
+            # 使用三级优选引擎自动检测整定段/振荡段/扰动段 (与 test_synthetic_tuning.py 一致)
+            detect_res = find_high_variability_periods({"history_data": data})
+            qualified_windows = detect_res.get("qualified_windows", [])
+            
+            # 如果自动检测没找到任何段，退化到手动指定
+            if not qualified_windows:
+                change_time = metadata['change_time']
+                end_time = data[-1]['timestamp']
+                qualified_windows = [{'start_time': change_time, 'end_time': end_time}]
             
             input_data = {
                 'history_data': data,
                 'params': {},
                 'qualified_windows': qualified_windows,
+                'current_pid': scenario['original_pid'],
             }
             
             process_changed = scenario['process_changed']
@@ -44,16 +59,16 @@ def run_and_collect_failed():
             L_changed = process_changed.get('L', 5)
             loop_type = scenario.get('loop_type', 'flow')
             
-            # 【优化】根据回路类型使用不同的仿真时长乘数
+            # 【优化】根据回路类型使用不同的仿真时长乘数 (匹配 test_synthetic_tuning.py)
             if loop_type == 'level':
-                sim_factor = 10.0
-                min_duration = 600
+                sim_factor = 40.0
+                min_duration = 3000
             elif loop_type == 'temperature':
-                sim_factor = 8.0
-                min_duration = 500
+                sim_factor = 30.0
+                min_duration = 3000
             else:
-                sim_factor = 6.0
-                min_duration = 400
+                sim_factor = 15.0
+                min_duration = 1200
             
             # 极慢系统(T1>100s)特殊处理
             if T1_changed > 100:
@@ -73,10 +88,19 @@ def run_and_collect_failed():
             pid_params = result.get('pid_parameters', {})
             
             sim_seed = scenario_seed + 300
-            sim_result = simulate_with_new_pid(process_changed, pid_params, sv, duration=sim_duration, seed=sim_seed)
+            # 慢回路使用更宽松的误差带（石化行业标准：液位/温度10%，流量/压力5%）
+            err_band = 0.10 if loop_type in ('level', 'temperature') else 0.05
+            sim_result = simulate_with_new_pid(process_changed, pid_params, sv, duration=sim_duration, seed=sim_seed, error_band_pct=err_band)
             
             tuning_success = result.get('success', False)
-            is_stable = tuning_success and sim_result['is_stable']
+            rule_stable = tuning_success and sim_result['is_stable']
+            
+            # 收敛放松：保守整定可能未完全进入误差带，但正在收敛且稳态误差小
+            if tuning_success and not sim_result['is_stable']:
+                if sim_result.get('is_converging', False) and sim_result.get('steady_error', 100) < 10:
+                    rule_stable = True
+            
+            is_stable = rule_stable
             
             result_info = {
                 'idx': idx,

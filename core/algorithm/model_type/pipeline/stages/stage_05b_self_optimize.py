@@ -158,14 +158,22 @@ class SelfOptimizeStage(PipelineStage):
                     continue
                 new_kp = base_kp / ratio
                 
-                # [FIX] 石化化工级 PB(Kp) 底线：Level 回路避免 PB 盲目滑向极致
+                # [FIX] 石化化工级 PB(Kp) 底线：避免 PB 盲目滑向极致
+                current_pb = 100.0 / new_kp if new_kp > 1e-6 else 9999.0
                 if loop_type == 'level':
-                    current_pb = 100.0 / new_kp if new_kp > 1e-6 else 9999.0
                     # PP工艺级别: PB < 50% 极其危险，PB > 200% 基本无效丧失控制能力
                     if current_pb < 50.0:
-                        new_kp = 100.0 / 50.0  # 自动卡死在 50% 的极限边界
+                        new_kp = 100.0 / 50.0
                     elif current_pb > 200.0:
-                        new_kp = 100.0 / 200.0 # 自动卡死在 200% 的极软边界
+                        new_kp = 100.0 / 200.0
+                elif loop_type == 'flow':
+                    # 流量回路：振荡整定时模型K估算误差大，PB < 100% 时高增益系统极易超调发散
+                    if current_pb < 100.0:
+                        new_kp = 100.0 / 100.0
+                elif loop_type == 'pressure':
+                    # 压力回路：PB < 80% 过于激进
+                    if current_pb < 80.0:
+                        new_kp = 100.0 / 80.0
                         
                 if new_kp < 0.01 or new_kp > max_kp_limit:
                     continue
@@ -199,11 +207,13 @@ class SelfOptimizeStage(PipelineStage):
                     if base_ti <= 350.0:
                         ti_max_limit = min(ti_max_limit, 300.0)
                 elif loop_type == 'flow':
-                    # [FIX] 流量回路响应极快，无论评分引擎如何逼迫，Ti 探索上限死死卡住 20s
+                    # [FIX] 流量回路响应极快，Ti 探索上限卡住 20s，下限 2s 防过度激进
                     ti_max_limit = min(ti_max_limit, 20.0)
+                    ti_min_limit = max(ti_min_limit, 2.0)
                 elif loop_type == 'pressure':
-                    # [FIX] 压力回路天花板锁在 60s
+                    # [FIX] 压力回路天花板锁在 60s，下限 3s
                     ti_max_limit = min(ti_max_limit, 60.0)
+                    ti_min_limit = max(ti_min_limit, 3.0)
                 
                 for ratio in ratios:
                     if abs(ratio - 1.0) < 1e-6:
@@ -352,7 +362,7 @@ class SelfOptimizeStage(PipelineStage):
             if d['final_score'] > baseline_score or len(to_show) < 3:
                 to_show.append(d)
                 
-        if sorted_log and sorted_log[-1] not in to_show:
+        if sorted_log and not any(d is sorted_log[-1] for d in to_show):
             to_show.append(sorted_log[-1])
 
         self.log(f"\n   📊 Phase 2 搜索摘要 ({len(search_log)} 个候选):")
