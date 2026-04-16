@@ -1037,8 +1037,15 @@ class OscillationTuner(LoggerMixin):
             )
             sim_model_type = ModelType.FOPDT
         
+        if is_integrating_fb:
+            sim_params = (K_est_final, L_est)
+            sim_model_name = ModelType.FOPI
+        else:
+            sim_params = (K_est_final, T1_est, L_est)
+            sim_model_name = ModelType.FOPDT
+
         pv_model = self._simulator.simulate_segmented(
-            (K_est_final, T1_est, L_est), 'FOPDT', y, u,
+            sim_params, sim_model_name, y, u,
             reset_on_sv_change=True, sv=sv, enable_smooth=True,
             enable_amplitude_calibration=True, enable_offset_correction=True, enable_oscillation_overlay=True
         )

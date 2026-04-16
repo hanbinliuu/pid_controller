@@ -7,7 +7,7 @@ from .stages.stage_05_refinement import RefinementStage
 from .stages.stage_05b_self_optimize import SelfOptimizeStage
 from .stages.stage_06_output import OutputVerificationStage
 
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 
 from ..config import Config, ModelType
 from ..data_models import TuningInput
@@ -207,6 +207,14 @@ class TuningOrchestrator(LoggerMixin):
         
         if exact_window_mode:
             detected_stage = 0  # 标记为强制模式，不做阶段路由
+
+        # [NEW] 对上游 detector 给出的窗口做质量去重，避免同质重叠窗口污染后续整定
+        if qualified_windows and not exact_window_mode:
+            qualified_windows = self._refine_detected_windows(
+                qualified_windows,
+                max_keep=sw_config.get('top_n', 3),
+                max_overlap=sw_config.get('max_overlap_ratio', 0.8),
+            )
         
         self.log(f"   📋 数据阶段自动分类: Stage {detected_stage}"
                  f"{' (MV阶跃→三阶段流水线)' if detected_stage == 1 else ''}"
@@ -320,6 +328,9 @@ class TuningOrchestrator(LoggerMixin):
         
         candidates = []
         
+        loop_constraints = self._get_loop_constraints()
+        diversity_overlap = sw_config.get('max_overlap_ratio', 0.8)
+
         def evaluate_window(i, window):
             try:
                 fast_input = {
@@ -339,12 +350,28 @@ class TuningOrchestrator(LoggerMixin):
                 pid = result.get('pid_parameters', {})
                 kp = pid.get('kp', pid.get('Kp', 0.0))
                 pb = pid.get('pb', pid.get('Pb', 0.0))
+                ti = pid.get('ti', pid.get('Ti', 0.0))
+
+                penalty, p_detail = self._window_boundary_penalty(pid, loop_constraints)
+                stability_bonus = 0.0
+                clv = result.get('closed_loop_verification', {}) or {}
+                if clv.get('is_stable') is True:
+                    stability_bonus = 0.05
+                elif clv.get('is_stable') is False:
+                    stability_bonus = -0.15
+
+                success_penalty = 0.0 if result.get('success', False) else 0.4
+                adjusted_score = score - penalty + stability_bonus - success_penalty
                 
                 return {
                     'window': window,
                     'score': score,
+                    'adjusted_score': adjusted_score,
                     'kp': kp,
                     'pb': pb,
+                    'ti': ti,
+                    'edge_penalty': penalty,
+                    'edge_detail': p_detail,
                     'idx': i,
                     'error': None
                 }
@@ -363,29 +390,43 @@ class TuningOrchestrator(LoggerMixin):
                     candidates.append(res)
                     st_str = datetime.fromtimestamp(res['window']['start_time']/1000).strftime('%m-%d %H:%M')
                     et_str = datetime.fromtimestamp(res['window']['end_time']/1000).strftime('%m-%d %H:%M')
-                    self.log(f"   窗口 {res['idx']+1:2d}/{len(search_windows)}: {st_str} ~ {et_str} | 评分={res['score']:5.2f} | Pb={res['pb']:.1f}%")
+                    self.log(
+                        f"   窗口 {res['idx']+1:2d}/{len(search_windows)}: {st_str} ~ {et_str} | "
+                        f"评分={res['score']:5.2f} | 调整后={res['adjusted_score']:5.2f} | Pb={res['pb']:.1f}%"
+                    )
         
         if not candidates:
             self.log("   ⚠️ 所有窗口评估失败，跳过滑窗寻优")
             return []
         
-        # 按评分降序排列
-        candidates.sort(key=lambda c: c['score'], reverse=True)
+        # 按“窗口综合分”排序（评分 - 贴边惩罚 + 稳定奖励）
+        candidates.sort(key=lambda c: c['adjusted_score'], reverse=True)
         
         # 选取 Top N 个分数达标的窗口用于多段融合
         top_n = sw_config.get('top_n', 1)
         min_score_ratio = sw_config.get('top_n_min_score_ratio', 0.85)
-        best_score = candidates[0]['score']
+        best_score = candidates[0]['adjusted_score']
         score_threshold = best_score * min_score_ratio
-        
-        top_candidates = [c for c in candidates[:top_n] if c['score'] >= score_threshold]
+
+        # 先阈值过滤，再做重叠抑制，保证窗口多样性
+        prefiltered = [c for c in candidates if c['adjusted_score'] >= score_threshold]
+        top_candidates = []
+        for c in prefiltered:
+            if len(top_candidates) >= top_n:
+                break
+            if any(self._window_overlap_ratio(c['window'], kept['window']) > diversity_overlap for kept in top_candidates):
+                continue
+            top_candidates.append(c)
         
         from datetime import datetime
-        self.log(f"\n   🏆 Top {len(top_candidates)} 窗口 (最高分={best_score:.2f}, 阈值={score_threshold:.2f}):")
+        self.log(f"\n   🏆 Top {len(top_candidates)} 窗口 (最高调整分={best_score:.2f}, 阈值={score_threshold:.2f}):")
         for rank, c in enumerate(top_candidates, 1):
             st_str = datetime.fromtimestamp(c['window']['start_time']/1000).strftime('%m-%d %H:%M')
             et_str = datetime.fromtimestamp(c['window']['end_time']/1000).strftime('%m-%d %H:%M')
-            self.log(f"      #{rank}: {st_str} ~ {et_str} (评分={c['score']:.2f})")
+            self.log(
+                f"      #{rank}: {st_str} ~ {et_str} "
+                f"(评分={c['score']:.2f}, 调整后={c['adjusted_score']:.2f}, 边界惩罚={c['edge_penalty']:.2f})"
+            )
         
         return [c['window'] for c in top_candidates]
     
@@ -484,4 +525,83 @@ class TuningOrchestrator(LoggerMixin):
     
 
 
+    @staticmethod
+    def _window_overlap_ratio(w1: Dict[str, Any], w2: Dict[str, Any]) -> float:
+        s1, e1 = int(w1.get('start_time', 0)), int(w1.get('end_time', 0))
+        s2, e2 = int(w2.get('start_time', 0)), int(w2.get('end_time', 0))
+        inter = max(0, min(e1, e2) - max(s1, s2))
+        if inter <= 0:
+            return 0.0
+        d1 = max(1, e1 - s1)
+        d2 = max(1, e2 - s2)
+        return inter / min(d1, d2)
 
+    def _get_loop_constraints(self) -> Dict[str, float]:
+        """基于 process_context 获取回路约束，用于窗口筛选贴边惩罚。"""
+        try:
+            from ..config.loop_presets import get_loop_preset
+            loop_type = (self._process_context or {}).get('loop_type', 'default')
+            return get_loop_preset(loop_type)
+        except Exception:
+            return {}
+
+    def _window_boundary_penalty(self, pid: Dict[str, Any], loop_constraints: Dict[str, float]) -> Tuple[float, Dict[str, float]]:
+        """窗口级贴边惩罚：用于滑窗阶段过滤“高分但贴边”的脆弱解。"""
+        pb = float(pid.get('pb', pid.get('Pb', 0.0)) or 0.0)
+        ti = float(pid.get('ti', pid.get('Ti', 0.0)) or 0.0)
+        pb_min = float(loop_constraints.get('pb_min', 0.0) or 0.0)
+        ti_min = float(loop_constraints.get('ti_min', 0.1) or 0.1)
+        ti_max = float(loop_constraints.get('ti_max', 300.0) or 300.0)
+
+        loop_type = (self._process_context or {}).get('loop_type', '')
+        if loop_type == 'level':
+            ti_min = max(ti_min, 60.0)
+        elif loop_type == 'flow':
+            ti_min = max(ti_min, 2.0)
+            ti_max = min(ti_max, 20.0)
+        elif loop_type == 'pressure':
+            ti_min = max(ti_min, 3.0)
+            ti_max = min(ti_max, 60.0)
+
+        def near_lower(value: float, lower: float, ratio: float, weight: float) -> float:
+            if lower <= 0:
+                return 0.0
+            band = max(lower * ratio, 1e-6)
+            gap = value - lower
+            if gap <= 0:
+                return weight
+            if gap >= band:
+                return 0.0
+            return weight * (1.0 - gap / band)
+
+        def near_upper(value: float, upper: float, ratio: float, weight: float) -> float:
+            if upper <= 0:
+                return 0.0
+            band = max(upper * ratio, 1e-6)
+            gap = upper - value
+            if gap <= 0:
+                return weight
+            if gap >= band:
+                return 0.0
+            return weight * (1.0 - gap / band)
+
+        p_pb = near_lower(pb, pb_min, 0.25, 0.28)
+        p_ti = near_lower(ti, ti_min, 0.25, 0.22) + near_upper(ti, ti_max, 0.25, 0.10)
+        penalty = min(0.45, max(0.0, p_pb + p_ti))
+        return penalty, {'pb': pb, 'ti': ti, 'pb_min': pb_min, 'ti_min': ti_min, 'ti_max': ti_max}
+
+    def _refine_detected_windows(self, windows: List[Dict[str, Any]], max_keep: int = 5, max_overlap: float = 0.8) -> List[Dict[str, Any]]:
+        """
+        对 detector 返回窗口做质量排序 + 重叠抑制。
+        """
+        if not windows:
+            return windows
+        ranked = sorted(windows, key=lambda w: float(w.get('quality_score', 0.0)), reverse=True)
+        picked: List[Dict[str, Any]] = []
+        for w in ranked:
+            if len(picked) >= max_keep:
+                break
+            if any(self._window_overlap_ratio(w, p) > max_overlap for p in picked):
+                continue
+            picked.append(w)
+        return picked or windows[:max_keep]

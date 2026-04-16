@@ -1653,7 +1653,9 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
                     if max_q >= QUALITY_GATE:
                         print(f"[SegmentSelector] 🥇 Level 1 命中: {len(tuning_segments)} 个整定段 "
                               f"(最高质量={max_q:.2f})")
-                        qualified_windows = _segments_to_windows(tuning_segments, timestamps)
+                        qualified_windows = _segments_to_windows(
+                            tuning_segments, timestamps, source="level1_tuning", max_windows=5, max_overlap_ratio=0.8
+                        )
                         return {
                             "start_time": start_time,
                             "end_time": end_time,
@@ -1687,7 +1689,9 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
                 if max_q >= QUALITY_GATE:
                     print(f"[SegmentSelector] 🥈 Level 2 命中: {len(osc_segments)} 个振荡段 "
                           f"(最高质量={max_q:.2f})")
-                    qualified_windows = _segments_to_windows(osc_segments, timestamps)
+                    qualified_windows = _segments_to_windows(
+                        osc_segments, timestamps, source="level2_oscillation", max_windows=5, max_overlap_ratio=0.8
+                    )
                     return {
                         "start_time": start_time,
                         "end_time": end_time,
@@ -1705,7 +1709,9 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
             max_q = max(s[3] for s in level1_sub_qualified)
             print(f"[SegmentSelector] 🥇↩ Level 1 亚合格段回捞: {len(level1_sub_qualified)} 个整定段 "
                   f"(最高质量={max_q:.2f}，优于 Level 3 全量兜底)")
-            qualified_windows = _segments_to_windows(level1_sub_qualified, timestamps)
+            qualified_windows = _segments_to_windows(
+                level1_sub_qualified, timestamps, source="level1_sub_qualified", max_windows=5, max_overlap_ratio=0.8
+            )
             return {
                 "start_time": start_time,
                 "end_time": end_time,
@@ -1725,7 +1731,9 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
                 seg_end_time = int(timestamps[seg_end_idx])
                 qualified_windows.append({
                     "start_time": seg_start_time,
-                    "end_time": seg_end_time
+                    "end_time": seg_end_time,
+                    "quality_score": 0.2,  # Level 3 兜底段，默认较低质量
+                    "source": "level3_fallback",
                 })
         
         return {
@@ -1745,23 +1753,51 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
         }
 
 
-def _segments_to_windows(segments: List[Tuple], timestamps: List) -> List[Dict]:
+def _segments_to_windows(segments: List[Tuple], timestamps: List, source: str = "unknown",
+                         max_windows: int = 5, max_overlap_ratio: float = 0.8) -> List[Dict]:
     """
     将 (start_idx, end_idx, setpoint, quality_score) 格式的段列表
     转换为 {"start_time": ..., "end_time": ...} 格式的窗口列表
     """
-    windows = []
+    raw_windows = []
     for seg in segments:
         seg_start, seg_end = seg[0], seg[1]
         if seg_start < len(timestamps) and seg_end > 0:
-            seg_start_time = int(timestamps[seg_start])
             seg_end_idx = min(seg_end - 1, len(timestamps) - 1)
+            seg_start_time = int(timestamps[seg_start])
             seg_end_time = int(timestamps[seg_end_idx])
-            windows.append({
+            quality_score = float(seg[3]) if len(seg) > 3 else 0.0
+            raw_windows.append({
                 "start_time": seg_start_time,
-                "end_time": seg_end_time
+                "end_time": seg_end_time,
+                "quality_score": round(quality_score, 4),
+                "source": source,
             })
-    return windows
+
+    if not raw_windows:
+        return []
+
+    def overlap_ratio(w1: Dict, w2: Dict) -> float:
+        s1, e1 = w1["start_time"], w1["end_time"]
+        s2, e2 = w2["start_time"], w2["end_time"]
+        inter = max(0, min(e1, e2) - max(s1, s2))
+        if inter <= 0:
+            return 0.0
+        d1 = max(1, e1 - s1)
+        d2 = max(1, e2 - s2)
+        return inter / min(d1, d2)
+
+    # 先按质量排序，再做高重叠抑制，避免返回大量同质窗口
+    raw_windows.sort(key=lambda x: x.get("quality_score", 0.0), reverse=True)
+    selected: List[Dict] = []
+    for w in raw_windows:
+        if len(selected) >= max_windows:
+            break
+        if any(overlap_ratio(w, kept) > max_overlap_ratio for kept in selected):
+            continue
+        selected.append(w)
+
+    return selected
 
 
 def merge_adjacent_periods(

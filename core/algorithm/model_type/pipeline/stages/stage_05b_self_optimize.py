@@ -45,6 +45,12 @@ _DEFAULT_CONFIG = {
     'fine_tune_ratios': [0.5, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 2.0],
     'fine_tune_max_rounds': 3,  # 增加一轮微调机会
     'fine_tune_min_improvement': 0.02, # [FIX] 在平滑分数下，0.02 分代表着物理指标实质性改善，不再需要 0.1 才能接纳
+    # [NEW] 贴边惩罚：避免将触碰约束边界的参数当作最优
+    'boundary_penalty_enabled': True,
+    'boundary_penalty_band_ratio': 0.25,   # 距离边界 25% 以内开始惩罚
+    'boundary_penalty_max': 0.35,          # 最大总惩罚分
+    'boundary_penalty_weight_pb': 0.22,
+    'boundary_penalty_weight_ti': 0.18,
 }
 
 
@@ -67,6 +73,75 @@ class SelfOptimizeStage(PipelineStage):
         self._config = copy.deepcopy(_DEFAULT_CONFIG)
         self._config.update(getattr(Config, 'SELF_OPTIMIZE', {}))
 
+    def _compute_boundary_penalty(self, pid_params: Dict, loop_type: str, tuning_constraints: Dict) -> Tuple[float, Dict]:
+        """
+        计算参数贴边惩罚分（越贴边惩罚越高），用于避免“边界即最优”的伪解。
+        """
+        if not self._config.get('boundary_penalty_enabled', True):
+            return 0.0, {'enabled': False}
+
+        full = pid_to_full_dict(pid_params['Kp'], pid_params['Ki'], pid_params.get('Kd', 0.0))
+        pb = float(full['pb'])
+        ti = float(full['ti'])
+
+        pb_min = float(tuning_constraints.get('pb_min', 0.0) or 0.0)
+        pb_max = float(tuning_constraints.get('pb_max', 0.0) or 0.0)
+        ti_min = float(tuning_constraints.get('ti_min', 0.1) or 0.1)
+        ti_max = float(tuning_constraints.get('ti_max', 300.0) or 300.0)
+
+        # 保持与主整定逻辑一致的回路下限
+        if loop_type == 'level':
+            ti_buffer = Config.PID_CONSTRAINTS.get('ti_lower_buffer_ratio', 0.08)
+            ti_min = max(ti_min, 60.0 * (1.0 + ti_buffer))
+        elif loop_type == 'flow':
+            ti_min = max(ti_min, 2.0)
+            ti_max = min(ti_max, 20.0)
+        elif loop_type == 'pressure':
+            ti_min = max(ti_min, 3.0)
+            ti_max = min(ti_max, 60.0)
+
+        band_ratio = float(self._config.get('boundary_penalty_band_ratio', 0.25))
+        pb_w = float(self._config.get('boundary_penalty_weight_pb', 0.22))
+        ti_w = float(self._config.get('boundary_penalty_weight_ti', 0.18))
+        max_penalty = float(self._config.get('boundary_penalty_max', 0.35))
+
+        def near_lower_penalty(value: float, lower: float, ratio: float, weight: float) -> float:
+            if lower <= 0:
+                return 0.0
+            band = max(lower * ratio, 1e-6)
+            gap = value - lower
+            if gap <= 0:
+                return weight
+            if gap >= band:
+                return 0.0
+            return weight * (1.0 - gap / band)
+
+        def near_upper_penalty(value: float, upper: float, ratio: float, weight: float) -> float:
+            if upper <= 0:
+                return 0.0
+            band = max(upper * ratio, 1e-6)
+            gap = upper - value
+            if gap <= 0:
+                return weight
+            if gap >= band:
+                return 0.0
+            return weight * (1.0 - gap / band)
+
+        p_pb = near_lower_penalty(pb, pb_min, band_ratio, pb_w) + near_upper_penalty(pb, pb_max, band_ratio, pb_w * 0.5)
+        p_ti = near_lower_penalty(ti, ti_min, band_ratio, ti_w) + near_upper_penalty(ti, ti_max, band_ratio, ti_w * 0.5)
+
+        penalty = min(max_penalty, max(0.0, p_pb + p_ti))
+        detail = {
+            'enabled': True,
+            'penalty_pb': round(p_pb, 4),
+            'penalty_ti': round(p_ti, 4),
+            'penalty_total': round(penalty, 4),
+            'pb': pb, 'ti': ti,
+            'pb_min': pb_min, 'pb_max': pb_max,
+            'ti_min': ti_min, 'ti_max': ti_max,
+        }
+        return penalty, detail
+
     # ------------------------------------------------------------------
     # 评估: 给定 lambda 计算 PID 并评分
     # ------------------------------------------------------------------
@@ -75,7 +150,8 @@ class SelfOptimizeStage(PipelineStage):
         tuning_constraints = self._context.export_tuning_constraints() if self._context else {}
         pid_params = self._pid_calculator.calculate_from_fusion(
             fusion, lambda_factor, loop_type=loop_type,
-            tuning_constraints=tuning_constraints
+            tuning_constraints=tuning_constraints,
+            current_pid=self._context.get_current_pid() if self._context else None
         )
         # Fix #1: 确保 key 统一为大写
         pid_params = _normalize_pid_keys(pid_params)
@@ -109,6 +185,10 @@ class SelfOptimizeStage(PipelineStage):
             method_conf, _ = ModelRating.model_id_confidence(fusion)
         final_score, _ = ModelRating.final_rating(perf_score, method_conf)
 
+        tuning_constraints = self._context.export_tuning_constraints() if self._context else {}
+        boundary_penalty, penalty_detail = self._compute_boundary_penalty(pid_params, loop_type, tuning_constraints)
+        final_score_adjusted = max(0.0, final_score - boundary_penalty)
+
         full_pid = pid_to_full_dict(pid_params['Kp'], pid_params['Ki'], pid_params['Kd'])
         pb = full_pid['pb']
         ti = full_pid['ti']
@@ -117,11 +197,14 @@ class SelfOptimizeStage(PipelineStage):
         detail = {
             'pid_params': pid_params, 'pb': pb, 'ti': ti, 'td': td,
             'is_stable': is_stable, 'performance_score': perf_score,
-            'method_confidence': method_conf, 'final_score': final_score,
+            'method_confidence': method_conf, 'final_score_raw': final_score,
+            'final_score': final_score_adjusted,
             'overshoot': cl_metrics.overshoot,
             'settling_time': cl_metrics.settling_time,
             'steady_state_error': cl_metrics.steady_state_error,
             'cl_metrics': cl_metrics,  # Fix #3: 保存 cl_metrics 供后续更新 closed_loop_verification
+            'boundary_penalty': boundary_penalty,
+            'boundary_penalty_detail': penalty_detail,
         }
         if extra:
             detail.update(extra)
@@ -202,7 +285,8 @@ class SelfOptimizeStage(PipelineStage):
                 ti_min_limit = 0.1
                 
                 if loop_type == 'level':
-                    ti_min_limit = max(ti_min_limit, 60.0)
+                    ti_buffer = Config.PID_CONSTRAINTS.get('ti_lower_buffer_ratio', 0.08)
+                    ti_min_limit = max(ti_min_limit, 60.0 * (1.0 + ti_buffer))
                     # 强硬锁定探索上限不超过 300s，极度压缩 Ti 以迎合操作员工艺直觉
                     if base_ti <= 350.0:
                         ti_max_limit = min(ti_max_limit, 300.0)
@@ -441,15 +525,20 @@ class SelfOptimizeStage(PipelineStage):
         best_score, best_detail = candidates[0]
 
         original_score = best_score
+        original_detail = None
         for score, detail in candidates:
             if abs(detail.get('lambda_factor', -1) - base_lambda) < 1e-6:
                 original_score = score
+                original_detail = detail
                 break
 
         self._log_lambda_table(candidates, best_detail, base_lambda)
 
         improvement_p1 = best_score - original_score
         best_lf = best_detail.get('lambda_factor', base_lambda)
+        phase2_baseline_score = best_score
+        phase2_baseline_detail = best_detail
+
         if abs(best_lf - base_lambda) < 1e-6:
             self.log(f"\n   Phase 1 结果: 原始 λ={base_lambda:.3f} 已是最优 (评分={original_score:.2f})")
         elif improvement_p1 >= min_improvement:
@@ -457,10 +546,15 @@ class SelfOptimizeStage(PipelineStage):
             context.lambda_factor = best_lf
         else:
             self.log(f"\n   Phase 1 结果: λ 提升不足 (+{improvement_p1:.2f})，保持 λ={base_lambda:.3f}")
+            # 关键修复：当 Phase 1 未采纳新 lambda 时，Phase 2 必须回到原始 lambda 基线，
+            # 不能继续沿用未采纳候选的 PID/评分。
+            if original_detail is not None:
+                phase2_baseline_score = original_score
+                phase2_baseline_detail = original_detail
 
         # ── Phase 2: PB/TI/TD 微调 ──
         if self._config.get('fine_tune_enabled', True):
-            self._run_phase2(fusion, best_detail['pid_params'], best_score,
+            self._run_phase2(fusion, phase2_baseline_detail['pid_params'], phase2_baseline_score,
                             sp_initial, sp_final, pv_initial, loop_type,
                             context, original_score, tuning_constraints=context.export_tuning_constraints())
 
@@ -524,7 +618,22 @@ class SelfOptimizeStage(PipelineStage):
             # 使用统一工具函数生成完整 PID 参数字典，但只 update 以保留原有方法标记等
             tuned_p_dict = pid_to_full_dict(tuned_Kp, tuned_Ki, tuned_Kd)
             context.final_result['pid_parameters'].update(tuned_p_dict)
-            context.final_result['model_rating'] = round(tuned_score, 2)
+            final_rating_synced = round(tuned_score, 2)
+            context.final_result['model_rating'] = final_rating_synced
+
+            # 关键修复：fallback 路径在 Phase 2 提升后，需要同步更新 rating_details，
+            # 否则会出现“综合评分已更新，但闭环性能评分/方法置信度仍是旧值”的错位显示。
+            rating_details = context.final_result.get('rating_details', {})
+            if isinstance(rating_details, dict) and tuned_detail:
+                if 'performance_score' in tuned_detail:
+                    rating_details['performance_score'] = round(float(tuned_detail['performance_score']), 2)
+                if 'method_confidence' in tuned_detail:
+                    rating_details['method_confidence'] = round(float(tuned_detail['method_confidence']), 2)
+                rating_details['final_rating'] = final_rating_synced
+                rating_details['final_score'] = final_rating_synced
+                if 'boundary_penalty' in tuned_detail:
+                    rating_details['boundary_penalty'] = round(float(tuned_detail['boundary_penalty']), 4)
+                context.final_result['rating_details'] = rating_details
 
             # Fix #3: 同步更新 closed_loop_verification, 使其与微调后的参数匹配
             if tuned_detail and 'cl_metrics' in tuned_detail:

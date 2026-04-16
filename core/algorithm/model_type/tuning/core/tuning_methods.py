@@ -21,6 +21,27 @@ class TuningMethodsMixin:
     需要宿主类提供 _epsilon, _pid_constraints, _get_fallback_params, _get_max_kp 属性/方法。
     """
     
+    def _soft_cap_kp(self, Kp: float, max_Kp: float, tuning_constraints: dict = None) -> float:
+        """
+        对 Kp 上限做软着陆，避免最终参数长期贴在 PB 下边界。
+        """
+        tuning_constraints = tuning_constraints or {}
+        if max_Kp <= 0:
+            return Kp
+        cfg = self._pid_constraints
+        edge_enabled = cfg.get('edge_buffer_enabled', True)
+        near_ratio = cfg.get('edge_near_ratio', 0.02)
+        upper_buffer_ratio = tuning_constraints.get(
+            'kp_upper_buffer_ratio',
+            cfg.get('kp_upper_buffer_ratio', 0.95)
+        )
+        if not edge_enabled:
+            return min(Kp, max_Kp)
+        near_upper = max_Kp * (1.0 - near_ratio)
+        if Kp >= near_upper:
+            return min(max_Kp * upper_buffer_ratio, max_Kp)
+        return min(Kp, max_Kp)
+
     def _should_use_simc(self, loop_type: str = None) -> bool:
         """根据回路类型决定是否使用 SIMC（混合策略）"""
         simc_cfg = getattr(Config, 'SIMC_TUNING', {})
@@ -83,8 +104,7 @@ class TuningMethodsMixin:
         Ti *= preset_ti_multiplier
         
         max_Kp = self._get_max_kp(pb_min)
-        if Kp > max_Kp:
-            Kp = max_Kp
+        Kp = self._soft_cap_kp(Kp, max_Kp, tuning_constraints)
         
         # 应用回路预设的Td
         Td = 0.0
@@ -184,8 +204,7 @@ class TuningMethodsMixin:
         Td = min(Td, td_max)
         
         max_Kp = self._get_max_kp(pb_min)
-        if Kp > max_Kp:
-            Kp = max_Kp
+        Kp = self._soft_cap_kp(Kp, max_Kp, tuning_constraints)
         return Kp, Ti, Td
     
     def _tune_sopdt(self, K: float, T1: float, T2: float, L: float,
@@ -227,8 +246,7 @@ class TuningMethodsMixin:
         Td = 0.0
         
         max_Kp = self._get_max_kp(pb_min)
-        if Kp > max_Kp:
-            Kp = max_Kp
+        Kp = self._soft_cap_kp(Kp, max_Kp, tuning_constraints)
         return Kp, Ti, Td
     
     def _tune_integrator(self, K: float, T1: float, 
@@ -262,8 +280,7 @@ class TuningMethodsMixin:
             Td = min(Ti * td_ratio, td_max)
         
         max_Kp = self._get_max_kp(pb_min)
-        if Kp > max_Kp:
-            Kp = max_Kp
+        Kp = self._soft_cap_kp(Kp, max_Kp, tuning_constraints)
         return Kp, Ti, Td
     
     def _tune_nonlinear(self, K: float, T1: float, L: float,
@@ -325,6 +342,19 @@ class TuningMethodsMixin:
             ti_max = ti_max_default
             
         Ti = max(ti_min, min(Ti, ti_max))
+
+        # [NEW] 约束边界缓冲：避免 Ti 贴边（尤其是 Ti=60s 这类频发边界点）
+        edge_enabled = cfg.get('edge_buffer_enabled', True)
+        if edge_enabled and ti_max > ti_min:
+            near_ratio = cfg.get('edge_near_ratio', 0.02)
+            lower_buffer_ratio = cfg.get('ti_lower_buffer_ratio', 0.08)
+            upper_buffer_ratio = cfg.get('ti_upper_buffer_ratio', 0.08)
+            lower_near = ti_min * (1.0 + near_ratio)
+            upper_near = ti_max * (1.0 - near_ratio)
+            if Ti <= lower_near:
+                Ti = ti_min * (1.0 + lower_buffer_ratio)
+            elif Ti >= upper_near:
+                Ti = ti_max * (1.0 - upper_buffer_ratio)
         
         td_max_ratio = cfg.get('td_max_ratio', 0.25)
         Td = max(0.0, min(Td, Ti * td_max_ratio))

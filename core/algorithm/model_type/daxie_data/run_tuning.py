@@ -62,6 +62,7 @@ LOOP_CONFIGS = {
     "50104": {
         "device": "2216_LIC_50104",
         "loop_type": "level",
+        "current_pid": {"pb": 500.0, "ti": 250.0, "td": 0.0},
         "start_time": "2026-03-13 00:00:00",
         "end_time": "2025-11-23 00:00:00"
     },
@@ -80,6 +81,7 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
         
     cfg = LOOP_CONFIGS[loop_id]
     device = cfg["device"]
+    current_pid_cfg = cfg.get("current_pid")
     
     json_path = DATA_DIR / f"{device}.json"
     if not json_path.exists():
@@ -95,9 +97,15 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
     # 截取对应活跃扰动区间
     start_ts = int(datetime.strptime(cfg["start_time"], "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
     end_ts = int(datetime.strptime(cfg["end_time"], "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
+    if start_ts > end_ts:
+        print(f"⚠️ 检测到起止时间倒置，自动交换: {cfg['start_time']} > {cfg['end_time']}")
+        start_ts, end_ts = end_ts, start_ts
     
     sliced_data = [d for d in history_data if start_ts <= d["timestamp"] <= end_ts]
     print(f"✂️ 截取数据: {len(sliced_data)} 点 ({cfg['start_time']} ~ {cfg['end_time']})")
+    if not sliced_data:
+        print("❌ 截取结果为空，请检查起止时间是否落在数据时间范围内")
+        return
     
     # ==========================================
     # 模式分发 (互相完全解耦)
@@ -139,7 +147,8 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
                 'history_data': sliced_data,
                 'params': {'model_type': 'FOPDT', 'turning_type': 'PID', 'analyst_column': 'pv', 'exact_window': True},
                 'qualified_windows': [window],
-                'response_mode': 'balanced'
+                'response_mode': 'balanced',
+                'current_pid': current_pid_cfg
             }
             # 使用统一的 tuning_context
             from core.models import SemanticProvider
@@ -235,7 +244,8 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
             'exact_window': enable_grid_search  # 如果是网格搜索模式，严格使用传入的整定段，不再进行内部的阶跃二次裁剪
         },
         'qualified_windows': final_run_windows,
-        'response_mode': 'balanced'
+        'response_mode': 'balanced',
+        'current_pid': current_pid_cfg
     }
     
     t0 = time.time()
@@ -279,7 +289,7 @@ def run_tuning(loop_id: str, enable_grid_search: bool = False, window_h: float =
             print(f"\n⏱️ Top-1 重跑耗时: {t1 - t0:.2f} 秒")
             final_score = result.get('model_rating', 0.0)
             final_pid = result.get('pid_parameters', {})
-            print(f"   ✅ Top-1 重跑评分: {final_score:.2f} (原多段: {final_score:.2f})")
+            print(f"   ✅ Top-1 重跑评分: {final_score:.2f} (原多段: {best_single_score:.2f})")
         else:
             print(f"\n✅ [质量门控] 多段融合评分 {final_score:.2f} ≥ 最佳单段评分 {best_single_score:.2f}，保持融合结果")
     rating_details = result.get('rating_details', {})
@@ -368,8 +378,9 @@ if __name__ == "__main__":
     ENABLE_GRID_SEARCH = (args.mode == "auto_pipeline")
 
     # [可选] 也可以在这里临时覆盖字典里的默认起止时间
-    LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2025-11-16 00:00:00"
-    LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2025-11-17 00:00:00"
+    if TARGET_LOOP in LOOP_CONFIGS:
+        LOOP_CONFIGS[TARGET_LOOP]["start_time"] = "2026-02-01 00:00:00"
+        LOOP_CONFIGS[TARGET_LOOP]["end_time"] = "2026-02-02 00:00:00"
     
     print("=" * 60)
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")

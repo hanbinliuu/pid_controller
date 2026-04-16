@@ -561,7 +561,8 @@ class RefinementStage(PipelineStage):
         method_result = self._method_selector.select_and_tune(
             context.segments_for_fitting, context.segment_results_fitted,
             model_params=model_params, lambda_factor=context.lambda_factor,
-            loop_type=context.loop_type
+            loop_type=context.loop_type,
+            current_pid=context.get_current_pid()
         )
         
         # 继电反馈法胜利条件判断
@@ -580,7 +581,8 @@ class RefinementStage(PipelineStage):
                 from ...tuning.verification.stability_analyzer import StabilityAnalyzer
                 model_pid = self._pid_calculator.calculate_from_fusion(
                     fusion_result, context.lambda_factor, 
-                    tuning_constraints=context.export_tuning_constraints()
+                    tuning_constraints=context.export_tuning_constraints(),
+                    current_pid=context.get_current_pid()
                 )
                 model_margins = StabilityAnalyzer.check_stability(model_params, model_pid)
                 model_pm = model_margins.phase_margin if model_margins else 0

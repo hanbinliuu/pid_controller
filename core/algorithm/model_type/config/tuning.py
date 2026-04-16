@@ -70,6 +70,13 @@ PID_CONSTRAINTS = {
     
     # Td约束
     'td_max_ratio': 0.25,            # Td最大比例（相对于Ti）
+
+    # 贴边缓冲（避免参数长期命中边界）
+    'edge_buffer_enabled': True,
+    'edge_near_ratio': 0.02,         # 距离边界 2% 以内判定为“贴边”
+    'kp_upper_buffer_ratio': 0.95,   # Kp 触顶后回退到上限的 95%
+    'ti_lower_buffer_ratio': 0.08,   # Ti 贴下边界时抬高 8%
+    'ti_upper_buffer_ratio': 0.08,   # Ti 贴上边界时回退 8%
     
     # 默认回退参数（当整定失败时使用）
     'fallback_kp': 1.0,
@@ -180,6 +187,33 @@ MODEL_SELECTOR = {
     'quality_excellent_r2': 0.85,        # 优秀R²阈值
     'quality_good_r2': 0.7,              # 良好R²阈值
     'quality_acceptable_r2': 0.5,        # 一般R²阈值
+
+    # 方法竞争目标函数（自动计算，不依赖人工试凑）
+    'method_select_weight_stability': 0.75,       # 稳定性评分权重
+    'method_select_weight_confidence': 0.25,      # 方法置信度权重
+    'method_select_weight_move_penalty': 0.85,    # 相对 current_pid 变更惩罚权重
+    'method_select_move_ratio_kp': 4.0,           # Kp 允许相对变化倍率（对数尺度）
+    'method_select_move_ratio_ti': 4.0,           # Ti 允许相对变化倍率（对数尺度）
+    'method_select_move_kp_weight': 0.6,          # 变更惩罚中 Kp 权重
+    'method_select_move_ti_weight': 0.4,          # 变更惩罚中 Ti 权重
+    'method_select_sign_flip_penalty': 0.7,       # Kp 符号翻转惩罚（0~1）
+
+    # 模型辨识参数输出护栏（相对 current_pid 的单次调参幅度限制）
+    'model_based_use_current_pid_guard': True,
+    'model_based_kp_max_expand_base': 2.0,        # 低置信度时 Kp 最大放大倍数
+    'model_based_kp_max_expand_gain': 2.0,        # 高置信度额外放大倍数
+    'model_based_kp_max_shrink_base': 2.0,        # 低置信度时 Kp 最大缩小倍数
+    'model_based_kp_max_shrink_gain': 2.0,        # 高置信度额外缩小倍数
+    'model_based_ti_max_expand_base': 1.8,        # 低置信度时 Ti 最大放大倍数
+    'model_based_ti_max_expand_gain': 1.2,        # 高置信度额外放大倍数
+    'model_based_ti_max_shrink_base': 2.2,        # 低置信度时 Ti 最大缩小倍数
+    'model_based_ti_max_shrink_gain': 1.8,        # 高置信度额外缩小倍数
+
+    # 无 current_pid 时的自判断护栏（基于数据质量与模型可信度）
+    'no_current_pid_guard_enabled': True,
+    'no_current_pid_pb_floor_factor': 0.8,        # 最低 PB 底线因子（乘以回路 pb_min）
+    'no_current_pid_pb_risk_gain': 1.0,           # 风险越高，PB 底线越高
+    'no_current_pid_ti_floor_risk_gain': 1.2,     # 风险越高，Ti 下限越高
 }
 
 # ============================================================

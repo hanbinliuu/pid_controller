@@ -20,7 +20,8 @@
 """
 
 import numpy as np
-from typing import Dict, List, Optional
+import math
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -64,6 +65,8 @@ class TuningMethodResult:
     stability_margins: Optional[StabilityMargins] = None
     reasoning: str = ""
     warnings: List[str] = field(default_factory=list)
+    selection_score: Optional[float] = None
+    selection_breakdown: Dict[str, float] = field(default_factory=dict)
 
 
 class TuningMethodSelector(LoggerMixin):
@@ -162,7 +165,8 @@ class TuningMethodSelector(LoggerMixin):
                         segment_results: List[SegmentResult],
                         model_params: Optional[Dict] = None,
                         lambda_factor: float = 0.8,
-                        loop_type: str = '') -> TuningMethodResult:
+                        loop_type: str = '',
+                        current_pid: Optional[Dict] = None) -> TuningMethodResult:
         """
         选择整定方法并执行整定
         
@@ -186,7 +190,10 @@ class TuningMethodSelector(LoggerMixin):
         
         # 1. 尝试模型辨识法
         if model_params and model_params.get('K', 0) != 0:
-            model_result = self._model_based_tuning(segments, model_params, lambda_factor, chars, loop_type=loop_type)
+            model_result = self._model_based_tuning(
+                segments, model_params, lambda_factor, chars,
+                loop_type=loop_type, current_pid=current_pid
+            )
             if model_result.model_params:
                 model_result = self._verify_stability(model_result)
                 candidates.append(model_result)
@@ -201,8 +208,8 @@ class TuningMethodSelector(LoggerMixin):
         if not candidates:
             return self._conservative_fallback("无可用整定方法", loop_type=loop_type)
         
-        # 3. 基于稳定性裕度选择最优方法
-        best = self._select_best_by_stability(candidates)
+        # 3. 统一目标函数自动选择最优方法（稳定性 + 置信度 - 变更成本）
+        best = self._select_best_by_stability(candidates, current_pid=current_pid)
         
         # 4. 如果最优方法不稳定，尝试调整
         if best.stability_margins and not best.stability_margins.is_stable:
@@ -214,8 +221,128 @@ class TuningMethodSelector(LoggerMixin):
         
         return best
     
-    def _select_best_by_stability(self, candidates: List[TuningMethodResult]) -> TuningMethodResult:
-        """基于稳定性裕度选择最优方法（GM+PM 综合评分）"""
+    def _extract_pid_triplet(self, pid: Optional[Dict]) -> Tuple[float, float, float]:
+        """从任意 PID 字典中提取 Kp/Ti/Td，兼容 kp/Kp、ti/Ti、pb/Pb。"""
+        if not pid:
+            return 0.0, 0.0, 0.0
+        kp = pid.get('Kp', pid.get('kp', 0.0))
+        ti = pid.get('Ti', pid.get('ti', 0.0))
+        td = pid.get('Td', pid.get('td', 0.0))
+        if abs(kp) < self._epsilon:
+            pb = pid.get('pb', pid.get('Pb', 0.0))
+            if pb and abs(pb) > self._epsilon:
+                kp = 100.0 / float(pb)
+        return float(kp), float(ti), float(td)
+
+    def _compute_pid_move_penalty(self, current_pid: Optional[Dict], candidate_pid: Dict) -> Tuple[float, Dict[str, float]]:
+        """
+        计算相对当前 PID 的变更惩罚（0~1）。
+        使用对数倍率度量，避免靠人工“试凑”保守度。
+        """
+        if not current_pid or not candidate_pid:
+            return 0.0, {
+                'enabled': 0.0,
+                'penalty': 0.0,
+                'kp_move': 0.0,
+                'ti_move': 0.0,
+                'sign_flip': 0.0,
+            }
+
+        cfg = Config.MODEL_SELECTOR
+        ratio_kp = max(1.01, float(cfg.get('method_select_move_ratio_kp', 4.0)))
+        ratio_ti = max(1.01, float(cfg.get('method_select_move_ratio_ti', 4.0)))
+        w_kp = float(cfg.get('method_select_move_kp_weight', 0.6))
+        w_ti = float(cfg.get('method_select_move_ti_weight', 0.4))
+        sign_flip_penalty = float(cfg.get('method_select_sign_flip_penalty', 0.7))
+
+        kp_old, ti_old, _ = self._extract_pid_triplet(current_pid)
+        kp_new, ti_new, _ = self._extract_pid_triplet(candidate_pid)
+
+        kp_move = 0.0
+        if abs(kp_old) > self._epsilon and abs(kp_new) > self._epsilon:
+            kp_move = min(1.0, abs(math.log(abs(kp_new) / abs(kp_old))) / math.log(ratio_kp))
+
+        ti_move = 0.0
+        if ti_old > self._epsilon and ti_new > self._epsilon:
+            ti_move = min(1.0, abs(math.log(ti_new / ti_old)) / math.log(ratio_ti))
+
+        sign_flip = 0.0
+        if abs(kp_old) > self._epsilon and abs(kp_new) > self._epsilon and kp_old * kp_new < 0:
+            sign_flip = 1.0
+
+        penalty = min(1.0, w_kp * kp_move + w_ti * ti_move + sign_flip_penalty * sign_flip)
+        return penalty, {
+            'enabled': 1.0,
+            'penalty': float(penalty),
+            'kp_move': float(kp_move),
+            'ti_move': float(ti_move),
+            'sign_flip': float(sign_flip),
+        }
+
+    def _apply_current_pid_guard(self, pid_params: Dict[str, float],
+                                 current_pid: Optional[Dict],
+                                 data_confidence: float) -> Dict[str, float]:
+        """
+        相对 current_pid 的单次调参护栏。
+        数据质量越高，允许变化幅度越大；低质量时自动收敛到更保守的改变量。
+        """
+        cfg = Config.MODEL_SELECTOR
+        if not cfg.get('model_based_use_current_pid_guard', True):
+            return pid_params
+        if not current_pid:
+            return pid_params
+
+        kp_old, ti_old, _ = self._extract_pid_triplet(current_pid)
+        if abs(kp_old) < self._epsilon and ti_old <= self._epsilon:
+            return pid_params
+
+        q = float(np.clip(data_confidence, 0.0, 1.0))
+        kp_expand = float(cfg.get('model_based_kp_max_expand_base', 2.0)) + float(cfg.get('model_based_kp_max_expand_gain', 2.0)) * q
+        kp_shrink = float(cfg.get('model_based_kp_max_shrink_base', 2.0)) + float(cfg.get('model_based_kp_max_shrink_gain', 2.0)) * q
+        ti_expand = float(cfg.get('model_based_ti_max_expand_base', 1.8)) + float(cfg.get('model_based_ti_max_expand_gain', 1.2)) * q
+        ti_shrink = float(cfg.get('model_based_ti_max_shrink_base', 2.2)) + float(cfg.get('model_based_ti_max_shrink_gain', 1.8)) * q
+
+        adjusted = dict(pid_params)
+        changed = False
+
+        kp_new = float(adjusted.get('Kp', 0.0))
+        if abs(kp_old) > self._epsilon and abs(kp_new) > self._epsilon:
+            kp_abs = abs(kp_new)
+            kp_lower = abs(kp_old) / max(1.01, kp_shrink)
+            kp_upper = abs(kp_old) * max(1.01, kp_expand)
+            kp_abs_capped = float(np.clip(kp_abs, kp_lower, kp_upper))
+            kp_sign = 1.0 if kp_old >= 0 else -1.0
+            kp_capped = kp_sign * kp_abs_capped
+            if abs(kp_capped - kp_new) > 1e-9:
+                changed = True
+                adjusted['Kp'] = round(kp_capped, 4)
+
+        ti_new = float(adjusted.get('Ti', 0.0))
+        if ti_old > self._epsilon and ti_new > self._epsilon:
+            ti_lower = ti_old / max(1.01, ti_shrink)
+            ti_upper = ti_old * max(1.01, ti_expand)
+            ti_capped = float(np.clip(ti_new, ti_lower, ti_upper))
+            if abs(ti_capped - ti_new) > 1e-9:
+                changed = True
+                adjusted['Ti'] = round(ti_capped, 2)
+
+        if changed:
+            kp_val = float(adjusted.get('Kp', 0.0))
+            ti_val = float(adjusted.get('Ti', 0.0))
+            td_val = float(adjusted.get('Td', 0.0))
+            adjusted['Ki'] = round(kp_val / ti_val, 4) if ti_val > self._epsilon else 0.0
+            adjusted['Kd'] = round(kp_val * td_val, 4)
+            adjusted['pb'] = round(100.0 / abs(kp_val), 2) if abs(kp_val) > self._epsilon else adjusted.get('pb', 100.0)
+            self.log(
+                f"   🔒 current_pid护栏生效: Kp→{adjusted.get('Kp', 0.0):.4f}, "
+                f"Ti→{adjusted.get('Ti', 0.0):.2f}s (q={q:.2f})"
+            )
+
+        return adjusted
+
+    def _select_best_by_stability(self, candidates: List[TuningMethodResult],
+                                  current_pid: Optional[Dict] = None) -> TuningMethodResult:
+        """基于统一目标函数选择最优方法（稳定性+置信度-变更惩罚）"""
         if len(candidates) == 1:
             return candidates[0]
         
@@ -242,23 +369,51 @@ class TuningMethodSelector(LoggerMixin):
             pm_norm = min(10.0, m.phase_margin / 9.0)    # PM=90 → 10分
             return 0.4 * gm_norm + 0.6 * pm_norm
         
+        selector_cfg = Config.MODEL_SELECTOR
+        w_stability = float(selector_cfg.get('method_select_weight_stability', 0.75))
+        w_conf = float(selector_cfg.get('method_select_weight_confidence', 0.25))
+        w_move = float(selector_cfg.get('method_select_weight_move_penalty', 0.85))
+
+        def _selection_score(c: TuningMethodResult) -> float:
+            stability = _stability_score(c) if c.stability_margins else 0.0
+            confidence = float(np.clip(c.confidence, 0.0, 1.0)) * 10.0
+            move_penalty, penalty_detail = self._compute_pid_move_penalty(current_pid, c.pid_params)
+            total = w_stability * stability + w_conf * confidence - w_move * (move_penalty * 10.0)
+            c.selection_score = float(total)
+            c.selection_breakdown = {
+                'stability_score': float(stability),
+                'confidence_score': float(confidence),
+                'move_penalty': float(move_penalty),
+                **penalty_detail,
+            }
+            return total
+
         if stable_candidates:
-            best = max(stable_candidates, key=_stability_score)
-            score = _stability_score(best)
-            best.reasoning = (f"GM+PM综合评分最优 "
-                            f"(GM={best.stability_margins.gain_margin:.2f}, "
-                            f"PM={best.stability_margins.phase_margin:.1f}°, "
-                            f"综合={score:.1f})")
+            best = max(stable_candidates, key=_selection_score)
+            _selection_score(best)
+            score = best.selection_score if best.selection_score is not None else 0.0
+            bd = best.selection_breakdown or {}
+            best.reasoning = (
+                f"目标函数最优(综合={score:.2f}, GM={best.stability_margins.gain_margin:.2f}, "
+                f"PM={best.stability_margins.phase_margin:.1f}°, 变更惩罚={bd.get('move_penalty', 0.0):.2f})"
+            )
+            self.log(
+                f"   目标函数: 稳定性={bd.get('stability_score', 0.0):.2f}, "
+                f"置信度={bd.get('confidence_score', 0.0):.2f}, "
+                f"变更惩罚={bd.get('move_penalty', 0.0):.2f}, 综合={score:.2f}"
+            )
         else:
-            best = max(valid_candidates, key=lambda c: c.stability_margins.phase_margin if c.stability_margins else 0)
-            best.reasoning = "所有方法都不满足稳定性要求，选择相位裕度最大的"
+            best = max(valid_candidates, key=_selection_score)
+            _selection_score(best)
+            best.reasoning = "所有方法都不满足稳定性要求，按综合目标函数选择最稳妥方案"
         
         return best
 
     
     def _model_based_tuning(self, segments: List[HistoricalData], model_params: Optional[Dict],
                             lambda_factor: float, chars: DataCharacteristics,
-                            loop_type: str = '') -> TuningMethodResult:
+                            loop_type: str = '',
+                            current_pid: Optional[Dict] = None) -> TuningMethodResult:
         """模型辨识法整定"""
         self.log("\n🔧 使用模型辨识法整定")
         if model_params is None or model_params.get('K', 0) == 0:
@@ -298,15 +453,22 @@ class TuningMethodSelector(LoggerMixin):
         # [FIX] Level + FO_INTEGRATOR 的 Ti 下限保护
         # 纯积分器 T1=0 导致 PIDCalculator 的 lambda 公式算出极短的 Ti (18~20s)，
         # 这对液位回路来说完全不合理（行业标准 Ti ≥ 60s）。
-        # 强制 Ti 不低于 60s，避免 model_based 路径输出危险的快速积分。
+        # 强制 Ti 不低于 60s，并保留边界缓冲，避免贴边参数。
         if loop_type == 'level' and is_integrator_model:
             ti_val = pid_params.get('Ti', 0)
-            TI_MIN_LEVEL = 60.0
-            if ti_val < TI_MIN_LEVEL:
-                self.log(f"   ⚠️ Level积分器 Ti={ti_val:.1f}s < {TI_MIN_LEVEL}s (行业下限)，强制提升")
+            from ..config import Config as _Cfg
+            ti_buffer = _Cfg.PID_CONSTRAINTS.get('ti_lower_buffer_ratio', 0.08)
+            TI_MIN_LEVEL = 60.0 * (1.0 + ti_buffer)
+            if ti_val + 1e-6 < TI_MIN_LEVEL:
+                self.log(f"   ⚠️ Level积分器 Ti={ti_val:.1f}s < {TI_MIN_LEVEL:.1f}s (安全下限+缓冲)，强制提升")
                 pid_params['Ti'] = TI_MIN_LEVEL
                 kp_val = pid_params.get('Kp', 1.0)
                 pid_params['Ki'] = round(kp_val / TI_MIN_LEVEL, 4)
+
+        # 基于 current_pid 的单次调参护栏（算法自动约束，不是人工试凑）
+        pid_params = self._apply_current_pid_guard(
+            pid_params, current_pid=current_pid, data_confidence=chars.step_quality
+        )
         
         return TuningMethodResult(
             method=TuningMethod.MODEL_BASED, confidence=chars.step_quality,
