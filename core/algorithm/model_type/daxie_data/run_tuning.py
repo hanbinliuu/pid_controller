@@ -13,14 +13,30 @@
    先看位号：
    python core/algorithm/model_type/daxie_data/run_tuning.py --list-devices --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv
 
+   - 5203_FIC_21005
+   - 5203_LIC_11502
+   - 5203_PIC_11201
+   - 5203_PIC_11501 ---已经稳态    --ok
+   - 5203_PIC_21901 ---已经稳态
+   - 5203_TIC_11303  
+   - 5203_TIC_20201   --ok
+
    再整定（示例：5203_LIC_11502）：
-   python core/algorithm/model_type/daxie_data/run_tuning.py 5203_LIC_11502 --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv --parse-raw
+   python core/algorithm/model_type/daxie_data/run_tuning.py 5203_PIC_11501 --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv --parse-raw
    默认时间窗（未显式传参时）: 2026-04-15 00:00:00 ~ 2026-04-16 00:00:00
 
+    测试已经稳定的回路
+    python core/algorithm/model_type/daxie_data/run_tuning.py 5203_PIC_21901 \
+  --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv \
+  --parse-raw \
+  --mode benchmark \
+  --blind-validate \
+  --seed 42
+
+  
 3) 模式切换
    - 默认: auto_pipeline（滑窗寻优）
    - 可选: --mode benchmark（扰动段探测）
-   - 验证算法不依赖当前参数: 追加 --blind-validate
 
 输出目录：
    - output/tuning_grid_search_[device].csv
@@ -34,8 +50,6 @@ import os
 import json
 import time
 import argparse
-import copy
-import random
 import numpy as np
 import pandas as pd
 import concurrent.futures
@@ -347,145 +361,6 @@ def _normalize_pid_dict(pid: Optional[Dict[str, Any]]) -> Dict[str, float]:
     }
 
 
-def _evaluate_pid_score_under_result_model(
-    pid_norm: Dict[str, float],
-    result: Dict[str, Any],
-    sliced_data: List[Dict[str, Any]],
-    loop_type: str,
-) -> Optional[Dict[str, Any]]:
-    """
-    在“当前识别模型”下评估给定 PID 的闭环评分，返回与主评分口径一致的结果。
-    """
-    try:
-        from core.algorithm.model_type.data_models import FusionResult, HistoricalData
-        from core.algorithm.model_type.rating import ModelRating
-        from core.algorithm.model_type.tuning.core.pid_calculator import PIDCalculator
-        from core.algorithm.model_type.utils import compute_sim_params, build_cl_verification
-
-        model_params = result.get("model_parameters", {}) or {}
-        model_type = result.get("model_type", "FOPDT")
-        fusion = FusionResult(
-            model_type=model_type,
-            K=float(model_params.get("K", 1.0) or 1.0),
-            T1=float(model_params.get("T1", 10.0) or 10.0),
-            T2=float(model_params.get("T2", 0.0) or 0.0),
-            L=float(model_params.get("L", 0.0) or 0.0),
-            loop_type=loop_type,
-        )
-
-        hist = HistoricalData.from_json(sliced_data)
-        sim_params = compute_sim_params(hist)
-        if sim_params is None:
-            sp_initial, sp_final, pv_initial = 50.0, 60.0, 50.0
-        else:
-            sp_initial, sp_final, pv_initial = sim_params
-
-        kp = float(pid_norm.get("kp", 0.0) or 0.0)
-        ti = float(pid_norm.get("ti", 0.0) or 0.0)
-        td = float(pid_norm.get("td", 0.0) or 0.0)
-        ki = float(pid_norm.get("ki", 0.0) or 0.0)
-        kd = float(pid_norm.get("kd", 0.0) or 0.0)
-        if abs(ki) < 1e-12 and abs(kp) > 1e-12 and ti > 1e-12:
-            ki = kp / ti
-        if abs(kd) < 1e-12 and abs(kp) > 1e-12 and td > 1e-12:
-            kd = kp * td
-
-        pid_eval = {"Kp": kp, "Ki": ki, "Kd": kd}
-
-        calc = PIDCalculator()
-        is_stable, cl_metrics = calc.verify_pid_stability(
-            fusion,
-            pid_eval,
-            sp_initial=sp_initial,
-            sp_final=sp_final,
-            pv_initial=pv_initial,
-            loop_type=loop_type,
-            verbose=False,
-        )
-
-        perf_score, _ = ModelRating.performance_score(copy.deepcopy(cl_metrics), loop_type=loop_type)
-        method_conf = float((result.get("rating_details", {}) or {}).get("method_confidence", 0.5) or 0.5)
-        final_score, _ = ModelRating.final_rating(perf_score, method_conf)
-        cl_info = build_cl_verification(
-            cl_metrics,
-            sp_initial=sp_initial,
-            sp_final=sp_final,
-            pv_initial=pv_initial,
-            is_stable=is_stable,
-        )
-
-        return {
-            "model_rating": round(float(final_score), 2),
-            "performance_score": round(float(perf_score), 2),
-            "method_confidence": method_conf,
-            "closed_loop_verification": cl_info,
-            "pid_parameters": {
-                "kp": kp,
-                "ki": ki,
-                "kd": kd,
-                "ti": ti,
-                "td": td,
-                "pb": float(pid_norm.get("pb", 0.0) or 0.0),
-            },
-        }
-    except Exception as e:
-        print(f"⚠️ 评估 current_pid 评分失败: {e}")
-        return None
-
-
-def _assess_blind_validation_context(
-    result: Dict[str, Any],
-    sliced_data: List[Dict[str, Any]],
-    tuning_windows: List[Dict[str, Any]],
-    final_score: float,
-    current_pid_eval: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """盲整定结论：用于解释低分是否来自“可辨识性不足”而非算法失效。"""
-    notes: List[str] = []
-    method = str(
-        (result.get("pid_parameters", {}) or {}).get("method")
-        or (result.get("tuning_features", {}) or {}).get("tuning_method")
-        or ""
-    ).lower()
-    model_type = str(result.get("model_type", "") or "").upper()
-    model_params = result.get("model_parameters", {}) or {}
-
-    pv_ranges: List[float] = []
-    mv_ranges: List[float] = []
-    for w in tuning_windows or []:
-        st = int(w.get("start_time", 0))
-        et = int(w.get("end_time", 0))
-        seg = [d for d in sliced_data if st <= int(d.get("timestamp", 0)) <= et]
-        if not seg:
-            continue
-        pv = np.array([float(d.get("pv", 0.0)) for d in seg], dtype=float)
-        mv = np.array([float(d.get("mv", 0.0)) for d in seg], dtype=float)
-        pv_ranges.append(float(np.ptp(pv)))
-        mv_ranges.append(float(np.ptp(mv)))
-
-    if pv_ranges and mv_ranges:
-        pv_med = float(np.median(pv_ranges))
-        mv_med = float(np.median(mv_ranges))
-        if pv_med < 0.5 and mv_med >= 0.5:
-            notes.append(f"窗口激励偏弱: median(PV范围)={pv_med:.3f}, median(MV范围)={mv_med:.3f}")
-
-    k_abs = abs(float(model_params.get("K", 0.0) or 0.0))
-    if model_type in ("FO_INTEGRATOR", "FOPDT", "FO") and k_abs < 0.05:
-        notes.append(f"识别模型增益过小(|K|={k_abs:.4f})，可辨识性不足")
-
-    if "fallback" in method:
-        notes.append(f"本次走 fallback 路径(method={method})，说明有效激励不足")
-
-    if current_pid_eval:
-        gap = float(current_pid_eval.get("model_rating", 0.0) or 0.0) - float(final_score)
-        if gap >= 1.0:
-            notes.append(f"current_pid 评分更高(+{gap:.2f})，盲整定结果参考价值偏低")
-
-    if notes:
-        return {"status": "limited_identifiability", "confidence": "low", "notes": notes}
-    return {"status": "pass", "confidence": "normal", "notes": []}
-
-
 def run_tuning(
     loop_id: str,
     enable_grid_search: bool = False,
@@ -495,14 +370,7 @@ def run_tuning(
     force_parse_raw: bool = False,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
-    use_current_pid_in_tuning: bool = True,
-    seed: Optional[int] = None,
 ):
-    if seed is not None:
-        np.random.seed(int(seed))
-        random.seed(int(seed))
-        print(f"🎲 固定随机种子: {int(seed)}")
-
     raw_csv_path: Optional[Path] = None
     if raw_csv:
         raw_csv_path = Path(raw_csv)
@@ -511,9 +379,7 @@ def run_tuning(
 
     cfg = resolve_loop_config(loop_id, raw_csv_path)
     device = cfg["device"]
-    loop_type_from_tag = cfg.get("loop_type", infer_loop_type(device))
     current_pid_cfg = cfg.get("current_pid")
-    print(f"🧭 DCS位号识别: {device} -> loop_type={loop_type_from_tag}")
     history_data = maybe_load_history_data(cfg, raw_csv_path=raw_csv_path, force_parse_raw=force_parse_raw)
 
     # 对新原始 CSV 设备：若未显式配置 current_pid，则自动从 PB/TI/TD 列提取
@@ -522,12 +388,6 @@ def run_tuning(
         if auto_pid:
             current_pid_cfg = auto_pid
             print(f"🧭 自动读取当前PID: Pb={auto_pid.get('pb', 0.0):.1f}%, Ti={auto_pid.get('ti', 0.0):.1f}s, Td={auto_pid.get('td', 0.0):.1f}s")
-
-    # 验证模式可禁用 current_pid 参与整定（盲整定），但仍保留 baseline 用于比较评分
-    effective_current_pid_cfg = current_pid_cfg if use_current_pid_in_tuning else None
-    if not use_current_pid_in_tuning:
-        print("🧪 盲整定验证模式: 整定过程不使用 current_pid，仅用于结果对比")
-        print("   ↳ 已启用硬隔离: 屏蔽 process_context/current_pid 护栏")
 
     start_time = start_time or cfg.get("start_time")
     end_time = end_time or cfg.get("end_time")
@@ -588,28 +448,16 @@ def run_tuning(
             
             input_data_seg = {
                 'history_data': sliced_data,
-                'params': {
-                    'model_type': 'FOPDT',
-                    'turning_type': 'PID',
-                    'analyst_column': 'pv',
-                    'exact_window': True,
-                    'loop_type': loop_type_from_tag,
-                },
+                'params': {'model_type': 'FOPDT', 'turning_type': 'PID', 'analyst_column': 'pv', 'exact_window': True},
                 'qualified_windows': [window],
                 'response_mode': 'balanced',
-                'current_pid': effective_current_pid_cfg
+                'current_pid': current_pid_cfg
             }
             # 使用统一的 tuning_context
             from core.models import SemanticProvider
             provider = SemanticProvider()
             tuning_context = provider.get_tuning_context(device)
-            # 强制回路类型与设备位号一致，避免无实例模型时被误判为 temperature/level
-            tuning_context['loop_type'] = loop_type_from_tag
-            tuning_context['loop_type_source'] = 'dcs_tag'
             tuning_context['exact_window'] = enable_grid_search
-            if not use_current_pid_in_tuning:
-                tuning_context['disable_current_pid_in_tuning'] = True
-                tuning_context.pop('current_pid', None)
             
             orc_seg = TuningOrchestrator(verbose=False, process_context=tuning_context)
             res_seg = orc_seg.run(input_data_seg)
@@ -696,12 +544,11 @@ def run_tuning(
             'model_type': 'FOPDT', 
             'turning_type': 'PID', 
             'analyst_column': 'pv',
-            'exact_window': enable_grid_search,  # 如果是网格搜索模式，严格使用传入的整定段，不再进行内部的阶跃二次裁剪
-            'loop_type': loop_type_from_tag,
+            'exact_window': enable_grid_search  # 如果是网格搜索模式，严格使用传入的整定段，不再进行内部的阶跃二次裁剪
         },
         'qualified_windows': final_run_windows,
         'response_mode': 'balanced',
-        'current_pid': effective_current_pid_cfg
+        'current_pid': current_pid_cfg
     }
     
     t0 = time.time()
@@ -710,13 +557,7 @@ def run_tuning(
     from core.models import SemanticProvider
     provider = SemanticProvider()
     tuning_context = provider.get_tuning_context(device)
-    # 强制回路类型与设备位号一致，避免无实例模型时误分类导致整定策略跑偏
-    tuning_context['loop_type'] = loop_type_from_tag
-    tuning_context['loop_type_source'] = 'dcs_tag'
     tuning_context['exact_window'] = enable_grid_search  # 补充运行时的控制标志
-    if not use_current_pid_in_tuning:
-        tuning_context['disable_current_pid_in_tuning'] = True
-        tuning_context.pop('current_pid', None)
 
     baseline_pid = _normalize_pid_dict(current_pid_cfg or tuning_context.get("current_pid"))
     
@@ -756,53 +597,6 @@ def run_tuning(
             print(f"   ✅ Top-1 重跑评分: {final_score:.2f} (原多段: {best_single_score:.2f})")
         else:
             print(f"\n✅ [质量门控] 多段融合评分 {final_score:.2f} ≥ 最佳单段评分 {best_single_score:.2f}，保持融合结果")
-    # 评估 current_pid 评分（用于对比与稳态保参验证）
-    current_pid_eval = None
-    if baseline_pid:
-        current_pid_eval = _evaluate_pid_score_under_result_model(
-            baseline_pid, result, sliced_data, loop_type=tuning_context.get("loop_type", "flow")
-        )
-        if current_pid_eval:
-            print(
-                f"   📌 current_pid评分  : {current_pid_eval['model_rating']:.2f} "
-                f"(性能={current_pid_eval['performance_score']:.2f}, 置信={current_pid_eval['method_confidence']:.2f})"
-            )
-
-    # 若本次为 fallback 路径且有 current_pid，则优先返回 current_pid（稳态保参策略）
-    method_for_guard = str(final_pid.get("method") or result.get("tuning_features", {}).get("tuning_method") or "").lower()
-    switched_to_current_pid = False
-    should_keep_current_pid = False
-    if use_current_pid_in_tuning and baseline_pid and current_pid_eval and ("fallback" in method_for_guard):
-        should_keep_current_pid = True
-    # 兜底规则：即使 method 名称不是 fallback，只要 current_pid 评分显著更高，也返回 current_pid
-    if use_current_pid_in_tuning and baseline_pid and current_pid_eval and (current_pid_eval["model_rating"] >= float(final_score) + 0.5):
-        should_keep_current_pid = True
-
-    if should_keep_current_pid:
-        switched_to_current_pid = True
-        result["pid_parameters"] = {
-            "kp": current_pid_eval["pid_parameters"]["kp"],
-            "ki": current_pid_eval["pid_parameters"]["ki"],
-            "kd": current_pid_eval["pid_parameters"]["kd"],
-            "ti": current_pid_eval["pid_parameters"]["ti"],
-            "td": current_pid_eval["pid_parameters"]["td"],
-            "pb": current_pid_eval["pid_parameters"]["pb"],
-            "method": "current_pid_keep",
-        }
-        result["model_rating"] = current_pid_eval["model_rating"]
-        result["closed_loop_verification"] = current_pid_eval["closed_loop_verification"]
-        rd = result.get("rating_details", {}) or {}
-        rd["performance_score"] = current_pid_eval["performance_score"]
-        rd["method_confidence"] = current_pid_eval["method_confidence"]
-        rd["final_rating"] = current_pid_eval["model_rating"]
-        result["rating_details"] = rd
-        result.setdefault("tuning_features", {})
-        result["tuning_features"]["tuning_method"] = "current_pid_keep"
-        print("   🛡️ 稳态保参策略触发：返回 current_pid 作为最终参数")
-
-    # 同步读取（可能已被 current_pid 覆盖）
-    final_score = result.get("model_rating", 0.0)
-    final_pid = result.get("pid_parameters", {})
     rating_details = result.get('rating_details', {})
     perf_score = rating_details.get('performance_score', 0.0)
     conf_score = rating_details.get('method_confidence', 0.0)
@@ -825,12 +619,6 @@ def run_tuning(
         print(f"   🧭 当前PID(基线)  : Kp={baseline_pid.get('kp', 0.0):.4f}, Pb={baseline_pid.get('pb', 0.0):.1f}%, Ti={baseline_pid.get('ti', 0.0):.1f}s, Td={baseline_pid.get('td', 0.0):.1f}s")
     else:
         print("   🧭 当前PID(基线)  : N/A (未提供)")
-    if current_pid_eval:
-        print(
-            f"   🧭 当前PID评分    : {current_pid_eval.get('model_rating', 0.0):.2f} "
-            f"(性能={current_pid_eval.get('performance_score', 0.0):.2f}, "
-            f"置信={current_pid_eval.get('method_confidence', 0.0):.2f})"
-        )
 
     print(f"   🏆 综合性能评分 : {final_score:.2f} 分")
     print(f"      ├─ 闭环性能评分 : {perf_score:.2f} / 10")
@@ -843,18 +631,6 @@ def run_tuning(
         d_ti = final_Ti - baseline_pid.get("ti", 0.0)
         d_td = final_Td - baseline_pid.get("td", 0.0)
         print(f"   🔁 参数变化对比   : ΔPb={d_pb:+.1f}%, ΔTi={d_ti:+.1f}s, ΔTd={d_td:+.1f}s")
-    blind_eval = None
-    if not use_current_pid_in_tuning:
-        blind_eval = _assess_blind_validation_context(
-            result, sliced_data, final_run_windows, final_score, current_pid_eval
-        )
-        if blind_eval["status"] == "limited_identifiability":
-            print("   🧪 盲整定结论   : 可辨识性不足（本次结果仅供参考）")
-            for n in blind_eval["notes"]:
-                print(f"      - {n}")
-            print("   🚫 下发建议       : 不建议下发本次整定参数，建议保持当前PID")
-        else:
-            print("   🧪 盲整定结论   : 通过（可用于与现场参数对比）")
     print("=" * 60)
     
     # 💡 瘦身版结果存储：剔除大量 history_data，仅保留 PID、时间、评分
@@ -871,18 +647,6 @@ def run_tuning(
         "pid_parameters": result.get("pid_parameters", {})
     }
     compact_result["baseline_pid"] = baseline_pid or {}
-    if current_pid_eval:
-        compact_result["baseline_pid_rating"] = {
-            "model_rating": current_pid_eval["model_rating"],
-            "performance_score": current_pid_eval["performance_score"],
-            "method_confidence": current_pid_eval["method_confidence"],
-        }
-    compact_result["switched_to_current_pid"] = switched_to_current_pid
-    if blind_eval is not None:
-        compact_result["blind_validation"] = blind_eval
-        compact_result["recommendation"] = (
-            "keep_current_pid" if blind_eval.get("status") == "limited_identifiability" else "candidate_pid_available"
-        )
     
     # [NEW] 输出修正：如果命中了兜底免死金牌，在数据记录上正式修正为纯积分物理模型(FO_INTEGRATOR)
     if final_pid.get('method') == 'integrating_fallback':
@@ -925,8 +689,6 @@ if __name__ == "__main__":
     parser.add_argument("--list-devices", action="store_true", help="仅列出原始CSV中可用设备位号后退出")
     parser.add_argument("--start-time", default=None, help="可选，覆盖截取起始时间。格式: YYYY-mm-dd HH:MM:SS")
     parser.add_argument("--end-time", default=None, help="可选，覆盖截取结束时间。格式: YYYY-mm-dd HH:MM:SS")
-    parser.add_argument("--blind-validate", action="store_true", help="盲整定验证：整定时不使用 current_pid，仅在结果中做对比评分")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子（用于复现拟合/寻优结果），默认 42")
     parser.add_argument("--mode", choices=["benchmark", "auto_pipeline"], default="benchmark",
                         help="运行模式: 'benchmark' 为多线程并发测分压测仪，'auto_pipeline' 为模拟真实后端全自动智能流转。")
     parser.add_argument("--window", type=float, default=6.0, help="滑窗寻优模式下的满窗长度(小时), 默认 4.0")
@@ -961,6 +723,4 @@ if __name__ == "__main__":
         force_parse_raw=args.parse_raw,
         start_time=args.start_time,
         end_time=args.end_time,
-        use_current_pid_in_tuning=(not args.blind_validate),
-        seed=args.seed,
     )
