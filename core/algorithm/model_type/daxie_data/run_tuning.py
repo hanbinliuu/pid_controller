@@ -12,13 +12,13 @@
 2) 新流程（直接用 20260416.csv 原始数据）
    先看位号：
    python core/algorithm/model_type/daxie_data/run_tuning.py --list-devices --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv
-
-   - 5203_FIC_21005
-   - 5203_LIC_11502
-   - 5203_PIC_11201
+    
+   - 5203_FIC_21005  --ok
+   - 5203_LIC_11502  --ok
+   - 5203_PIC_11201  --no
    - 5203_PIC_11501 ---已经稳态    --ok
-   - 5203_PIC_21901 ---已经稳态
-   - 5203_TIC_11303  
+   - 5203_PIC_21901 ---已经稳态      ---no
+   - 5203_TIC_11303  --ok
    - 5203_TIC_20201   --ok
 
    再整定（示例：5203_LIC_11502）：
@@ -26,7 +26,7 @@
    默认时间窗（未显式传参时）: 2026-04-15 00:00:00 ~ 2026-04-16 00:00:00
 
     测试已经稳定的回路
-    python core/algorithm/model_type/daxie_data/run_tuning.py 5203_PIC_21901 \
+    python core/algorithm/model_type/daxie_data/run_tuning.py 5203_PIC_11501 \
   --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv \
   --parse-raw \
   --mode benchmark \
@@ -34,6 +34,8 @@
   --seed 42
 
   
+
+
 3) 模式切换
    - 默认: auto_pipeline（滑窗寻优）
    - 可选: --mode benchmark（扰动段探测）
@@ -381,267 +383,6 @@ def _baseline_to_pid_params(baseline_pid: Dict[str, float]) -> Dict[str, float]:
     }
 
 
-def _is_valid_model_for_rating(model_params: Dict[str, Any], model_type: str = "") -> bool:
-    """判断模型参数是否可用于 ModelRating 对比评分。"""
-    if not isinstance(model_params, dict) or not model_params:
-        return False
-    try:
-        k = float(model_params.get("K", 0.0) or 0.0)
-        t1 = float(model_params.get("T1", 0.0) or 0.0)
-        t2 = float(model_params.get("T2", 0.0) or 0.0)
-        l = float(model_params.get("L", 0.0) or 0.0)
-    except Exception:
-        return False
-
-    # 纯积分器允许 T1=0，但仍要求 K 非零
-    if str(model_type).upper() == "FO_INTEGRATOR":
-        return np.isfinite(k) and abs(k) > 1e-12 and np.isfinite(l)
-
-    return (
-        np.isfinite(k) and np.isfinite(t1) and np.isfinite(t2) and np.isfinite(l)
-        and abs(k) > 1e-12 and t1 > 1e-12
-    )
-
-
-def _evaluate_pid_against_result_model(
-    model_params: Dict[str, Any],
-    pid_for_eval: Dict[str, Any],
-    loop_type: str,
-    method_confidence: Optional[float],
-    method_name: str,
-    history_data: List[Dict[str, Any]],
-    model_type: str = "",
-) -> Optional[Dict[str, Any]]:
-    """
-    使用最终识别模型对指定 PID 做同口径评分（用于 baseline 对比）。
-    返回:
-        {
-            "final_rating": float,
-            "performance_score": float,
-            "method_confidence": float | None,
-            "raw": ModelRating.evaluate(...) 原始字典
-        }
-    """
-    if not _is_valid_model_for_rating(model_params, model_type=model_type):
-        return None
-
-    if not history_data:
-        return None
-
-    sv_arr = np.asarray([float(d.get("sv", 0.0)) for d in history_data], dtype=float)
-    pv_arr = np.asarray([float(d.get("pv", 0.0)) for d in history_data], dtype=float)
-    if sv_arr.size == 0 or pv_arr.size == 0:
-        return None
-
-    sp_initial = float(sv_arr[0])
-    tail_n = max(10, int(0.1 * len(sv_arr)))
-    sp_final = float(np.nanmedian(sv_arr[-tail_n:]))
-    if not np.isfinite(sp_final):
-        sp_final = sp_initial
-    if abs(sp_final - sp_initial) < 1e-9:
-        pv_range = float(np.nanmax(pv_arr) - np.nanmin(pv_arr)) if pv_arr.size else 0.0
-        delta = max(0.1, 0.05 * max(pv_range, 1.0))
-        sp_final = sp_initial + delta
-
-    from core.algorithm.model_type.rating import ModelRating
-
-    eval_res = ModelRating.evaluate(
-        model_params=model_params,
-        pid_params=pid_for_eval,
-        method=method_name or "model_identification",
-        method_confidence=method_confidence if method_confidence is not None else None,
-        sp_initial=sp_initial,
-        sp_final=sp_final,
-        loop_type=loop_type or "flow",
-    )
-    perf = float(eval_res.get("performance_score", 0.0))
-    conf = eval_res.get("method_confidence", method_confidence)
-    if eval_res.get("final_rating") is not None:
-        final = float(eval_res.get("final_rating", 0.0))
-    elif conf is not None:
-        from core.algorithm.model_type.rating import ModelRating
-        final, _ = ModelRating.final_rating(perf, float(conf))
-    else:
-        final = perf
-    return {
-        "final_rating": float(final),
-        "performance_score": perf,
-        "method_confidence": float(conf) if conf is not None else None,
-        "raw": eval_res,
-    }
-
-
-def _calc_window_identifiability_stats(
-    history_data: List[Dict[str, Any]],
-    windows: List[Dict[str, Any]],
-) -> Dict[str, float]:
-    """统计候选窗口的可辨识性信息，用于早期保护判定。"""
-    if not history_data or not windows:
-        return {
-            "max_quality": 0.0,
-            "median_pv_range": 0.0,
-            "median_mv_range": 0.0,
-            "global_sv_range": 0.0,
-            "global_sv_median_abs": 0.0,
-        }
-
-    ts = np.asarray([int(d.get("timestamp", 0)) for d in history_data], dtype=np.int64)
-    pv = np.asarray([float(d.get("pv", 0.0)) for d in history_data], dtype=float)
-    sv = np.asarray([float(d.get("sv", 0.0)) for d in history_data], dtype=float)
-    mv = np.asarray([float(d.get("mv", 0.0)) for d in history_data], dtype=float)
-
-    pv_ranges: List[float] = []
-    mv_ranges: List[float] = []
-    qualities: List[float] = []
-
-    for w in windows:
-        st = int(w.get("start_time", ts[0]))
-        et = int(w.get("end_time", ts[-1]))
-        mask = (ts >= st) & (ts <= et)
-        if not np.any(mask):
-            continue
-        pv_seg = pv[mask]
-        mv_seg = mv[mask]
-        pv_ranges.append(float(np.nanmax(pv_seg) - np.nanmin(pv_seg)))
-        mv_ranges.append(float(np.nanmax(mv_seg) - np.nanmin(mv_seg)))
-        try:
-            qualities.append(float(w.get("quality_score", 0.0) or 0.0))
-        except Exception:
-            qualities.append(0.0)
-
-    return {
-        "max_quality": float(max(qualities)) if qualities else 0.0,
-        "median_pv_range": float(np.median(pv_ranges)) if pv_ranges else 0.0,
-        "median_mv_range": float(np.median(mv_ranges)) if mv_ranges else 0.0,
-        "global_sv_range": float(np.nanmax(sv) - np.nanmin(sv)) if sv.size else 0.0,
-        "global_sv_median_abs": float(abs(np.nanmedian(sv))) if sv.size else 0.0,
-    }
-
-
-def _evaluate_historical_operating_score(history_data: List[Dict[str, Any]]) -> Dict[str, float]:
-    """
-    历史实绩评分（不依赖模型）：
-    反映“当前PID在这段真实历史工况下是否平稳、是否贴合SV”。
-    """
-    if not history_data:
-        return {
-            "score": 0.0,
-            "mae_pct": 0.0,
-            "p95_pct": 0.0,
-            "pv_std_pct": 0.0,
-            "mv_jitter_pct": 0.0,
-        }
-
-    pv = np.asarray([float(d.get("pv", 0.0)) for d in history_data], dtype=float)
-    sv = np.asarray([float(d.get("sv", 0.0)) for d in history_data], dtype=float)
-    mv = np.asarray([float(d.get("mv", 0.0)) for d in history_data], dtype=float)
-
-    if pv.size == 0 or sv.size == 0:
-        return {
-            "score": 0.0,
-            "mae_pct": 0.0,
-            "p95_pct": 0.0,
-            "pv_std_pct": 0.0,
-            "mv_jitter_pct": 0.0,
-        }
-
-    sv_scale = float(max(abs(np.nanmedian(sv)), 1e-6))
-    err_abs = np.abs(pv - sv)
-
-    mae_pct = float(np.nanmedian(err_abs) / sv_scale * 100.0)
-    p95_pct = float(np.nanpercentile(err_abs, 95) / sv_scale * 100.0)
-    pv_std_pct = float(np.nanstd(pv) / sv_scale * 100.0)
-
-    if mv.size >= 3:
-        mv_diff = np.diff(mv)
-        mv_scale = float(max(np.nanpercentile(np.abs(mv), 95), 1e-6))
-        mv_jitter_pct = float(np.nanstd(mv_diff) / mv_scale * 100.0)
-    else:
-        mv_jitter_pct = 0.0
-
-    mae_s = float(np.interp(mae_pct, [0.0, 0.2, 0.5, 1.0, 2.0, 5.0], [10.0, 9.5, 8.5, 7.0, 5.0, 2.0]))
-    p95_s = float(np.interp(p95_pct, [0.0, 0.5, 1.0, 2.0, 3.0, 8.0], [10.0, 9.0, 8.0, 6.0, 4.5, 1.0]))
-    pvstd_s = float(np.interp(pv_std_pct, [0.0, 0.1, 0.2, 0.4, 0.8, 2.0], [10.0, 9.5, 8.5, 7.0, 5.0, 2.0]))
-    mvjit_s = float(np.interp(mv_jitter_pct, [0.0, 0.2, 0.5, 1.0, 2.0, 5.0], [10.0, 9.0, 8.0, 6.5, 4.5, 2.0]))
-
-    score = 0.35 * mae_s + 0.25 * p95_s + 0.25 * pvstd_s + 0.15 * mvjit_s
-    score = float(np.clip(score, 0.0, 10.0))
-
-    return {
-        "score": round(score, 2),
-        "mae_pct": round(mae_pct, 3),
-        "p95_pct": round(p95_pct, 3),
-        "pv_std_pct": round(pv_std_pct, 3),
-        "mv_jitter_pct": round(mv_jitter_pct, 3),
-    }
-
-
-def _build_pid_comparison_conclusion(
-    historical_score: Dict[str, float],
-    baseline_rating: Optional[Dict[str, Any]],
-    final_score: float,
-    conf_score: float,
-    final_pid: Dict[str, Any],
-    baseline_pid: Dict[str, float],
-    kept_current_due_to_unidentifiable: bool,
-) -> Dict[str, str]:
-    """生成最终现场可读的参数对比结论。"""
-    hist_score = float(historical_score.get("score", 0.0) or 0.0)
-    baseline_model_score = None
-    if baseline_rating is not None:
-        baseline_model_score = float(baseline_rating.get("final_rating", 0.0) or 0.0)
-
-    final_ti = float(final_pid.get("Ti", final_pid.get("ti", 0.0)) or 0.0)
-    final_pb = float(final_pid.get("pb", final_pid.get("Pb", 0.0)) or 0.0)
-    base_ti = float(baseline_pid.get("ti", 0.0) or 0.0)
-    base_pb = float(baseline_pid.get("pb", 0.0) or 0.0)
-
-    ti_change_ratio = abs(final_ti - base_ti) / max(abs(base_ti), 1.0) if base_ti else 0.0
-    pb_change_ratio = abs(final_pb - base_pb) / max(abs(base_pb), 1.0) if base_pb else 0.0
-    large_param_change = ti_change_ratio >= 0.7 or pb_change_ratio >= 1.0
-
-    if kept_current_due_to_unidentifiable:
-        return {
-            "decision": "建议保持当前PID",
-            "reason": "本次数据不可辨识，模型评分不可作为新参数优劣依据。",
-            "status": "keep_current_not_identifiable",
-        }
-
-    if hist_score >= 8.5 and conf_score < 0.5:
-        return {
-            "decision": "建议保持当前PID",
-            "reason": f"历史实绩已很稳({hist_score:.2f}/10)，但模型置信度偏低({conf_score:.2f})，新参数只适合作为候选。",
-            "status": "keep_current_high_history_low_confidence",
-        }
-
-    if hist_score >= 8.5 and large_param_change:
-        return {
-            "decision": "建议保持当前PID",
-            "reason": "历史实绩优秀，同时新参数相对当前PID变化过大，建议先补充扰动测试再判断。",
-            "status": "keep_current_large_change",
-        }
-
-    if baseline_model_score is not None and final_score > baseline_model_score + 0.5 and conf_score >= 0.6:
-        return {
-            "decision": "新参数更优，可进入人工复核",
-            "reason": f"同模型口径下新参数高于当前PID {final_score - baseline_model_score:.2f} 分，且模型置信度可接受。",
-            "status": "candidate_better",
-        }
-
-    if baseline_model_score is not None and final_score <= baseline_model_score + 0.3:
-        return {
-            "decision": "建议保持当前PID",
-            "reason": "同模型口径下新参数没有形成明确优势。",
-            "status": "keep_current_no_clear_gain",
-        }
-
-    return {
-        "decision": "建议人工复核后再下发",
-        "reason": "模型分与历史实绩分属于不同口径，需要结合现场扰动测试判断。",
-        "status": "manual_review",
-    }
-
-
 def run_tuning(
     loop_id: str,
     enable_grid_search: bool = False,
@@ -865,55 +606,14 @@ def run_tuning(
         tuning_context.pop('current_pid', None)
 
     baseline_pid = _normalize_pid_dict(current_pid_cfg or tuning_context.get("current_pid"))
-
-    # [NEW] 低可辨识性早期保护（主要用于盲整定验证）
-    # 避免在“SV几乎不变 + PV激励极弱 + 窗口质量普遍偏低”的场景里强行拟合并输出误导参数。
-    quick_keep_reason = None
-    if blind_validate and (not enable_grid_search) and baseline_pid and final_run_windows:
-        ident_stats = _calc_window_identifiability_stats(sliced_data, final_run_windows)
-        sv_scale = max(ident_stats["global_sv_median_abs"], 1e-6)
-        sv_flat_th = max(0.02, 0.005 * sv_scale)
-        pv_low_th = max(0.02, 0.003 * sv_scale)
-        if (
-            ident_stats["max_quality"] < 0.50
-            and ident_stats["global_sv_range"] <= sv_flat_th
-            and ident_stats["median_pv_range"] <= pv_low_th
-        ):
-            quick_keep_reason = (
-                f"低激励/低可辨识性: maxQ={ident_stats['max_quality']:.2f}, "
-                f"median(PV范围)={ident_stats['median_pv_range']:.4f}, "
-                f"SV范围={ident_stats['global_sv_range']:.4f}"
-            )
-            print(f"⚠️ 早期保护触发：{quick_keep_reason}")
-            print("   → 跳过后续模型辨识与整定，直接保持当前PID（盲整定场景保护）")
-            result = {
-                "success": False,
-                "model_rating": 0.0,
-                "model_type": "FOPDT",
-                "model_parameters": {},
-                "pid_parameters": _baseline_to_pid_params(baseline_pid),
-                "tuning_features": {
-                    "tuning_method": "keep_current_low_excitation",
-                    "reason": quick_keep_reason,
-                },
-                "rating_details": {},
-            }
-            t1 = time.time()
-        else:
-            orchestrator_final = TuningOrchestrator(
-                verbose=True,
-                process_context=tuning_context
-            )
-            result = orchestrator_final.run(input_data_final)
-            t1 = time.time()
-    else:
-        orchestrator_final = TuningOrchestrator(
-            verbose=True,
-            process_context=tuning_context
-        )
-        result = orchestrator_final.run(input_data_final)
-        t1 = time.time()
-
+    
+    orchestrator_final = TuningOrchestrator(
+        verbose=True, 
+        process_context=tuning_context
+    )
+    result = orchestrator_final.run(input_data_final)
+    t1 = time.time()
+    
     print(f"\n⏱️ 最终模式执行耗时: {t1 - t0:.2f} 秒")
 
     # 可辨识性失败保护：避免输出默认兜底参数(Kp=1/Ti=20)误导现场
@@ -955,18 +655,6 @@ def run_tuning(
     rating_details = result.get('rating_details', {})
     perf_score = rating_details.get('performance_score', 0.0)
     conf_score = rating_details.get('method_confidence', 0.0)
-    historical_score = _evaluate_historical_operating_score(sliced_data)
-    baseline_rating = None
-    if baseline_pid:
-        baseline_rating = _evaluate_pid_against_result_model(
-            model_params=result.get("model_parameters", {}) or {},
-            pid_for_eval=baseline_pid,
-            loop_type=loop_type_from_tag,
-            method_confidence=(float(conf_score) if conf_score is not None else None),
-            method_name=(result.get('tuning_features', {}).get('tuning_method') or "model_identification"),
-            history_data=sliced_data,
-            model_type=result.get("model_type", ""),
-        )
     
     print("\n" + "="*60)
     print("🎉 最终整定参数与总分榜单发布！")
@@ -981,51 +669,16 @@ def run_tuning(
     final_Ki = final_pid.get('Ki', final_pid.get('ki', 0.0))
     if final_Ti == 0.0 and abs(final_Ki) > 1e-9 and abs(final_Kp) > 1e-9:
         final_Ti = abs(final_Kp) / abs(final_Ki)
-    comparison_conclusion = _build_pid_comparison_conclusion(
-        historical_score=historical_score,
-        baseline_rating=baseline_rating,
-        final_score=float(final_score or 0.0),
-        conf_score=float(conf_score or 0.0),
-        final_pid={
-            **(final_pid or {}),
-            "Kp": final_Kp,
-            "Ti": final_Ti,
-            "Td": final_Td,
-            "pb": final_pb,
-        },
-        baseline_pid=baseline_pid or {},
-        kept_current_due_to_unidentifiable=kept_current_due_to_unidentifiable,
-    )
     
     if baseline_pid:
         print(f"   🧭 当前PID(基线)  : Kp={baseline_pid.get('kp', 0.0):.4f}, Pb={baseline_pid.get('pb', 0.0):.1f}%, Ti={baseline_pid.get('ti', 0.0):.1f}s, Td={baseline_pid.get('td', 0.0):.1f}s")
-        if baseline_rating is not None:
-            b_final = baseline_rating.get("final_rating", 0.0)
-            b_perf = baseline_rating.get("performance_score", 0.0)
-            b_conf = baseline_rating.get("method_confidence", None)
-            if b_conf is None:
-                print(f"   🧭 当前PID评分    : {b_final:.2f} (性能={b_perf:.2f}, 置信=N/A)")
-            else:
-                print(f"   🧭 当前PID评分    : {b_final:.2f} (性能={b_perf:.2f}, 置信={float(b_conf):.2f})")
-        else:
-            print("   🧭 当前PID评分    : N/A（模型不可辨识，无法同口径评分）")
     else:
         print("   🧭 当前PID(基线)  : N/A (未提供)")
-    print(
-        "   📈 历史实绩评分  : "
-        f"{historical_score.get('score', 0.0):.2f} / 10 "
-        f"(MAE={historical_score.get('mae_pct', 0.0):.3f}%, "
-        f"P95={historical_score.get('p95_pct', 0.0):.3f}%, "
-        f"PV波动={historical_score.get('pv_std_pct', 0.0):.3f}%, "
-        f"MV抖动={historical_score.get('mv_jitter_pct', 0.0):.3f}%)"
-    )
 
     if kept_current_due_to_unidentifiable:
         print("   🏆 综合性能评分 : N/A（可辨识性不足，未评分）")
         print("      ├─ 闭环性能评分 : N/A")
         print("      └─ 方法置信度   : N/A")
-        if quick_keep_reason:
-            print(f"   🧪 判定依据       : {quick_keep_reason}")
     else:
         print(f"   🏆 综合性能评分 : {final_score:.2f} 分")
         print(f"      ├─ 闭环性能评分 : {perf_score:.2f} / 10")
@@ -1038,8 +691,6 @@ def run_tuning(
         d_ti = final_Ti - baseline_pid.get("ti", 0.0)
         d_td = final_Td - baseline_pid.get("td", 0.0)
         print(f"   🔁 参数变化对比   : ΔPb={d_pb:+.1f}%, ΔTi={d_ti:+.1f}s, ΔTd={d_td:+.1f}s")
-    print(f"   🧾 对比结论       : {comparison_conclusion['decision']}")
-    print(f"      原因           : {comparison_conclusion['reason']}")
     print("=" * 60)
     
     # 💡 瘦身版结果存储：剔除大量 history_data，仅保留 PID、时间、评分
@@ -1059,15 +710,6 @@ def run_tuning(
         "not_identifiable_unscored" if kept_current_due_to_unidentifiable else "scored"
     )
     compact_result["baseline_pid"] = baseline_pid or {}
-    if quick_keep_reason:
-        compact_result["identifiability_reason"] = quick_keep_reason
-    compact_result["baseline_pid_rating"] = {
-        "final_rating": None if baseline_rating is None else baseline_rating.get("final_rating"),
-        "performance_score": None if baseline_rating is None else baseline_rating.get("performance_score"),
-        "method_confidence": None if baseline_rating is None else baseline_rating.get("method_confidence"),
-    }
-    compact_result["historical_operating_score"] = historical_score
-    compact_result["comparison_conclusion"] = comparison_conclusion
     
     # [NEW] 输出修正：如果命中了兜底免死金牌，在数据记录上正式修正为纯积分物理模型(FO_INTEGRATOR)
     if final_pid.get('method') == 'integrating_fallback':
