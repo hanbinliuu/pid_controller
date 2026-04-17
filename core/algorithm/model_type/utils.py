@@ -302,9 +302,31 @@ def compute_sim_params(hist_data, config: dict = None) -> tuple:
 
     sp_change = abs(sp_final - sp_initial)
     pv_sp_diff = abs(pv_initial - sp_initial)
-    if sp_change < config['min_sp_change'] or pv_sp_diff > sp_change * 2:
-        sp_initial = config['default_sp_initial']
-        sp_final = config['default_sp_final']
-        pv_initial = config['default_pv_initial']
+    min_sp_change = float(config.get('min_sp_change', 0.5))
+
+    # 无明显SV阶跃：使用“工作点附近小步进”验证，避免 50->60 这类失真评分场景
+    if sp_change < min_sp_change:
+        sv_med = float(np.median(sv))
+        pv_med = float(np.median(y))
+        pv_std = float(np.std(y))
+        base = max(abs(sv_med), abs(pv_med), 1.0)
+        step_mag = max(pv_std * 4.0, base * 0.01, 0.02)
+        step_mag = min(step_mag, base * 0.08)
+        direction = 1.0
+        diff = sv_med - pv_med
+        if abs(diff) > 1e-9:
+            direction = float(np.sign(diff))
+        sp_initial = pv_med
+        sp_final = pv_med + direction * step_mag
+        pv_initial = pv_med
+    elif pv_sp_diff > sp_change * 2:
+        # SP/PV 工作点明显错位：仍保留真实量纲，避免回落到固定 50/60
+        sv_med = float(np.median(sv))
+        pv_med = float(np.median(y))
+        direction = float(np.sign(sp_final - sp_initial)) if abs(sp_final - sp_initial) > 1e-9 else 1.0
+        step_mag = max(sp_change, max(abs(sv_med), abs(pv_med), 1.0) * 0.01)
+        sp_initial = sv_med
+        sp_final = sv_med + direction * step_mag
+        pv_initial = pv_med
 
     return sp_initial, sp_final, pv_initial

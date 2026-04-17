@@ -628,8 +628,16 @@ class OscillationTuner(LoggerMixin):
                     sign = np.sign(current_Kp)
                     source = "current_pid"
                 else:
-                    sign = np.sign(corr) if abs(corr) > 0.1 else 1.0
-                    source = "correlation"
+                    # [FIX] 盲整定下的符号判定防抖：
+                    # 对 flow 回路，弱相关数据中 corr 的符号极不稳定，容易误翻作用方向。
+                    # 仅当相关性绝对值足够高时才采用相关符号，否则使用保守默认正向。
+                    corr_sign_threshold = 0.35 if self._loop_type == 'flow' else 0.20
+                    if abs(corr) >= corr_sign_threshold:
+                        sign = np.sign(corr)
+                        source = "correlation"
+                    else:
+                        sign = 1.0
+                        source = f"default(+1,|corr|<{corr_sign_threshold:.2f})"
             
             K_approx = abs(K_approx) * sign
             
@@ -675,8 +683,10 @@ class OscillationTuner(LoggerMixin):
         
         delay_ratio = L_approx / max(T1_approx, 1.0)
         
-        # [NEW] 近积分过程专用路径 (level 回路, 或低增益+大时间常数)
-        is_integrating = (self._loop_type == 'level') or (T1_approx > 100.0 and abs(K_approx) < 0.3)
+        # [FIX] 近积分过程专用路径仅限 level 回路。
+        # 旧逻辑会让 pressure/temperature 在弱激励数据(T1大、K小)下误入 LEVEL 专属整定，
+        # 产生不合理的 integrating_fallback 参数与低评分。
+        is_integrating = (self._loop_type == 'level')
         if is_integrating:
             # 积分过程整定：使用 Lambda 规则的积分过程版本
             # G(s) ≈ K_int/s，其中 K_int = K/T1（归一化积分增益），必须保留真实物理符号！
@@ -1065,7 +1075,11 @@ class OscillationTuner(LoggerMixin):
         )
         
         sv_mean, pv_mean, pv_std = float(np.mean(sv)), float(np.mean(y)), float(np.std(y))
-        sp_initial, sp_final = sv_mean, sv_mean + max(pv_std * 2, 1.0)
+        base = max(abs(sv_mean), abs(pv_mean), 1.0)
+        step_mag = max(pv_std * 4.0, base * 0.01, 0.02)
+        step_mag = min(step_mag, base * 0.08)
+        direction = float(np.sign(sv_mean - pv_mean)) if abs(sv_mean - pv_mean) > 1e-9 else 1.0
+        sp_initial, sp_final = pv_mean, pv_mean + direction * step_mag
         
         is_stable, cl_metrics = self._pid_calculator.verify_pid_stability(
             temp_fusion, pid_params, sp_initial=sp_initial, sp_final=sp_final, pv_initial=pv_mean, 

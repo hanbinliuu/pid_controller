@@ -44,6 +44,7 @@ class SegmentResult:
     oscillation_ratio: float = 0.0      # 振荡比例
     is_nonlinear: bool = False          # 是否为非线性
     is_high_oscillation: bool = False   # 是否为高振荡（用于临界法整定）
+    weak_excitation: bool = False       # 是否为弱激励段（PV变化小但MV有动作）
 
 
 @dataclass

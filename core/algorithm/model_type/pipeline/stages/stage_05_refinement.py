@@ -406,10 +406,14 @@ class RefinementStage(PipelineStage):
         )
         
         sv_mean = float(np.mean(sv))
-        pv_std = float(np.std(y))
-        sp_initial = sv_mean
-        sp_final = sv_mean + max(pv_std * 2, 1.0)
         pv_initial = float(np.mean(y))
+        pv_std = float(np.std(y))
+        base = max(abs(sv_mean), abs(pv_initial), 1.0)
+        step_mag = max(pv_std * 4.0, base * 0.01, 0.02)
+        step_mag = min(step_mag, base * 0.08)
+        sp_initial = pv_initial
+        direction = float(np.sign(sv_mean - pv_initial)) if abs(sv_mean - pv_initial) > 1e-9 else 1.0
+        sp_final = sp_initial + direction * step_mag
         
         process_ctx = context.process_context or {}
         loop_type = process_ctx.get('loop_type', '')

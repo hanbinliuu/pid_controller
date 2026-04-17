@@ -237,6 +237,18 @@ class SelfOptimizeStage(PipelineStage):
         industry_penalty, industry_detail = self._compute_industry_plausibility_penalty(pb, ti, loop_type)
         final_score_adjusted = max(0.0, final_score - boundary_penalty_effective - industry_penalty)
 
+        # [FIX] 灾难响应候选拦截：
+        # 在 fallback 路径中，可能出现“极不稳定但分数反而上升”的假改善。
+        # 对超大超调/超大稳态误差的候选直接降为 0 分，禁止被采纳。
+        catastrophic = (
+            (not is_stable) and (
+                float(cl_metrics.overshoot) > 300.0 or
+                float(cl_metrics.steady_state_error) > 50.0
+            )
+        )
+        if catastrophic:
+            final_score_adjusted = 0.0
+
         detail = {
             'pid_params': pid_params, 'pb': pb, 'ti': ti, 'td': td,
             'is_stable': is_stable, 'performance_score': perf_score,
@@ -251,6 +263,7 @@ class SelfOptimizeStage(PipelineStage):
             'industry_penalty': industry_penalty,
             'boundary_penalty_detail': penalty_detail,
             'industry_penalty_detail': industry_detail,
+            'catastrophic_response': catastrophic,
         }
         if extra:
             detail.update(extra)
@@ -319,6 +332,8 @@ class SelfOptimizeStage(PipelineStage):
                         fusion, c, sp_initial, sp_final, pv_initial, loop_type,
                         extra=extra_info)
                     search_log.append(detail)
+                    if detail.get('catastrophic_response'):
+                        continue
                     if score > best_score + min_improv:
                         best_score, best_pid, best_detail, improved = score, c, detail, True
                 except Exception:
@@ -365,6 +380,8 @@ class SelfOptimizeStage(PipelineStage):
                             fusion, c, sp_initial, sp_final, pv_initial, loop_type,
                             extra=extra_info)
                         search_log.append(detail)
+                        if detail.get('catastrophic_response'):
+                            continue
                         if score > best_score + min_improv:
                             best_score, best_pid, best_detail, improved = score, c, detail, True
                     except Exception:
@@ -400,6 +417,8 @@ class SelfOptimizeStage(PipelineStage):
                             fusion, c, sp_initial, sp_final, pv_initial, loop_type,
                             extra=extra_info)
                         search_log.append(detail)
+                        if detail.get('catastrophic_response'):
+                            continue
                         if score > best_score + min_improv:
                             best_score, best_pid, best_detail, improved = score, c, detail, True
                     except Exception:
@@ -616,6 +635,18 @@ class SelfOptimizeStage(PipelineStage):
             return context
 
         final_result = context.final_result
+        # 空结果/无效模型参数场景直接跳过，避免把默认兜底参数(如 PB=100/TI=20)
+        # 继续“微调”成看似可用的结果，造成误导。
+        if not final_result.get("success", True):
+            self.log("   ⚠️ 当前为失败/空结果(success=False)，跳过 Phase 2 微调")
+            return context
+        mp = final_result.get("model_parameters", {}) or {}
+        k_abs = abs(float(mp.get("K", 0.0) or 0.0))
+        t1 = float(mp.get("T1", 0.0) or 0.0)
+        if k_abs < 1e-9 or t1 <= 0.0:
+            self.log(f"   ⚠️ 当前模型参数无效(K={k_abs:.4e}, T1={t1:.2f})，跳过 Phase 2 微调")
+            return context
+
         self.log(f"   ℹ️ 已有整定结果 (来自 {final_result.get('tuning_features', {}).get('tuning_method', 'fallback')})，执行 Phase 2 微调")
 
         fusion, pid_params, sp_initial, sp_final, pv_initial, loop_type = \

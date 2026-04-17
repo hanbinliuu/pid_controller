@@ -72,7 +72,7 @@ class SegmentProcessor(LoggerMixin):
         
         return segments
     
-    def filter_invalid_segments(self, segments: List[HistoricalData]
+    def filter_invalid_segments(self, segments: List[HistoricalData], loop_type: str = ""
                                 ) -> Tuple[List[HistoricalData], List[SegmentResult]]:
         """
         过滤无效扰动段
@@ -122,11 +122,24 @@ class SegmentProcessor(LoggerMixin):
             
             y, u = seg.pv[valid_mask], seg.mv[valid_mask]
             pv_range, mv_range = np.ptp(y), np.ptp(u)
+            weak_excitation = False
             
             # 检查2: PV变化
             if pv_range < min_pv and np.std(y) < 0.1:
-                self._mark_invalid(result, f"PV无变化(range={pv_range:.2f})", i, segment_results)
-                continue
+                # 弱激励工况放宽（典型稳态验证场景）：
+                # 对 pressure/flow/temperature，如果 MV 确有动作，则保留该段用于盲整定可辨识性验证。
+                weak_loop = (loop_type or "").lower() in ("pressure", "flow", "temperature")
+                weak_mv_min = max(float(self._seg_config.get('min_mv_range', 0.1)), 0.1)
+                if weak_loop and mv_range >= weak_mv_min:
+                    weak_excitation = True
+                    result.weak_excitation = True
+                    self.log(
+                        f"   段{i+1}: ℹ️ 弱激励段(PV范围={pv_range:.2f}, MV范围={mv_range:.2f})，"
+                        f"保留用于盲整定验证"
+                    )
+                else:
+                    self._mark_invalid(result, f"PV无变化(range={pv_range:.2f})", i, segment_results)
+                    continue
             
             # 检查3: MV变化
             if mv_range < min_mv:
@@ -135,12 +148,14 @@ class SegmentProcessor(LoggerMixin):
             
             # 检查4: 阶跃响应形状特征
             shape_valid, shape_reason = self._check_step_response_shape(y, u)
-            if not shape_valid:
+            if not shape_valid and not weak_excitation:
                 result.is_valid = False
                 result.invalid_reason = shape_reason
                 self.log(f"   段{i+1}: ✗ {result.invalid_reason}")
                 segment_results.append(result)
                 continue
+            if not shape_valid and weak_excitation:
+                self.log(f"   段{i+1}: ℹ️ 弱激励放宽形状约束({shape_reason})")
             
             # 检查5: 数据质量检测（非线性、阶跃特征、振荡）
             quality = self._preprocessor.analyze_quality(y, u)
@@ -149,6 +164,9 @@ class SegmentProcessor(LoggerMixin):
             result.step_response_score = quality.step_response_score
             result.oscillation_ratio = quality.oscillation_ratio
             result.is_nonlinear = quality.is_nonlinear
+            if weak_excitation:
+                # 弱激励段保留但降置信，避免虚高评分
+                result.quality_score = min(result.quality_score, 0.45)
             
             # 检查6: 严重非线性过滤
             severe_nonlin = self._seg_config['severe_nonlinearity']
@@ -171,6 +189,8 @@ class SegmentProcessor(LoggerMixin):
             
             # 根据质量给出细分评价
             quality_flag = ""
+            if weak_excitation:
+                quality_flag += " ⚪弱激励"
             if quality.is_nonlinear:
                 quality_flag += " ⚠️非线性"
             if quality.oscillation_ratio > 0.3:

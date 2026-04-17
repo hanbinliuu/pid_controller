@@ -141,6 +141,8 @@ class TuningContext:
 
     def get_current_pid(self) -> Optional[Dict[str, float]]:
         """获取当前 DCS 中的 PID 参数，优先从 input_data 获取，否则从 process_context 获取"""
+        if self.process_context and self.process_context.get('disable_current_pid_in_tuning'):
+            return None
         if self.current_pid:
             return self.current_pid
         if self.process_context and self.process_context.get('current_pid'):
@@ -339,4 +341,3 @@ class TuningContext:
         if self.characterization_model:
             return self.characterization_model.valve.stiction_index_estimated
         return 0.0
-

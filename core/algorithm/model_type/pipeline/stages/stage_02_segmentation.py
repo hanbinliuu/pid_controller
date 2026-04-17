@@ -32,51 +32,62 @@ class SegmentationStage(PipelineStage):
         
         # 1. 提取来自 tuning_segment 的扰动段
         raw_segs = self._segment_processor.extract_segments(context.hist_data, context.input_data.tuning_window)
-        disturbance_segs, disturbance_results = self._segment_processor.filter_invalid_segments(raw_segs)
+        disturbance_segs, disturbance_results = self._segment_processor.filter_invalid_segments(
+            raw_segs, loop_type=context.get_loop_type()
+        )
         
         self.log(f"📊 扰动段: {len(disturbance_segs)} 个有效")
         
         # 处理完全无扰动段的特殊情况 (液位纯PV震荡)
         if not disturbance_segs:
-            pv_range = np.ptp(context.hist_data.pv)
-            pv_mean = np.mean(np.abs(context.hist_data.pv)) + 1e-9
-            has_pv_oscillation = pv_range > pv_mean * 0.01  # PV波动超过1%
+            # [NEW] 当扰动段筛选全灭时，仍尝试基于 MV 阶跃检测整定段。
+            # 这对“PV已稳态但MV仍有动作”的验证场景尤为重要。
+            tuning_segs_mv, tuning_results_mv = self._segment_processor.detect_tuning_segments(context.hist_data)
+            if tuning_segs_mv:
+                self.log(f"✅ 扰动段为空，回退到 MV 阶跃整定段: {len(tuning_segs_mv)} 个")
+                disturbance_segs = tuning_segs_mv
+                disturbance_results = tuning_results_mv
+                # 继续走后续标准流程，不进入早退 fallback
+            else:
+                pv_range = np.ptp(context.hist_data.pv)
+                pv_mean = np.mean(np.abs(context.hist_data.pv)) + 1e-9
+                has_pv_oscillation = pv_range > pv_mean * 0.01  # PV波动超过1%
             
-            if has_pv_oscillation and len(raw_segs) > 0:
-                self.log(f"⚠️ 无有效扰动段(MV无变化)，但PV存在振荡(range={pv_range:.2f})，尝试振荡整定fallback")
-                dummy_results = [
-                    SegmentResult(segment_idx=i, start_idx=0, end_idx=len(seg.pv)-1,
-                                  data_points=len(seg.pv), is_valid=True)
-                    for i, seg in enumerate(raw_segs)
-                ]
-                if self._fallback_manager is not None:
-                    if self._fallback_manager.try_fallback(
-                        context,
-                        raw_segs,
-                        dummy_results,
-                        force=True,
-                        start_log=None,
-                        success_log="✅ 振荡整定fallback成功",
-                        fail_log="❌ 振荡整定fallback失败",
-                        output_windows=None,
-                        output_segments=raw_segs,
-                        output_results=dummy_results,
-                    ):
-                        return context
-                else:
-                    osc_result = self._oscillation_tuner.try_oscillation_tuning(
-                        raw_segs, dummy_results, context.get_current_pid(), force=True
-                    )
-                    if osc_result and osc_result.get('success'):
-                        self.log(f"✅ 振荡整定fallback成功")
-                        context.final_result = self._oscillation_tuner.build_oscillation_output(
-                            osc_result, context.hist_data, context.time_range, tuning_windows=None
+                if has_pv_oscillation and len(raw_segs) > 0:
+                    self.log(f"⚠️ 无有效扰动段(MV无变化)，但PV存在振荡(range={pv_range:.2f})，尝试振荡整定fallback")
+                    dummy_results = [
+                        SegmentResult(segment_idx=i, start_idx=0, end_idx=len(seg.pv)-1,
+                                      data_points=len(seg.pv), is_valid=True)
+                        for i, seg in enumerate(raw_segs)
+                    ]
+                    if self._fallback_manager is not None:
+                        if self._fallback_manager.try_fallback(
+                            context,
+                            raw_segs,
+                            dummy_results,
+                            force=True,
+                            start_log=None,
+                            success_log="✅ 振荡整定fallback成功",
+                            fail_log="❌ 振荡整定fallback失败",
+                            output_windows=None,
+                            output_segments=raw_segs,
+                            output_results=dummy_results,
+                        ):
+                            return context
+                    else:
+                        osc_result = self._oscillation_tuner.try_oscillation_tuning(
+                            raw_segs, dummy_results, context.get_current_pid(), force=True
                         )
-                        return context
-            
-            self.log("⚠️ 无有效扰动段，跳过整定")
-            context.is_fallback_triggered = True # Mark failure path
-            return context
+                        if osc_result and osc_result.get('success'):
+                            self.log(f"✅ 振荡整定fallback成功")
+                            context.final_result = self._oscillation_tuner.build_oscillation_output(
+                                osc_result, context.hist_data, context.time_range, tuning_windows=None
+                            )
+                            return context
+                
+                self.log("⚠️ 无有效扰动段，跳过整定")
+                context.is_fallback_triggered = True # Mark failure path
+                return context
             
         # 2. 尝试寻找 SV阶跃 和 MV阶跃段
         sv_step_segs, sv_step_results = self._segment_processor.detect_sv_step_segments(context.hist_data)

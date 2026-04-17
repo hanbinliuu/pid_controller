@@ -454,26 +454,36 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
     ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
 
     # ========== 在子图1上追加新PID仿真预测 ==========
-    if pid_params.get('kp') and fitting_result.get('success'):
-        sim_result = simulate_pid_prediction(
-            timestamps, pv_array, mv_array, sv_array,
-            model_info, pid_params
-        )
+    # 诊断口径：即便 fitting_result.success=False（如“拟合完全失败”），
+    # 只要模型参数仍可模拟，也尝试画出预测曲线，便于排查。
+    model_simulatable = (
+        (is_integrating and model_info.get('K_int', 0.0) > 1e-12) or
+        ((not is_integrating) and model_info.get('T1', 0.0) > 0 and abs(model_info.get('K', 0.0)) > 1e-12)
+    )
+    if pid_params.get('kp') and model_simulatable:
+        try:
+            sim_result = simulate_pid_prediction(
+                timestamps, pv_array, mv_array, sv_array,
+                model_info, pid_params
+            )
 
-        future_time_array = sim_result['future_time_array']
-        pv_sim = sim_result['pv_sim']
-        mv_sim = sim_result['mv_sim']
-        n_sim_steps = sim_result['n_sim_steps']
-        sv_target = sim_result['sv_target']
+            future_time_array = sim_result['future_time_array']
+            pv_sim = sim_result['pv_sim']
+            mv_sim = sim_result['mv_sim']
+            n_sim_steps = sim_result['n_sim_steps']
+            sv_target = sim_result['sv_target']
 
-        # 在子图1上绘制仿真PV
-        ax1.plot(future_time_array, pv_sim, color='#00AA00', linestyle='-',
-                 label='新参数PV (仿真)', linewidth=2.0, alpha=0.9)
-        ax1.plot(future_time_array, np.full(n_sim_steps, sv_target), 'r--', linewidth=1.0)
-        ax1.axvline(x=time_array[-1], color='purple', linestyle='--', linewidth=1.5,
-                    label='仿真起点', alpha=0.7)
-        ax1.axvspan(time_array[-1], future_time_array[-1], alpha=0.05, color='green')
-        ax1.legend(loc='upper right')
+            # 在子图1上绘制仿真PV
+            ax1.plot(future_time_array, pv_sim, color='#00AA00', linestyle='-',
+                     label='新参数PV (仿真)', linewidth=2.0, alpha=0.9)
+            ax1.plot(future_time_array, np.full(n_sim_steps, sv_target), 'r--', linewidth=1.0)
+            ax1.axvline(x=time_array[-1], color='purple', linestyle='--', linewidth=1.5,
+                        label='仿真起点', alpha=0.7)
+            ax1.axvspan(time_array[-1], future_time_array[-1], alpha=0.05, color='green')
+            ax1.legend(loc='upper right')
+        except Exception:
+            sim_result = None
+            mv_sim = None
     else:
         sim_result = None  # 无仿真数据
         mv_sim = None
@@ -745,132 +755,59 @@ def visualize_fitting_result(data: List[Dict], tuning_input: Dict,
                             fontsize=8, color='red',
                             arrowprops=dict(arrowstyle='->', color='red', lw=0.8))
 
-    # ========== 子图5: 新PID仿真预测（使用真实过程模型） ==========
+    # ========== 子图5: 新PID仿真预测（复用统一仿真引擎，保证口径一致） ==========
     if has_closed_loop:
         ax5 = fig.add_subplot(n_plots, 1, 5)
 
-        model_params_raw = fitting_result.get('model_parameters', {})
-        K_raw = model_params_raw.get('K', 1.0)
-        T1_raw = model_params_raw.get('T1', 10.0)
-        T2_raw = model_params_raw.get('T2', 0.0)
-        L_raw = model_params_raw.get('L', 0.0)
+        if sim_result is None and pid_params.get('kp') and model_simulatable:
+            try:
+                sim_result = simulate_pid_prediction(
+                    timestamps, pv_array, mv_array, sv_array, model_info, pid_params
+                )
+            except Exception:
+                sim_result = None
 
-        Kp = pid_params.get('kp', 1.0)
-        Ki_val = pid_params.get('ki', 0.0)
-        Kd_val = pid_params.get('kd', 0.0)
+        if sim_result is not None:
+            pv_sim5 = sim_result['pv_sim']
+            sv_target5 = sim_result['sv_target']
+            pv_init5 = sim_result['pv_init']
+            dt_sim5 = sim_result['dt_sim']
+            t_sim5 = np.arange(len(pv_sim5)) * dt_sim5
 
-        # 采样间隔
-        if len(timestamps) > 1:
-            dt_est5 = (timestamps[1] - timestamps[0]) / 1000.0
+            ax5.plot(t_sim5, pv_sim5, 'b-', label='PV (预测)', linewidth=1.5)
+            ax5.axhline(y=sv_target5, color='r', linestyle='--', label=f'SV={sv_target5:.1f}', linewidth=1.2)
+            ax5.fill_between(
+                t_sim5,
+                sv_target5 * 0.95,
+                sv_target5 * 1.05,
+                alpha=0.2,
+                color='green',
+                label='±5%误差带'
+            )
+            ax5.axhline(y=pv_init5, color='gray', linestyle=':', alpha=0.5, label=f'初始PV={pv_init5:.1f}')
+
+            # 与主图一致：稳定判据采用末段是否持续落在误差带内
+            error_band5 = max(abs(sv_target5) * 0.05, 0.3)
+            tail = pv_sim5[-100:] if len(pv_sim5) >= 100 else pv_sim5
+            in_band = np.abs(tail - sv_target5) < error_band5 if len(tail) > 0 else np.array([False])
+            is_stable_predict = bool(np.all(in_band))
+            stable_status = '预测稳态' if is_stable_predict else '预测不稳态'
+
+            ax5.set_xlim([0, t_sim5[-1]])
+            ax5.set_title(f'新PID参数仿真预测（统一引擎）- {stable_status}')
         else:
-            dt_est5 = 1.0
-            
-        # [FIX] 强制欧拉积分步长，防止大步长引发预测曲线的剧烈振荡错觉
-        dt_sim5 = min(1.0, max(0.1, dt_est5))
-
-        Ti_param5 = pid_params.get('ti', 0.0)
-        sim_duration5 = max(T1_raw * 40, 1000, Ti_param5 * 6)
-
-        # 初始条件
-        pv_init5 = pv_array[-1]
-        mv_init5 = mv_array[-1]
-        sv_target5 = sv_array[-1]
-
-        method_str = pid_params.get('method', '')
-        is_int_for_plot = is_integrating or method_str == 'integrating_fallback'
-
-        if is_int_for_plot and (mv_init5 < 5.0 or mv_init5 > 95.0):
-            mv_init5 = 50.0
-
-        initial_error5 = abs(sv_target5 - pv_init5)
-        if initial_error5 < 2.0:
-            if K_raw < 0:
-                mv_margin = mv_init5 * 0.8
-            else:
-                mv_margin = (100 - mv_init5) * 0.8
-            max_achievable_step = abs(K_raw) * mv_margin
-            desired_step = max(np.ptp(sv_array) * 0.1, 1.0)
-            step = min(desired_step, max_achievable_step)
-            sv_target5 = sv_target5 + step
-
-        # 积分系统保护
-        if is_int_for_plot:
-            k_int5 = model_info['K_int'] if model_info['K_int'] > 1e-9 else K_raw / max(T1_raw, 1.0)
-            if k_int5 > 1e-9:
-                theo_time = abs(sv_target5 - pv_init5) / (k_int5 * 50.0)
-                sim_duration5 = max(sim_duration5, theo_time * 2.5)
-        else:
-            k_int5 = 0.0
-
-        if sim_duration5 / dt_sim5 > 20000:
-            dt_sim5 = max(dt_sim5, sim_duration5 / 20000.0)
-
-        n_sim_steps5 = min(int(sim_duration5 / dt_sim5), 20000)
-
-        pv_sim5 = np.zeros(n_sim_steps5)
-        mv_sim5 = np.zeros(n_sim_steps5)
-        sv_sim5 = np.full(n_sim_steps5, sv_target5)
-
-        x1_5, x2_5 = 0.0, 0.0
-        integral5 = 0.0
-        prev_error5 = sv_target5 - pv_init5
-        delay_steps5 = max(1, int(L_raw / dt_sim5)) if L_raw > 0 else 1
-        mv_history5 = [mv_init5] * delay_steps5
-        pv_current5 = pv_init5
-        pv_base5 = pv_init5
-        mv_base5 = mv_init5
-
-        for ii in range(n_sim_steps5):
-            error5 = sv_target5 - pv_current5
-            integral5 += error5 * dt_sim5
-            derivative5 = (error5 - prev_error5) / dt_sim5 if dt_sim5 > 0 else 0.0
-            prev_error5 = error5
-
-            integral5 = np.clip(integral5, -100/(abs(Ki_val)+1e-10), 100/(abs(Ki_val)+1e-10))
-
-            mv_raw = mv_base5 + Kp * error5 + Ki_val * integral5 + Kd_val * derivative5
-            mv_out5 = np.clip(mv_raw, 0, 100)
-
-            if mv_raw != mv_out5 and abs(Ki_val) > 1e-10:
-                integral5 = (mv_out5 - mv_base5 - Kp * error5 - Kd_val * derivative5) / Ki_val
-
-            mv_sim5[ii] = mv_out5
-
-            mv_history5.append(mv_out5)
-            mv_delayed5 = mv_history5.pop(0)
-            delta_mv5 = mv_delayed5 - mv_base5
-
-            if is_int_for_plot:
-                k_int_sim = k_int5
-                x1_5 += k_int_sim * delta_mv5 * dt_sim5
-                pv_current5 = pv_base5 + x1_5
-            else:
-                T1_eff5 = max(T1_raw, 0.01)
-                alpha5 = 1.0 - np.exp(-dt_sim5 / T1_eff5)
-                x1_next5 = x1_5 + alpha5 * (K_raw * delta_mv5 - x1_5)
-                x1_5 = x1_next5
-                pv_current5 = pv_base5 + x1_5
-
-            pv_sim5[ii] = pv_current5
-
-        t_sim5 = np.arange(n_sim_steps5) * dt_sim5
-
-        ax5.plot(t_sim5, pv_sim5, 'b-', label='PV (预测)', linewidth=1.5)
-        ax5.axhline(y=sv_target5, color='r', linestyle='--', label=f'SV={sv_target5:.1f}', linewidth=1.2)
-        ax5.fill_between(t_sim5, sv_target5 * 0.95, sv_target5 * 1.05, alpha=0.2, color='green', label='±5%误差带')
-        ax5.axhline(y=pv_init5, color='gray', linestyle=':', alpha=0.5, label=f'初始PV={pv_init5:.1f}')
-
-        error_band5 = abs(sv_target5) * 0.05
-        in_band = np.abs(pv_sim5[-100:] - sv_target5) < error_band5 if len(pv_sim5) >= 100 else False
-        is_stable_predict = np.all(in_band) if isinstance(in_band, np.ndarray) else False
-        stable_status = '预测稳态' if is_stable_predict else '预测不稳态'
+            ax5.text(
+                0.5, 0.5, '无可用仿真结果',
+                transform=ax5.transAxes, ha='center', va='center', fontsize=11
+            )
+            ax5.set_title('新PID参数仿真预测（统一引擎）')
 
         ax5.set_xlabel('仿真时间 (s)')
         ax5.set_ylabel('PV')
-        ax5.set_title(f'新PID参数仿真预测（基于估算模型）- {stable_status}')
-        ax5.legend(loc='upper right')
+        handles, labels = ax5.get_legend_handles_labels()
+        if handles:
+            ax5.legend(loc='upper right')
         ax5.grid(True, alpha=0.3)
-        ax5.set_xlim([0, t_sim5[-1]])
 
     plt.tight_layout()
 
