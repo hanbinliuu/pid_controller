@@ -89,6 +89,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .config import Config
+
 
 @dataclass
 class ClosedLoopMetrics:
@@ -656,15 +658,24 @@ class ModelRating:
         
         final = pw * performance_score + cw * confidence_score
         
-        # 硬约束：性能极差时，置信度再高也封顶
-        if performance_score <= 1.0:
-            final = min(final, 3.0)   # 不稳定
-        elif performance_score <= 3.0:
-            final = min(final, 5.0)   # 控制品质很差
-        
-        # 硬约束：置信度极低时，性能分打折
-        if method_confidence < 0.2:
-            final = min(final, 6.0)   # 方法极不可靠
+        rating_cfg = getattr(Config, 'RATING_GUARD', {}) or {}
+
+        # 硬约束：性能极差时，置信度再高也封顶（可配置）
+        # 目的：杜绝“闭环表现差，但综合分异常偏高”的假优解。
+        perf_caps = rating_cfg.get('performance_caps', [(1.0, 3.0), (3.0, 5.0), (4.5, 6.2), (6.0, 7.5)])
+        for perf_th, cap in perf_caps:
+            try:
+                if performance_score <= float(perf_th):
+                    final = min(final, float(cap))
+                    break
+            except Exception:
+                continue
+
+        # 硬约束：置信度极低时，综合分封顶（可配置）
+        low_conf_th = float(rating_cfg.get('low_confidence_threshold', 0.2))
+        low_conf_cap = float(rating_cfg.get('low_confidence_cap', 6.0))
+        if method_confidence < low_conf_th:
+            final = min(final, low_conf_cap)
         
         final = round(min(10.0, max(0.0, final)), 2)
         
@@ -971,4 +982,3 @@ class ModelRating:
             result['final_details'] = final_details
         
         return result
-

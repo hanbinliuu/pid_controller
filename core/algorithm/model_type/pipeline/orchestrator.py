@@ -187,9 +187,11 @@ class TuningOrchestrator(LoggerMixin):
         if qualified_windows and not exact_window_mode:
             qualified_windows = self._refine_detected_windows(
                 qualified_windows,
+                history_data=history_data,
                 max_keep=sw_config.get('top_n', 3),
                 max_overlap=sw_config.get('max_overlap_ratio', 0.8),
                 min_quality=sw_config.get('min_window_quality', 0.2),
+                min_identifiability=sw_config.get('min_identifiability', 0.25),
             )
         
         self.log(f"   📋 数据阶段自动分类: Stage {detected_stage}"
@@ -293,6 +295,17 @@ class TuningOrchestrator(LoggerMixin):
             self.log(f"   ℹ️ 滑窗: 数据时长不足，仅能切出 {len(search_windows)} 个窗口（需≥{min_windows}），跳过滑窗寻优")
             return []
         
+        # 先做一轮轻量可辨识性过滤，避免对“不可辨识窗口”做昂贵并发整定
+        min_ident = float(sw_config.get('min_identifiability', 0.25) or 0.25)
+        prefilter_ratio = float(sw_config.get('prefilter_keep_ratio', 0.55) or 0.55)
+        for w in search_windows:
+            w['_identifiability'] = self._window_identifiability_score(history_data, w)
+        search_windows = sorted(search_windows, key=lambda w: float(w.get('_identifiability', 0.0)), reverse=True)
+        identifiable = [w for w in search_windows if float(w.get('_identifiability', 0.0)) >= min_ident]
+        if identifiable:
+            keep_n = max(min_windows, min(len(identifiable), int(np.ceil(len(search_windows) * prefilter_ratio))))
+            search_windows = identifiable[:keep_n]
+
         self.log(f"\n{'='*60}")
         self.log(f"🔍 滑动窗口寻优: {len(search_windows)} 个候选窗口 (窗口={window_h}h, 步长={step_h}h)")
         self.log('='*60)
@@ -378,9 +391,13 @@ class TuningOrchestrator(LoggerMixin):
                     except Exception:
                         pass
 
+                identifiability = self._window_identifiability_score(history_data, window)
+                ident_center = float(sw_config.get('ident_penalty_center', 0.45) or 0.45)
+                ident_gain = float(sw_config.get('ident_penalty_gain', 0.45) or 0.45)
+                ident_penalty = max(0.0, (ident_center - identifiability) * ident_gain)
                 success_penalty = 0.0 if result.get('success', False) else 0.4
                 adjusted_score = (
-                    score - penalty - perf_penalty - conf_penalty - sign_penalty - settling_penalty
+                    score - penalty - perf_penalty - conf_penalty - sign_penalty - settling_penalty - ident_penalty
                     + stability_bonus - success_penalty
                 )
                 
@@ -396,6 +413,8 @@ class TuningOrchestrator(LoggerMixin):
                     'conf_penalty': conf_penalty,
                     'sign_penalty': sign_penalty,
                     'settling_penalty': settling_penalty,
+                    'ident_penalty': ident_penalty,
+                    'identifiability': identifiability,
                     'edge_detail': p_detail,
                     'idx': i,
                     'error': None
@@ -418,7 +437,7 @@ class TuningOrchestrator(LoggerMixin):
                     self.log(
                         f"   窗口 {res['idx']+1:2d}/{len(search_windows)}: {st_str} ~ {et_str} | "
                         f"评分={res['score']:5.2f} | 调整后={res['adjusted_score']:5.2f} | "
-                        f"Perf罚={res['perf_penalty']:.2f} | Pb={res['pb']:.1f}%"
+                        f"Perf罚={res['perf_penalty']:.2f} | Id={res['identifiability']:.2f} | Pb={res['pb']:.1f}%"
                     )
         
         if not candidates:
@@ -451,7 +470,7 @@ class TuningOrchestrator(LoggerMixin):
             et_str = datetime.fromtimestamp(c['window']['end_time']/1000).strftime('%m-%d %H:%M')
             self.log(
                 f"      #{rank}: {st_str} ~ {et_str} "
-                f"(评分={c['score']:.2f}, 调整后={c['adjusted_score']:.2f}, 边界惩罚={c['edge_penalty']:.2f})"
+                f"(评分={c['score']:.2f}, 调整后={c['adjusted_score']:.2f}, 边界惩罚={c['edge_penalty']:.2f}, Id={c.get('identifiability', 0.0):.2f})"
             )
         
         return [c['window'] for c in top_candidates]
@@ -619,17 +638,33 @@ class TuningOrchestrator(LoggerMixin):
     def _refine_detected_windows(
         self,
         windows: List[Dict[str, Any]],
+        history_data: Optional[List[Dict[str, Any]]] = None,
         max_keep: int = 5,
         max_overlap: float = 0.8,
-        min_quality: float = 0.2
+        min_quality: float = 0.2,
+        min_identifiability: float = 0.25,
     ) -> List[Dict[str, Any]]:
         """
-        对 detector 返回窗口做质量排序 + 重叠抑制。
+        对 detector 返回窗口做质量排序 + 可辨识性过滤 + 重叠抑制。
         """
         if not windows:
             return windows
-        ranked = sorted(windows, key=lambda w: float(w.get('quality_score', 0.0)), reverse=True)
-        qualified = [w for w in ranked if float(w.get('quality_score', 0.0)) >= min_quality]
+        enriched: List[Dict[str, Any]] = []
+        for w in windows:
+            q = float(w.get('quality_score', 0.0) or 0.0)
+            ident = self._window_identifiability_score(history_data, w) if history_data else q
+            mix = 0.65 * q + 0.35 * ident
+            ww = dict(w)
+            ww['_quality'] = q
+            ww['_identifiability'] = ident
+            ww['_window_score'] = mix
+            enriched.append(ww)
+        ranked = sorted(enriched, key=lambda w: float(w.get('_window_score', 0.0)), reverse=True)
+
+        qualified = [
+            w for w in ranked
+            if float(w.get('_quality', 0.0)) >= min_quality and float(w.get('_identifiability', 0.0)) >= min_identifiability
+        ]
         if qualified:
             ranked = qualified
         picked: List[Dict[str, Any]] = []
@@ -639,4 +674,63 @@ class TuningOrchestrator(LoggerMixin):
             if any(self._window_overlap_ratio(w, p) > max_overlap for p in picked):
                 continue
             picked.append(w)
-        return picked or windows[:max_keep]
+        return picked or [dict(w) for w in windows[:max_keep]]
+
+    @staticmethod
+    def _slice_window_data(history_data: Optional[List[Dict[str, Any]]], window: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not history_data:
+            return []
+        s = int(window.get('start_time', 0) or 0)
+        e = int(window.get('end_time', 0) or 0)
+        if e <= s:
+            return []
+        return [d for d in history_data if s <= int(d.get('timestamp', 0) or 0) <= e]
+
+    def _window_identifiability_score(self, history_data: Optional[List[Dict[str, Any]]], window: Dict[str, Any]) -> float:
+        """
+        估计窗口“可辨识性”（0-1）：MV激励 + PV响应 + MV/PV相关性 + SV干扰惩罚。
+        """
+        w_data = self._slice_window_data(history_data, window)
+        if len(w_data) < 30:
+            return 0.0
+
+        pv = np.array([float(d.get('pv', d.get('PV', 0.0)) or 0.0) for d in w_data], dtype=float)
+        mv = np.array([float(d.get('mv', d.get('MV', 0.0)) or 0.0) for d in w_data], dtype=float)
+        sv = np.array([float(d.get('sv', d.get('SV', 0.0)) or 0.0) for d in w_data], dtype=float)
+        if len(pv) < 10 or len(mv) < 10:
+            return 0.0
+
+        sw_cfg = Config.SLIDING_WINDOW
+
+        pv_span = float(np.ptp(pv))
+        mv_span = float(np.ptp(mv))
+        pv_scale = float(np.mean(np.abs(pv))) + 1e-6
+        mv_scale = float(np.mean(np.abs(mv))) + 1e-6
+        pv_activity = float(np.clip(
+            pv_span / (float(sw_cfg.get('ident_pv_scale', 0.12)) * pv_scale + 1.0), 0.0, 1.0
+        ))
+        mv_activity = float(np.clip(
+            mv_span / (float(sw_cfg.get('ident_mv_scale', 0.10)) * mv_scale + 1.0), 0.0, 1.0
+        ))
+
+        # 使用导数相关性估计“激励->响应”的可辨识程度（不依赖绝对偏置）
+        dmv = np.diff(mv)
+        dpv = np.diff(pv)
+        corr = 0.0
+        if len(dmv) > 8 and np.std(dmv) > 1e-9 and np.std(dpv) > 1e-9:
+            corr = float(np.corrcoef(dmv, dpv)[0, 1])
+            if not np.isfinite(corr):
+                corr = 0.0
+        corr_score = float(np.clip(abs(corr), 0.0, 1.0))
+
+        sv_span = float(np.ptp(sv)) if len(sv) else 0.0
+        sv_penalty = float(np.clip(
+            sv_span / (float(sw_cfg.get('ident_sv_scale', 0.15)) * (float(np.mean(np.abs(sv))) + 1.0)), 0.0, 1.0
+        ))
+
+        w_mv = float(sw_cfg.get('ident_mv_weight', 0.35))
+        w_pv = float(sw_cfg.get('ident_pv_weight', 0.30))
+        w_corr = float(sw_cfg.get('ident_corr_weight', 0.25))
+        w_sv_penalty = float(sw_cfg.get('ident_sv_penalty_weight', 0.15))
+        score = w_mv * mv_activity + w_pv * pv_activity + w_corr * corr_score - w_sv_penalty * sv_penalty
+        return float(np.clip(score, 0.0, 1.0))

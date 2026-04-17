@@ -327,7 +327,7 @@ class OscillationTuner(LoggerMixin):
             Pu, Ku, K_approx=apparent_gain, reason=reason,
             oscillation_ratio=oscillation_ratio, data_quality=data_quality,
             nonlinearity=nonlinearity, valve_issues=valve_issues, confidence=confidence,
-            tuning_constraints=tuning_constraints
+            tuning_constraints=tuning_constraints, current_pid=current_pid
         )
         
         if pid_params is None:
@@ -493,13 +493,18 @@ class OscillationTuner(LoggerMixin):
                                       reason: str = 'generic', oscillation_ratio: float = 0.0,
                                       data_quality: float = 0.5, nonlinearity: float = 0.0,
                                       valve_issues: Dict = None, confidence: float = 0.5,
-                                      tuning_constraints: dict = None) -> Dict[str, Any]:
+                                      tuning_constraints: dict = None,
+                                      current_pid: Dict = None) -> Dict[str, Any]:
         """获取保守PID参数（委托给 ConservativePIDCalculator）"""
+        current_pid = current_pid or {}
         return self._conservative_pid_calculator.calculate(
             Pu=Pu, Ku=Ku, K_approx=K_approx, reason=reason,
             oscillation_ratio=oscillation_ratio, data_quality=data_quality,
             nonlinearity=nonlinearity, valve_issues=valve_issues, confidence=confidence,
-            tuning_constraints=tuning_constraints
+            tuning_constraints=tuning_constraints,
+            has_current_pid=bool(current_pid),
+            current_kp=float(current_pid.get('Kp', current_pid.get('kp', 0.0)) or 0.0),
+            current_ti=float(current_pid.get('Ti', current_pid.get('ti', 0.0)) or 0.0),
         )
     
 

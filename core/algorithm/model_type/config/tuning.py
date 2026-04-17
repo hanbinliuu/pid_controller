@@ -241,6 +241,23 @@ SELF_OPTIMIZE = {
 }
 
 # ============================================================
+# 最终评分硬门槛配置 (Final Rating Guardrails)
+# ============================================================
+RATING_GUARD = {
+    # method_confidence 极低时，综合分封顶
+    'low_confidence_threshold': 0.2,
+    'low_confidence_cap': 6.0,
+    # 按 performance_score 分段封顶（从低到高匹配）
+    # 格式: (performance_threshold, final_rating_cap)
+    'performance_caps': [
+        (1.0, 3.0),
+        (3.0, 5.0),
+        (4.5, 6.2),
+        (6.0, 7.5),
+    ],
+}
+
+# ============================================================
 # 滑动窗口寻优配置 (Sliding Window Optimization)
 # ============================================================
 SLIDING_WINDOW = {
@@ -252,4 +269,18 @@ SLIDING_WINDOW = {
     'fast_screen_verbose': False,            # 快筛阶段是否输出详细日志
     'top_n': 3,                              # 滑窗寻优返回 Top N 个高分窗口用于多段融合（1=退化为原始单窗口行为）
     'top_n_min_score_ratio': 0.85,           # Top N 窗口的最低评分比率（相对于最高分），低于此的窗口不纳入融合
+    # 可辨识性预过滤（防止把算力浪费在“不可整定窗口”）
+    'min_identifiability': 0.25,             # 可辨识性最低阈值
+    'prefilter_keep_ratio': 0.55,            # 预过滤后保留比例（相对于原候选数）
+    # 可辨识性打分参数
+    'ident_mv_weight': 0.35,
+    'ident_pv_weight': 0.30,
+    'ident_corr_weight': 0.25,
+    'ident_sv_penalty_weight': 0.15,
+    'ident_mv_scale': 0.10,
+    'ident_pv_scale': 0.12,
+    'ident_sv_scale': 0.15,
+    # 在滑窗综合分里的低可辨识性惩罚
+    'ident_penalty_center': 0.45,
+    'ident_penalty_gain': 0.45,
 }

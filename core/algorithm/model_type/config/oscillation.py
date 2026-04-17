@@ -160,4 +160,54 @@ OSCILLATION_TUNING = {
     # 真正的反向作用系统（制冷、减压）通常不会有剧烈震荡
     'negative_k_oscillation_threshold': 0.3,  # 中等震荡阈值，超过此值开始检查负K
     'negative_k_severe_threshold': 0.5,       # 剧烈震荡阈值，超过此值直接取abs(K)
+
+    # ========== risk_factor 归一与分路径护栏 ==========
+    # risk_factor: 将多处保守乘数收敛为一次性风险压缩，避免重复叠乘过度保守
+    'risk_factor_damping_high_conf': 0.74,    # confidence >= 0.75
+    'risk_factor_damping_mid_conf': 0.80,     # 0.45 <= confidence < 0.75
+    'risk_factor_damping_low_conf': 0.88,     # confidence < 0.45
+    'risk_factor_extreme_osc_boost': 0.06,    # osc_ratio > 0.85 时额外保守
+    'risk_factor_cap_by_loop': {
+        'flow': 2.8,
+        'pressure': 3.0,
+        'temperature': 3.4,
+        'level': 3.6,
+        'default': 3.2,
+    },
+
+    # 可用 current_pid：采用相对变更约束（防激进/防过度变弱）
+    'current_pid_pb_min_ratio': 0.70,         # PB 不得低于 current_pb * ratio（防过强）
+    'current_pid_pb_max_ratio': 3.50,         # PB 不得高于 current_pb * ratio（防过弱）
+    'current_pid_ti_min_ratio': 0.60,         # Ti 相对下限
+    'current_pid_ti_max_ratio': 2.80,         # Ti 相对上限
+
+    # 无 current_pid：采用绝对安全带（按回路类型）
+    'no_current_pid_pb_abs_min_by_loop': {
+        'flow': 120.0,
+        'pressure': 140.0,
+        'temperature': 120.0,
+        'level': 80.0,
+        'default': 100.0,
+    },
+    'no_current_pid_pb_abs_max_by_loop': {
+        'flow': 600.0,
+        'pressure': 550.0,
+        'temperature': 700.0,
+        'level': 500.0,
+        'default': 600.0,
+    },
+    'no_current_pid_ti_abs_min_by_loop': {
+        'flow': 6.0,
+        'pressure': 8.0,
+        'temperature': 24.0,
+        'level': 20.0,
+        'default': 10.0,
+    },
+    'no_current_pid_ti_abs_max_by_loop': {
+        'flow': 220.0,
+        'pressure': 280.0,
+        'temperature': 700.0,
+        'level': 900.0,
+        'default': 600.0,
+    },
 }

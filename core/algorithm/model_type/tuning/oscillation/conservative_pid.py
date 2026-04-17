@@ -35,7 +35,9 @@ class ConservativePIDCalculator(LoggerMixin):
                   K_approx: float = 1.0, reason: str = 'generic',
                   oscillation_ratio: float = 0.0, data_quality: float = 0.5,
                   nonlinearity: float = 0.0, valve_issues: Dict = None,
-                  confidence: float = 0.5, tuning_constraints: dict = None) -> Dict[str, Any]:
+                  confidence: float = 0.5, tuning_constraints: dict = None,
+                  has_current_pid: bool = False, current_kp: float = 0.0,
+                  current_ti: float = 0.0) -> Dict[str, Any]:
         """计算保守PID参数"""
         tuning_constraints = tuning_constraints or {}
         if valve_issues is None:
@@ -45,8 +47,22 @@ class ConservativePIDCalculator(LoggerMixin):
         pb_base = self._apply_quality_factors(pb_base, reason, data_quality, nonlinearity, valve_issues)
         pb_base, delay_ratio = self._apply_extreme_factors(pb_base, K_approx, Pu, oscillation_ratio)
         pb_base, safety_factor = self._apply_oscillation_adjustment(pb_base, oscillation_ratio, tuning_constraints)
-        pb_safe = self._apply_pb_bounds(pb_base, K_approx, confidence, reason, pb_from_K, pb_from_Ku, Pu, Ku, slow_factor, delay_ratio, tuning_constraints)
-        Ti, Td, ti_multiplier, td_multiplier = self._calculate_ti_td(Pu, oscillation_ratio, K_approx, tuning_constraints)
+        # 统一风险因子压缩：避免多来源保守因子在同一轮中过度连乘
+        pb_base = self._normalize_risk_multiplier(
+            pb_base=pb_base,
+            pb_from_k=pb_from_K,
+            pb_from_ku=pb_from_Ku,
+            confidence=confidence,
+            oscillation_ratio=oscillation_ratio,
+        )
+        pb_safe = self._apply_pb_bounds(
+            pb_base, K_approx, confidence, reason, pb_from_K, pb_from_Ku, Pu, Ku, slow_factor,
+            delay_ratio, tuning_constraints, has_current_pid=has_current_pid, current_kp=current_kp
+        )
+        Ti, Td, ti_multiplier, td_multiplier = self._calculate_ti_td(
+            Pu, oscillation_ratio, K_approx, tuning_constraints,
+            has_current_pid=has_current_pid, current_ti=current_ti
+        )
         
         return self._build_result(pb_safe, Ti, Td, Pu, Ku, reason)
 
@@ -196,9 +212,49 @@ class ConservativePIDCalculator(LoggerMixin):
         pb_base *= total_multiplier
         return pb_base, safety_factor
 
+    def _normalize_risk_multiplier(
+        self,
+        pb_base: float,
+        pb_from_k: float,
+        pb_from_ku: float,
+        confidence: float,
+        oscillation_ratio: float,
+    ) -> float:
+        """
+        将“多模块连乘”得到的 PB 放大倍率压缩到单一 risk_factor 视角，降低重复放大的风险。
+        """
+        baseline = max(float(pb_from_k), float(pb_from_ku), 1.0)
+        raw_mult = max(1.0, float(pb_base) / baseline)
+
+        # 置信度越高，越不需要过度保守；置信度低则保守压缩更弱
+        osc_cfg = Config.OSCILLATION_TUNING
+        if confidence >= 0.75:
+            damping = float(osc_cfg.get('risk_factor_damping_high_conf', 0.74))
+        elif confidence >= 0.45:
+            damping = float(osc_cfg.get('risk_factor_damping_mid_conf', 0.80))
+        else:
+            damping = float(osc_cfg.get('risk_factor_damping_low_conf', 0.88))
+
+        # 极端振荡保留更多保守性，避免压缩过头
+        if oscillation_ratio > 0.85:
+            damping = min(0.92, damping + float(osc_cfg.get('risk_factor_extreme_osc_boost', 0.06)))
+
+        cap_map = osc_cfg.get('risk_factor_cap_by_loop', {}) or {}
+        mult_cap = float(cap_map.get(self._loop_type, cap_map.get('default', 3.2)))
+        risk_factor = float(np.clip(np.exp(np.log(raw_mult) * damping), 1.0, mult_cap))
+
+        pb_normalized = baseline * risk_factor
+        if raw_mult > 1.05:
+            self.log(
+                f"   📉 风险因子归一: raw×{raw_mult:.2f} → risk×{risk_factor:.2f} "
+                f"(基线PB={baseline:.1f}, damping={damping:.2f})"
+            )
+        return pb_normalized
+
     def _apply_pb_bounds(self, pb_base: float, K_approx: float, confidence: float, reason: str,
                         pb_from_K: float, pb_from_Ku: float, Pu: float, Ku: float, 
-                        slow_factor: float, delay_ratio: float = 0.0, tuning_constraints: dict = None) -> float:
+                        slow_factor: float, delay_ratio: float = 0.0, tuning_constraints: dict = None,
+                        has_current_pid: bool = False, current_kp: float = 0.0) -> float:
         """应用 pb 边界限制"""
         tuning_constraints = tuning_constraints or {}
         osc_config = Config.OSCILLATION_TUNING
@@ -233,11 +289,30 @@ class ConservativePIDCalculator(LoggerMixin):
             pb_min = min(pb_min * osc_config.get('ku_k_extreme_pb_factor', 1.4), 450.0)  # 恢复
         
         pb_safe = np.clip(pb_base, pb_min, pb_max)
+
+        # 分路径策略：
+        # 1) 有 current_pid：使用相对变更限制（防激进/防过度变弱）
+        # 2) 无 current_pid：使用绝对安全带（回路先验）
+        if has_current_pid and abs(float(current_kp)) > 1e-9:
+            current_pb = 100.0 / max(abs(float(current_kp)), 1e-6)
+            rel_min = float(osc_config.get('current_pid_pb_min_ratio', 0.70))
+            rel_max = float(osc_config.get('current_pid_pb_max_ratio', 3.50))
+            pb_rel_low = current_pb * rel_min
+            pb_rel_high = current_pb * rel_max
+            pb_safe = float(np.clip(pb_safe, pb_rel_low, pb_rel_high))
+        else:
+            abs_min_map = osc_config.get('no_current_pid_pb_abs_min_by_loop', {}) or {}
+            abs_max_map = osc_config.get('no_current_pid_pb_abs_max_by_loop', {}) or {}
+            abs_pb_min = float(abs_min_map.get(self._loop_type, abs_min_map.get('default', 100.0)))
+            abs_pb_max = float(abs_max_map.get(self._loop_type, abs_max_map.get('default', 600.0)))
+            pb_safe = float(np.clip(pb_safe, max(pb_min, abs_pb_min), min(pb_max, abs_pb_max)))
+
         self.log(f"   📊 动态pb计算: K={K_approx:.3f}→pb={pb_from_K:.1f}, Ku={Ku:.3f}→pb={pb_from_Ku:.1f}, 最终pb={pb_safe:.1f}")
         return pb_safe
     
     def _calculate_ti_td(self, Pu: float, oscillation_ratio: float, K_approx: float,
-                         tuning_constraints: dict) -> Tuple[float, float, float, float]:
+                         tuning_constraints: dict,
+                         has_current_pid: bool = False, current_ti: float = 0.0) -> Tuple[float, float, float, float]:
         """计算保守的 Ti 和 Td 值"""
         osc_config = Config.OSCILLATION_TUNING
         preset = tuning_constraints
@@ -267,6 +342,17 @@ class ConservativePIDCalculator(LoggerMixin):
             self.log(f"   📊 慢系统(Pu={Pu:.0f}s): 跳过preset Ti乘数×{preset_ti_mult:.2f}")
         
         conservative_Ti = np.clip(base_Ti * ti_multiplier, *osc_config.get('ti_range', [1.5, 600.0]))
+
+        if has_current_pid and float(current_ti) > 1e-9:
+            rel_min = float(osc_config.get('current_pid_ti_min_ratio', 0.60))
+            rel_max = float(osc_config.get('current_pid_ti_max_ratio', 2.80))
+            conservative_Ti = float(np.clip(conservative_Ti, float(current_ti) * rel_min, float(current_ti) * rel_max))
+        else:
+            ti_min_map = osc_config.get('no_current_pid_ti_abs_min_by_loop', {}) or {}
+            ti_max_map = osc_config.get('no_current_pid_ti_abs_max_by_loop', {}) or {}
+            ti_abs_min = float(ti_min_map.get(self._loop_type, ti_min_map.get('default', 10.0)))
+            ti_abs_max = float(ti_max_map.get(self._loop_type, ti_max_map.get('default', 600.0)))
+            conservative_Ti = float(np.clip(conservative_Ti, ti_abs_min, ti_abs_max))
         
         conservative_Td = 0.0
         td_multiplier = 0.0
