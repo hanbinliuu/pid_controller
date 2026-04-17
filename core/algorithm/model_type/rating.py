@@ -778,6 +778,7 @@ class ModelRating:
         delta_x2 = 0.0
         integral = 0.0
         prev_error = 0.0
+        delay_steps = max(0, int(round(L / max(dt, eps))))
         from collections import deque
         delta_mv_buf = deque([0.0] * (delay_steps + 1))
         step_time = 10

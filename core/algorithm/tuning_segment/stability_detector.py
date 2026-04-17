@@ -1628,6 +1628,12 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
         start_time = int(timestamps[0])
         end_time = int(timestamps[-1])
         
+        # 读取外部传入的回路类型（可选）
+        params = history_data.get("params", {}) if isinstance(history_data, dict) else {}
+        loop_type = str(
+            params.get("loop_type", history_data.get("loop_type", ""))
+        ).strip().lower()
+
         # =============================================
         # 三级优选调度（瀑布式 + 质量门槛 + 亚合格回捞）
         # Level 1 质量达标 → 直接返回
@@ -1638,7 +1644,11 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
         # =============================================
         
         QUALITY_GATE = 0.55       # Level 1/2 需要最高质量 >= 此值才算有效命中
-        SUB_QUALITY_GATE = 0.45   # [NEW] 亚合格门槛：有真实 MV 阶跃但信噪比偏弱
+        # 弱激励现场数据（尤其压力/流量/温度）容易长期落在 0.42~0.45，
+        # 原固定 0.45 会把“真实 MV 阶跃但响应较弱”的窗口误杀到 Level 3 全量兜底。
+        SUB_QUALITY_GATE = 0.42 if loop_type in ("pressure", "flow", "temperature") else 0.45
+        if loop_type:
+            print(f"[SegmentSelector] 回路类型={loop_type}, 门槛: QUALITY={QUALITY_GATE:.2f}, SUB={SUB_QUALITY_GATE:.2f}")
         level1_sub_qualified = None  # 暂存 Level 1 亚合格段
 
         # Level 1: 整定段检测（MV阶跃 → PV响应）
@@ -1653,8 +1663,15 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
                     if max_q >= QUALITY_GATE:
                         print(f"[SegmentSelector] 🥇 Level 1 命中: {len(tuning_segments)} 个整定段 "
                               f"(最高质量={max_q:.2f})")
+                        expansion = 1.6 if loop_type in ("pressure", "temperature") else 1.3
                         qualified_windows = _segments_to_windows(
-                            tuning_segments, timestamps, source="level1_tuning", max_windows=5, max_overlap_ratio=0.8
+                            tuning_segments, timestamps,
+                            source="level1_tuning",
+                            max_windows=3,
+                            max_overlap_ratio=0.6,
+                            pv_data=pv_data,
+                            mv_data=mv_data,
+                            expansion_factor=expansion,
                         )
                         return {
                             "start_time": start_time,
@@ -1710,7 +1727,14 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
             print(f"[SegmentSelector] 🥇↩ Level 1 亚合格段回捞: {len(level1_sub_qualified)} 个整定段 "
                   f"(最高质量={max_q:.2f}，优于 Level 3 全量兜底)")
             qualified_windows = _segments_to_windows(
-                level1_sub_qualified, timestamps, source="level1_sub_qualified", max_windows=5, max_overlap_ratio=0.8
+                level1_sub_qualified, timestamps,
+                source="level1_sub_qualified",
+                max_windows=3,
+                max_overlap_ratio=0.6,
+                pv_data=pv_data,
+                mv_data=mv_data,
+                # 亚合格段进一步放宽窗口长度，尽量覆盖慢响应尾部
+                expansion_factor=2.0 if loop_type in ("pressure", "temperature", "flow") else 1.5,
             )
             return {
                 "start_time": start_time,
@@ -1757,23 +1781,47 @@ def find_high_variability_periods(history_data: Dict[str, Any]) -> Dict[str, Any
 
 
 def _segments_to_windows(segments: List[Tuple], timestamps: List, source: str = "unknown",
-                         max_windows: int = 5, max_overlap_ratio: float = 0.8) -> List[Dict]:
+                         max_windows: int = 5, max_overlap_ratio: float = 0.8,
+                         pv_data: Optional[np.ndarray] = None,
+                         mv_data: Optional[np.ndarray] = None,
+                         expansion_factor: float = 1.0) -> List[Dict]:
     """
     将 (start_idx, end_idx, setpoint, quality_score) 格式的段列表
     转换为 {"start_time": ..., "end_time": ...} 格式的窗口列表
     """
     raw_windows = []
+    global_pv_span = float(np.ptp(pv_data)) if pv_data is not None and len(pv_data) > 1 else 0.0
+    global_mv_span = float(np.ptp(mv_data)) if mv_data is not None and len(mv_data) > 1 else 0.0
     for seg in segments:
         seg_start, seg_end = seg[0], seg[1]
         if seg_start < len(timestamps) and seg_end > 0:
-            seg_end_idx = min(seg_end - 1, len(timestamps) - 1)
+            seg_len = max(1, int(seg_end - seg_start))
+            expanded_end = seg_start + int(seg_len * max(1.0, float(expansion_factor)))
+            seg_end_idx = min(expanded_end - 1, len(timestamps) - 1)
             seg_start_time = int(timestamps[seg_start])
             seg_end_time = int(timestamps[seg_end_idx])
             quality_score = float(seg[3]) if len(seg) > 3 else 0.0
+            pv_span_local = 0.0
+            mv_span_local = 0.0
+            if pv_data is not None and seg_end_idx > seg_start:
+                pv_seg = np.asarray(pv_data[seg_start:seg_end_idx + 1], dtype=float)
+                if pv_seg.size > 1:
+                    pv_span_local = float(np.ptp(pv_seg))
+            if mv_data is not None and seg_end_idx > seg_start:
+                mv_seg = np.asarray(mv_data[seg_start:seg_end_idx + 1], dtype=float)
+                if mv_seg.size > 1:
+                    mv_span_local = float(np.ptp(mv_seg))
+
+            # 当 quality_score 接近打平时，用段内 MV/PV 幅值作为二级排序键，
+            # 避免挑到“动作很弱但评分偶然相同”的窗口。
+            mv_rel = (mv_span_local / max(global_mv_span, 1e-6)) if global_mv_span > 0 else 0.0
+            pv_rel = (pv_span_local / max(global_pv_span, 1e-6)) if global_pv_span > 0 else 0.0
+            rank_score = quality_score + 0.25 * mv_rel + 0.20 * pv_rel
             raw_windows.append({
                 "start_time": seg_start_time,
                 "end_time": seg_end_time,
                 "quality_score": round(quality_score, 4),
+                "rank_score": round(float(rank_score), 6),
                 "source": source,
             })
 
@@ -1790,15 +1838,21 @@ def _segments_to_windows(segments: List[Tuple], timestamps: List, source: str = 
         d2 = max(1, e2 - s2)
         return inter / min(d1, d2)
 
-    # 先按质量排序，再做高重叠抑制，避免返回大量同质窗口
-    raw_windows.sort(key=lambda x: x.get("quality_score", 0.0), reverse=True)
+    # 先按 rank_score 排序，再做高重叠抑制，避免返回大量同质窗口
+    raw_windows.sort(key=lambda x: x.get("rank_score", x.get("quality_score", 0.0)), reverse=True)
     selected: List[Dict] = []
     for w in raw_windows:
         if len(selected) >= max_windows:
             break
         if any(overlap_ratio(w, kept) > max_overlap_ratio for kept in selected):
             continue
-        selected.append(w)
+        # 输出时保持兼容，避免扩展字段影响下游
+        selected.append({
+            "start_time": w["start_time"],
+            "end_time": w["end_time"],
+            "quality_score": w["quality_score"],
+            "source": w["source"],
+        })
 
     return selected
 
