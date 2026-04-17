@@ -837,16 +837,21 @@ class OscillationTuner(LoggerMixin):
         # ================================================================
         extreme_delay_threshold = osc_config.get('extreme_delay_ratio_threshold', 0.8)
         large_delay_threshold = osc_config.get('large_delay_ratio_threshold', 0.5)
-        
+        large_delay_abs_threshold = osc_config.get('large_delay_absolute_threshold', 15.0)
+
+        pb_factors = []
+        ti_factors = []
+        delay_risk_applied = False
+
         if delay_ratio > extreme_delay_threshold or L_approx > 30.0:
-            # 极大滞后：增加保守性以恢复稳定性 (1.8 -> 2.2)
-            pb_base *= 2.2
-            ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.4) * 1.1  # 原: 1.5 * 1.2
+            delay_risk_applied = True
+            pb_factors.append(2.2)
+            ti_factors.append(osc_config.get('large_delay_ti_boost', 1.4) * 1.1)
             self.log(f"   ⚠️ 检测到极大滞后系统 (L/T={delay_ratio:.2f})")
-        elif delay_ratio > large_delay_threshold or L_approx > osc_config.get('large_delay_absolute_threshold', 15.0):
-            # 大滞后：标准保守 (优化: 降低 1.8→1.4)
-            pb_base *= osc_config.get('large_delay_pb_boost', 1.4)  # 原: 1.8
-            ti_multiplier *= osc_config.get('large_delay_ti_boost', 1.3)  # 原: 1.5
+        elif delay_ratio > large_delay_threshold or L_approx > large_delay_abs_threshold:
+            delay_risk_applied = True
+            pb_factors.append(osc_config.get('large_delay_pb_boost', 1.4))
+            ti_factors.append(osc_config.get('large_delay_ti_boost', 1.3))
         
         pu_min = 20.0 if self._loop_type == 'level' else 10.0
         Pu_approx = max(4 * L_approx, pu_min)
@@ -864,11 +869,11 @@ class OscillationTuner(LoggerMixin):
                 boost_factor = 0.1   # 对高增益更激进 (0.15 -> 0.1)
             elif self._loop_type == 'pressure':
                 boost_factor = 0.08  # 回调 (0.1 -> 0.08)
-            pb_base *= 1.0 + (K_abs_approx - 2.0) * boost_factor
+            pb_factors.append(1.0 + (K_abs_approx - 2.0) * boost_factor)
         elif K_abs_approx < 0.5:
             # 适度恢复低增益补偿以提升稳定性
             low_gain_boost = 1.15 if self._loop_type in ['flow', 'pressure'] else 1.4
-            pb_base *= low_gain_boost
+            pb_factors.append(low_gain_boost)
         
         # 恢复稳定性: 恢复慢系统调整系数
         t1_threshold = 80.0 if self._loop_type == 'level' else 60.0  # 恢复阈值
@@ -887,26 +892,45 @@ class OscillationTuner(LoggerMixin):
                     pb_base = min_safe_pb
         if T1_approx > t1_threshold:
             # 减缓慢系统 PB 膨胀 (150 -> 300)
-            pb_base *= 1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 300.0)
+            pb_factors.append(1.0 + (T1_approx - t1_threshold) / (200.0 if self._loop_type == 'level' else 300.0))
             
         # [NEW] Flow 回路大滞后专杀 (Dead-time Dominant Flow)
         # 如果流量回路测出了明显大于物理常理的滞后时间，直接放弃快响应要求，强制拉开积分时间和比例度。
         if self._loop_type == 'flow' and L_approx > 3.0:
             self.log(f"   ⚠️ 触发 Flow 回路大滞后专杀 (L={L_approx:.1f}s > 3.0s)，放弃快响应强制求稳")
-            pb_base *= 1.5
-            ti_multiplier *= max(1.5, L_approx / 4.0)
+            # 去重：若已触发统一 delay 风险，不再二次放大 PB，只保留 Ti 增强
+            if not delay_risk_applied:
+                pb_factors.append(1.5)
+            ti_factors.append(max(1.5, L_approx / 4.0))
         
         # 应用 Loop Preset 的安全系数和范围限制
         preset = tuning_constraints or {}
         safety_factor = preset.get('safety_factor', 1.05)
-        pb_base *= safety_factor
+        pb_factors.append(safety_factor)
         
         pb_max_limit = preset.get('pb_max', osc_config.get('pb_max', 400.0))
         pb_min_limit = preset.get('pb_min', osc_config.get('pb_min', 60.0))
         
         # 应用 Loop Preset 的 Ti Multiplier
         preset_ti_mult = preset.get('ti_multiplier', 1.0)
-        ti_multiplier *= preset_ti_mult
+        ti_factors.append(preset_ti_mult)
+
+        # [NEW] 统一乘数融合：避免“同类风险多次连乘”导致过度保守
+        def _compose_factor(factors, cap, min_factor=0.6):
+            if not factors:
+                return 1.0
+            safe = [max(min_factor, float(f)) for f in factors]
+            # 因子越多，轻微衰减组合强度，避免重复语义叠加过头
+            damping = max(0.78, 1.0 - 0.05 * max(0, len(safe) - 1))
+            composed = float(np.exp(np.sum(np.log(safe)) * damping))
+            return float(np.clip(composed, min_factor, cap))
+
+        pb_cap_map = {'flow': 2.6, 'pressure': 2.8, 'temperature': 3.0, 'level': 3.2}
+        ti_cap_map = {'flow': 3.0, 'pressure': 3.0, 'temperature': 3.5, 'level': 4.0}
+        pb_composed = _compose_factor(pb_factors, pb_cap_map.get(self._loop_type, 3.0))
+        ti_composed = _compose_factor(ti_factors, ti_cap_map.get(self._loop_type, 3.2), min_factor=0.7)
+        pb_base *= pb_composed
+        ti_multiplier *= ti_composed
         
         # 严格遵守 PB 限制
         pb_safe = np.clip(pb_base, pb_min_limit, pb_max_limit)

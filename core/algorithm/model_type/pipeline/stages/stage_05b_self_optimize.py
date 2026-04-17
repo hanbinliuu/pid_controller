@@ -142,6 +142,40 @@ class SelfOptimizeStage(PipelineStage):
         }
         return penalty, detail
 
+    def _compute_industry_plausibility_penalty(self, pb: float, ti: float, loop_type: str) -> Tuple[float, Dict]:
+        """
+        工业可行性软惩罚：
+        - 防止 Phase2 把参数推向“仿真得分不低但现场过慢/不可用”的极端区
+        """
+        penalty = 0.0
+        detail = {'pb': pb, 'ti': ti, 'loop_type': loop_type}
+
+        if loop_type == 'flow':
+            # 流量回路：PB/Ti 过大通常意味着过慢，容易在有限仿真窗内不收敛
+            if pb > 350.0:
+                penalty += min(0.55, (pb - 350.0) / 300.0 * 0.55)
+            if ti > 30.0:
+                penalty += min(0.30, (ti - 30.0) / 60.0 * 0.30)
+        elif loop_type == 'pressure':
+            if pb > 320.0:
+                penalty += min(0.40, (pb - 320.0) / 280.0 * 0.40)
+            if ti > 80.0:
+                penalty += min(0.20, (ti - 80.0) / 120.0 * 0.20)
+        elif loop_type == 'temperature':
+            if pb > 650.0:
+                penalty += min(0.30, (pb - 650.0) / 450.0 * 0.30)
+            if ti > 260.0:
+                penalty += min(0.20, (ti - 260.0) / 280.0 * 0.20)
+        elif loop_type == 'level':
+            if pb > 500.0:
+                penalty += min(0.28, (pb - 500.0) / 400.0 * 0.28)
+            if ti > 240.0:
+                penalty += min(0.20, (ti - 240.0) / 260.0 * 0.20)
+
+        penalty = min(0.75, max(0.0, penalty))
+        detail['industry_penalty'] = round(penalty, 4)
+        return penalty, detail
+
     # ------------------------------------------------------------------
     # 评估: 给定 lambda 计算 PID 并评分
     # ------------------------------------------------------------------
@@ -187,12 +221,21 @@ class SelfOptimizeStage(PipelineStage):
 
         tuning_constraints = self._context.export_tuning_constraints() if self._context else {}
         boundary_penalty, penalty_detail = self._compute_boundary_penalty(pid_params, loop_type, tuning_constraints)
-        final_score_adjusted = max(0.0, final_score - boundary_penalty)
+
+        # 反回归保护：对“已稳定且性能高”的候选，弱化贴边惩罚，避免误伤可用解
+        boundary_penalty_effective = boundary_penalty
+        if is_stable and perf_score >= 7.5:
+            boundary_penalty_effective *= 0.5
+        elif is_stable and perf_score >= 6.5:
+            boundary_penalty_effective *= 0.75
 
         full_pid = pid_to_full_dict(pid_params['Kp'], pid_params['Ki'], pid_params['Kd'])
         pb = full_pid['pb']
         ti = full_pid['ti']
         td = full_pid['td']
+
+        industry_penalty, industry_detail = self._compute_industry_plausibility_penalty(pb, ti, loop_type)
+        final_score_adjusted = max(0.0, final_score - boundary_penalty_effective - industry_penalty)
 
         detail = {
             'pid_params': pid_params, 'pb': pb, 'ti': ti, 'td': td,
@@ -203,8 +246,11 @@ class SelfOptimizeStage(PipelineStage):
             'settling_time': cl_metrics.settling_time,
             'steady_state_error': cl_metrics.steady_state_error,
             'cl_metrics': cl_metrics,  # Fix #3: 保存 cl_metrics 供后续更新 closed_loop_verification
-            'boundary_penalty': boundary_penalty,
+            'boundary_penalty': boundary_penalty_effective,
+            'boundary_penalty_raw': boundary_penalty,
+            'industry_penalty': industry_penalty,
             'boundary_penalty_detail': penalty_detail,
+            'industry_penalty_detail': industry_detail,
         }
         if extra:
             detail.update(extra)
