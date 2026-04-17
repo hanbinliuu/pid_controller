@@ -181,9 +181,11 @@ class SegmentManager(LoggerMixin):
         oscillation_segments = [] # 振荡段（备用，用于临界法）
         oscillation_results = []
         
-        # 阈值配置
-        step_threshold = 0.5      # 阶跃特征阈值
-        osc_threshold = 0.5       # 振荡比例阈值
+        # 阈值配置（与 Step 1.95 预检共用配置口径）
+        seg_cfg = Config.SEGMENT_PROCESSING
+        step_threshold = seg_cfg.get('classification_step_threshold', 0.5)
+        osc_threshold = seg_cfg.get('classification_osc_threshold', 0.5)
+        internal_osc_threshold = seg_cfg.get('segment_internal_osc_threshold', 0.05)
         
         for seg, result in zip(valid_segments, segment_results):
             step_score = result.step_response_score
@@ -197,8 +199,8 @@ class SegmentManager(LoggerMixin):
             # 相对振荡度：PV标准差 / SV均值
             relative_oscillation = pv_std / sv_mean if sv_mean > 0 else 0
             
-            # 如果相对振荡度 > 5%，认为仍在振荡
-            still_oscillating = relative_oscillation > 0.05
+            # 如果相对振荡度超过阈值，认为段内仍在振荡
+            still_oscillating = relative_oscillation > internal_osc_threshold
             
             # 分类：阶跃特征好且振荡不严重且段内不振荡 → 整定段
             if step_score >= step_threshold and osc_ratio < osc_threshold and not still_oscillating:
@@ -220,7 +222,14 @@ class SegmentManager(LoggerMixin):
         for i, (seg, result) in enumerate(zip(valid_segments, segment_results)):
             step_score = result.step_response_score
             osc_ratio = result.oscillation_ratio
-            seg_type = "整定段" if (step_score >= step_threshold and osc_ratio < osc_threshold) else "振荡段"
+            pv_array = np.array(seg.pv)
+            pv_std = np.std(pv_array)
+            sv_mean = np.mean(seg.sv) if len(seg.sv) > 0 else 50.0
+            relative_oscillation = pv_std / sv_mean if sv_mean > 0 else 0
+            still_oscillating = relative_oscillation > internal_osc_threshold
+            seg_type = "整定段" if (
+                step_score >= step_threshold and osc_ratio < osc_threshold and not still_oscillating
+            ) else "振荡段"
             self.log(f"   段{i+1}: {seg_type} (阶跃={step_score:.2f}, 振荡={osc_ratio:.2f})")
         
         return tuning_segments, tuning_results, oscillation_segments, oscillation_results

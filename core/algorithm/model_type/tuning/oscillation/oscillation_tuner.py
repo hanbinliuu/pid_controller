@@ -29,44 +29,21 @@ from .conservative_pid import ConservativePIDCalculator
 class OscillationTuner(LoggerMixin):
     """振荡数据整定器"""
     
-    def __init__(self, pid_calculator, simulator, verbose: bool = False, 
-                 llm_client=None, loop_type: str = "", loop_name: str = ""):
+    def __init__(self, pid_calculator, simulator, verbose: bool = False,
+                 loop_type: str = "", loop_name: str = ""):
         self._init_logger(verbose)
         self._pid_calculator = pid_calculator
         self._simulator = simulator
         self._epsilon = Config.EPSILON
         
-        self._llm_client = llm_client
-        self._llm_advisor = None
         self._loop_type = loop_type
         self._loop_name = loop_name
         self._strategy = get_loop_strategy(loop_type)
         
         self._conservative_pid_calculator = ConservativePIDCalculator(
-            verbose=verbose, llm_client=llm_client, 
+            verbose=verbose,
             loop_type=loop_type, loop_name=loop_name
         )
-
-        
-        if llm_client is not None:
-            self._init_llm_advisor(llm_client)
-    
-    def set_llm_client(self, llm_client, loop_type: str = "", loop_name: str = ""):
-        """设置 LLM 客户端"""
-        self._llm_client = llm_client
-        self._loop_type = loop_type
-        self._loop_name = loop_name
-        self._strategy = get_loop_strategy(loop_type)
-        self._init_llm_advisor(llm_client)
-        self._conservative_pid_calculator.set_llm_client(llm_client, loop_type, loop_name)
-    
-    def _init_llm_advisor(self, llm_client):
-        """初始化 LLM 顾问"""
-        try:
-            from ..strategies.llm_conservative_advisor import LLMOscillationTuningAdvisor
-            self._llm_advisor = LLMOscillationTuningAdvisor(llm_client=llm_client, verbose=self._verbose)
-        except ImportError:
-            self._llm_advisor = None
 
     def detect_valve_issues(self, mv: np.ndarray, pv: np.ndarray, dt: float = 1.0) -> Dict[str, Any]:
         """检测阀门问题（死区、粘滞、饱和）"""

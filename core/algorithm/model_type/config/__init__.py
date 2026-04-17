@@ -9,7 +9,6 @@
 OSCILLATION_TUNING:
     pb_min/pb_max: 比例带范围(%)，控制整定的保守程度
     ti_range: 积分时间范围(秒)
-    enable_llm: 是否启用LLM辅助整定
     
 按场景调整
 ---------

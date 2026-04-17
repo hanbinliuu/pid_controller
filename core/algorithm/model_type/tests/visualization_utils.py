@@ -987,3 +987,214 @@ def visualize_new_pid_simulation(data: List[Dict], fitting_result: Dict,
     plt.savefig(filepath, dpi=150, bbox_inches='tight')
     print(f"\n📊 新参数仿真图表已保存至: {filepath}")
     plt.close()
+
+
+def visualize_scenario_comparison(
+    scenario: Dict,
+    metadata: Dict,
+    data: List[Dict],
+    sim_old: Dict,
+    sim_rule: Dict,
+    pid_rule: Dict,
+    result: Dict,
+    scenario_idx: int,
+    tuning_method: str = "unknown",
+    output_dir: str = None,
+):
+    """稳定性测试专用可视化（Old PID vs Tuned PID）"""
+    colors = {
+        "pv": "#1E88E5",
+        "sv": "#E53935",
+        "mv": "#43A047",
+        "old_pid": "#7E57C2",
+        "rule": "#FF9800",
+        "band": "#4CAF50",
+        "grid": "#E0E0E0",
+    }
+
+    plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "SimHei", "DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
+    plt.rcParams["axes.facecolor"] = "#FAFAFA"
+    plt.rcParams["figure.facecolor"] = "#FFFFFF"
+
+    fig = plt.figure(figsize=(16, 10))
+
+    method_str = "Critical Method" if "oscillation" in tuning_method else "Model Fitting"
+    fig.suptitle(
+        f"Scenario {scenario_idx}: {scenario['name']}\n{scenario['description']} | Method: {method_str}",
+        fontsize=14,
+        fontweight="bold",
+        color="#333333",
+    )
+
+    sv = metadata["sv"]
+    pid_old = scenario["original_pid"]
+
+    timestamps = [d["timestamp"] for d in data]
+    time_seconds = [(ts - timestamps[0]) / 1000 for ts in timestamps]
+    pv_array = np.array([d["pv"] for d in data])
+    sv_array = np.array([d["sv"] for d in data])
+    mv_array = np.array([d["mv"] for d in data])
+
+    change_idx = 300
+    if metadata.get("change_time"):
+        for i, ts in enumerate(timestamps):
+            if ts >= metadata["change_time"]:
+                change_idx = i
+                break
+
+    ax1 = fig.add_subplot(2, 3, 1)
+    ax1.plot(time_seconds, pv_array, color=colors["pv"], label="PV", linewidth=1.2, alpha=0.9)
+    ax1.plot(time_seconds, sv_array, color=colors["sv"], linestyle="--", label="SV", linewidth=1.5)
+    ax1.axvline(x=time_seconds[change_idx], color="#FF5722", linestyle="--", linewidth=2, alpha=0.8, label="Change")
+    ax1.fill_between(time_seconds, sv * 0.95, sv * 1.05, alpha=0.12, color=colors["band"])
+    ax1.set_ylabel("PV / SV", fontweight="bold", color=colors["pv"])
+    ax1.set_xlabel("Time (s)")
+    ax1.set_title("Original Data: PV, SV & MV", fontweight="bold", fontsize=11)
+    ax1.tick_params(axis="y", labelcolor=colors["pv"])
+    ax1.grid(True, alpha=0.4, color=colors["grid"])
+    ax1.set_xlim([0, time_seconds[-1]])
+
+    ax1_mv = ax1.twinx()
+    ax1_mv.plot(time_seconds, mv_array, color=colors["mv"], label="MV", linewidth=1.0, alpha=0.7)
+    ax1_mv.set_ylabel("MV (%)", fontweight="bold", color=colors["mv"])
+    ax1_mv.tick_params(axis="y", labelcolor=colors["mv"])
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax1_mv.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=7, framealpha=0.9)
+
+    ax2 = fig.add_subplot(2, 3, 2)
+    osc_start = max(0, change_idx - 20)
+    ax2.plot(time_seconds[osc_start:], pv_array[osc_start:], color=colors["pv"], label="PV", linewidth=1.2)
+    ax2.plot(time_seconds[osc_start:], sv_array[osc_start:], color=colors["sv"], linestyle="--", label="SV", linewidth=1.5)
+    ax2.axhline(y=sv * 1.05, color="#9E9E9E", linestyle=":", alpha=0.7)
+    ax2.axhline(y=sv * 0.95, color="#9E9E9E", linestyle=":", alpha=0.7)
+    ax2.fill_between(time_seconds[osc_start:], sv * 0.95, sv * 1.05, alpha=0.12, color=colors["band"])
+    ax2.set_ylabel("PV / SV", fontweight="bold", color=colors["pv"])
+    ax2.set_xlabel("Time (s)")
+    ax2.set_title("Oscillation Segment (Zoomed)", fontweight="bold", fontsize=11)
+    ax2.tick_params(axis="y", labelcolor=colors["pv"])
+    ax2.grid(True, alpha=0.4, color=colors["grid"])
+
+    ax2_mv = ax2.twinx()
+    ax2_mv.plot(time_seconds[osc_start:], mv_array[osc_start:], color=colors["mv"], label="MV", linewidth=1.0, alpha=0.7)
+    ax2_mv.set_ylabel("MV (%)", fontweight="bold", color=colors["mv"])
+    ax2_mv.tick_params(axis="y", labelcolor=colors["mv"])
+    lines1, labels1 = ax2.get_legend_handles_labels()
+    lines2, labels2 = ax2_mv.get_legend_handles_labels()
+    ax2.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=7, framealpha=0.9)
+
+    ax3 = fig.add_subplot(2, 3, 3)
+    ax3.plot(sim_old["t"], sim_old["pv"], color=colors["old_pid"], linestyle="--", label="Old PV", linewidth=1.5, alpha=0.8)
+    ax3.plot(sim_rule["t"], sim_rule["pv"], color=colors["rule"], label="Tuned PV", linewidth=2)
+    ax3.plot(sim_old["t"], sim_old["sv"], color=colors["sv"], linestyle="--", label="SV", linewidth=1.2, alpha=0.7)
+    ax3.fill_between(sim_old["t"], sv * 0.95, sv * 1.05, alpha=0.12, color=colors["band"])
+    old_status = "Stable" if sim_old["is_stable"] else "Oscillating"
+    new_status = "STABLE" if sim_rule["is_stable"] else "Oscillating"
+    ax3.set_title(f"Old ({old_status}) vs Tuned ({new_status})", fontweight="bold", fontsize=11)
+    ax3.set_ylabel("PV", fontweight="bold", color=colors["pv"])
+    ax3.set_xlabel("Time (s)")
+    ax3.tick_params(axis="y", labelcolor=colors["pv"])
+    ax3.grid(True, alpha=0.4, color=colors["grid"])
+
+    ax3_mv = ax3.twinx()
+    ax3_mv.plot(sim_old["t"], sim_old["mv"], color=colors["old_pid"], linestyle=":", label="Old MV", linewidth=1.0, alpha=0.5)
+    ax3_mv.plot(sim_rule["t"], sim_rule["mv"], color=colors["rule"], linestyle=":", label="Tuned MV", linewidth=1.0, alpha=0.6)
+    ax3_mv.set_ylabel("MV (%)", fontweight="bold", color=colors["mv"])
+    ax3_mv.tick_params(axis="y", labelcolor=colors["mv"])
+    lines1, labels1 = ax3.get_legend_handles_labels()
+    lines2, labels2 = ax3_mv.get_legend_handles_labels()
+    ax3.legend(lines1 + lines2, labels1 + labels2, loc="lower right", fontsize=6, framealpha=0.9, ncol=2)
+
+    ax4 = fig.add_subplot(2, 3, 4)
+    metrics = ["Settling\nTime (s)", "Overshoot\n(%)", "IAE\n(×100)"]
+    old_vals = [min(sim_old["settling_time"], 300), sim_old["overshoot"], sim_old.get("iae", 0) / 100]
+    rule_vals = [min(sim_rule["settling_time"], 300), sim_rule["overshoot"], sim_rule.get("iae", 0) / 100]
+    x = np.arange(len(metrics))
+    width = 0.35
+    bars1 = ax4.bar(x - width / 2, old_vals, width, label="Old PID", color=colors["old_pid"], alpha=0.8)
+    bars2 = ax4.bar(x + width / 2, rule_vals, width, label="Tuned PID", color=colors["rule"], alpha=0.8)
+    if not sim_old["is_stable"]:
+        bars1[0].set_hatch("//")
+        bars1[0].set_edgecolor("#333333")
+    if not sim_rule["is_stable"]:
+        bars2[0].set_hatch("//")
+        bars2[0].set_edgecolor("#333333")
+    for bar, val in zip(bars1, old_vals):
+        ax4.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 2, f"{val:.1f}", ha="center", va="bottom", fontsize=8, color="#555555")
+    for bar, val in zip(bars2, rule_vals):
+        ax4.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 2, f"{val:.1f}", ha="center", va="bottom", fontsize=8, color="#555555")
+    ax4.set_ylabel("Value", fontweight="bold")
+    ax4.set_title("Performance Metrics", fontweight="bold", fontsize=11)
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(metrics, fontsize=9)
+    ax4.legend(fontsize=9, framealpha=0.9)
+    ax4.grid(True, alpha=0.4, axis="y", color=colors["grid"])
+
+    ax5 = fig.add_subplot(2, 3, 5)
+    ax5.axis("off")
+    info_lines = [
+        ("PROCESS PARAMETERS", None),
+        ("─" * 35, None),
+        (f"Original: K={scenario['process_original']['K']:.2f}, T1={scenario['process_original']['T1']:.1f}s", None),
+        (f"Changed:  K={scenario['process_changed']['K']:.2f}, T1={scenario['process_changed']['T1']:.1f}s, L={scenario['process_changed']['L']:.1f}s", None),
+        ("", None),
+        ("PID PARAMETERS", None),
+        ("─" * 35, None),
+        (f"{'Parameter':<12} {'Old PID':<12} {'Tuned PID':<12}", None),
+        (f"{'PB (%)':<12} {100/pid_old['Kp'] if pid_old.get('Kp', 0) != 0 else '-':<12.1f} {pid_rule.get('pb', 100):<12.1f}", None),
+        (f"{'Ti (s)':<12} {pid_old['Kp']/pid_old['Ki'] if pid_old.get('Ki', 0) != 0 else '-':<12.1f} {pid_rule.get('ti', 0):<12.1f}", None),
+        (f"{'Td (s)':<12} {pid_old['Kd']/pid_old['Kp'] if pid_old.get('Kp', 0) != 0 and pid_old.get('Kd', 0) != 0 else 0:<12.1f} {pid_rule.get('td', 0):<12.1f}", None),
+        ("", None),
+        ("TUNING RESULT", None),
+        ("─" * 35, None),
+    ]
+    if sim_rule["is_stable"]:
+        info_lines.append((f"Status: STABLE (Ts={sim_rule['settling_time']:.0f}s)", "#4CAF50"))
+    else:
+        info_lines.append((f"Status: UNSTABLE (not settled)", "#F44336"))
+    info_lines.append((f"Method: {method_str}", None))
+    info_lines.append((f"Loop Type: {scenario.get('loop_type', 'unknown')}", None))
+
+    y_pos = 0.95
+    for text, color in info_lines:
+        text_color = color if color else "#333333"
+        fontweight = "bold" if text.isupper() or "Status" in text else "normal"
+        ax5.text(
+            0.05,
+            y_pos,
+            text,
+            transform=ax5.transAxes,
+            fontsize=10,
+            verticalalignment="top",
+            fontfamily="monospace",
+            color=text_color,
+            fontweight=fontweight,
+        )
+        y_pos -= 0.055
+
+    from matplotlib.patches import FancyBboxPatch
+
+    bbox = FancyBboxPatch(
+        (0.02, 0.02),
+        0.96,
+        0.96,
+        boxstyle="round,pad=0.02,rounding_size=0.02",
+        facecolor="#F5F5F5",
+        edgecolor="#BDBDBD",
+        transform=ax5.transAxes,
+        zorder=-1,
+    )
+    ax5.add_patch(bbox)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+    if output_dir is None:
+        output_dir = "core/algorithm/model_type/tests/results/stability"
+    os.makedirs(output_dir, exist_ok=True)
+    safe_name = scenario["name"].replace(" ", "_").replace("/", "_")
+    filename = f"scenario_{scenario_idx:02d}_{safe_name}.png"
+    filepath = os.path.join(output_dir, filename)
+    plt.savefig(filepath, dpi=150, bbox_inches="tight", facecolor="white", edgecolor="none")
+    print(f"   Chart saved: {filepath}")
+    plt.close()

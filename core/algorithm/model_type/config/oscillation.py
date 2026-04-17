@@ -8,7 +8,6 @@
 ---------------------
 - pb_min/pb_max: 比例带范围(%)，控制整定的保守程度
 - ti_range: 积分时间范围(秒)
-- enable_llm: 是否启用LLM辅助整定
 
 按场景调整
 ---------
@@ -19,9 +18,6 @@
 """
 
 OSCILLATION_TUNING = {
-    # ========== LLM 辅助决策开关 ==========
-    'enable_llm': False,                  # 是否启用 LLM 辅助决策保守策略
-    
     # 触发振荡整定的条件
     'oscillation_ratio_threshold': 0.08, # 振荡比阈值，降低以检测弱振荡（从0.1降到0.08）
     'r2_failure_threshold': 0.35,        # R² 阈值，略微提高以更早触发振荡整定（从0.3提到0.35）

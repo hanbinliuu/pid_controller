@@ -37,10 +37,6 @@ class TuningOrchestrator(LoggerMixin):
     3. 基于AIC/RSS/形状特征选择最优模型结构 → 确定模型类型
     4. 融合各段参数 → 唯一K, T, L（加权平均 / 全局优化）
     5. 验证一致性与仿真匹配度 → 最终输出
-    
-    LLM 增强:
-    - 支持使用大模型决策保守策略
-    - 通过构造函数或 set_llm_client() 启用
     """
     
     # 使用统一的常量定义（来自 ModelType）
@@ -52,14 +48,12 @@ class TuningOrchestrator(LoggerMixin):
     MIN_R2_FOR_QUALITY = Config.MODEL_SELECTOR['min_r2_for_quality']
     R2_THRESHOLDS = Config.MODEL_SELECTOR['r2_thresholds']
     
-    def __init__(self, verbose: bool = False, llm_client=None, process_context: dict = None):
+    def __init__(self, verbose: bool = False, process_context: dict = None):
         # Initialize stages pipeline here next time
         # Initialize stages pipeline here next time
         """
         Args:
             verbose: 是否输出详细日志
-            llm_client: LLM 客户端，用于决策保守策略
-                       需实现 chat(prompt) -> str 方法
             process_context: 工艺上下文信息（可选）
                 - loop_type: 回路类型 (flow/temperature/pressure/level)
                 - loop_name: 回路名称
@@ -68,7 +62,6 @@ class TuningOrchestrator(LoggerMixin):
         """
         self._init_logger(verbose)
         self._epsilon = Config.EPSILON
-        self._llm_client = llm_client
         self._process_context = process_context
         
         # 初始化子模块
@@ -76,7 +69,7 @@ class TuningOrchestrator(LoggerMixin):
         self._segment_processor = SegmentProcessor(verbose=verbose)
         self._simulator = ModelSimulator()
         
-        # PIDCalculator（正常整定用规则引擎，不需要 LLM）
+        # PIDCalculator（正常整定使用规则引擎）
         self._pid_calculator = PIDCalculator()
         
         self._unified_selector = UnifiedModelSelector(verbose=verbose)
@@ -95,12 +88,12 @@ class TuningOrchestrator(LoggerMixin):
         # 参数融合器（从 model_selector 拆分出来）
         self._param_fusion = ParameterFusion(self._segment_processor, verbose)
         
-        # OscillationTuner 支持 LLM 决策（临界法整定专用）
+        # 振荡整定器（临界法整定专用）
         loop_type = process_context.get('loop_type', '') if process_context else ''
         loop_name = process_context.get('loop_name', '') if process_context else ''
         self._oscillation_tuner = OscillationTuner(
             self._pid_calculator, self._simulator, verbose,
-            llm_client=llm_client, loop_type=loop_type, loop_name=loop_name
+            loop_type=loop_type, loop_name=loop_name
         )
         self._fallback_manager = PipelineFallbackManager(self._oscillation_tuner, logger_mixin=self)
         
@@ -111,27 +104,6 @@ class TuningOrchestrator(LoggerMixin):
         self._method_selector = TuningMethodSelector(
             self._pid_calculator, self._simulator, verbose
         )
-    
-    def set_llm_client(self, llm_client, process_context: dict = None):
-        """
-        设置 LLM 客户端，启用 LLM 决策保守策略
-        
-        注意：LLM 只在临界法整定时使用，正常数据质量好的整定不需要 LLM。
-        
-        Args:
-            llm_client: LLM 客户端
-            process_context: 工艺上下文信息
-                - loop_type: 回路类型 (flow/temperature/pressure/level)
-                - loop_name: 回路名称
-                - safety_critical: 是否安全关键
-        """
-        self._llm_client = llm_client
-        self._process_context = process_context
-        
-        # 更新 OscillationTuner（临界法整定专用）
-        loop_type = process_context.get('loop_type', '') if process_context else ''
-        loop_name = process_context.get('loop_name', '') if process_context else ''
-        self._oscillation_tuner.set_llm_client(llm_client, loop_type, loop_name)
     
     @property
     def verbose(self) -> bool:

@@ -18,6 +18,10 @@ SEGMENT_PROCESSING = {
     'severe_nonlinearity': 0.7,      # 严重非线性阈值
     'severe_oscillation': 0.75,      # 严重振荡阈值
     'low_quality_threshold': 0.25,   # 低质量分阈值
+    'classification_step_threshold': 0.5,  # Step 1.8: 阶跃特征判定阈值
+    'classification_osc_threshold': 0.5,   # Step 1.8/1.95 共用振荡阈值
+    'segment_internal_osc_threshold': 0.05,  # 段内PV仍振荡阈值(PV_std/SV)
+    'precheck_high_osc_threshold_fast_loop': 0.5,  # flow/pressure 预检阈值（与分类口径一致）
     
     # ========== 整定段合并配置 ==========
     'merge_gap_threshold': 300000,   # 合并间隔阈值（毫秒），5分钟=300000ms

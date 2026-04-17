@@ -507,6 +507,36 @@ class RefinementStage(PipelineStage):
             'segment_info': build_segment_info(segments, segment_results) if segments else []
         }
 
+    def _try_fallback(self, context: TuningContext, segments, results, force: bool) -> bool:
+        """统一 fallback 入口，避免 stage 内出现多套分叉逻辑。"""
+        if self._fallback_manager is not None:
+            return self._fallback_manager.try_fallback(
+                context,
+                segments,
+                results,
+                force=force,
+                start_log=None,
+                success_log="   ✅ 振荡整定fallback成功",
+                fail_log="   ❌ 振荡整定fallback也失败",
+            )
+
+        fallback_result = self._oscillation_tuner.try_oscillation_tuning(
+            segments,
+            results,
+            context.get_current_pid(),
+            force=force,
+            tuning_constraints=context.export_tuning_constraints(),
+        )
+        if fallback_result is None or not fallback_result.get('success', False):
+            return False
+
+        context.final_result = self._oscillation_tuner.build_oscillation_output(
+            fallback_result, context.hist_data, context.time_range, context.input_data.tuning_window,
+            context.original_segments, context.original_results,
+            tuning_constraints=context.export_tuning_constraints()
+        )
+        return True
+
     def execute(self, context: TuningContext) -> TuningContext:
         if context.is_fallback_triggered or context.final_result is not None:
             return context
@@ -538,32 +568,11 @@ class RefinementStage(PipelineStage):
         is_integrator = fusion_result.model_type in (ModelType.FOPI, ModelType.SOPI)
         if abs(fusion_result.K) < self._epsilon or (not is_integrator and fusion_result.T1 < self._epsilon):
             self.log("\n   ⚠️ 参数融合失败（K或T1无效），尝试振荡整定fallback...")
-            if self._fallback_manager is not None:
-                ok = self._fallback_manager.try_fallback(
-                    context,
-                    context.segments_for_fitting,
-                    context.segment_results_fitted,
-                    force=True,
-                    start_log=None,
-                    success_log="   ✅ 振荡整定fallback成功",
-                    fail_log="   ❌ 振荡整定fallback也失败",
-                )
-                if not ok:
-                    context.is_fallback_triggered = True
-            else:
-                fallback_result = self._oscillation_tuner.try_oscillation_tuning(
-                    context.segments_for_fitting, context.segment_results_fitted, context.get_current_pid(), force=True,
-                    tuning_constraints=context.export_tuning_constraints()
-                )
-                if fallback_result is not None:
-                    self.log("   ✅ 振荡整定fallback成功")
-                    context.final_result = self._oscillation_tuner.build_oscillation_output(
-                        fallback_result, context.hist_data, context.time_range, context.input_data.tuning_window,
-                        context.original_segments, context.original_results
-                    )
-                else:
-                    self.log("   ❌ 振荡整定fallback也失败")
-                    context.is_fallback_triggered = True
+            ok = self._try_fallback(
+                context, context.segments_for_fitting, context.segment_results_fitted, force=True
+            )
+            if not ok:
+                context.is_fallback_triggered = True
             return context
 
         # 4. 使用方法选择器验证稳定性，必要时使用继电反馈法(Relay Feedback)
