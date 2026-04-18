@@ -144,9 +144,16 @@ class SegmentationStage(PipelineStage):
             return context
             
         if self._check_mv_no_change(valid_segments):
-            self.log("❌ MV无变化，无法进行模型辨识")
-            context.is_fallback_triggered = True
-            return context
+            # 常见于“SV阶跃段优先”场景：SV段质量高但MV变化不足，导致辨识不可用。
+            # 此时优先回退到扰动段而不是直接整定失败。
+            if disturbance_segs and not self._check_mv_no_change(disturbance_segs):
+                self.log("⚠️ 当前候选段MV变化不足，回退到扰动段继续模型辨识")
+                valid_segments = disturbance_segs
+                segment_results = disturbance_results
+            else:
+                self.log("❌ MV无变化，无法进行模型辨识")
+                context.is_fallback_triggered = True
+                return context
             
         self.log(f"📊 最终有效段: {len(valid_segments)} 个")
         

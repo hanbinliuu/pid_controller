@@ -240,6 +240,25 @@ class ModelRating:
             weights['oscillation_count'] * oc_score +
             weights['decay_ratio'] * dr_score
         )
+
+        # 额外软惩罚：调节时间过长时，即使其他指标尚可，也要压低综合分，
+        # 避免“超慢但稳”在实操上被误判为优解。
+        long_settling_penalty = 0.0
+        if settling_time < float('inf'):
+            if loop_type == 'temperature' and settling_time > 3600:
+                long_settling_penalty = float(
+                    np.interp(settling_time, [3600, 7200, 14400], [0.3, 1.2, 2.5])
+                )
+            elif loop_type in ['flow', 'pressure'] and settling_time > 600:
+                long_settling_penalty = float(
+                    np.interp(settling_time, [600, 1200, 3000], [0.2, 0.8, 2.0])
+                )
+            elif loop_type == 'level' and settling_time > 10800:
+                long_settling_penalty = float(
+                    np.interp(settling_time, [10800, 21600, 43200], [0.2, 0.8, 1.5])
+                )
+        if long_settling_penalty > 0:
+            raw_score = max(0.0, raw_score - long_settling_penalty)
         
         # 稳定性因子：不稳定时整体打折（而非一票否决）
         if is_stable:
@@ -252,6 +271,7 @@ class ModelRating:
         score = round(min(10.0, max(0.0, score)), 2)
         
         details['raw_score'] = round(raw_score, 2)
+        details['long_settling_penalty'] = round(long_settling_penalty, 3)
         details['stability_factor'] = stability_factor
         details['weights'] = weights
         
@@ -691,6 +711,129 @@ class ModelRating:
     # ================================================================
     # 一站式接口: 仿真 + 三层评分
     # ================================================================
+    @staticmethod
+    def actuator_feasibility_score(simulation: Dict, loop_type: str = 'flow') -> Tuple[float, Dict[str, float]]:
+        """
+        执行器可行性评分（0-10）
+        关注现场执行层风险：阀门饱和、动作速率过快、抖动过大。
+        """
+        mv = np.array(simulation.get('mv_history', []), dtype=float)
+        dt = max(float(simulation.get('dt', 1.0) or 1.0), 1e-9)
+        loop_type = (loop_type or "flow").lower()
+        if mv.size < 5:
+            return 5.0, {'reason': 'mv_too_short'}
+
+        dmv = np.diff(mv)
+        abs_dmv = np.abs(dmv)
+        sat_ratio = float(np.mean((mv <= 1.0) | (mv >= 99.0)))
+        mv_p95_rate = float(np.percentile(abs_dmv / dt, 95))
+        mv_tv_norm = float(np.sum(abs_dmv) / max(len(abs_dmv) * 100.0, 1e-9))
+
+        if loop_type in ('temperature', 'level'):
+            sat_score = float(np.interp(sat_ratio, [0.0, 0.02, 0.05, 0.1, 0.2, 0.5], [10, 9.5, 8.5, 6.5, 3.0, 0.0]))
+            rate_score = float(np.interp(mv_p95_rate, [0.0, 0.05, 0.2, 0.5, 1.0, 2.0], [10, 9.5, 8.0, 6.0, 3.0, 0.0]))
+            tv_score = float(np.interp(mv_tv_norm, [0.0, 0.005, 0.01, 0.03, 0.06, 0.12], [10, 9.5, 8.0, 6.0, 3.0, 0.0]))
+        else:
+            sat_score = float(np.interp(sat_ratio, [0.0, 0.01, 0.03, 0.08, 0.15, 0.4], [10, 9.5, 8.5, 6.0, 3.0, 0.0]))
+            rate_score = float(np.interp(mv_p95_rate, [0.0, 0.1, 0.5, 1.0, 2.5, 5.0], [10, 9.0, 7.5, 6.0, 3.0, 0.0]))
+            tv_score = float(np.interp(mv_tv_norm, [0.0, 0.01, 0.02, 0.05, 0.1, 0.2], [10, 9.0, 8.0, 6.0, 3.0, 0.0]))
+
+        score = 0.45 * sat_score + 0.35 * rate_score + 0.20 * tv_score
+        score = round(float(np.clip(score, 0.0, 10.0)), 2)
+        details = {
+            'score': score,
+            'saturation_ratio': round(sat_ratio, 4),
+            'mv_p95_rate': round(mv_p95_rate, 4),
+            'mv_tv_norm': round(mv_tv_norm, 4),
+            'saturation_score': round(sat_score, 2),
+            'rate_score': round(rate_score, 2),
+            'tv_score': round(tv_score, 2),
+            'weights': {'saturation': 0.45, 'rate': 0.35, 'tv': 0.20},
+        }
+        return score, details
+
+    @staticmethod
+    def robustness_score(model_params: Dict, pid_params: Dict,
+                         loop_type: str = 'flow',
+                         sp_initial: float = 50.0, sp_final: float = 60.0,
+                         n_steps: int = 500, dt: float = 1.0,
+                         n_samples: int = 9, perturbation: float = 0.2,
+                         random_seed: int = 42) -> Tuple[float, Dict]:
+        """
+        参数扰动鲁棒性评分（0-10）
+        在模型参数 ±perturbation 扰动下重复仿真，统计稳定率与分数分布。
+        """
+        n_samples = int(max(5, min(31, n_samples)))
+        perturbation = float(np.clip(perturbation, 0.05, 0.5))
+        rng = np.random.default_rng(int(random_seed))
+
+        base_K = float(model_params.get('K', 1.0) or 1.0)
+        base_T1 = max(float(model_params.get('T1', 10.0) or 10.0), 1e-6)
+        base_T2 = max(float(model_params.get('T2', 0.0) or 0.0), 0.0)
+        base_L = max(float(model_params.get('L', 0.0) or 0.0), 0.0)
+
+        perf_scores: List[float] = []
+        stable_flags: List[int] = []
+        sim_n_steps = int(max(200, min(n_steps, 1200)))
+        sim_dt = max(float(dt), 2.0)
+
+        for _ in range(n_samples):
+            fK = 1.0 + float(rng.uniform(-perturbation, perturbation))
+            fT1 = 1.0 + float(rng.uniform(-perturbation, perturbation))
+            fT2 = 1.0 + float(rng.uniform(-perturbation, perturbation))
+            fL = 1.0 + float(rng.uniform(-perturbation, perturbation))
+
+            trial_model = {
+                'K': base_K * fK,
+                'T1': max(base_T1 * fT1, 1e-6),
+                'T2': max(base_T2 * fT2, 0.0),
+                'L': max(base_L * fL, 0.0),
+            }
+            sim = ModelRating.simulate_step_response(
+                trial_model,
+                pid_params,
+                sp_initial=sp_initial,
+                sp_final=sp_final,
+                n_steps=sim_n_steps,
+                dt=sim_dt,
+                loop_type=loop_type,
+            )
+
+            from types import SimpleNamespace
+            m = SimpleNamespace(
+                is_stable=sim['is_stable'],
+                overshoot=sim['overshoot'],
+                settling_time=sim['settling_time'] if sim['settling_time'] >= 0 else float('inf'),
+                steady_state_error=sim['steady_state_error'],
+                oscillation_count=sim['oscillation_count'],
+                decay_ratio=sim['decay_ratio'],
+            )
+            s, _ = ModelRating.performance_score(m, loop_type=loop_type)
+            perf_scores.append(float(s))
+            stable_flags.append(1 if sim.get('is_stable', False) else 0)
+
+        arr = np.array(perf_scores, dtype=float)
+        stable_ratio = float(np.mean(stable_flags)) if stable_flags else 0.0
+        score_mean = float(np.mean(arr)) if arr.size else 0.0
+        score_p10 = float(np.percentile(arr, 10)) if arr.size else 0.0
+        score_p90 = float(np.percentile(arr, 90)) if arr.size else 0.0
+
+        robustness = 0.45 * (stable_ratio * 10.0) + 0.35 * score_mean + 0.20 * score_p10
+        if stable_ratio < 0.5:
+            robustness = min(robustness, 4.0)
+        robustness = round(float(np.clip(robustness, 0.0, 10.0)), 2)
+
+        details = {
+            'score': robustness,
+            'samples': int(n_samples),
+            'perturbation': perturbation,
+            'stable_ratio': round(stable_ratio, 4),
+            'score_mean': round(score_mean, 3),
+            'score_p10': round(score_p10, 3),
+            'score_p90': round(score_p90, 3),
+            'weights': {'stable_ratio': 0.45, 'mean': 0.35, 'p10': 0.20},
+        }
+        return robustness, details
     
     @staticmethod
     def simulate_step_response(model_params: Dict, pid_params: Dict,
@@ -734,32 +877,55 @@ class ModelRating:
             }
         """
         eps = 1e-10
+        dt = max(float(dt or 1.0), eps)
+        loop_type = (loop_type or "flow").lower()
         
         # 解析模型参数
-        K = model_params.get('K', 1.0)
-        T1 = max(model_params.get('T1', 10.0), eps)
-        T2 = model_params.get('T2', 0.0)
-        L = max(model_params.get('L', 0.0), 0.0)
+        K = float(model_params.get('K', 1.0) or 0.0)
+        T1 = max(abs(float(model_params.get('T1', 10.0) or 10.0)), eps)
+        T2 = max(float(model_params.get('T2', 0.0) or 0.0), 0.0)
+        L = max(float(model_params.get('L', 0.0) or 0.0), 0.0)
         
         # 解析 PID 参数（兼容两种格式）
+        ti_param = 0.0
         if 'Kp' in pid_params:
-            Kp = pid_params['Kp']
-            Ki = pid_params.get('Ki', 0.0)
-            Kd = pid_params.get('Kd', 0.0)
+            Kp = float(pid_params['Kp'] or 0.0)
+            Ki = float(pid_params.get('Ki', 0.0) or 0.0)
+            Kd = float(pid_params.get('Kd', 0.0) or 0.0)
+            ti_param = float(pid_params.get('Ti', 0.0) or pid_params.get('ti', 0.0) or 0.0)
         elif 'kp' in pid_params:
-            Kp = pid_params['kp']
-            Ki = pid_params.get('ki', 0.0)
-            Kd = pid_params.get('kd', 0.0)
+            Kp = float(pid_params['kp'] or 0.0)
+            Ki = float(pid_params.get('ki', 0.0) or 0.0)
+            Kd = float(pid_params.get('kd', 0.0) or 0.0)
+            ti_param = float(pid_params.get('ti', 0.0) or pid_params.get('Ti', 0.0) or 0.0)
         else:
-            pb = pid_params.get('pb', 100.0)
-            ti = pid_params.get('ti', 0.0)
-            td = pid_params.get('td', 0.0)
+            pb = float(pid_params.get('pb', 100.0) or 100.0)
+            ti = float(pid_params.get('ti', 0.0) or 0.0)
+            td = float(pid_params.get('td', 0.0) or 0.0)
             Kp = 100.0 / pb if pb > 0 else 1.0
             Ki = Kp / ti if ti > 0 else 0.0
             Kd = Kp * td
+            ti_param = ti
+        if ti_param <= eps and abs(Ki) > eps and abs(Kp) > eps:
+            ti_param = abs(Kp / Ki)
         
         if pv_initial is None:
             pv_initial = sp_initial
+
+        # Rating 主要用于比较参数。固定 500 秒会系统性低估慢积分/温度/压力回路，
+        # 因此按模型时间常数、死区和 Ti 自动拉长仿真窗口。
+        verification_cfg = getattr(Config, "LOOP_SPECIFIC_VERIFICATION", {}) or {}
+        loop_cfg = verification_cfg.get(loop_type, {}) or {}
+        max_settling_base = float(getattr(Config, "CLOSED_LOOP", {}).get("max_settling_time", 900.0))
+        settling_factor = float(loop_cfg.get("max_settling_time_factor", 15.0))
+        max_time_constant = max(T1, T2 if T2 > eps else T1, L, 1.0)
+        max_settling = max(
+            max_settling_base,
+            settling_factor * (max_time_constant + L),
+            6.0 * ti_param if ti_param > eps else 0.0,
+        )
+        required_duration = max(float(n_steps) * dt, max_settling * 1.2, max_time_constant * 20.0, 120.0)
+        n_steps = int(min(max(int(np.ceil(required_duration / dt)), int(n_steps)), 200000))
         
         # 仿真
         pv_hist = np.zeros(n_steps)
@@ -806,10 +972,11 @@ class ModelRating:
             delta_mv_delayed = delta_mv_buf.popleft()
             
             # 过程模型更新
-            alpha1 = dt / T1
+            # 用指数欧拉避免 dt > T 时数值爆炸，尤其是现场压力回路识别出 T≈1s 的场景。
+            alpha1 = 1.0 - np.exp(-dt / max(T1, eps))
             if T2 > eps:
                 # 二阶
-                alpha2 = dt / max(T2, T1 * 0.1)
+                alpha2 = 1.0 - np.exp(-dt / max(T2, T1 * 0.1, eps))
                 delta_pv_new = delta_pv + alpha1 * (K * delta_mv_delayed - delta_pv)
                 delta_x2 = delta_x2 + alpha2 * (delta_pv_new - delta_x2)
                 delta_pv = delta_x2
@@ -877,14 +1044,17 @@ class ModelRating:
         decay_ratio = peaks[1] / peaks[0] if len(peaks) >= 2 and peaks[0] > eps else (0.0 if len(peaks) <= 1 else 1.0)
         
         # 稳定性判定
-        max_settling = 600.0
-        max_overshoot = 65.0 if decay_ratio <= 0.6 else 30.0
-        max_sse = 8.0
+        max_overshoot_cfg = float(loop_cfg.get(
+            "overshoot_acceptable",
+            getattr(Config, "CLOSED_LOOP", {}).get("overshoot_acceptable", 60.0),
+        ))
+        max_overshoot = max_overshoot_cfg if decay_ratio <= 0.6 else min(max_overshoot_cfg, 35.0)
+        max_sse = float(loop_cfg.get("steady_state_error", 8.0))
         
         is_settled = settling_time < max_settling
         is_accurate = sse < max_sse
         is_smooth = overshoot < max_overshoot
-        is_decaying = decay_ratio < 0.8
+        is_decaying = decay_ratio < 0.85
         is_stable = is_settled and is_accurate and is_smooth and is_decaying
         
         # 边界容忍
@@ -906,6 +1076,11 @@ class ModelRating:
             'oscillation_count': osc_count,
             'decay_ratio': round(decay_ratio, 4),
             'rise_time': round(rise_time, 2) if rise_time < float('inf') else -1,
+            'max_settling_allowed': round(max_settling, 2),
+            'max_overshoot_allowed': round(max_overshoot, 2),
+            'max_steady_state_error_allowed': round(max_sse, 2),
+            'n_steps': n_steps,
+            'dt': dt,
             'pv_history': pv_hist.tolist(),
             'mv_history': mv_hist.tolist(),
             'sp_history': sp_hist.tolist(),
@@ -966,10 +1141,54 @@ class ModelRating:
         
         # Layer 1
         perf_score, perf_details = ModelRating.performance_score(m, loop_type=loop_type)
+
+        # 可用性附加维度：执行器可行性 + 参数扰动鲁棒性
+        feas_score, feas_details = ModelRating.actuator_feasibility_score(sim, loop_type=loop_type)
+        robust_score, robust_details = ModelRating.robustness_score(
+            model_params=model_params,
+            pid_params=pid_params,
+            loop_type=loop_type,
+            sp_initial=sp_initial,
+            sp_final=sp_final,
+            n_steps=n_steps,
+            dt=dt,
+            n_samples=9,
+            perturbation=0.2,
+            random_seed=42,
+        )
+
+        predicted_onsite = 0.5 * perf_score + 0.3 * robust_score + 0.2 * feas_score
+        if method_confidence is not None:
+            predicted_onsite = 0.85 * predicted_onsite + 0.15 * (float(method_confidence) * 10.0)
+        predicted_onsite = round(float(np.clip(predicted_onsite, 0.0, 10.0)), 2)
+
+        raw_p10 = max(0.0, robust_details.get('score_p10', predicted_onsite) - 0.5)
+        raw_p90 = min(10.0, robust_details.get('score_p90', predicted_onsite) + 0.5)
+        p10 = min(raw_p10, predicted_onsite)
+        p90 = max(raw_p90, predicted_onsite)
+        uncertainty = {
+            'p10': round(p10, 2),
+            'p50': predicted_onsite,
+            'p90': round(p90, 2),
+        }
+        predicted_details = {
+            'performance_score': round(float(perf_score), 2),
+            'robustness_score': round(float(robust_score), 2),
+            'actuator_feasibility_score': round(float(feas_score), 2),
+            'method_confidence': round(float(method_confidence), 4) if method_confidence is not None else None,
+            'weights': {'performance': 0.5, 'robustness': 0.3, 'actuator': 0.2, 'confidence_mix': 0.15 if method_confidence is not None else 0.0},
+        }
         
         result = {
             'performance_score': perf_score,
             'performance_details': perf_details,
+            'robustness_score': robust_score,
+            'robustness_details': robust_details,
+            'actuator_feasibility_score': feas_score,
+            'actuator_feasibility_details': feas_details,
+            'predicted_onsite_score': predicted_onsite,
+            'predicted_onsite_details': predicted_details,
+            'predicted_onsite_uncertainty': uncertainty,
             'simulation': sim,
         }
         

@@ -577,8 +577,8 @@ class DataPreprocessor(LoggerMixin):
                     residual_u_corr = np.corrcoef(residual, u)[0, 1]
                     if not np.isnan(residual_u_corr):
                         scores.append(min(abs(residual_u_corr), 1.0))
-            except:
-                pass
+            except Exception as e:
+                self.log(f"   ⚠️ 非线性检测-残差相关性计算失败，跳过该子项: {e}")
             
             # 方法3：突变检测 - 检测 PV 的突然变化
             pv_diff = np.abs(np.diff(y))

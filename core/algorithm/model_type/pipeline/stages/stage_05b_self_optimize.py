@@ -73,6 +73,25 @@ class SelfOptimizeStage(PipelineStage):
         self._config = copy.deepcopy(_DEFAULT_CONFIG)
         self._config.update(getattr(Config, 'SELF_OPTIMIZE', {}))
 
+    def _get_tuning_scenario(self) -> str:
+        if getattr(self, "_context", None) is None:
+            return ""
+        return str((self._context.process_context or {}).get("tuning_scenario", "") or "").strip().lower()
+
+    def _get_stable_evolve_limit(self) -> float:
+        if getattr(self, "_context", None) is None:
+            return 0.5
+        try:
+            return float((self._context.process_context or {}).get("stable_max_delta", 0.5) or 0.5)
+        except Exception:
+            return 0.5
+
+    @staticmethod
+    def _within_relative_change(new_v: float, old_v: float, max_delta: float, eps: float = 1e-10) -> bool:
+        if abs(old_v) <= eps:
+            return abs(new_v) <= eps
+        return abs(new_v - old_v) / abs(old_v) <= max_delta
+
     def _compute_boundary_penalty(self, pid_params: Dict, loop_type: str, tuning_constraints: Dict) -> Tuple[float, Dict]:
         """
         计算参数贴边惩罚分（越贴边惩罚越高），用于避免“边界即最优”的伪解。
@@ -281,6 +300,81 @@ class SelfOptimizeStage(PipelineStage):
         min_improv = self._config.get('fine_tune_min_improvement', _DEFAULT_CONFIG['fine_tune_min_improvement'])
         eps = 1e-10
 
+        scenario = self._get_tuning_scenario()
+        stable_evolve_mode = scenario == 'stable_evolve'
+        method_name = str((baseline_pid or {}).get("method", "") or "").strip().lower()
+        is_level_unstable_integrating = (
+            loop_type == 'level'
+            and scenario == 'unstable'
+            and method_name == 'integrating_fallback'
+        )
+
+        current_pid_anchor = None
+        stable_max_delta = self._get_stable_evolve_limit()
+        if stable_evolve_mode and getattr(self, "_context", None) is not None:
+            cp = self._context.get_current_pid()
+            if cp:
+                try:
+                    current_pid_anchor = _normalize_pid_keys(cp)
+                except Exception:
+                    current_pid_anchor = None
+
+        # 低分非稳态场景：扩大搜索范围，尝试把综合评分从“可用”推向“更优”。
+        # 仅对快速回路(flow/pressure)且 baseline_score 偏低时启用，避免影响稳态高分场景。
+        adaptive_expand = (
+            (not stable_evolve_mode)
+            and (loop_type in ['flow', 'pressure'])
+            and (baseline_score is not None)
+            and (baseline_score < 7.0)
+        )
+        unstable_joint_pb_ti_search = (
+            (not stable_evolve_mode)
+            and scenario == 'unstable'
+            and loop_type in ['temperature', 'flow', 'pressure', 'level']
+            and (baseline_score is not None)
+            and (
+                baseline_score < 7.5
+                or (loop_type in ['flow', 'pressure'] and baseline_score < 8.0)
+            )
+        )
+        if adaptive_expand:
+            if baseline_score < 4.0:
+                # 极低分场景：增加更激进倍率与轮次，给优化器一次“翻盘”机会。
+                expanded = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 1.8]
+                max_rounds = max(max_rounds, 4)
+            else:
+                expanded = [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4]
+                max_rounds = max(max_rounds, 3)
+            ratios = sorted(set(float(r) for r in (list(ratios) + expanded)))
+            self.log(f"   🔎 Phase 2 扩展搜索: ratios={ratios}, rounds={max_rounds} (baseline={baseline_score:.2f})")
+        elif is_level_unstable_integrating and (baseline_score is not None) and (baseline_score < 7.0):
+            # 液位不稳 + 积分兜底：允许更宽 PB/TI 搜索，争取把评分从中位区间再往上拉。
+            expanded = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2]
+            ratios = sorted(set(float(r) for r in (list(ratios) + expanded)))
+            max_rounds = max(max_rounds, 4)
+            self.log(f"   🔎 Phase 2 扩展搜索(level-integrating): ratios={ratios}, rounds={max_rounds} (baseline={baseline_score:.2f})")
+        elif stable_evolve_mode:
+            # 稳态进化：只做 current_pid 附近的小步搜索，避免“激进跳变”破坏已有稳态。
+            ratios = [0.8, 0.9, 1.0, 1.1, 1.2]
+            max_rounds = min(max(max_rounds, 2), 3)
+            self.log(
+                f"   🔎 Phase 2 稳态进化搜索: ratios={ratios}, rounds={max_rounds}, "
+                f"ΔPb/ΔTi<= {stable_max_delta*100:.1f}%"
+            )
+        elif unstable_joint_pb_ti_search:
+            # 非稳态类型化联合搜索：按回路类型扩展 PI 邻域
+            if loop_type == 'temperature':
+                expanded = [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6]
+                max_rounds = max(max_rounds, 3)
+            elif loop_type in ['flow', 'pressure']:
+                expanded = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4]
+                max_rounds = max(max_rounds, 3)
+            else:  # level
+                expanded = [0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.6]
+                max_rounds = max(max_rounds, 4)
+            ratios = sorted(set(float(r) for r in (list(ratios) + expanded)))
+            self.log(f"   🔎 Phase 2 扩展搜索({loop_type}-unstable): ratios={ratios}, rounds={max_rounds}")
+
         best_pid = _normalize_pid_keys(baseline_pid)
         best_score = baseline_score
         best_detail = None
@@ -304,9 +398,10 @@ class SelfOptimizeStage(PipelineStage):
                 # [FIX] 石化化工级 PB(Kp) 底线：避免 PB 盲目滑向极致
                 current_pb = 100.0 / new_kp if new_kp > 1e-6 else 9999.0
                 if loop_type == 'level':
-                    # PP工艺级别: PB < 50% 极其危险，PB > 200% 基本无效丧失控制能力
-                    if current_pb < 50.0:
-                        new_kp = 100.0 / 50.0
+                    # 液位常规: PB < 50% 风险高；但不稳+积分兜底场景可小幅放宽到 40% 做试运行候选探索。
+                    pb_floor = 40.0 if is_level_unstable_integrating else 50.0
+                    if current_pb < pb_floor:
+                        new_kp = 100.0 / pb_floor
                     elif current_pb > 200.0:
                         new_kp = 100.0 / 200.0
                 elif loop_type == 'flow':
@@ -325,6 +420,18 @@ class SelfOptimizeStage(PipelineStage):
                 if abs(best_pid['Kp']) > eps:
                     c['Ki'] = c['Kp'] * (best_pid['Ki'] / best_pid['Kp'])
                     c['Kd'] = c['Kp'] * (best_pid['Kd'] / best_pid['Kp']) if abs(best_pid['Kd']) > eps else 0.0
+                if stable_evolve_mode and current_pid_anchor is not None:
+                    c_full = pid_to_full_dict(c['Kp'], c['Ki'], c.get('Kd', 0.0))
+                    ref_full = pid_to_full_dict(
+                        current_pid_anchor['Kp'],
+                        current_pid_anchor['Ki'],
+                        current_pid_anchor.get('Kd', 0.0)
+                    )
+                    if (
+                        not self._within_relative_change(c_full['pb'], ref_full['pb'], stable_max_delta)
+                        or not self._within_relative_change(c_full['ti'], ref_full['ti'], stable_max_delta)
+                    ):
+                        continue
                 try:
                     extra_info = {'param': 'PB', 'ratio': ratio, 'round': round_idx + 1}
                     if method_conf is not None: extra_info['method_conf'] = method_conf
@@ -373,6 +480,18 @@ class SelfOptimizeStage(PipelineStage):
                     
                     c = dict(best_pid)
                     c['Ki'] = c['Kp'] / new_ti
+                    if stable_evolve_mode and current_pid_anchor is not None:
+                        c_full = pid_to_full_dict(c['Kp'], c['Ki'], c.get('Kd', 0.0))
+                        ref_full = pid_to_full_dict(
+                            current_pid_anchor['Kp'],
+                            current_pid_anchor['Ki'],
+                            current_pid_anchor.get('Kd', 0.0)
+                        )
+                        if (
+                            not self._within_relative_change(c_full['pb'], ref_full['pb'], stable_max_delta)
+                            or not self._within_relative_change(c_full['ti'], ref_full['ti'], stable_max_delta)
+                        ):
+                            continue
                     try:
                         extra_info = {'param': 'TI', 'ratio': ratio, 'round': round_idx + 1}
                         if method_conf is not None: extra_info['method_conf'] = method_conf
@@ -396,7 +515,11 @@ class SelfOptimizeStage(PipelineStage):
             
             if base_td_val < eps:
                 # 原始是 PI 控制器 (Kd=0)。这时候是否允许升格为 PID？
-                if loop_type in ['flow', 'level']:
+                if loop_type == 'level' and is_level_unstable_integrating:
+                    # 液位不稳+积分兜底：允许极小 D 项试探以抑制过冲，搜索中仍由评分与稳定性门控。
+                    base_ti_val = abs(best_pid['Kp'] / best_pid['Ki']) if abs(best_pid['Ki']) > eps else 60.0
+                    base_td_val = max(1.0, min(base_ti_val / 20.0, 12.0))
+                elif loop_type in ['flow', 'level']:
                     # 流量和液位回路拥有压倒性的否决权：如果底层不出 D 参数，坚决不允许它瞎长出 D 参数
                     pass
                 else:
@@ -410,6 +533,18 @@ class SelfOptimizeStage(PipelineStage):
                         continue
                     c = dict(best_pid)
                     c['Kd'] = c['Kp'] * base_td_val * ratio
+                    if stable_evolve_mode and current_pid_anchor is not None:
+                        c_full = pid_to_full_dict(c['Kp'], c['Ki'], c.get('Kd', 0.0))
+                        ref_full = pid_to_full_dict(
+                            current_pid_anchor['Kp'],
+                            current_pid_anchor['Ki'],
+                            current_pid_anchor.get('Kd', 0.0)
+                        )
+                        if (
+                            not self._within_relative_change(c_full['pb'], ref_full['pb'], stable_max_delta)
+                            or not self._within_relative_change(c_full['ti'], ref_full['ti'], stable_max_delta)
+                        ):
+                            continue
                     try:
                         extra_info = {'param': 'TD', 'ratio': ratio, 'round': round_idx + 1}
                         if method_conf is not None: extra_info['method_conf'] = method_conf
@@ -423,6 +558,95 @@ class SelfOptimizeStage(PipelineStage):
                             best_score, best_pid, best_detail, improved = score, c, detail, True
                     except Exception:
                         pass
+
+            # --- PB×TI 联合搜索 (非稳态类型化) ---
+            if unstable_joint_pb_ti_search and abs(best_pid.get('Ki', 0.0)) > eps:
+                base_kp = abs(best_pid['Kp'])
+                base_ti = abs(best_pid['Kp'] / best_pid['Ki'])
+                preset = tuning_constraints
+                preset_pb_min = preset.get('pb_min', 0.0)
+                max_kp_limit = 100.0 / preset_pb_min if preset_pb_min > 0 else 9999.0
+                ti_max_limit = preset.get('ti_max', 300.0)
+                ti_min_limit = 0.1
+                if loop_type == 'temperature':
+                    ti_min_limit = max(ti_min_limit, 15.0)
+                    ti_max_limit = max(ti_max_limit, 600.0)
+                    combo_ratios = [0.7, 0.8, 0.9, 1.1, 1.2, 1.3]
+                    if baseline_score is not None and baseline_score < 5.0:
+                        combo_ratios = [0.6, 0.7, 0.8, 0.9, 1.1, 1.2, 1.4, 1.6]
+                elif loop_type == 'flow':
+                    ti_min_limit = max(ti_min_limit, 2.0)
+                    ti_max_limit = min(ti_max_limit, 30.0)
+                    combo_ratios = [0.8, 0.9, 1.1, 1.2, 1.3]
+                elif loop_type == 'pressure':
+                    ti_min_limit = max(ti_min_limit, 3.0)
+                    ti_max_limit = min(ti_max_limit, 80.0)
+                    combo_ratios = [0.8, 0.9, 1.1, 1.2, 1.3]
+                else:  # level
+                    ti_buffer = Config.PID_CONSTRAINTS.get('ti_lower_buffer_ratio', 0.08)
+                    ti_min_limit = max(ti_min_limit, 60.0 * (1.0 + ti_buffer))
+                    ti_max_limit = max(ti_max_limit, 600.0)
+                    combo_ratios = [0.7, 0.8, 0.9, 1.1, 1.2, 1.4]
+
+                for pb_ratio in combo_ratios:
+                    for ti_ratio in combo_ratios:
+                        if abs(pb_ratio - 1.0) < 1e-6 and abs(ti_ratio - 1.0) < 1e-6:
+                            continue
+                        c = dict(best_pid)
+                        new_kp = base_kp / pb_ratio
+                        current_pb = 100.0 / new_kp if new_kp > 1e-6 else 9999.0
+                        if loop_type == 'level':
+                            pb_floor = 40.0 if is_level_unstable_integrating else 50.0
+                            if current_pb < pb_floor:
+                                new_kp = 100.0 / pb_floor
+                            elif current_pb > 200.0:
+                                new_kp = 100.0 / 200.0
+                        elif loop_type == 'flow':
+                            if current_pb < 100.0:
+                                new_kp = 100.0 / 100.0
+                        elif loop_type == 'pressure':
+                            if current_pb < 80.0:
+                                new_kp = 100.0 / 80.0
+                        if new_kp < 0.01 or new_kp > max_kp_limit:
+                            continue
+                        c['Kp'] = Kp_sign * new_kp
+
+                        new_ti = base_ti * ti_ratio
+                        new_ti = max(ti_min_limit, min(new_ti, ti_max_limit))
+                        c['Ki'] = c['Kp'] / new_ti
+
+                        if stable_evolve_mode and current_pid_anchor is not None:
+                            c_full = pid_to_full_dict(c['Kp'], c['Ki'], c.get('Kd', 0.0))
+                            ref_full = pid_to_full_dict(
+                                current_pid_anchor['Kp'],
+                                current_pid_anchor['Ki'],
+                                current_pid_anchor.get('Kd', 0.0)
+                            )
+                            if (
+                                not self._within_relative_change(c_full['pb'], ref_full['pb'], stable_max_delta)
+                                or not self._within_relative_change(c_full['ti'], ref_full['ti'], stable_max_delta)
+                            ):
+                                continue
+                        try:
+                            extra_info = {
+                                'param': 'PBxTI',
+                                'ratio': float(pb_ratio),
+                                'round': round_idx + 1,
+                                'pb_ratio': float(pb_ratio),
+                                'ti_ratio': float(ti_ratio),
+                            }
+                            if method_conf is not None:
+                                extra_info['method_conf'] = method_conf
+                            score, detail = self._evaluate_pid(
+                                fusion, c, sp_initial, sp_final, pv_initial, loop_type,
+                                extra=extra_info)
+                            search_log.append(detail)
+                            if detail.get('catastrophic_response'):
+                                continue
+                            if score > best_score + min_improv:
+                                best_score, best_pid, best_detail, improved = score, c, detail, True
+                        except Exception:
+                            pass
 
             if not improved:
                 break
@@ -662,6 +886,21 @@ class SelfOptimizeStage(PipelineStage):
             self.log(f"   ⚠️ 基线评估失败: {e}，跳过微调")
             return context
 
+        # 稳态进化场景：以 current_pid 作为 Phase2 起点，更符合“在已有稳态上小步进化”。
+        if self._get_tuning_scenario() == 'stable_evolve':
+            cp = context.get_current_pid()
+            if cp:
+                try:
+                    cp_pid = _normalize_pid_keys(cp)
+                    cp_score, _ = self._evaluate_pid(
+                        fusion, cp_pid, sp_initial, sp_final, pv_initial, loop_type, extra={'method_conf': method_conf}
+                    )
+                    pid_params = cp_pid
+                    baseline_score = cp_score
+                    self.log(f"   🧬 稳态进化起点: 采用 current_pid 作为微调基线 (评分={cp_score:.2f})")
+                except Exception as e:
+                    self.log(f"   ⚠️ current_pid 基线评估失败，保持算法基线: {e}")
+
         self.log(f"\n   ── Phase 2: PB/TI/TD 微调 (fallback 路径) ──")
 
         base_full = pid_to_full_dict(pid_params['Kp'], pid_params['Ki'], pid_params.get('Kd', 0.0))
@@ -736,6 +975,17 @@ class SelfOptimizeStage(PipelineStage):
         self.log(f"\n   ── Phase 2: PB/TI/TD 微调 ──")
 
         baseline_pid = _normalize_pid_keys(baseline_pid)
+        if self._get_tuning_scenario() == 'stable_evolve':
+            cp = context.get_current_pid()
+            if cp:
+                try:
+                    cp_pid = _normalize_pid_keys(cp)
+                    cp_score, _ = self._evaluate_pid(fusion, cp_pid, sp_initial, sp_final, pv_initial, loop_type)
+                    baseline_pid = cp_pid
+                    baseline_score = cp_score
+                    self.log(f"   🧬 稳态进化起点: 采用 current_pid 作为微调基线 (评分={cp_score:.2f})")
+                except Exception as e:
+                    self.log(f"   ⚠️ current_pid 基线评估失败，保持算法基线: {e}")
         Kp = baseline_pid['Kp']
         Ki = baseline_pid['Ki']
         Kd = baseline_pid['Kd']

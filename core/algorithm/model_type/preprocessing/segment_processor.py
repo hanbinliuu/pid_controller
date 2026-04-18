@@ -842,7 +842,10 @@ class SegmentProcessor(LoggerMixin):
                 scores.append(0.7)
             else:
                 scores.append(0.4)
-        except:
+        except Exception as e:
+            # 降级但保留可追踪信息，避免静默吞错
+            if hasattr(self, "log"):
+                self.log(f"   ⚠️ 相关性计算失败，采用中性分(0.5): {e}")
             scores.append(0.5)
         
         # ========== 6. 阶跃响应形态检测 ==========

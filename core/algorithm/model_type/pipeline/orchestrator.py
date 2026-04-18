@@ -126,6 +126,11 @@ class TuningOrchestrator(LoggerMixin):
                 - qualified_windows: 扰动窗口列表
                 - current_pid: 当前 PID 参数（可选）
                 - process_context: 工艺上下文（可选，会覆盖构造函数中的设置）
+                    推荐字段:
+                    - loop_type: 回路类型 ('flow'/'temperature'/'pressure'/'level')
+                    - loop_name: 回路名称（可选）
+                    - tuning_scenario: 业务场景（如 unstable/stable_evolve，可选）
+                    - disable_current_pid_in_tuning: 是否在整定阶段屏蔽 current_pid（可选）
                 - response_mode: 响应模式（可选）
         """
         history_data = input_data.get('history_data', [])
@@ -134,6 +139,9 @@ class TuningOrchestrator(LoggerMixin):
         current_pid = input_data.get('current_pid', None)
         # 动态提取外部(后端)传入的最新的工艺/语义上下文
         ext_process_context = input_data.get('process_context', None)
+        active_context_for_check = ext_process_context if ext_process_context is not None else (self._process_context or {})
+        if not (active_context_for_check or {}).get('loop_type'):
+            self.log("⚠️ process_context 未提供 loop_type，将按默认回路处理，可能影响阈值/评分/约束选择")
         
         
         turning_type = params.get('turning_type')

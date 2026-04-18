@@ -4,41 +4,72 @@
 【最常用用法（兼容旧数据 + 新原始数据）】
 
 1) 旧流程（2216 回路，兼容 data/数据1.csv + data/数据2.csv）
-   python core/algorithm/model_type/daxie_data/run_tuning.py 50104
-   说明：
-   - 优先读取 data/2216_LIC_50104.json
-   - 若 JSON 不存在且 data 目录下有 数据1.csv/数据2.csv，会自动转换后再整定
+ python core/algorithm/model_type/daxie_data/run_tuning.py 50104 \
+  --legacy-refresh \
+  --start-time "2026-03-13 00:00:00" \
+  --end-time "2026-03-14 00:00:00"
 
 2) 新流程（直接用 20260416.csv 原始数据）
    先看位号：
    python core/algorithm/model_type/daxie_data/run_tuning.py --list-devices --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv
-    
+
+   当前验证状态（截至 2026-04-17）：
    - 5203_FIC_21005  --ok
    - 5203_LIC_11502  --ok
    - 5203_PIC_11201  --no
-   - 5203_PIC_11501 ---已经稳态    --ok
-   - 5203_PIC_21901 ---已经稳态      ---no
+   - 5203_PIC_11501  --已经稳态 --ok
+   - 5203_PIC_21901  --已经稳态 --no
    - 5203_TIC_11303  --ok
-   - 5203_TIC_20201   --ok
+   - 5203_TIC_20201  --ok
 
-   再整定（示例：5203_LIC_11502）：
+   再整定（示例）：
    python core/algorithm/model_type/daxie_data/run_tuning.py 5203_PIC_11501 --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv --parse-raw
    默认时间窗（未显式传参时）: 2026-04-15 00:00:00 ~ 2026-04-16 00:00:00
 
-    测试已经稳定的回路
-    python core/algorithm/model_type/daxie_data/run_tuning.py 5203_PIC_11501 \
-  --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv \
-  --parse-raw \
-  --mode benchmark \
-  --blind-validate \
-  --seed 42
+3) 两类目标（推荐直接用 --scenario）
+   A. 非稳态回路“先调稳”：
+   python core/algorithm/model_type/daxie_data/run_tuning.py 5203_FIC_21005  \
+     --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv \
+     --parse-raw \
+     --mode benchmark \
+     --scenario unstable \
+     --seed 42
 
-  
+   说明：
+   - 等价于旧参数 `--blind-validate`
+   - 整定过程不依赖 current PID（仅用于结果对比）
 
+   B. 已稳态回路“求进步”：
+   python core/algorithm/model_type/daxie_data/run_tuning.py 5203_PIC_11501 \
+     --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv \
+     --parse-raw \
+     --mode benchmark \
+     --scenario stable_evolve \
+     --seed 42
+   说明：
+   - 等价于旧参数 `--stable-evolve`
+   - 允许参考 current PID，且仅当可证明更优才放行新参数
+   - 可调进步阈值: `--stable-margin 0.5 --stable-max-delta 0.5`
 
-3) 模式切换
-   - 默认: auto_pipeline（滑窗寻优）
-   - 可选: --mode benchmark（扰动段探测）
+   python core/algorithm/model_type/daxie_data/run_tuning.py \
+    --batch \
+    --batch-quiet \
+    --raw-csv core/algorithm/model_type/daxie_data/data/20260416.csv \
+    --parse-raw \
+    --mode benchmark \
+    --batch-scenario auto \
+    --seed 42 \
+    --report-name tuning_batch_full
+
+   
+
+4) 模式切换
+   - 默认: benchmark（扰动段探测）
+   - 可选: --mode auto_pipeline（滑窗寻优）
+
+5) 兼容旧参数
+   - `--blind-validate` 与 `--stable-evolve` 仍可使用
+   - 若与 `--scenario` 同时指定，以 `--scenario` 为准
 
 输出目录：
    - output/tuning_grid_search_[device].csv
@@ -383,6 +414,207 @@ def _baseline_to_pid_params(baseline_pid: Dict[str, float]) -> Dict[str, float]:
     }
 
 
+def _is_valid_model_for_rating(result: Dict[str, Any]) -> bool:
+    """判断最终模型是否足以作为 current/new PID 的同口径仿真考场。"""
+    if not result or not result.get("success", True):
+        return False
+    model_params = result.get("model_parameters", {}) or {}
+    model_type = str(result.get("model_type", "") or "").upper()
+    k = float(model_params.get("K", 0.0) or 0.0)
+    t1 = float(model_params.get("T1", 0.0) or 0.0)
+    if abs(k) < 1e-9:
+        return False
+    if model_type == "FO_INTEGRATOR":
+        return True
+    return t1 > 1e-9
+
+
+def _evaluate_pid_against_result_model(
+    result: Dict[str, Any],
+    pid: Dict[str, float],
+    loop_type: str,
+    confidence: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """用同一个辨识模型给某组 PID 打分；模型不可辨识时返回 None。"""
+    if not pid or not _is_valid_model_for_rating(result):
+        return None
+    try:
+        from core.algorithm.model_type.rating import ModelRating
+        model_params = dict(result.get("model_parameters", {}) or {})
+        pid_params = _baseline_to_pid_params(pid)
+        method_conf = confidence
+        if method_conf is None:
+            method_conf = float((result.get("rating_details", {}) or {}).get("method_confidence", 0.0) or 0.0)
+        return ModelRating.evaluate(
+            model_params,
+            pid_params,
+            method="current_pid_baseline",
+            method_confidence=method_conf,
+            method_confidence_details={"method": "current_pid_baseline", "note": "same identified model"},
+            loop_type=loop_type,
+        )
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _evaluate_historical_operating_score(history_data: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    """
+    现场历史实绩评分：不依赖模型，只回答“这段数据在当前 PID 下实际稳不稳”。
+    它不证明新参数更好，但能作为稳定回路的保护基准。
+    """
+    if not history_data:
+        return None
+    pv = np.array([float(d.get("pv", 0.0) or 0.0) for d in history_data], dtype=float)
+    sv = np.array([float(d.get("sv", 0.0) or 0.0) for d in history_data], dtype=float)
+    mv = np.array([float(d.get("mv", 0.0) or 0.0) for d in history_data], dtype=float)
+    if len(pv) < 20:
+        return None
+
+    finite = np.isfinite(pv) & np.isfinite(sv) & np.isfinite(mv)
+    pv, sv, mv = pv[finite], sv[finite], mv[finite]
+    if len(pv) < 20:
+        return None
+
+    scale = max(abs(float(np.nanmedian(sv))), float(np.nanpercentile(pv, 95) - np.nanpercentile(pv, 5)), 1e-6)
+    err_pct = np.abs(pv - sv) / scale * 100.0
+    mae_pct = float(np.nanmean(err_pct))
+    p95_pct = float(np.nanpercentile(err_pct, 95))
+    pv_std_pct = float(np.nanstd(pv) / scale * 100.0)
+    mv_scale = max(abs(float(np.nanmedian(mv))), float(np.nanpercentile(mv, 95) - np.nanpercentile(mv, 5)), 1.0)
+    mv_jitter_pct = float(np.nanstd(np.diff(mv)) / mv_scale * 100.0) if len(mv) > 1 else 0.0
+
+    mae_score = float(np.interp(mae_pct, [0, 0.2, 0.5, 1.0, 2.0, 5.0], [10, 9.5, 8.5, 7.0, 4.0, 0.0]))
+    p95_score = float(np.interp(p95_pct, [0, 0.5, 1.0, 2.0, 5.0, 10.0], [10, 9.5, 8.0, 6.0, 3.0, 0.0]))
+    pv_score = float(np.interp(pv_std_pct, [0, 0.2, 0.5, 1.0, 3.0, 8.0], [10, 9.5, 8.5, 7.0, 4.0, 0.0]))
+    mv_score = float(np.interp(mv_jitter_pct, [0, 0.2, 0.5, 1.0, 3.0, 8.0], [10, 9.0, 8.0, 6.0, 3.0, 0.0]))
+    score = 0.35 * mae_score + 0.25 * p95_score + 0.25 * pv_score + 0.15 * mv_score
+
+    return {
+        "score": round(float(np.clip(score, 0.0, 10.0)), 2),
+        "mae_pct": round(mae_pct, 3),
+        "p95_pct": round(p95_pct, 3),
+        "pv_std_pct": round(pv_std_pct, 3),
+        "mv_jitter_pct": round(mv_jitter_pct, 3),
+    }
+
+
+def _synthesize_baseline_reference_score(
+    historical_score: Optional[Dict[str, float]],
+    baseline_model_rating: Optional[Dict[str, Any]],
+    method_confidence: float,
+) -> Optional[Dict[str, float]]:
+    """
+    生成“当前PID综合参考分”：
+    - 历史实绩分：反映真实运行
+    - 同口径模型分：反映在同一辨识模型上的可比性
+    """
+    hist = None
+    model = None
+    if historical_score:
+        hist = float(historical_score.get("score", 0.0) or 0.0)
+    if baseline_model_rating and not baseline_model_rating.get("error"):
+        model = float(baseline_model_rating.get("final_rating", baseline_model_rating.get("performance_score", 0.0)) or 0.0)
+
+    if hist is None and model is None:
+        return None
+    if hist is None:
+        return {"score": round(model, 2), "w_hist": 0.0, "w_model": 1.0}
+    if model is None:
+        return {"score": round(hist, 2), "w_hist": 1.0, "w_model": 0.0}
+
+    # 置信度越低，越依赖历史实绩；置信度越高，同口径模型权重略提高。
+    w_model = float(np.clip(method_confidence, 0.2, 0.5))
+    w_hist = 1.0 - w_model
+    score = w_hist * hist + w_model * model
+    return {
+        "score": round(float(np.clip(score, 0.0, 10.0)), 2),
+        "w_hist": round(w_hist, 2),
+        "w_model": round(w_model, 2),
+    }
+
+
+def _build_pid_comparison_conclusion(
+    *,
+    baseline_pid: Dict[str, float],
+    final_pid: Dict[str, Any],
+    historical_score: Optional[Dict[str, float]],
+    baseline_rating: Optional[Dict[str, Any]],
+    baseline_reference_score: Optional[Dict[str, float]],
+    final_score: Optional[float],
+    final_confidence: float,
+    kept_current_due_to_unidentifiable: bool,
+    stable_margin: float = 0.5,
+    stable_max_delta: float = 0.5,
+) -> Dict[str, str]:
+    """给现场验证脚本一个明确的下发/保持结论。"""
+    if not baseline_pid:
+        return {"decision": "无基线PID", "reason": "未读取到 current PID，只能输出新参数候选。"}
+    if kept_current_due_to_unidentifiable:
+        return {"decision": "建议保持当前PID", "reason": "本次模型不可辨识，已保护性回退为 current PID。"}
+
+    hist = float((historical_score or {}).get("score", 0.0) or 0.0)
+    baseline_final = None
+    if baseline_rating and not baseline_rating.get("error"):
+        baseline_final = float(baseline_rating.get("final_rating", baseline_rating.get("performance_score", 0.0)) or 0.0)
+    baseline_ref = None
+    if baseline_reference_score:
+        baseline_ref = float(baseline_reference_score.get("score", 0.0) or 0.0)
+
+    final_pb = float(final_pid.get("pb", final_pid.get("Pb", 0.0)) or 0.0)
+    final_ti = float(final_pid.get("ti", final_pid.get("Ti", 0.0)) or 0.0)
+    final_td = float(final_pid.get("td", final_pid.get("Td", 0.0)) or 0.0)
+    old_pb = float(baseline_pid.get("pb", 0.0) or 0.0)
+    old_ti = float(baseline_pid.get("ti", 0.0) or 0.0)
+    old_td = float(baseline_pid.get("td", 0.0) or 0.0)
+
+    def _rel_change(new_v: float, old_v: float) -> float:
+        if abs(old_v) <= 1e-9:
+            return 0.0 if abs(new_v) <= 1e-9 else float("inf")
+        return abs(new_v - old_v) / abs(old_v)
+
+    pb_rel_change = _rel_change(final_pb, old_pb)
+    ti_rel_change = _rel_change(final_ti, old_ti)
+    td_rel_change = _rel_change(final_td, old_td)
+
+    # 已经稳态的回路：必须有高可信模型和足够收益，才允许说“新参数更好”。
+    if hist >= 8.0:
+        if final_confidence < 0.55:
+            return {
+                "decision": "建议保持当前PID",
+                "reason": f"历史实绩已稳定({hist:.2f}/10)，但辨识/方法置信度仅 {final_confidence:.2f}，新参数不能证明优于 current PID。",
+            }
+        if pb_rel_change > stable_max_delta or ti_rel_change > stable_max_delta:
+            return {
+                "decision": "建议保持当前PID",
+                "reason": (
+                    f"历史实绩已稳定({hist:.2f}/10)，新参数相对 current PID 变化过大"
+                    f"(ΔPb={pb_rel_change*100:.1f}%, ΔTi={ti_rel_change*100:.1f}%, 阈值={stable_max_delta*100:.1f}%)，"
+                    "不满足稳态进化约束。"
+                ),
+            }
+        cmp_baseline = baseline_final if baseline_final is not None else baseline_ref
+        if cmp_baseline is not None and final_score is not None and final_score < cmp_baseline + stable_margin:
+            return {
+                "decision": "建议保持当前PID",
+                "reason": (
+                    f"新参数提升不足(baseline={cmp_baseline:.2f}, new={final_score:.2f}, "
+                    f"要求提升≥{stable_margin:.2f})，不建议替换已稳定参数。"
+                ),
+            }
+        return {
+            "decision": "新参数可作为候选",
+            "reason": (
+                f"历史实绩稳定且满足进步判据(提升≥{stable_margin:.2f}, "
+                f"ΔPb={pb_rel_change*100:.1f}%, ΔTi={ti_rel_change*100:.1f}%, ΔTd={td_rel_change*100:.1f}%)。"
+            ),
+        }
+
+    # 非稳态回路：历史实绩差时，更关注新参数是否能把闭环评分拉起来。
+    if final_score is not None and final_score >= 6.0 and final_confidence >= 0.45:
+        return {"decision": "新参数可作为候选", "reason": "历史实绩不佳或一般，新参数模型评分达到可用区间。"}
+    return {"decision": "不建议下发", "reason": "历史实绩不佳，但新参数模型评分/置信度仍不足。"}
+
+
 def run_tuning(
     loop_id: str,
     enable_grid_search: bool = False,
@@ -393,7 +625,10 @@ def run_tuning(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     blind_validate: bool = False,
+    stable_evolve: bool = False,
     seed: Optional[int] = None,
+    stable_margin: float = 0.5,
+    stable_max_delta: float = 0.5,
 ):
     if seed is not None:
         random.seed(seed)
@@ -419,9 +654,14 @@ def run_tuning(
         if auto_pid:
             current_pid_cfg = auto_pid
             print(f"🧭 自动读取当前PID: Pb={auto_pid.get('pb', 0.0):.1f}%, Ti={auto_pid.get('ti', 0.0):.1f}s, Td={auto_pid.get('td', 0.0):.1f}s")
-    use_current_pid_in_tuning = not blind_validate
-    if blind_validate:
+    if blind_validate and stable_evolve:
+        print("⚠️ 同时指定了 --blind-validate 与 --stable-evolve，已自动采用 --stable-evolve（稳态进化必须依赖 current PID 作为基线）。")
+    use_current_pid_in_tuning = stable_evolve or (not blind_validate)
+    if blind_validate and not stable_evolve:
         print("🧪 盲整定验证模式: 整定过程不使用 current_pid，仅用于结果对比")
+    if stable_evolve:
+        print("🧬 稳态进化模式: 以 current PID 为基线做保守优化，仅当可证明更优才放行")
+        print(f"   ↳ 进步判据: 评分提升≥{stable_margin:.2f}, 且 ΔPb/ΔTi ≤ {stable_max_delta*100:.1f}%")
     effective_current_pid_cfg = current_pid_cfg if use_current_pid_in_tuning else None
 
     start_time = start_time or cfg.get("start_time")
@@ -655,6 +895,59 @@ def run_tuning(
     rating_details = result.get('rating_details', {})
     perf_score = rating_details.get('performance_score', 0.0)
     conf_score = rating_details.get('method_confidence', 0.0)
+    historical_score = _evaluate_historical_operating_score(sliced_data)
+    baseline_model_rating = _evaluate_pid_against_result_model(
+        result,
+        baseline_pid,
+        loop_type_from_tag,
+        confidence=float(conf_score or 0.0) if not kept_current_due_to_unidentifiable else None,
+    )
+    baseline_reference_score = _synthesize_baseline_reference_score(
+        historical_score=historical_score,
+        baseline_model_rating=baseline_model_rating,
+        method_confidence=float(conf_score or 0.0),
+    )
+    comparison_conclusion = _build_pid_comparison_conclusion(
+        baseline_pid=baseline_pid,
+        final_pid=final_pid,
+        historical_score=historical_score,
+        baseline_rating=baseline_model_rating,
+        baseline_reference_score=baseline_reference_score,
+        final_score=None if kept_current_due_to_unidentifiable else float(final_score or 0.0),
+        final_confidence=float(conf_score or 0.0),
+        kept_current_due_to_unidentifiable=kept_current_due_to_unidentifiable,
+        stable_margin=float(stable_margin),
+        stable_max_delta=float(stable_max_delta),
+    )
+
+    kept_current_due_to_stable_evolve_guard = False
+    if stable_evolve and baseline_pid and not kept_current_due_to_unidentifiable:
+        allow_new = comparison_conclusion.get("decision") == "新参数可作为候选"
+        if not allow_new:
+            kept_current_due_to_stable_evolve_guard = True
+            print("⚠️ 稳态进化护栏：新参数未通过“优于 current PID”判据，最终回退为当前PID。")
+            result["pid_parameters"] = _baseline_to_pid_params(baseline_pid)
+            result["pid_parameters"]["method"] = "keep_current_stable_guard"
+            result.setdefault("tuning_features", {})
+            result["tuning_features"]["tuning_method"] = "keep_current_stable_guard"
+            final_pid = result["pid_parameters"]
+            if baseline_model_rating and not baseline_model_rating.get("error"):
+                result["model_rating"] = float(baseline_model_rating.get("final_rating", result.get("model_rating", 0.0)) or 0.0)
+                result["rating_details"] = {
+                    "performance_score": float(baseline_model_rating.get("performance_score", 0.0) or 0.0),
+                    "method_confidence": float(baseline_model_rating.get("method_confidence", conf_score or 0.0) or 0.0),
+                    "final_rating": float(baseline_model_rating.get("final_rating", 0.0) or 0.0),
+                }
+                final_score = result["model_rating"]
+            comparison_conclusion = {
+                "decision": "建议保持当前PID",
+                "reason": "稳态进化护栏生效：本次未能可靠证明新参数优于当前稳态参数。",
+            }
+
+    # 护栏可能重写了 rating_details，这里统一刷新，避免榜单数字不一致。
+    rating_details = result.get('rating_details', {})
+    perf_score = float(rating_details.get('performance_score', perf_score) or 0.0)
+    conf_score = float(rating_details.get('method_confidence', conf_score) or 0.0)
     
     print("\n" + "="*60)
     print("🎉 最终整定参数与总分榜单发布！")
@@ -672,8 +965,27 @@ def run_tuning(
     
     if baseline_pid:
         print(f"   🧭 当前PID(基线)  : Kp={baseline_pid.get('kp', 0.0):.4f}, Pb={baseline_pid.get('pb', 0.0):.1f}%, Ti={baseline_pid.get('ti', 0.0):.1f}s, Td={baseline_pid.get('td', 0.0):.1f}s")
+        if baseline_model_rating and not baseline_model_rating.get("error"):
+            print(
+                f"   🧭 当前PID模型评分: {baseline_model_rating.get('final_rating', 0.0):.2f} "
+                f"(性能={baseline_model_rating.get('performance_score', 0.0):.2f}, "
+                f"置信={baseline_model_rating.get('method_confidence', 0.0):.2f})"
+            )
+        else:
+            print("   🧭 当前PID模型评分: N/A（模型不可辨识，无法同口径仿真评分）")
+        if baseline_reference_score:
+            print(
+                f"   🧭 当前PID综合参考: {baseline_reference_score.get('score', 0.0):.2f} / 10 "
+                f"(历史{baseline_reference_score.get('w_hist', 0.0):.2f} + 同口径{baseline_reference_score.get('w_model', 0.0):.2f})"
+            )
     else:
         print("   🧭 当前PID(基线)  : N/A (未提供)")
+    if historical_score:
+        print(
+            f"   📈 历史实绩评分  : {historical_score['score']:.2f} / 10 "
+            f"(MAE={historical_score['mae_pct']:.3f}%, P95={historical_score['p95_pct']:.3f}%, "
+            f"PV波动={historical_score['pv_std_pct']:.3f}%, MV抖动={historical_score['mv_jitter_pct']:.3f}%)"
+        )
 
     if kept_current_due_to_unidentifiable:
         print("   🏆 综合性能评分 : N/A（可辨识性不足，未评分）")
@@ -691,6 +1003,9 @@ def run_tuning(
         d_ti = final_Ti - baseline_pid.get("ti", 0.0)
         d_td = final_Td - baseline_pid.get("td", 0.0)
         print(f"   🔁 参数变化对比   : ΔPb={d_pb:+.1f}%, ΔTi={d_ti:+.1f}s, ΔTd={d_td:+.1f}s")
+    if comparison_conclusion:
+        print(f"   🧾 对比结论       : {comparison_conclusion.get('decision', '')}")
+        print(f"      原因           : {comparison_conclusion.get('reason', '')}")
     print("=" * 60)
     
     # 💡 瘦身版结果存储：剔除大量 history_data，仅保留 PID、时间、评分
@@ -710,6 +1025,15 @@ def run_tuning(
         "not_identifiable_unscored" if kept_current_due_to_unidentifiable else "scored"
     )
     compact_result["baseline_pid"] = baseline_pid or {}
+    compact_result["baseline_pid_model_rating"] = baseline_model_rating or {}
+    compact_result["baseline_reference_score"] = baseline_reference_score or {}
+    compact_result["historical_operating_score"] = historical_score or {}
+    compact_result["comparison_conclusion"] = comparison_conclusion or {}
+    compact_result["stable_evolve_guard_applied"] = bool(kept_current_due_to_stable_evolve_guard)
+    compact_result["stable_evolve_policy"] = {
+        "stable_margin": float(stable_margin),
+        "stable_max_delta": float(stable_max_delta),
+    }
     
     # [NEW] 输出修正：如果命中了兜底免死金牌，在数据记录上正式修正为纯积分物理模型(FO_INTEGRATOR)
     if final_pid.get('method') == 'integrating_fallback':
@@ -754,9 +1078,18 @@ if __name__ == "__main__":
     parser.add_argument("--end-time", default=None, help="可选，覆盖截取结束时间。格式: YYYY-mm-dd HH:MM:SS")
     parser.add_argument("--mode", choices=["benchmark", "auto_pipeline"], default="benchmark",
                         help="运行模式: 'benchmark' 为多线程并发测分压测仪，'auto_pipeline' 为模拟真实后端全自动智能流转。")
-    parser.add_argument("--window", type=float, default=6.0, help="滑窗寻优模式下的满窗长度(小时), 默认 4.0")
+    parser.add_argument("--window", type=float, default=6.0, help="滑窗寻优模式下的满窗长度(小时), 默认 6.0")
     parser.add_argument("--step", type=float, default=2.0, help="滑窗寻优模式下每次移动的步长(小时), 改大可提速, 默认 2.0")
+    parser.add_argument(
+        "--scenario",
+        choices=["unstable", "stable_evolve"],
+        default=None,
+        help="业务目标场景：unstable=非稳态调稳(盲整定)；stable_evolve=已稳态进化(参考current_pid且需证明更优)",
+    )
     parser.add_argument("--blind-validate", action="store_true", help="盲整定验证：整定过程不使用 current_pid，仅用于结果对比")
+    parser.add_argument("--stable-evolve", action="store_true", help="稳态进化验证：以 current PID 为基线保守优化，仅当可证明更优才放行")
+    parser.add_argument("--stable-margin", type=float, default=0.5, help="稳态进化最低提升分数阈值(默认 0.5)")
+    parser.add_argument("--stable-max-delta", type=float, default=0.5, help="稳态进化时 Pb/Ti 最大允许相对变化(默认 0.5=50%%)")
     parser.add_argument("--seed", type=int, default=None, help="固定随机种子，保证复现性（例如: 42）")
     args = parser.parse_args()
 
@@ -778,6 +1111,16 @@ if __name__ == "__main__":
     print(f"🔧 开始跑测大榭现场数据 - 回路: {TARGET_LOOP}")
     print(f"🌍 运行模式: {'[Auto Pipeline (滑窗寻优)]' if ENABLE_GRID_SEARCH else '[Benchmark (扰动段探测)]'}")
     print("=" * 60)
+
+    blind_validate = args.blind_validate
+    stable_evolve = args.stable_evolve
+    if args.scenario is not None:
+        if args.scenario == "unstable":
+            blind_validate, stable_evolve = True, False
+            print("🎯 场景目标: 非稳态调稳 (scenario=unstable)")
+        elif args.scenario == "stable_evolve":
+            blind_validate, stable_evolve = False, True
+            print("🎯 场景目标: 已稳态进化 (scenario=stable_evolve)")
     
     run_tuning(
         TARGET_LOOP,
@@ -788,6 +1131,9 @@ if __name__ == "__main__":
         force_parse_raw=args.parse_raw,
         start_time=args.start_time,
         end_time=args.end_time,
-        blind_validate=args.blind_validate,
+        blind_validate=blind_validate,
+        stable_evolve=stable_evolve,
         seed=args.seed,
+        stable_margin=max(0.0, float(args.stable_margin)),
+        stable_max_delta=max(0.0, float(args.stable_max_delta)),
     )
